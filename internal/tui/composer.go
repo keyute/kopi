@@ -3,8 +3,11 @@ package tui
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
@@ -44,7 +47,10 @@ type composer struct {
 	ta textarea.Model
 	// blocks is keyed by marker.
 	blocks map[string]block
-	pastes int
+	// imageOf is the file of every image marker this composer inserted; it
+	// outlives reset so a restored input can tell its images from typed text.
+	imageOf map[string]string
+	pastes  int
 	// lastPaste is the marker of the paste block inserted by the latest
 	// input, or empty once any other input followed it.
 	lastPaste string
@@ -67,7 +73,7 @@ func newComposer(th theme, newline key.Binding) composer {
 		}
 		return "  "
 	})
-	c := composer{ta: ta, blocks: map[string]block{}}
+	c := composer{ta: ta, blocks: map[string]block{}, imageOf: map[string]string{}}
 	c.style(th)
 	c.ta.Focus()
 	return c
@@ -143,6 +149,25 @@ func (c *composer) press(x, y int) {
 	c.ta.BeginSelection(x, y)
 }
 
+// selectWord selects the run of non-space runes under (x, y), coordinates as
+// for press, through the textarea's own select-word-forward key. On a space or
+// past the line's end it is a plain press.
+func (c *composer) selectWord(x, y int) tea.Cmd {
+	c.press(x, y)
+	before, after := c.cursorLine()
+	if r, _ := utf8.DecodeRuneInString(after); after == "" || unicode.IsSpace(r) {
+		return nil
+	}
+	head := []rune(before)
+	from := len(head)
+	for from > 0 && !unicode.IsSpace(head[from-1]) {
+		from--
+	}
+	c.ta.ClearSelection()
+	c.ta.SetCursorColumn(from)
+	return c.forward(tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModCtrl | tea.ModShift})
+}
+
 // drag extends the selection press started and moves the cursor with it.
 func (c *composer) drag(x, y int) { c.ta.ExtendSelection(x, y) }
 
@@ -216,6 +241,7 @@ func (c *composer) insertImage(path string) tea.Cmd {
 	c.lastPaste = ""
 	mk := fmt.Sprintf("[image #%d]", imageCount.Add(1))
 	c.blocks[mk] = block{image: path}
+	c.imageOf[mk] = path
 	return c.forward(tea.PasteMsg{Content: mk})
 }
 
@@ -249,18 +275,22 @@ func (c *composer) reset() {
 }
 
 // restore puts inputs before the draft, everything joined by a blank line.
-// The [image #N] markers in each input's text are registered against its
-// Images in order, keeping their numbers.
+// An [image #N] marker in an input's text becomes an image block again only
+// if this composer inserted it and its file is among that input's Images not
+// yet claimed; any other marker stays plain text.
 func (c *composer) restore(inputs []event.Input) {
 	if len(inputs) == 0 {
 		return
 	}
 	parts := make([]string, 0, len(inputs)+1)
 	for _, in := range inputs {
-		imgs := in.Images
-		for _, mk := range imageMarker.FindAllString(in.Text, len(imgs)) {
-			c.blocks[mk] = block{image: imgs[0]}
-			imgs = imgs[1:]
+		imgs := slices.Clone(in.Images)
+		for _, mk := range imageMarker.FindAllString(in.Text, -1) {
+			path, ok := c.imageOf[mk]
+			if i := slices.Index(imgs, path); ok && i >= 0 {
+				c.blocks[mk] = block{image: path}
+				imgs = slices.Delete(imgs, i, i+1)
+			}
 		}
 		parts = append(parts, in.Text)
 	}

@@ -28,8 +28,6 @@ func translate(ev agent.AgentEvent) (event.Event, bool) {
 		if ev.Message.User != nil {
 			return event.UserMessage{Text: userText(ev.Message.User.Content)}, true
 		}
-	case agent.QueueUpdateEvent:
-		return event.QueueChanged{Pending: ev.Steering}, true
 	case agent.ToolExecutionStartEvent:
 		return event.ToolStart{CallID: ev.ToolCallID, Name: ev.ToolName, Args: compactJSON(ev.Args)}, true
 	case agent.ToolExecutionEndEvent:
@@ -54,8 +52,8 @@ func translate(ev agent.AgentEvent) (event.Event, bool) {
 // textJoiner puts a blank line before a text block that directly follows
 // emitted text, as history does with afterText, so the reducer's
 // concatenation draws separate paragraphs live and restored. Thinking does not
-// separate text, nor does a queue update; a tool call, notice, user message or
-// new run does. Tool and queue events can arrive from concurrent goroutines.
+// separate text; a tool call, notice, user message or new run does. Tool events
+// can arrive from concurrent goroutines.
 //
 // It also drops each prompt's own user message, which TurnStart already
 // carries, so only steered messages become UserMessage.
@@ -102,7 +100,7 @@ func (j *textJoiner) translate(ev agent.AgentEvent) (event.Event, bool) {
 			e = event.TextDelta{Text: "\n\n" + d.Text}
 		}
 		j.newBlock, j.afterText = false, true
-	case event.ThinkingDelta, event.QueueChanged, nil:
+	case event.ThinkingDelta, nil:
 	default:
 		j.afterText = false
 	}

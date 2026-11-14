@@ -60,7 +60,7 @@ func TestHookBlocksToolUnknownToGate(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
 
-	_, err = sess.Send(t.Context(), "probe")
+	_, _, err = sess.Send(t.Context(), "probe")
 	require.NoError(t, err)
 	assert.Contains(t, lastToolResult(t, <-requests), policy.ErrUnknownTool.Error())
 	assert.False(t, ran.Load())
@@ -81,7 +81,7 @@ func TestExecToolRunsOnlyInExecuteMode(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
 
-	_, err = sess.Send(t.Context(), "run it")
+	_, _, err = sess.Send(t.Context(), "run it")
 	require.NoError(t, err)
 	denied := lastToolResult(t, <-requests)
 	assert.Contains(t, denied, policy.ErrDenied.Error())
@@ -89,7 +89,7 @@ func TestExecToolRunsOnlyInExecuteMode(t *testing.T) {
 	assert.Zero(t, ran.Load())
 
 	authority.EnterExecute()
-	_, err = sess.Send(t.Context(), "run it now")
+	_, _, err = sess.Send(t.Context(), "run it now")
 	require.NoError(t, err)
 	assert.Equal(t, execOutput, lastToolResult(t, <-requests))
 	assert.Equal(t, int32(1), ran.Load())

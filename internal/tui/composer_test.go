@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
@@ -157,13 +158,16 @@ func TestPasteReplacesSelection(t *testing.T) {
 
 func TestRestoreKeepsDraftBlocks(t *testing.T) {
 	m, _ := newTestModel(t, 60, 30)
+	m.composer.insertImage("/tmp/a.png")
+	mk := fmt.Sprintf("[image #%d]", imageCount.Load())
+	m.composer.reset()
 	pasteText(m, linesOf(11))
 
-	m.composer.restore([]event.Input{{Text: "a [image #9]", Images: []string{"/tmp/a.png"}}})
+	m.composer.restore([]event.Input{{Text: "a " + mk, Images: []string{"/tmp/a.png"}}})
 
-	assert.Equal(t, "a [image #9]\n\n[paste #1 +11 lines]", m.composer.value())
+	assert.Equal(t, "a "+mk+"\n\n[paste #1 +11 lines]", m.composer.value())
 	text, imgs := m.composer.expanded()
-	assert.Equal(t, "a [image #9]\n\n"+linesOf(11), text)
+	assert.Equal(t, "a "+mk+"\n\n"+linesOf(11), text)
 	assert.Equal(t, []string{"/tmp/a.png"}, imgs)
 }
 
@@ -180,6 +184,34 @@ func TestComposerDragSelectsAndCopies(t *testing.T) {
 	assertCopied(t, m, cmd, "hello")
 	press(m, tea.KeyPressMsg{Code: 'X', Text: "X"})
 	assert.Equal(t, "X world", m.composer.value(), "typing replaces the selection")
+}
+
+func TestComposerDoubleClickSelectsWord(t *testing.T) {
+	for _, tc := range []struct {
+		name, text  string
+		x, row      int
+		word, typed string
+	}{
+		{"first row", "alpha beta gamma", 9, 0, "beta", "alpha X gamma"},
+		{"wrapped row", "alpha beta gamma delta epsilon", 5, 1, "delta", "alpha beta gamma X epsilon"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newTestModel(t, 20, 30)
+			at := fixedClock(m)
+			typeText(m, tc.text)
+			y := m.composerTop() + tc.row
+
+			pressAt(m, tc.x, y)
+			releaseAt(m, tc.x, y)
+			*at = at.Add(300 * time.Millisecond)
+			pressAt(m, tc.x, y)
+			cmd := releaseAt(m, tc.x, y)
+
+			assertCopied(t, m, cmd, tc.word)
+			press(m, tea.KeyPressMsg{Code: 'X', Text: "X"})
+			assert.Equal(t, tc.typed, m.composer.value(), "typing replaces the word")
+		})
+	}
 }
 
 func TestComposerClickPlacesCursor(t *testing.T) {

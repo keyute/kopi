@@ -276,3 +276,17 @@ func TestSelectionClearsWhenLinesAboveChange(t *testing.T) {
 	assert.True(t, m.sel.empty())
 	assert.Empty(t, reversedRows(m))
 }
+
+func TestSelectionSurvivesBlockAppendedBelow(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	send(m, event.Notice{Text: "first"})
+	row := rowOf(t, m, "κ first")
+	pressAt(m, 2, row)
+	moveTo(m, 7, row)
+	releaseAt(m, 7, row)
+
+	send(m, event.Notice{Text: "other"})
+
+	assert.Equal(t, "first", m.sel.text(m.lines))
+	assert.Equal(t, []int{row}, reversedRows(m))
+}

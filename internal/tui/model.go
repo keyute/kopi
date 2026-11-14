@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -379,7 +380,8 @@ func (m *model) holdTop(change func()) {
 }
 
 // relayout rebuilds the transcript's lines: the header, then each block
-// that draws anything with one blank line above it.
+// that draws anything with one blank line above it. A selection, which holds
+// line indices, is dropped once any line up to its end changes.
 func (m *model) relayout() {
 	if m.width == 0 {
 		return
@@ -387,6 +389,7 @@ func (m *model) relayout() {
 	m.pending = pendingRows(m.queued, &m.keys, m.width, max(2, m.height/3), m.th)
 	blocks := m.tr.Blocks()
 	m.folds.settle(blocks)
+	old := m.lines
 	m.lines = header(m.version, m.th)
 	for _, b := range blocks {
 		ls := m.cache.lines(b, m.folds.of(b), m.width, m.th)
@@ -395,6 +398,17 @@ func (m *model) relayout() {
 		}
 		m.lines = append(m.lines, line{})
 		m.lines = append(m.lines, ls...)
+	}
+	if m.drag.region != regionTranscript && m.sel.empty() {
+		return
+	}
+	n := max(m.sel.anchor.line, m.sel.head.line) + 1
+	sameText := func(a, b line) bool { return a.text == b.text }
+	if !slices.EqualFunc(old[:min(n, len(old))], m.lines[:min(n, len(m.lines))], sameText) {
+		m.sel = selection{}
+		if m.drag.region == regionTranscript {
+			m.drag = drag{}
+		}
 	}
 }
 

@@ -155,7 +155,11 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	if err != nil {
 		return nil, fmt.Errorf("failed to open session: %w", err)
 	}
-	return &Session{inner: sess}, nil
+	s := &Session{inner: sess}
+	// Subscribed before any Session.Subscribe: PiG runs listeners in
+	// subscription order, so QueueChanged precedes the delivered UserMessage.
+	sess.Subscribe(s.dropDelivered)
+	return s, nil
 }
 
 // resume and continueLatest check the listing first because PiG reports a

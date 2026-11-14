@@ -43,7 +43,7 @@ type drag struct {
 func (m *model) mouse(msg tea.MouseMsg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.MouseClickMsg:
-		m.press(msg.Mouse())
+		return m.press(msg.Mouse())
 	case tea.MouseMotionMsg:
 		return m.motion(msg.Mouse())
 	case tea.MouseReleaseMsg:
@@ -59,12 +59,13 @@ func (m *model) mouse(msg tea.MouseMsg) tea.Cmd {
 	return nil
 }
 
-// press starts a drag in the transcript or the composer. A double click in
-// the transcript selects the word under the pointer, a triple click its line.
-func (m *model) press(mo tea.Mouse) {
+// press starts a drag in the transcript or the composer. A double click
+// selects the word under the pointer; in the transcript a triple click selects
+// its line.
+func (m *model) press(mo tea.Mouse) tea.Cmd {
 	m.sel, m.drag = selection{}, drag{}
 	if mo.Button != tea.MouseLeft {
-		return
+		return nil
 	}
 	n := m.clicks.press(m.now(), mo.X, mo.Y)
 	switch top := m.composerTop(); {
@@ -73,7 +74,7 @@ func (m *model) press(mo tea.Mouse) {
 		m.drag = drag{region: regionTranscript, at: mo, press: p, count: n, x: mo.X}
 		m.sel = selection{anchor: p, head: p}
 		if p.line >= len(m.lines) {
-			return
+			return nil
 		}
 		switch text := m.lines[p.line].text; n {
 		case 2:
@@ -84,8 +85,12 @@ func (m *model) press(mo tea.Mouse) {
 		}
 	case mo.Y >= top && mo.Y < top+m.composer.height():
 		m.drag = drag{region: regionComposer}
+		if n == 2 {
+			return m.composer.selectWord(mo.X, mo.Y-top)
+		}
 		m.composer.press(mo.X, mo.Y-top)
 	}
+	return nil
 }
 
 // motion extends the drag in the region it began in. In the transcript the

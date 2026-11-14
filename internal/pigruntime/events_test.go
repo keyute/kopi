@@ -58,11 +58,7 @@ func TestTranslate(t *testing.T) {
 			in:   agent.CompactionEndEvent{ErrorMessage: "too big"},
 			want: event.Notice{Text: "compaction failed: too big"},
 		},
-		{
-			name: "queue update keeps steering only",
-			in:   agent.QueueUpdateEvent{Steering: []string{"a", "b"}, FollowUp: []string{"c"}},
-			want: event.QueueChanged{Pending: []string{"a", "b"}},
-		},
+		{name: "queue update dropped", in: agent.QueueUpdateEvent{Steering: []string{"a", "b"}, FollowUp: []string{"c"}}},
 		{
 			name: "user message start",
 			in:   agent.MessageStartEvent{Message: agent.AgentMessage{User: &agent.UserMessage{Content: ai.UserContentBlocks{ai.TextContent{Text: "steer"}, ai.ImageContent{}}}}},
@@ -99,7 +95,7 @@ func TestTextJoinerSeparatesAdjacentTextBlocks(t *testing.T) {
 		{
 			name: "queue update between",
 			in:   []agent.AgentEvent{textStart, text("one"), agent.QueueUpdateEvent{}, textStart, text("two")},
-			want: []event.Event{event.TextDelta{Text: "one"}, event.QueueChanged{}, event.TextDelta{Text: "\n\ntwo"}},
+			want: []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: "\n\ntwo"}},
 		},
 		{
 			name: "tool call block between",

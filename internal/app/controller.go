@@ -420,9 +420,10 @@ func (c *Controller) startTurn(ctx context.Context, p pigruntime.Prompt) *Work {
 // transition that finds no work never races an undelivered TurnEnd of the old
 // session.
 func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session, emit func(event.Event), w *Work, p pigruntime.Prompt) {
+	parts := []pigruntime.Prompt{p}
 	for {
 		start := time.Now()
-		outcome, err := sess.Send(ctx, p.Text, p.Images...)
+		outcome, sent, err := sess.Send(ctx, p.Text, p.Images...)
 		elapsed := time.Since(start)
 		if err != nil {
 			outcome = event.Outcome{Status: event.Failed, Message: err.Error()}
@@ -430,6 +431,9 @@ func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session
 		}
 
 		c.queue.Lock()
+		if !sent {
+			w.next = slices.Concat(parts, w.next)
+		}
 		next, unsent := settle(w.stopped, outcome, w.next, c.take(sess, w))
 		w.next = nil
 		w.cancel()
@@ -451,6 +455,7 @@ func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session
 		}
 		ctx, w.cancel = context.WithCancel(base)
 		p = joined(next)
+		parts = next
 		emit(event.TurnEnd{WorkID: w.id, Outcome: outcome, Elapsed: elapsed})
 		emit(event.TurnStart{WorkID: w.id, Prompt: p.Text})
 		c.queue.Unlock()

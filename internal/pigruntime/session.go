@@ -30,12 +30,25 @@ type Session struct {
 	// held across PiG calls that notify listeners on the caller's goroutine,
 	// so no listener may take it.
 	steerMu sync.Mutex
-	// queuedMu guards queued; a listener takes it, so it is never held across
-	// a PiG call.
+	// queuedMu guards queued, listeners, nextID and skipped. dropDelivered
+	// takes it on PiG's event executor, so it is never held across a PiG call.
+	// Lock order is steerMu, queuedMu, then whatever a listener takes;
+	// listeners are called with it held and must not call back into Session.
 	queuedMu sync.Mutex
-	// queued mirrors PiG's steering queue, matched by queued text, with the
-	// prompts as written: PiG's ClearQueue returns only the queued texts.
-	queued []Steering
+	// queued is the source of QueueChanged: the steered messages not yet
+	// delivered, with the prompts as written. PiG's own text list can drop a
+	// steer whose text matches the prompt, and its updates are unordered.
+	queued    []Steering
+	listeners []listener
+	nextID    int
+	// skipped is sends when dropDelivered last skipped a prompt's own user
+	// message.
+	skipped uint64
+}
+
+type listener struct {
+	id int
+	fn func(event.Event)
 }
 
 type Image struct {
@@ -82,15 +95,40 @@ func (s *Session) ContextUsage() (tokens, window int, ok bool) {
 	return *u.Tokens, u.ContextWindow, true
 }
 
-// Subscribe registers fn to run synchronously on PiG's event executor; a slow
-// fn stalls the turn. Every call for a turn has run when Send returns.
+// Subscribe registers fn to run synchronously on PiG's event executor and,
+// for QueueChanged, on the goroutine that changed the queue. A slow fn stalls
+// the turn, and fn must not call back into the Session. Every call for a turn
+// has run when Send returns.
 func (s *Session) Subscribe(fn func(event.Event)) func() {
+	s.queuedMu.Lock()
+	s.nextID++
+	id := s.nextID
+	s.listeners = append(s.listeners, listener{id: id, fn: fn})
+	s.queuedMu.Unlock()
 	j := textJoiner{sends: &s.sends}
-	return s.inner.Subscribe(func(ev agent.AgentEvent) {
+	unsubscribe := s.inner.Subscribe(func(ev agent.AgentEvent) {
 		if e, ok := j.translate(ev); ok {
 			fn(e)
 		}
 	})
+	return func() {
+		unsubscribe()
+		s.queuedMu.Lock()
+		defer s.queuedMu.Unlock()
+		s.listeners = slices.DeleteFunc(s.listeners, func(l listener) bool { return l.id == id })
+	}
+}
+
+// notifyQueue reports the mirror to every listener. Called with queuedMu held,
+// so reports arrive in the order the mirror changed.
+func (s *Session) notifyQueue() {
+	pending := make([]string, 0, len(s.queued))
+	for _, st := range s.queued {
+		pending = append(pending, st.text)
+	}
+	for _, l := range s.listeners {
+		l.fn(event.QueueChanged{Pending: pending})
+	}
 }
 
 // Send runs one turn. Cancelling ctx is the abort request for this turn
@@ -99,9 +137,11 @@ func (s *Session) Subscribe(fn func(event.Event)) func() {
 // stopped normally (PiG reports an abort during a tool as StopReason "error"
 // with "context canceled"). Model failures are not
 // errors: they surface as a Failed outcome carrying the provider's error text.
-func (s *Session) Send(ctx context.Context, text string, images ...Image) (event.Outcome, error) {
+// sent is false only when ctx was already done and the prompt never reached
+// PiG.
+func (s *Session) Send(ctx context.Context, text string, images ...Image) (_ event.Outcome, sent bool, _ error) {
 	if ctx.Err() != nil {
-		return event.Outcome{Status: event.Interrupted}, nil
+		return event.Outcome{Status: event.Interrupted}, false, nil
 	}
 	var aborted atomic.Bool
 	abort := func() {
@@ -110,7 +150,6 @@ func (s *Session) Send(ctx context.Context, text string, images ...Image) (event
 	}
 	unsubscribe := s.inner.Subscribe(abortAtRunStart(ctx, abort))
 	defer unsubscribe()
-	defer s.inner.Subscribe(s.dropDelivered)()
 	abortDone := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() {
 		defer close(abortDone)
@@ -126,23 +165,23 @@ func (s *Session) Send(ctx context.Context, text string, images ...Image) (event
 		<-abortDone
 	}
 	if err != nil {
-		return event.Outcome{}, fmt.Errorf("failed to send prompt: %w", err)
+		return event.Outcome{}, true, fmt.Errorf("failed to send prompt: %w", err)
 	}
 	last := lastAssistant(msgs)
 	// A cancel can land after PiG finished the turn but before stop(); a
 	// turn that ended normally is complete whatever the abort hook saw.
 	if aborted.Load() && (last == nil || last.StopReason != ai.StopReasonStop) {
-		return event.Outcome{Status: event.Interrupted}, nil
+		return event.Outcome{Status: event.Interrupted}, true, nil
 	}
 	if last != nil {
 		switch last.StopReason {
 		case ai.StopReasonAborted:
-			return event.Outcome{Status: event.Interrupted}, nil
+			return event.Outcome{Status: event.Interrupted}, true, nil
 		case ai.StopReasonError:
-			return event.Outcome{Status: event.Failed, Message: last.ErrorMessage}, nil
+			return event.Outcome{Status: event.Failed, Message: last.ErrorMessage}, true, nil
 		}
 	}
-	return event.Outcome{Status: event.Completed}, nil
+	return event.Outcome{Status: event.Completed}, true, nil
 }
 
 // Steering is a message prepared by PrepareSteer for Steer.
@@ -182,6 +221,7 @@ func (s *Session) Steer(st Steering) {
 	defer s.steerMu.Unlock()
 	s.queuedMu.Lock()
 	s.queued = append(s.queued, st)
+	s.notifyQueue()
 	s.queuedMu.Unlock()
 	s.inner.QueueSteer(st.text, st.images)
 }
@@ -224,40 +264,40 @@ func (s *Session) resize(images []ai.ImageContent) []*ai.ImageContent {
 func (s *Session) TakeQueued() []Prompt {
 	s.steerMu.Lock()
 	defer s.steerMu.Unlock()
-	steering, _ := s.inner.ClearQueue()
+	_, _ = s.inner.ClearQueue()
 	s.queuedMu.Lock()
-	mirror := s.queued
-	s.queued = nil
-	s.queuedMu.Unlock()
-	var out []Prompt
-	for _, text := range steering {
-		i := slices.IndexFunc(mirror, func(st Steering) bool { return st.text == text })
-		if i < 0 {
-			out = append(out, Prompt{Text: text})
-			continue
-		}
-		out = append(out, mirror[i].Prompt)
-		mirror = slices.Delete(mirror, i, i+1)
+	defer s.queuedMu.Unlock()
+	out := make([]Prompt, 0, len(s.queued))
+	for _, st := range s.queued {
+		out = append(out, st.Prompt)
 	}
+	s.queued = nil
+	s.notifyQueue()
 	return out
 }
 
-// dropDelivered removes a delivered message from the mirror as PiG removes it
-// from its queue: the first queued entry with the user message's non-empty
-// text.
+// dropDelivered removes a delivered message from the mirror: the first queued
+// entry with the user message's non-empty text. It skips each Send's first
+// user message, the prompt itself, as textJoiner does; PiG emits it before any
+// steered one.
 func (s *Session) dropDelivered(ev agent.AgentEvent) {
 	start, ok := ev.(agent.MessageStartEvent)
 	if !ok || start.Message.User == nil {
+		return
+	}
+	s.queuedMu.Lock()
+	defer s.queuedMu.Unlock()
+	if n := s.sends.Load(); n != s.skipped {
+		s.skipped = n
 		return
 	}
 	text := userText(start.Message.User.Content)
 	if text == "" {
 		return
 	}
-	s.queuedMu.Lock()
-	defer s.queuedMu.Unlock()
 	if i := slices.IndexFunc(s.queued, func(st Steering) bool { return st.text == text }); i >= 0 {
 		s.queued = slices.Delete(s.queued, i, i+1)
+		s.notifyQueue()
 	}
 }
 

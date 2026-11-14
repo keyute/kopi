@@ -38,7 +38,7 @@ func sendAsync(t *testing.T, sess *Session, text string, images ...Image) <-chan
 	t.Helper()
 	done := make(chan error, 1)
 	go func() {
-		_, err := sess.Send(t.Context(), text, images...)
+		_, _, err := sess.Send(t.Context(), text, images...)
 		done <- err
 	}()
 	return done
@@ -187,7 +187,7 @@ func TestTakeQueuedReturnsUndeliveredPrompts(t *testing.T) {
 	require.NoError(t, <-done)
 	assert.Equal(t, []string{"prompt"}, userTexts(<-first))
 
-	_, err := sess.Send(t.Context(), "next")
+	_, _, err := sess.Send(t.Context(), "next")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"prompt", "next"}, userTexts(<-second))
 	assert.Empty(t, sess.TakeQueued())
@@ -254,7 +254,7 @@ func TestTakeQueuedKeepsSteerWithPromptText(t *testing.T) {
 		}
 	}))
 
-	_, err := sess.Send(t.Context(), "T")
+	_, _, err := sess.Send(t.Context(), "T")
 	require.NoError(t, err)
 
 	sent := 0

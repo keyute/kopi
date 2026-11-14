@@ -711,13 +711,16 @@ func TestQueueEditMovesQueueBeforeDraft(t *testing.T) {
 
 func TestQueueEditRegistersImages(t *testing.T) {
 	m, c := newTestModel(t, 60, 30)
-	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []string{"see [image #7]"}})
-	c.queued = []event.Input{{Text: "see [image #7]", Images: []string{"/tmp/a.png"}}}
+	m.composer.insertImage("/tmp/a.png")
+	mk := fmt.Sprintf("[image #%d]", imageCount.Load())
+	m.composer.reset()
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []string{"see " + mk}})
+	c.queued = []event.Input{{Text: "see " + mk, Images: []string{"/tmp/a.png"}}}
 
 	press(m, up)
 
 	text, imgs := m.composer.expanded()
-	assert.Equal(t, "see [image #7]", text)
+	assert.Equal(t, "see "+mk, text)
 	assert.Equal(t, []string{"/tmp/a.png"}, imgs)
 }
 
