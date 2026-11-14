@@ -8,8 +8,11 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
+	"slices"
+	"sync"
 	"testing"
 
+	"github.com/MichaelKinsy/PiG/agent"
 	"github.com/MichaelKinsy/PiG/ai"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -188,6 +191,80 @@ func TestTakeQueuedReturnsUndeliveredPrompts(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"prompt", "next"}, userTexts(<-second))
 	assert.Empty(t, sess.TakeQueued())
+}
+
+func TestQueueChangedNeverListsDeliveredMessage(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), reply("done"), reply("done")})
+	started, release := make(chan struct{}), make(chan struct{})
+	sess := openTestSession(t, r, heldProbe(started, release))
+	// Subscribed before recordQueue so it runs first. Only steer(sess, "y")'s
+	// own caller reports [x y]; it is held there until x has been delivered.
+	held, resume := make(chan struct{}), make(chan struct{})
+	t.Cleanup(sess.inner.Subscribe(func(ev agent.AgentEvent) {
+		if q, ok := ev.(agent.QueueUpdateEvent); ok && slices.Equal(q.Steering, []string{"x", "y"}) {
+			close(held)
+			<-resume
+		}
+	}))
+	evs := recordQueue(t, sess)
+
+	done := sendAsync(t, sess, "prompt")
+	<-started
+	steer(sess, "x")
+	steered := make(chan struct{})
+	go func() {
+		defer close(steered)
+		steer(sess, "y")
+	}()
+	<-held
+	close(release)
+	var got []event.Event
+	for ev := range evs {
+		got = append(got, ev)
+		if ev == (event.UserMessage{Text: "x"}) {
+			break
+		}
+	}
+	close(resume)
+	<-steered
+	require.NoError(t, <-done)
+	got = append(got, drain(evs)...)
+
+	delivered := slices.Index(got, event.Event(event.UserMessage{Text: "x"}))
+	for _, ev := range got[delivered+1:] {
+		if q, ok := ev.(event.QueueChanged); ok {
+			assert.NotContains(t, q.Pending, "x", "events: %v", got)
+		}
+	}
+}
+
+func TestTakeQueuedKeepsSteerWithPromptText(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{reply("done"), reply("done")})
+	sess := openTestSession(t, r)
+	steer(sess, "T")
+	var once sync.Once
+	var taken []Prompt
+	t.Cleanup(sess.inner.Subscribe(func(ev agent.AgentEvent) {
+		if start, ok := ev.(agent.MessageStartEvent); ok && start.Message.User != nil {
+			once.Do(func() { taken = sess.TakeQueued() })
+		}
+	}))
+
+	_, err := sess.Send(t.Context(), "T")
+	require.NoError(t, err)
+
+	sent := 0
+	for _, m := range sess.inner.Messages() {
+		if m.User != nil && userText(m.User.Content) == "T" {
+			sent++
+		}
+	}
+	returned := slices.ContainsFunc(taken, func(p Prompt) bool { return p.Text == "T" })
+	assert.True(t, returned || sent == 2, "the steer is neither returned (%v) nor delivered (%d sent)", taken, sent)
 }
 
 func TestSendAndSteerCarryImages(t *testing.T) {

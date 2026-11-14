@@ -218,3 +218,18 @@ func TestComposerClickIsOtherInputBetweenPastes(t *testing.T) {
 
 	assert.Equal(t, "[paste #1 +11 lines][paste #2 +11 lines]", m.composer.value())
 }
+
+func TestRestoreRegistersOnlyMarkersThatWereImages(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	typeText(m, "see [image #999] ")
+	m.composer.insertImage("/tmp/b.png")
+	real := fmt.Sprintf("[image #%d]", imageCount.Load())
+	require.Equal(t, "see [image #999] "+real, m.composer.value())
+
+	text, imgs := m.composer.expanded()
+	m.composer.reset()
+	m.composer.restore([]event.Input{{Text: text, Images: imgs}})
+
+	assert.Equal(t, block{image: "/tmp/b.png"}, m.composer.blocks[real])
+	assert.NotContains(t, m.composer.blocks, "[image #999]", "a typed marker stays plain text")
+}

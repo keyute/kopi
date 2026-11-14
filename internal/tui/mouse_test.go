@@ -261,3 +261,18 @@ func TestSelectionClearsOnResizeFoldSessionAndTheme(t *testing.T) {
 		})
 	}
 }
+
+func TestSelectionClearsWhenLinesAboveChange(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	send(m, start("a"), okOut("a", "3 lines", "a1\na2\n"), start("b"), ok("b", "1 line"))
+	row := rowOf(t, m, "  ↳ b.go · 1 line")
+	pressAt(m, 4, row)
+	moveTo(m, 8, row)
+	releaseAt(m, 8, row)
+	require.Equal(t, []int{row}, reversedRows(m))
+
+	send(m, event.TextDelta{Text: "Done."})
+
+	assert.True(t, m.sel.empty())
+	assert.Empty(t, reversedRows(m))
+}
