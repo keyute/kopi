@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/app"
+	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
@@ -26,7 +27,17 @@ type fakeController struct {
 	running    bool
 	interrupts int
 	submitted  []string
+	images     [][]string
 	submitErr  error
+	sentNow    []string
+	nowImages  [][]string
+	sendNowErr error
+	// queued is what TakeQueued hands out once; takes counts the calls.
+	queued     []event.Input
+	takes      int
+	toggles    int
+	history    []string
+	histories  int
 	subscriber func(event.Event)
 }
 
@@ -35,9 +46,30 @@ func (f *fakeController) Subscribe(fn func(event.Event)) func() {
 	return func() { f.subscriber = nil }
 }
 
-func (f *fakeController) Submit(_ context.Context, input string) (*app.Work, error) {
-	f.submitted = append(f.submitted, input)
+func (f *fakeController) Submit(_ context.Context, text string, images ...string) (*app.Work, error) {
+	f.submitted = append(f.submitted, text)
+	f.images = append(f.images, images)
 	return nil, f.submitErr
+}
+
+func (f *fakeController) SendNow(_ context.Context, text string, images ...string) error {
+	f.sentNow = append(f.sentNow, text)
+	f.nowImages = append(f.nowImages, images)
+	return f.sendNowErr
+}
+
+func (f *fakeController) TakeQueued() []event.Input {
+	f.takes++
+	q := f.queued
+	f.queued = nil
+	return q
+}
+
+func (f *fakeController) ToggleMode() { f.toggles++ }
+
+func (f *fakeController) History() []string {
+	f.histories++
+	return f.history
 }
 
 func (f *fakeController) Interrupt() bool {
@@ -47,10 +79,23 @@ func (f *fakeController) Interrupt() bool {
 
 func (f *fakeController) Status() app.Status { return f.status }
 
+// testOptions are the options config's defaults resolve to.
+func testOptions() Options {
+	s := config.DefaultStatusLine()
+	return Options{Version: "v1.2.3", Keys: config.DefaultKeys(), StatusLeft: s.Left, StatusRight: s.Right}
+}
+
 func newTestModel(t *testing.T, width, height int) (*model, *fakeController) {
 	t.Helper()
+	return newTestModelWith(t, width, height, testOptions())
+}
+
+func newTestModelWith(t *testing.T, width, height int, opts Options) (*model, *fakeController) {
+	t.Helper()
 	c := &fakeController{status: app.Status{Model: "mock/model-1", Mode: policy.Plan}}
-	m := newModel(t.Context(), c, newBridge(), "v1.2.3")
+	m := newModel(t.Context(), c, newBridge(), opts)
+	m.clip = &fakeClipboard{}
+	m.pickVerb = func() verb { return fallbackVerb }
 	m.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	return m, c
 }
@@ -64,14 +109,22 @@ func press(m *model, k tea.KeyPressMsg) tea.Cmd {
 	return cmd
 }
 
+// typeText enters s as typing would, so it never collapses into a block.
 func typeText(m *model, s string) {
+	m.composer.update(tea.PasteMsg{Content: s})
+}
+
+// pasteText delivers s as a terminal paste.
+func pasteText(m *model, s string) {
 	m.Update(tea.PasteMsg{Content: s})
 }
 
 var (
 	enter  = tea.KeyPressMsg{Code: tea.KeyEnter}
 	ctrlC  = tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+	ctrlD  = tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl}
 	escape = tea.KeyPressMsg{Code: tea.KeyEscape}
+	left   = tea.KeyPressMsg{Code: tea.KeyLeft}
 )
 
 // screen is the view's text, one string per row, with trailing blanks trimmed.
@@ -234,11 +287,11 @@ func TestComposerGrowsToAThirdOfTheHeight(t *testing.T) {
 	m, _ := newTestModel(t, 30, 30)
 
 	typeText(m, "a\nb")
-	assert.Equal(t, 2, m.composer.Height())
+	assert.Equal(t, 2, m.composer.height())
 	assert.Equal(t, "  b", screen(m)[len(screen(m))-3])
 
 	typeText(m, strings.Repeat("\nline", 20))
-	assert.Equal(t, 10, m.composer.Height())
+	assert.Equal(t, 10, m.composer.height())
 	assert.Len(t, screen(m), 30)
 }
 
@@ -267,7 +320,7 @@ func TestLightBackgroundSwitchesTheme(t *testing.T) {
 
 	m.Update(tea.BackgroundColorMsg{Color: color.White})
 	assert.Equal(t, latte(), m.th)
-	assert.Equal(t, latte().userMessageBg, m.composer.Styles().Focused.Text.GetBackground())
+	assert.Equal(t, latte().userMessageBg, m.composer.ta.Styles().Focused.Text.GetBackground())
 }
 
 func TestSessionChangedRestoresHistory(t *testing.T) {
@@ -354,15 +407,33 @@ func TestEnterKeepsTextUntilAcceptedThenClears(t *testing.T) {
 	cmd := press(m, enter)
 
 	require.NotNil(t, cmd)
-	assert.Equal(t, "hello", m.composer.Value())
+	assert.Equal(t, "hello", m.composer.value())
 	assert.Empty(t, c.submitted, "Submit runs in the command, not in Update")
 	assert.Nil(t, press(m, enter), "a second Enter while in flight submits nothing")
 	msg := cmd()
 	assert.Equal(t, []string{"hello"}, c.submitted)
-	assert.Equal(t, "hello", m.composer.Value())
+	assert.Equal(t, "hello", m.composer.value())
 
 	m.Update(msg)
-	assert.Empty(t, m.composer.Value())
+	assert.Empty(t, m.composer.value())
+}
+
+func TestSubmitSendsExpandedTextAndImages(t *testing.T) {
+	m, c := newTestModel(t, 40, 20)
+	img := writeImage(t, t.TempDir(), "a.png")
+	n := imageCount.Load() + 1
+	typeText(m, "look ")
+	pasteText(m, img)
+	pasteText(m, linesOf(11))
+
+	cmd := press(m, enter)
+	require.NotNil(t, cmd)
+	m.Update(cmd())
+
+	assert.Equal(t, []string{fmt.Sprintf("look [image #%d]", n) + linesOf(11)}, c.submitted)
+	assert.Equal(t, [][]string{{img}}, c.images)
+	assert.Empty(t, m.composer.value(), "the unchanged raw draft is cleared")
+	assert.Empty(t, m.composer.blocks)
 }
 
 func TestTextTypedWhileSubmittingIsKept(t *testing.T) {
@@ -372,7 +443,7 @@ func TestTextTypedWhileSubmittingIsKept(t *testing.T) {
 
 	m.Update(msg)
 
-	assert.Equal(t, "hello again", m.composer.Value())
+	assert.Equal(t, "hello again", m.composer.value())
 }
 
 func TestBlankEnterDoesNothing(t *testing.T) {
@@ -380,7 +451,7 @@ func TestBlankEnterDoesNothing(t *testing.T) {
 	typeText(m, "  ")
 
 	assert.Nil(t, press(m, enter))
-	assert.Equal(t, "  ", m.composer.Value())
+	assert.Equal(t, "  ", m.composer.value())
 }
 
 func TestNewlineKeysInsertNewline(t *testing.T) {
@@ -394,42 +465,44 @@ func TestNewlineKeysInsertNewline(t *testing.T) {
 			typeText(m, "a")
 			assert.Nil(t, press(m, k))
 			typeText(m, "b")
-			assert.Equal(t, "a\nb", m.composer.Value())
+			assert.Equal(t, "a\nb", m.composer.value())
 			assert.Empty(t, c.submitted)
 		})
 	}
 }
 
-func TestBusyRefusalKeepsDraftAndHintsOnWorkingRow(t *testing.T) {
+func TestEnterWhileBusyQueuesAndClears(t *testing.T) {
 	m, c := newTestModel(t, 60, 20)
-	send(m, event.TurnStart{Prompt: "first"}, start("a"), ok("a", "1 line"), start("b"), ok("b", "2 lines"))
-	before := body(m)
-	c.submitErr = app.ErrBusy
+	send(m, event.TurnStart{Prompt: "first"})
 
 	m.Update(submitText(t, m, "more"))
 
-	assert.Equal(t, "more", m.composer.Value())
-	assert.Equal(t, before, body(m), "no block is added and the live group stays live")
-	assert.Contains(t, screen(m), "⠋ Working… 0s · esc to interrupt")
-	assert.Nil(t, press(m, tea.KeyPressMsg{Code: tea.KeyLeft}))
-	assert.Contains(t, screen(m), "⠋ Working… 0s")
-	assert.NotContains(t, screen(m), "⠋ Working… 0s · esc to interrupt", "a key press clears the hint")
-
-	m.Update(submitText(t, m, "!"))
-	require.Contains(t, screen(m), "⠋ Working… 0s · esc to interrupt")
-	send(m, event.TurnEnd{})
-	assert.Empty(t, m.hint, "the turn ending clears the hint")
+	assert.Equal(t, []string{"more"}, c.submitted)
+	assert.Empty(t, m.composer.value())
+	s := screen(m)
+	assert.Equal(t, "⠋ Working… 0s", s[len(s)-6], "no hint on the working row")
 }
 
-func TestBusyRefusalWithoutTurnOnlyKeepsDraft(t *testing.T) {
+func TestBusyRefusalKeepsDraftAndFlashes(t *testing.T) {
 	m, c := newTestModel(t, 60, 20)
 	c.submitErr = app.ErrBusy
 
-	m.Update(submitText(t, m, "more"))
+	_, cmd := m.Update(submitText(t, m, "more"))
 
-	assert.Equal(t, "more", m.composer.Value())
-	assert.Empty(t, m.hint)
+	assert.NotNil(t, cmd, "the flash expires")
+	assert.Equal(t, "more", m.composer.value())
+	assert.Contains(t, statusText(m), "busy switching sessions")
 	assert.Empty(t, body(m))
+}
+
+func TestBadImageRefusalKeepsDraft(t *testing.T) {
+	m, c := newTestModel(t, 60, 20)
+	c.submitErr = fmt.Errorf("%w: content is text/plain", app.ErrBadImage)
+
+	m.Update(submitText(t, m, "look"))
+
+	assert.Equal(t, "look", m.composer.value())
+	assert.Equal(t, []string{"", "κ not a supported image: content is text/plain"}, body(m))
 }
 
 func TestCommandDuringTurnIsSubmitted(t *testing.T) {
@@ -447,32 +520,84 @@ func TestSubmitErrors(t *testing.T) {
 
 	_, cmd := m.Update(submitText(t, m, "/nope"))
 	assert.Nil(t, cmd)
-	assert.Equal(t, "/nope", m.composer.Value(), "the draft is kept so a typo can be fixed")
+	assert.Equal(t, "/nope", m.composer.value(), "the draft is kept so a typo can be fixed")
 	assert.Equal(t, []string{"", "κ unknown command: /nope"}, body(m))
 
-	m.composer.Reset()
+	m.composer.reset()
 	c.submitErr = app.ErrQuit
 	_, cmd = m.Update(submitText(t, m, "/quit"))
 	require.NotNil(t, cmd)
 	assert.Equal(t, tea.QuitMsg{}, cmd())
 }
 
-func TestCtrlCInterruptsWhenBusyAndQuitsWhenIdle(t *testing.T) {
+func isQuit(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	_, ok := cmd().(tea.QuitMsg)
+	return ok
+}
+
+// statusText is the status line's text.
+func statusText(m *model) string {
+	s := screen(m)
+	return s[len(s)-1]
+}
+
+func TestCancelInterruptsThenClearsThenTakesTwoToQuit(t *testing.T) {
 	for _, msg := range []tea.Msg{ctrlC, interruptMsg{}} {
 		t.Run(fmt.Sprintf("%T", msg), func(t *testing.T) {
-			m, c := newTestModel(t, 30, 20)
+			cancel := func(m *model) tea.Cmd { _, cmd := m.Update(msg); return cmd }
+			m, c := newTestModel(t, 40, 20)
+			typeText(m, "draft")
 
 			c.running = true
-			_, cmd := m.Update(msg)
-			assert.Nil(t, cmd)
+			assert.Nil(t, cancel(m))
 			assert.Equal(t, 1, c.interrupts)
+			assert.Equal(t, "draft", m.composer.value(), "interrupting keeps the draft")
 
 			c.running = false
-			_, cmd = m.Update(msg)
-			require.NotNil(t, cmd)
-			assert.Equal(t, tea.QuitMsg{}, cmd())
+			assert.Nil(t, cancel(m))
+			assert.Empty(t, m.composer.value(), "at idle the draft is cleared")
+
+			cmd := cancel(m)
+			assert.False(t, isQuit(cmd))
+			assert.True(t, strings.HasSuffix(statusText(m), "ctrl+c again to exit · plan"), statusText(m))
+			assert.True(t, isQuit(cancel(m)))
+
+			m.Update(flashMsg{m.flashSeq})
+			assert.False(t, strings.Contains(statusText(m), "again to exit"), "the hint expires")
+			assert.False(t, isQuit(cancel(m)), "the next press arms again")
+			assert.Contains(t, statusText(m), "ctrl+c again to exit")
+
+			press(m, left)
+			assert.NotContains(t, statusText(m), "again to exit", "another key disarms")
+			assert.False(t, isQuit(cancel(m)))
 		})
 	}
+}
+
+func TestStaleFlashMsgKeepsNewerFlash(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	m.flash("first")
+	stale := m.flashSeq
+	m.flash("second")
+
+	m.Update(flashMsg{stale})
+
+	assert.Contains(t, statusText(m), "second")
+}
+
+func TestCtrlDQuitsOnlyWhenEmpty(t *testing.T) {
+	m, _ := newTestModel(t, 30, 20)
+	typeText(m, "ab")
+	press(m, tea.KeyPressMsg{Code: tea.KeyHome})
+
+	assert.False(t, isQuit(press(m, ctrlD)))
+	assert.Equal(t, "b", m.composer.value(), "with text it deletes forward")
+
+	m.composer.reset()
+	assert.True(t, isQuit(press(m, ctrlD)))
 }
 
 func TestEscInterruptsAndNeverQuits(t *testing.T) {
@@ -481,8 +606,28 @@ func TestEscInterruptsAndNeverQuits(t *testing.T) {
 	assert.Nil(t, press(m, escape))
 
 	c.running = false
+	typeText(m, "draft")
 	assert.Nil(t, press(m, escape))
 	assert.Equal(t, 2, c.interrupts)
+	assert.Equal(t, "draft", m.composer.value(), "esc at idle keeps the draft")
+}
+
+func TestReboundKeys(t *testing.T) {
+	opts := testOptions()
+	opts.Keys = map[string][]string{"submit": {"ctrl+s"}}
+	m, c := newTestModelWith(t, 30, 20, opts)
+	typeText(m, "hi")
+
+	press(m, enter)
+	assert.Empty(t, c.submitted, "enter no longer submits")
+	cmd := press(m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	require.NotNil(t, cmd)
+	cmd()
+	assert.Equal(t, []string{"hi"}, c.submitted)
+
+	assert.False(t, isQuit(press(m, ctrlC)), "cancel is unbound")
+	assert.False(t, isQuit(press(m, ctrlC)))
+	assert.Zero(t, c.interrupts)
 }
 
 func TestInitWaitsForEvents(t *testing.T) {
@@ -493,4 +638,196 @@ func TestInitWaitsForEvents(t *testing.T) {
 
 	require.NotNil(t, cmd, "the wait is re-armed")
 	assert.Equal(t, []string{"", "κ early"}, body(m))
+}
+
+var (
+	up        = tea.KeyPressMsg{Code: tea.KeyUp}
+	down      = tea.KeyPressMsg{Code: tea.KeyDown}
+	ctrlEnter = tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl}
+	shiftTab  = tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
+)
+
+func TestSendNowSendsExpandedTextAndImages(t *testing.T) {
+	m, c := newTestModel(t, 40, 20)
+	img := writeImage(t, t.TempDir(), "a.png")
+	n := imageCount.Load() + 1
+	typeText(m, "look ")
+	pasteText(m, img)
+	pasteText(m, linesOf(11))
+
+	cmd := press(m, ctrlEnter)
+	require.NotNil(t, cmd)
+	assert.Empty(t, c.sentNow, "SendNow runs in the command, not in Update")
+	m.Update(cmd())
+
+	assert.Equal(t, []string{fmt.Sprintf("look [image #%d]", n) + linesOf(11)}, c.sentNow)
+	assert.Equal(t, [][]string{{img}}, c.nowImages)
+	assert.Empty(t, c.submitted)
+	assert.Empty(t, m.composer.value())
+}
+
+func TestSendNowWithEmptyDraftSendsTheQueue(t *testing.T) {
+	m, c := newTestModel(t, 40, 20)
+
+	cmd := press(m, ctrlEnter)
+	require.NotNil(t, cmd)
+	m.Update(cmd())
+
+	assert.Equal(t, []string{""}, c.sentNow)
+}
+
+func TestSendNowRefusalKeepsDraft(t *testing.T) {
+	m, c := newTestModel(t, 40, 20)
+	c.sendNowErr = errors.New("boom")
+	typeText(m, "draft")
+
+	cmd := press(m, ctrlEnter)
+	require.NotNil(t, cmd)
+	m.Update(cmd())
+
+	assert.Equal(t, "draft", m.composer.value())
+	assert.Equal(t, []string{"", "κ boom"}, body(m))
+}
+
+// queueTwo starts a turn with a and b queued.
+func queueTwo(m *model, c *fakeController) {
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []string{"a", "b"}})
+	c.queued = []event.Input{{Text: "a"}, {Text: "b"}}
+}
+
+func TestQueueEditMovesQueueBeforeDraft(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	queueTwo(m, c)
+	typeText(m, "draft")
+
+	assert.Nil(t, press(m, up))
+
+	assert.Equal(t, 1, c.takes)
+	assert.Equal(t, "a\n\nb\n\ndraft", m.composer.value())
+	assert.NotContains(t, strings.Join(screen(m), "\n"), "queued", "the area empties at once")
+	press(m, up)
+	assert.Equal(t, 1, c.takes, "a second press does not take again")
+}
+
+func TestQueueEditRegistersImages(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []string{"see [image #7]"}})
+	c.queued = []event.Input{{Text: "see [image #7]", Images: []string{"/tmp/a.png"}}}
+
+	press(m, up)
+
+	text, imgs := m.composer.expanded()
+	assert.Equal(t, "see [image #7]", text)
+	assert.Equal(t, []string{"/tmp/a.png"}, imgs)
+}
+
+func TestUpWithNothingPendingBrowsesHistory(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	c.history = []string{"old"}
+	m.composer.setHistory(c.History())
+	send(m, event.TurnStart{Prompt: "go"})
+
+	press(m, up)
+
+	assert.Zero(t, c.takes)
+	assert.Equal(t, "old", m.composer.value())
+}
+
+func TestUpInsideMultiLineDraftMovesCursor(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	queueTwo(m, c)
+	c.history = []string{"old"}
+	m.composer.setHistory(c.History())
+	typeText(m, "one\ntwo\nthree")
+
+	press(m, up)
+
+	assert.Zero(t, c.takes)
+	assert.Equal(t, "one\ntwo\nthree", m.composer.value())
+	assert.Equal(t, 1, m.composer.ta.Line())
+}
+
+func TestUnsentInputReturnsBeforeDraft(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	send(m, event.TurnStart{Prompt: "go"})
+	typeText(m, "draft")
+
+	send(m, event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}, Unsent: []event.Input{{Text: "a"}, {Text: "b"}}})
+
+	assert.Equal(t, "a\n\nb\n\ndraft", m.composer.value())
+}
+
+// submitDuringStop types text and presses Enter in a running turn, then
+// delivers the stopped turn's TurnEnd handing back unsent before the
+// submit's result, which it returns.
+func submitDuringStop(t *testing.T, m *model, text string, unsent ...event.Input) tea.Msg {
+	t.Helper()
+	send(m, event.TurnStart{Prompt: "go"})
+	msg := submitText(t, m, text)
+	send(m, event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}, Unsent: unsent})
+	require.Equal(t, text, m.composer.value(), "held while the submit is in flight")
+	return msg
+}
+
+func TestUnsentInputDuringAcceptedSubmitReplacesIt(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	msg := submitDuringStop(t, m, "/new", event.Input{Text: "fix the test"})
+
+	m.Update(msg)
+
+	assert.Equal(t, "fix the test", m.composer.value())
+}
+
+func TestUnsentInputDuringRefusedSubmitGoesBeforeIt(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	c.submitErr = errors.New("boom")
+	msg := submitDuringStop(t, m, "/new", event.Input{Text: "fix the test"})
+
+	m.Update(msg)
+
+	assert.Equal(t, "fix the test\n\n/new", m.composer.value())
+}
+
+func TestUnsentInputDuringBusyRefusalGoesBeforeIt(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	c.submitErr = app.ErrBusy
+	msg := submitDuringStop(t, m, "/new", event.Input{Text: "fix the test"})
+
+	m.Update(msg)
+
+	assert.Equal(t, "fix the test\n\n/new", m.composer.value())
+}
+
+func TestOwnTextHandedBackDuringAcceptedSubmitAppearsOnce(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	msg := submitDuringStop(t, m, "x", event.Input{Text: "x"})
+
+	m.Update(msg)
+
+	assert.Equal(t, "x", m.composer.value())
+}
+
+func TestAcceptedSubmitReloadsHistory(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	require.Equal(t, 1, c.histories, "loaded at start")
+	msg := submitText(t, m, "hello")
+	c.history = []string{"hello"}
+
+	m.Update(msg)
+
+	press(m, up)
+	assert.Equal(t, "hello", m.composer.value())
+}
+
+func TestToggleModeKey(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	assert.Nil(t, press(m, shiftTab))
+	assert.Equal(t, 1, c.toggles)
+
+	opts := testOptions()
+	opts.Keys["toggle-mode"] = []string{"ctrl+t"}
+	m, c = newTestModelWith(t, 60, 30, opts)
+	press(m, shiftTab)
+	press(m, tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	assert.Equal(t, 1, c.toggles)
 }

@@ -4,22 +4,26 @@ import "github.com/keyute/kopi/internal/transcript"
 
 // folds is the frontend's own view state over the transcript: which sealed
 // groups are open (by group key), which calls show their output (by call
-// ID), and whether everything is shown.
+// ID), whether everything is shown, and the verb each live turn picked (by
+// turn key).
 type folds struct {
 	open     map[string]bool
 	expanded map[string]bool
 	all      bool
+	verbs    map[string]verb
 }
 
-// blockFolds is the part of the fold state one block's lines depend on.
-// expanded is per call: a group's calls in order, or a row's one call.
+// blockFolds is the part of the view state one block's lines depend on.
+// expanded is per call: a group's calls in order, or a row's one call. verb
+// is a turn's.
 type blockFolds struct {
 	open     bool
 	expanded []bool
+	verb     verb
 }
 
 func newFolds() folds {
-	return folds{open: map[string]bool{}, expanded: map[string]bool{}}
+	return folds{open: map[string]bool{}, expanded: map[string]bool{}, verbs: map[string]verb{}}
 }
 
 func (f *folds) of(b transcript.Block) blockFolds {
@@ -34,6 +38,11 @@ func (f *folds) of(b transcript.Block) blockFolds {
 		if b.Call.State == transcript.OK {
 			return blockFolds{expanded: []bool{f.all || f.expanded[b.Call.ID]}}
 		}
+	case transcript.Turn:
+		if v, ok := f.verbs[b.Key()]; ok {
+			return blockFolds{verb: v}
+		}
+		return blockFolds{verb: fallbackVerb}
 	}
 	return blockFolds{}
 }

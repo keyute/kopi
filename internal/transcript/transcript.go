@@ -45,6 +45,10 @@ func (t *Transcript) Apply(ev event.Event) {
 	switch ev := ev.(type) {
 	case event.TurnStart:
 		t.items = append(t.items, item{kind: userItem, text: ev.Prompt})
+	case event.UserMessage:
+		// History restores a steered message as a TurnStart; both draw the
+		// same block.
+		t.items = append(t.items, item{kind: userItem, text: ev.Text})
 	case event.TextDelta:
 		if n := len(t.items); n > t.boundary && t.items[n-1].kind == assistantItem {
 			t.items[n-1].text += ev.Text

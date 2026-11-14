@@ -17,13 +17,18 @@ import (
 
 	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/config"
+	"github.com/keyute/kopi/internal/history"
 	"github.com/keyute/kopi/internal/line"
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/tool"
 	"github.com/keyute/kopi/internal/tui"
 )
 
-const joinTimeout = 5 * time.Second
+const (
+	joinTimeout = 5 * time.Second
+	// historyLimit is how many prompts are kept for each workspace.
+	historyLimit = 100
+)
 
 func Execute() {
 	if err := newRoot().Execute(); err != nil {
@@ -214,13 +219,28 @@ func runInteractive(cmd *cobra.Command, req app.OpenRequest) (err error) {
 		}
 	}()
 
-	c := app.NewController(rt, app.Config{Model: model, Workspace: cwd, Tools: []tool.Tool{tool.NewRead(ws)}, JoinTimeout: joinTimeout})
+	cfg := app.Config{Model: model, Workspace: cwd, Tools: []tool.Tool{tool.NewRead(ws)}, JoinTimeout: joinTimeout}
+	// Only the fullscreen interface records prompts.
+	if fullscreen {
+		store, err := history.Open(paths.HistoryFile, cwd, historyLimit)
+		if err != nil {
+			slog.Warn("failed to open prompt history", "err", err)
+		}
+		cfg.History = store
+	}
+	c := app.NewController(rt, cfg)
 	// Created before Open so the session event is shown.
 	var f frontend
 	if fullscreen {
-		f = tui.New(c, cmd.InOrStdin(), cmd.OutOrStdout(), kopiVersion())
+		f = tui.New(c, cmd.InOrStdin(), cmd.OutOrStdout(), tui.Options{
+			Version:     kopiVersion(),
+			Keys:        resolved.Config.Keys,
+			StatusLeft:  resolved.Config.StatusLine.Left,
+			StatusRight: resolved.Config.StatusLine.Right,
+			ImageDir:    paths.ImageDir,
+		})
 	} else {
-		f = line.New(c, cmd.InOrStdin(), cmd.OutOrStdout(), isTerminal(cmd.InOrStdin()))
+		f = line.New(c, cmd.InOrStdin(), cmd.OutOrStdout())
 	}
 	// Only Open may be cancelled by SIGINT; ctx outlives it as the runtime's
 	// signal.

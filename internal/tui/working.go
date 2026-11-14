@@ -8,12 +8,7 @@ func newSpinner(th theme) spinner.Model {
 	return spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(fg(th.accent)))
 }
 
-// workingRow is the row above the composer while a turn runs; a non-empty
-// hint follows the elapsed time.
-func workingRow(sp *spinner.Model, elapsed, hint string, th theme) string {
-	row := sp.View() + " " + fg(th.muted).Render("Working… "+elapsed)
-	if hint != "" {
-		row += fg(th.dim).Render(" · " + hint)
-	}
-	return row
+// workingRow is the row above the composer while a turn runs.
+func workingRow(sp *spinner.Model, v verb, elapsed string, th theme) string {
+	return sp.View() + " " + fg(th.muted).Render(v.ing+"… "+elapsed)
 }

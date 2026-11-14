@@ -81,7 +81,7 @@ func (c *renderCache) render(b transcript.Block, f blockFolds) []line {
 	case transcript.Error:
 		return plain(hang("κ ", fg(th.error), b.Text, fg(th.error), width))
 	case transcript.Turn:
-		return plain(renderTurn(b, width, th))
+		return plain(renderTurn(b, f.verb, width, th))
 	}
 	return nil
 }
@@ -154,7 +154,7 @@ func outputLines(c transcript.Call, width int, th theme) []line {
 	return plain(hang("    ", fg(th.muted), output, fg(th.muted), width))
 }
 
-func renderTurn(t transcript.Turn, width int, th theme) []string {
+func renderTurn(t transcript.Turn, v verb, width int, th theme) []string {
 	var text string
 	var c lipgloss.Style
 	switch t.Outcome.Status {
@@ -162,7 +162,7 @@ func renderTurn(t transcript.Turn, width int, th theme) []string {
 		if t.Elapsed == 0 {
 			return nil
 		}
-		text, c = "Worked for "+formatDuration(t.Elapsed), fg(th.dim)
+		text, c = v.ed+" for "+formatDuration(t.Elapsed), fg(th.dim)
 	case event.Interrupted:
 		text, c = "Interrupted", fg(th.warning)
 	case event.Failed:

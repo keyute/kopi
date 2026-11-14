@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -17,34 +18,50 @@ import (
 // Controller is the part of app.Controller the frontend uses.
 type Controller interface {
 	Subscribe(fn func(event.Event)) func()
-	Submit(ctx context.Context, input string) (*app.Work, error)
+	Submit(ctx context.Context, text string, images ...string) (*app.Work, error)
+	SendNow(ctx context.Context, text string, images ...string) error
+	TakeQueued() []event.Input
 	Interrupt() bool
+	ToggleMode()
+	History() []string
 	Status() app.Status
+}
+
+// Options are the frontend's settings. Keys maps action names to key
+// strings; an action without keys is disabled. StatusLeft and StatusRight
+// name status line segments. ImageDir holds saved clipboard images.
+type Options struct {
+	Version                 string
+	Keys                    map[string][]string
+	StatusLeft, StatusRight []string
+	ImageDir                string
 }
 
 type Frontend struct {
 	c           Controller
 	in          io.Reader
 	out         io.Writer
-	version     string
+	opts        Options
 	bridge      *bridge
 	unsubscribe func()
 }
 
 // New subscribes to c at once, so events from an Open that follows are
 // drawn. Run unsubscribes when it returns.
-func New(c Controller, in io.Reader, out io.Writer, version string) *Frontend {
+func New(c Controller, in io.Reader, out io.Writer, opts Options) *Frontend {
 	b := newBridge()
-	return &Frontend{c: c, in: in, out: out, version: version, bridge: b, unsubscribe: c.Subscribe(b.push)}
+	return &Frontend{c: c, in: in, out: out, opts: opts, bridge: b, unsubscribe: c.Subscribe(b.push)}
 }
 
-// Run shows the UI until /quit, ctx cancellation, or Ctrl+C or an interrupt
-// at idle. interrupts delivers SIGINT.
+// Run shows the UI until /quit, ctx cancellation, the quit key on an empty
+// draft, or two cancels (the cancel key or SIGINT) in a row at idle with an
+// empty draft. interrupts delivers SIGINT.
 func (f *Frontend) Run(ctx context.Context, interrupts <-chan os.Signal) error {
 	defer f.unsubscribe()
 	defer f.bridge.close()
+	pruneImages(f.opts.ImageDir, time.Now())
 
-	p := tea.NewProgram(newModel(ctx, f.c, f.bridge, f.version),
+	p := tea.NewProgram(newModel(ctx, f.c, f.bridge, f.opts),
 		tea.WithInput(f.in), tea.WithOutput(f.out), tea.WithoutSignalHandler())
 	stopped := make(chan struct{})
 	defer close(stopped)

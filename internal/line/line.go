@@ -25,13 +25,12 @@ const (
 type Frontend struct {
 	c           *app.Controller
 	in          io.Reader
-	interactive bool
 	unsubscribe func()
 
 	mu  sync.Mutex
 	out io.Writer
 	// atLineStart is whether the last write ended a line, so a status line
-	// never continues streamed text or the prompt marker.
+	// never continues streamed text.
 	atLineStart bool
 	// lastError is the last Error event of the current turn; a Failed outcome
 	// carrying the same text is not printed twice.
@@ -40,18 +39,16 @@ type Frontend struct {
 
 // New subscribes to c at once, so events from an Open that follows (the
 // session line) are printed. Run unsubscribes when it returns.
-func New(c *app.Controller, in io.Reader, out io.Writer, interactive bool) *Frontend {
-	f := &Frontend{c: c, in: in, out: out, interactive: interactive, atLineStart: true}
+func New(c *app.Controller, in io.Reader, out io.Writer) *Frontend {
+	f := &Frontend{c: c, in: in, out: out, atLineStart: true}
 	f.unsubscribe = c.Subscribe(f.render)
 	return f
 }
 
 // Run reads lines until EOF, /quit, ctx cancellation, or an interrupt at idle.
-// interrupts delivers SIGINT. At EOF it waits for the running turn first.
-//
-// Interactive input is handled as it arrives, so commands work while a turn
-// runs. Otherwise input is strictly sequential: the next line is read only
-// once the turn a prompt started has ended.
+// interrupts delivers SIGINT. Input is strictly sequential: the next line is
+// read only once the turn a prompt started has ended, and at EOF Run waits for
+// the running turn first.
 func (f *Frontend) Run(ctx context.Context, interrupts <-chan os.Signal) error {
 	defer f.unsubscribe()
 
@@ -76,12 +73,9 @@ func (f *Frontend) Run(ctx context.Context, interrupts <-chan os.Signal) error {
 	}()
 
 	var turnDone <-chan struct{}
-	var eof bool
-	var inputErr error
-	f.prompt(turnDone)
 	for {
 		input := lines
-		if eof || (!f.interactive && turnDone != nil) {
+		if turnDone != nil {
 			input = nil
 		}
 		select {
@@ -93,52 +87,24 @@ func (f *Frontend) Run(ctx context.Context, interrupts <-chan os.Signal) error {
 			}
 		case <-turnDone:
 			turnDone = nil
-			if eof {
-				return inputErr
-			}
-			f.prompt(turnDone)
 		case text, ok := <-input:
 			if !ok {
-				eof = true
 				if err := <-readErr; err != nil {
-					inputErr = fmt.Errorf("failed to read input: %w", err)
+					return fmt.Errorf("failed to read input: %w", err)
 				}
-				if turnDone == nil {
-					return inputErr
-				}
-				continue
-			}
-			if f.interactive {
-				f.mu.Lock()
-				f.atLineStart = true // the terminal echoed the newline
-				f.mu.Unlock()
+				return nil
 			}
 			w, err := f.c.Submit(ctx, text)
 			switch {
 			case errors.Is(err, app.ErrQuit):
 				return nil
-			case errors.Is(err, app.ErrBusy):
-				f.println("[busy] a turn is running (Ctrl+C interrupts it); input dropped")
 			case err != nil:
 				f.println("[error] " + err.Error())
 			case w != nil:
 				turnDone = w.Done()
 			}
-			f.prompt(turnDone)
 		}
 	}
-}
-
-// prompt shows "<mode>> " in interactive mode when no turn is running.
-func (f *Frontend) prompt(turnDone <-chan struct{}) {
-	if !f.interactive || turnDone != nil {
-		return
-	}
-	mode := f.c.Status().Mode
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.ensureLineStart()
-	f.write(mode.String() + "> ")
 }
 
 func (f *Frontend) println(s string) {

@@ -48,6 +48,34 @@ func TestTurnEndDrawsFailureReasonOnce(t *testing.T) {
 	}
 }
 
+func TestSteeredMessageDrawsAsRestored(t *testing.T) {
+	var live Transcript
+	for _, ev := range []event.Event{
+		event.TurnStart{Prompt: "go"},
+		start("a"), end("a"),
+		event.QueueChanged{Pending: []string{"x"}},
+		event.QueueChanged{},
+		event.UserMessage{Text: "x"},
+		event.TextDelta{Text: "ok"},
+	} {
+		live.Apply(ev)
+	}
+	var restored Transcript
+	restored.Restore([]event.Event{event.TurnStart{Prompt: "go"}, start("a"), end("a"), event.TurnStart{Prompt: "x"}, event.TextDelta{Text: "ok"}})
+
+	want := []Block{
+		User{key: "item:0", Text: "go"}, row("a", OK), User{key: "item:2", Text: "x"}, Assistant{key: "item:3", Text: "ok"},
+	}
+	assert.Equal(t, want, live.Blocks())
+	assert.Equal(t, want, restored.Blocks())
+}
+
+func TestQueueChangedAddsNoBlock(t *testing.T) {
+	var tr Transcript
+	tr.Apply(event.QueueChanged{Pending: []string{"x"}})
+	assert.Empty(t, tr.Blocks())
+}
+
 func TestRestore(t *testing.T) {
 	for _, tc := range []struct {
 		name          string

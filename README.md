@@ -1,7 +1,7 @@
 # Kopi
 
 Kopi is a coding-agent CLI built on [PiG](https://github.com/MichaelKinsy/PiG).
-It is early: one read-only tool, a fullscreen terminal interface, and a line interface for piped use.
+It is early: one read-only tool, a fullscreen terminal interface, and a headless mode.
 
 ## Build and run
 
@@ -26,22 +26,39 @@ bin/kopi --model provider/id -r <id>
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
 
-- When stdin and stdout are both terminals, Kopi opens a fullscreen interface; with piped or redirected stdin or stdout it uses the line interface.
-- With piped stdin, lines run in order, each prompt's turn finishes before the next line is read, and Kopi exits at EOF.
+- When stdin and stdout are both terminals, Kopi opens a fullscreen interface; otherwise it runs headless.
+- Headless, lines are read in order, each prompt's turn finishes before the next line is read, and Kopi exits at end of input. Ctrl+C interrupts the running turn; at idle it exits.
 - Resuming (`-c`, `-r` or `/resume`) redraws the earlier conversation in the fullscreen interface, with its tool activity folded.
 - On exit from a session with messages, the fullscreen interface prints the command to resume it.
 
-Keys in the fullscreen interface:
+Keys in the fullscreen interface (defaults, see Configuration):
 
-- Enter sends the prompt or command.
-- Alt+Enter, Shift+Enter (in terminals with key disambiguation) or Ctrl+J inserts a newline.
+- Enter sends the prompt or command; while a turn runs it queues the prompt for that turn. Queued messages show in one shaded block above the working row, with `↳ queued · ctrl+enter to send now · up to edit` under it.
+- Ctrl+Enter sends now: it stops the current response and continues the turn with the queued messages plus the draft.
+- Alt+Enter, Shift+Enter or Ctrl+J inserts a newline. Ctrl+Enter and Shift+Enter need a terminal that reports modified Enter.
+- Up at the top of the input pulls queued messages back into it for editing; with nothing queued it browses input history, and Down goes back.
 - Esc interrupts the running turn.
-- Ctrl+C interrupts the running turn; at idle it exits. In the line interface it does the same.
+- Ctrl+C interrupts the running turn, else clears the draft, else a second press within two seconds exits.
+- After an interrupt, queued messages return to the input; `/new`, `/resume` and exiting discard them.
+- Ctrl+D exits when the input is empty.
+- Shift+Tab switches between plan and execute.
+- Ctrl+V pastes text or an image from the clipboard.
 - Mouse wheel or PgUp/PgDn scrolls the transcript.
-- Click a folded group to open it, and a call to show its output.
 - Ctrl+O expands every group and call output until pressed again.
 
-While the interface captures the mouse, selecting text needs the terminal's modifier-drag (Shift, or Option in some terminals).
+Mouse:
+
+- Click a folded group to open it, and a call to show its output.
+- Drag in the transcript to select text; it is copied on release. Double-click selects a word, triple-click a line.
+- Drag in the input to select text; it is copied on release. A click places the cursor.
+- Copies go to the terminal (OSC 52) and the system clipboard. The terminal's own modifier-drag selection (Shift, or Option in some terminals) still works.
+
+Paste and images:
+
+- A paste over 10 lines or 1000 characters collapses to `[paste #N +L lines]` or `[paste #N C chars]` and is sent in full. Pasting the same text again right after expands it in place.
+- An absolute path to an image file pasted or dropped into the input, or a clipboard image pasted with Ctrl+V, becomes `[image #N]` and is sent as an attachment: PNG, JPEG, GIF or WebP, up to 20 MiB.
+- Backspace or Delete next to a paste or image block removes it whole.
+- Clipboard images need `osascript` (macOS), `wl-paste` (Wayland) or `xclip` (X11).
 
 ## Configuration
 
@@ -53,12 +70,42 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 - `config.json` in the home; precedence is default < config file < flags.
 - `kopi config` shows each value and its origin; unknown keys are rejected.
-- The fullscreen interface logs to `kopi.log` in the home; the line interface logs to stderr.
+- The fullscreen interface logs to `kopi.log` in the home; headless runs log to stderr.
+- `history.jsonl` holds input history per working directory, written by the fullscreen interface; the last 100 entries are recalled.
+- `images/` holds pasted clipboard images, removed after a day.
 - `agent/` is PiG's agent directory, created on first run: its credential file (`auth.json`), session logs (`sessions/`), other PiG state and an optional `models.json`.
+
+`keys` maps each fullscreen action to a list of key strings, and `statusline` lists the status line's `left` and `right` segments from `model`, `context`, `branch`, `mode` and `notice`, which shows transient hints such as `Copied` (default left `model, context, branch`, right `notice, mode`):
+
+```json
+{
+  "version": 1,
+  "keys": { "send-now": ["ctrl+s"] },
+  "statusline": { "left": ["model", "branch"], "right": ["notice", "context", "mode"] }
+}
+```
+
+| Action | Default |
+| --- | --- |
+| `submit` | `enter` |
+| `newline` | `shift+enter`, `alt+enter`, `ctrl+j` |
+| `send-now` | `ctrl+enter` |
+| `interrupt` | `esc` |
+| `cancel` | `ctrl+c` |
+| `quit` | `ctrl+d` |
+| `toggle-mode` | `shift+tab` |
+| `paste` | `ctrl+v` |
+| `history-prev`, `history-next` | `up`, `down` |
+| `queue-edit` | `up` |
+| `expand-all` | `ctrl+o` |
+| `page-up`, `page-down` | `pgup`, `pgdown` |
+
+- Setting one action replaces that action's list and leaves the others at their defaults.
+- An unknown action or segment, an empty list or a blank key string is rejected at start; a key string that names no real key never matches.
 
 ## Modes and tools
 
-- Sessions are in plan or execute mode; only the user switches, with `/plan` and `/execute`.
+- Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab.
 - Every session starts in plan, including a resumed one.
 - `Read` reads text files inside the start directory: up to 2000 lines, 2000 characters per line and 100 KiB per call; binary files and directories are refused.
 - `Read` refuses Kopi's home and `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.config/gh`, `~/.netrc`, `~/.git-credentials`, `~/.npmrc`, `~/.docker`, `~/.kube`, `~/.azure`, `~/.pi`, `~/.pig`, `~/.claude`, `~/.claude.json` and `~/.codex`.
@@ -90,7 +137,7 @@ Manual live check: `kopi login openai-codex`, run with a model, ask it to read a
 
 Project-level config and trust, loading project instruction files, sandboxed shell and file-modifying tools, approval classification, delegation and workflows, background jobs, MCP, a Kopi provider identity, release packaging and self-update, and login for providers that need an installation device ID (`openai`).
 
-The fullscreen interface has no queued input while a turn runs, no in-app text selection and copy, and no slash-command completion menu.
+The fullscreen interface has no slash-command completion menu and no double- or triple-click selection in the input. Recalled history and re-edited queued messages show their full text rather than paste blocks.
 
 ## Contributing
 

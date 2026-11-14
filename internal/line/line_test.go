@@ -77,7 +77,7 @@ type harness struct {
 
 // start opens a controller over a faux provider and runs a frontend on in.
 // The frontend subscribes before Open, as the root command does.
-func start(t *testing.T, sb pigruntimetest.Sandbox, in io.Reader, interactive bool, steps []ai.FauxResponseStep, tools ...tool.Tool) *harness {
+func start(t *testing.T, sb pigruntimetest.Sandbox, in io.Reader, steps []ai.FauxResponseStep, tools ...tool.Tool) *harness {
 	t.Helper()
 	rt := pigruntimetest.NewRuntime(t, sb)
 	faux, model := pigruntimetest.RegisterFaux(t, rt, "kopi-faux")
@@ -85,7 +85,7 @@ func start(t *testing.T, sb pigruntimetest.Sandbox, in io.Reader, interactive bo
 	c := app.NewController(rt, app.Config{Model: model, Workspace: sb.Workspace, Tools: tools, JoinTimeout: waitLimit})
 	t.Cleanup(func() { assert.NoError(t, c.Close(context.Background())) })
 	h := &harness{c: c, faux: faux, out: newOutput(), interrupts: make(chan os.Signal), result: make(chan error, 1)}
-	f := New(c, in, h.out, interactive)
+	f := New(c, in, h.out)
 	require.NoError(t, c.Open(t.Context(), app.OpenRequest{}))
 	go func() { h.result <- f.Run(t.Context(), h.interrupts) }()
 	return h
@@ -172,7 +172,7 @@ func TestScriptedSessionRendersTurnThenStatus(t *testing.T) {
 		pigruntimetest.Text("The notes are short."),
 	}
 
-	h := start(t, sb, strings.NewReader("read the notes\n/status\n/quit\n"), false, steps, tool.NewRead(ws))
+	h := start(t, sb, strings.NewReader("read the notes\n/status\n/quit\n"), steps, tool.NewRead(ws))
 	require.NoError(t, h.wait(t))
 
 	out := h.out.String()
@@ -186,7 +186,7 @@ func TestScriptedSessionRendersTurnThenStatus(t *testing.T) {
 		"turn: idle",
 	)
 	assert.NotContains(t, out, "fixture-body-77", "tool output bodies are never printed")
-	assert.NotContains(t, out, "plan> ", "no prompt marker without a terminal")
+	assert.NotContains(t, out, "plan> ", "no prompt marker is printed")
 	for l := range strings.Lines(out) {
 		if i := strings.Index(l, "[tool]"); i >= 0 {
 			assert.Zero(t, i, "status line glued to other output: %q", l)
@@ -210,38 +210,49 @@ func (e *eofReader) Read(p []byte) (int, error) {
 }
 
 // The tool is released only after the frontend's reader has hit EOF, and Run
-// unsubscribes when it returns, so the turn's final text and the end of its
-// line can only be in the output if Run was still running when the turn
-// ended. What this cannot prove without a hook in the frontend is that its
-// loop had already taken the EOF from the reader before the turn ended: a
-// Run that wrongly returned at EOF would be caught whenever the loop sees EOF
-// before the remaining provider round trip completes.
+// unsubscribes when it returns, so the turn's final text can only be in the
+// output if Run was still running when the turn ended.
 func TestEOFWaitsForRunningTurn(t *testing.T) {
-	for _, interactive := range []bool{false, true} {
-		t.Run(map[bool]string{false: "piped", true: "interactive"}[interactive], func(t *testing.T) {
-			sb := pigruntimetest.NewSandbox(t)
-			started, release := make(chan struct{}), make(chan struct{})
-			pr, pw := pipe(t)
-			in := &eofReader{r: pr, eof: make(chan struct{})}
-			h := start(t, sb, in, interactive, []ai.FauxResponseStep{toolCall("Hold", nil), pigruntimetest.Text("done holding")}, holdTool(started, release))
+	sb := pigruntimetest.NewSandbox(t)
+	started, release := make(chan struct{}), make(chan struct{})
+	pr, pw := pipe(t)
+	in := &eofReader{r: pr, eof: make(chan struct{})}
+	h := start(t, sb, in, []ai.FauxResponseStep{toolCall("Hold", nil), pigruntimetest.Text("done holding")}, holdTool(started, release))
 
-			send(t, pw, "hold")
-			waitClosed(t, started)
-			require.NoError(t, pw.Close())
-			waitClosed(t, in.eof)
-			close(release)
+	send(t, pw, "hold")
+	waitClosed(t, started)
+	require.NoError(t, pw.Close())
+	waitClosed(t, in.eof)
+	close(release)
 
-			require.NoError(t, h.wait(t))
-			out := h.out.String()
-			ordered(t, out, "[tool] Hold ok\n", "done holding\n")
-			assert.True(t, strings.HasSuffix(out, "done holding\n") || strings.HasSuffix(out, "done holding\nplan> "), "the turn ended before Run returned:\n%s", out)
-		})
-	}
+	require.NoError(t, h.wait(t))
+	out := h.out.String()
+	ordered(t, out, "[tool] Hold ok\n", "done holding\n")
+	assert.True(t, strings.HasSuffix(out, "done holding\n"), "the turn ended before Run returned:\n%s", out)
+}
+
+// A line that arrives while a turn runs is handled only once the turn ends.
+func TestNextLineWaitsForRunningTurn(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	started, release := make(chan struct{}), make(chan struct{})
+	pr, pw := pipe(t)
+	h := start(t, sb, pr, []ai.FauxResponseStep{toolCall("Hold", nil), pigruntimetest.Text("done holding")}, holdTool(started, release))
+
+	send(t, pw, "hold")
+	waitClosed(t, started)
+	send(t, pw, "/status")
+	close(release)
+	h.out.waitFor(t, "turn: idle")
+	require.NoError(t, pw.Close())
+
+	require.NoError(t, h.wait(t))
+	ordered(t, h.out.String(), "done holding\n", "turn: idle")
+	assert.NotContains(t, h.out.String(), "turn: running")
 }
 
 func TestUnknownCommandPrintsErrorAndContinues(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
-	h := start(t, sb, strings.NewReader("/nope\n/status\n/quit\n"), false, nil)
+	h := start(t, sb, strings.NewReader("/nope\n/status\n/quit\n"), nil)
 
 	require.NoError(t, h.wait(t))
 	ordered(t, h.out.String(), "[error] unknown command: /nope\n", "mode: plan")
@@ -256,7 +267,7 @@ func TestInterruptDuringToolEndsTurn(t *testing.T) {
 		return "", ctx.Err()
 	})
 	pr, pw := pipe(t)
-	h := start(t, sb, pr, false, []ai.FauxResponseStep{toolCall("Block", nil), pigruntimetest.Text("unreached")}, block)
+	h := start(t, sb, pr, []ai.FauxResponseStep{toolCall("Block", nil), pigruntimetest.Text("unreached")}, block)
 
 	send(t, pw, "block")
 	waitClosed(t, started)
@@ -271,39 +282,12 @@ func TestInterruptDuringToolEndsTurn(t *testing.T) {
 func TestInterruptAtIdleExits(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	pr, _ := pipe(t)
-	h := start(t, sb, pr, true, nil)
+	h := start(t, sb, pr, nil)
 
-	h.out.waitFor(t, "plan> ")
 	h.interrupts <- os.Interrupt
 
 	require.NoError(t, h.wait(t))
-}
-
-func TestInteractiveCommandsWorkMidTurn(t *testing.T) {
-	sb := pigruntimetest.NewSandbox(t)
-	started, release := make(chan struct{}), make(chan struct{})
-	pr, pw := pipe(t)
-	h := start(t, sb, pr, true, []ai.FauxResponseStep{toolCall("Hold", nil), pigruntimetest.Text("done holding")}, holdTool(started, release))
-
-	h.out.waitFor(t, "plan> ")
-	send(t, pw, "hold")
-	waitClosed(t, started)
-	send(t, pw, "/execute")
-	h.out.waitFor(t, "[mode] execute\n")
-	send(t, pw, "another prompt")
-	h.out.waitFor(t, "[busy] a turn is running")
-	send(t, pw, "/plan")
-	h.out.waitFor(t, "[mode] plan\n")
-	send(t, pw, "/status")
-	h.out.waitFor(t, "turn: running")
-	close(release)
-	h.out.waitFor(t, "done holding\nplan> ")
-	send(t, pw, "/execute")
-	h.out.waitFor(t, "execute> ")
-	send(t, pw, "/quit")
-
-	require.NoError(t, h.wait(t))
-	assert.Equal(t, 2, h.faux.CallCount(), "only the held turn's two requests; the busy prompt never reached the provider")
+	assert.NotContains(t, h.out.String(), "plan> ")
 }
 
 func TestStatusLinesNeverShareALineWithText(t *testing.T) {

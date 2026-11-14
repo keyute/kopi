@@ -18,7 +18,7 @@ import (
 
 func TestNewQueuesEventsBeforeRun(t *testing.T) {
 	c := &fakeController{}
-	f := New(c, strings.NewReader(""), &bytes.Buffer{}, "dev")
+	f := New(c, strings.NewReader(""), &bytes.Buffer{}, testOptions())
 	require.NotNil(t, c.subscriber)
 
 	c.subscriber(event.SessionChanged{SessionID: "s1"})
@@ -61,7 +61,7 @@ func runFrontend(t *testing.T, c *fakeController, stop func(cancel context.Cance
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	out := &lockedBuffer{}
-	f := New(c, strings.NewReader(""), out, "dev")
+	f := New(c, strings.NewReader(""), out, testOptions())
 	interrupts := make(chan os.Signal, 1)
 	done := make(chan error, 1)
 	go func() { done <- f.Run(ctx, interrupts) }()
@@ -82,8 +82,11 @@ func TestRunReturnsOnContextCancel(t *testing.T) {
 	assert.NotContains(t, out, "Resume with")
 }
 
-func TestRunQuitsOnInterruptAtIdleAndPrintsResumeHint(t *testing.T) {
+func TestRunQuitsOnSecondInterruptAtIdleAndPrintsResumeHint(t *testing.T) {
 	c := &fakeController{status: app.Status{SessionID: "s1", MessageCount: 1}}
-	out := runFrontend(t, c, func(_ context.CancelFunc, interrupts chan<- os.Signal) { interrupts <- os.Interrupt })
+	out := runFrontend(t, c, func(_ context.CancelFunc, interrupts chan<- os.Signal) {
+		interrupts <- os.Interrupt
+		interrupts <- os.Interrupt
+	})
 	assert.True(t, strings.HasSuffix(out, "Resume with: kopi -r s1\n"), "output ends %q", out[max(0, len(out)-60):])
 }

@@ -1,7 +1,7 @@
 package tui
 
 import (
-	"strconv"
+	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -13,29 +13,73 @@ import (
 // contextWarnPercent is the context use from which the percentage warns.
 const contextWarnPercent = 90
 
-// statusLine sits two in from both edges: model id, context use and branch
-// on the left, the mode on the right. Parts that do not fit are dropped from
-// the right end of the left side; the mode always shows.
-func statusLine(s app.Status, width int, th theme) string {
-	c := th.warning
-	if s.Mode == policy.Execute {
-		c = th.success
-	}
-	right := fg(c).Render(s.Mode.String()) + "  "
+// statusInput is what a segment draws from: the session status and the
+// current transient hint, empty when none shows.
+type statusInput struct {
+	app.Status
+	notice string
+}
 
-	parts := []string{fg(th.accent).Render(modelID(s.Model))}
-	if s.ContextWindow > 0 {
-		pct := s.ContextTokens * 100 / s.ContextWindow
-		pc := th.dim
-		if pct >= contextWarnPercent {
-			pc = th.warning
+// segment renders one part of the status line; false draws nothing.
+type segment func(statusInput, theme) (string, bool)
+
+// segments is keyed by the config's status segment names.
+var segments = map[string]segment{
+	"model": func(s statusInput, th theme) (string, bool) {
+		return fg(th.accent).Render(modelID(s.Model)), true
+	},
+	"context": func(s statusInput, th theme) (string, bool) {
+		if s.ContextWindow <= 0 {
+			return "", false
 		}
-		parts = append(parts, fg(pc).Render(strconv.Itoa(pct)+"%"))
+		pct := float64(s.ContextTokens) * 100 / float64(s.ContextWindow)
+		c := th.text
+		if pct >= contextWarnPercent {
+			c = th.warning
+		}
+		return fg(c).Render(fmt.Sprintf("%.1f%%", pct)), true
+	},
+	"branch": func(s statusInput, th theme) (string, bool) {
+		return fg(th.accent).Render(s.Branch), s.Branch != ""
+	},
+	"mode": func(s statusInput, th theme) (string, bool) {
+		c := th.warning
+		if s.Mode == policy.Execute {
+			c = th.success
+		}
+		return fg(c).Render(s.Mode.String()), true
+	},
+	"notice": func(s statusInput, th theme) (string, bool) {
+		return fg(th.dim).Render(s.notice), s.notice != ""
+	},
+}
+
+// statusLayout names the segments on each side of the status line.
+type statusLayout struct {
+	left, right []string
+}
+
+func renderSegments(names []string, in statusInput, th theme) []string {
+	var parts []string
+	for _, n := range names {
+		if seg, ok := segments[n]; ok {
+			if text, ok := seg(in, th); ok {
+				parts = append(parts, text)
+			}
+		}
 	}
-	if s.Branch != "" {
-		parts = append(parts, fg(th.accent).Render(s.Branch))
-	}
+	return parts
+}
+
+// statusLine sits two in from both edges. The right side always shows;
+// left segments that do not fit are dropped from its right end. notice is
+// drawn only where the layout places the notice segment.
+func statusLine(s app.Status, layout statusLayout, notice string, width int, th theme) string {
+	in := statusInput{Status: s, notice: notice}
 	sep := fg(th.dim).Render(" · ")
+	right := strings.Join(renderSegments(layout.right, in, th), sep) + "  "
+
+	parts := renderSegments(layout.left, in, th)
 	var left string
 	for n := len(parts); n >= 0; n-- {
 		left = ""

@@ -2,6 +2,7 @@ package pigruntime
 
 import (
 	"encoding/json"
+	"sync/atomic"
 	"testing"
 
 	"github.com/MichaelKinsy/PiG/agent"
@@ -57,6 +58,17 @@ func TestTranslate(t *testing.T) {
 			in:   agent.CompactionEndEvent{ErrorMessage: "too big"},
 			want: event.Notice{Text: "compaction failed: too big"},
 		},
+		{
+			name: "queue update keeps steering only",
+			in:   agent.QueueUpdateEvent{Steering: []string{"a", "b"}, FollowUp: []string{"c"}},
+			want: event.QueueChanged{Pending: []string{"a", "b"}},
+		},
+		{
+			name: "user message start",
+			in:   agent.MessageStartEvent{Message: agent.AgentMessage{User: &agent.UserMessage{Content: ai.UserContentBlocks{ai.TextContent{Text: "steer"}, ai.ImageContent{}}}}},
+			want: event.UserMessage{Text: "steer"},
+		},
+		{name: "assistant message start dropped", in: agent.MessageStartEvent{Message: agent.AgentMessage{Assistant: &agent.AssistantMessage{}}}},
 		{name: "message update without delta dropped", in: agent.MessageUpdateEvent{AssistantMessageEvent: ai.TextStartEvent{}}},
 		{name: "agent end dropped", in: agent.AgentEndEvent{}},
 	} {
@@ -83,6 +95,11 @@ func TestTextJoinerSeparatesAdjacentTextBlocks(t *testing.T) {
 			name: "second block after thinking",
 			in:   []agent.AgentEvent{textStart, text("one"), text(" more"), update(ai.ThinkingDeltaEvent{Delta: "hmm"}), textStart, text("two")},
 			want: []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: " more"}, event.ThinkingDelta{Text: "hmm"}, event.TextDelta{Text: "\n\ntwo"}},
+		},
+		{
+			name: "queue update between",
+			in:   []agent.AgentEvent{textStart, text("one"), agent.QueueUpdateEvent{}, textStart, text("two")},
+			want: []event.Event{event.TextDelta{Text: "one"}, event.QueueChanged{}, event.TextDelta{Text: "\n\ntwo"}},
 		},
 		{
 			name: "tool call block between",
@@ -116,4 +133,25 @@ func TestTextJoinerSeparatesAdjacentTextBlocks(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func TestTextJoinerDropsEachPromptsUserMessage(t *testing.T) {
+	user := func(text string) agent.AgentEvent {
+		return agent.MessageStartEvent{Message: agent.AgentMessage{User: &agent.UserMessage{Content: ai.UserContentBlocks{ai.TextContent{Text: text}}}}}
+	}
+	var sends atomic.Uint64
+	j := textJoiner{sends: &sends}
+	var got []event.Event
+	feed := func(ev agent.AgentEvent) {
+		if e, ok := j.translate(ev); ok {
+			got = append(got, e)
+		}
+	}
+	sends.Add(1)
+	feed(user("first prompt"))
+	feed(user("steered"))
+	sends.Add(1)
+	feed(user("second prompt"))
+	feed(user("steered again"))
+	assert.Equal(t, []event.Event{event.UserMessage{Text: "steered"}, event.UserMessage{Text: "steered again"}}, got)
 }

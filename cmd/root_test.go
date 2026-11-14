@@ -303,6 +303,7 @@ func TestRootStreamsTurnFromMockServer(t *testing.T) {
 	assert.Contains(t, []string{"system", "developer"}, first["role"])
 	assert.Contains(t, first["content"], "You are Kopi, a coding agent working in")
 	assert.NotContains(t, stdout+stderr, syntheticKey)
+	assert.NoFileExists(t, filepath.Join(e.kopiHome, "history.jsonl"), "headless runs record no prompt history")
 }
 
 func TestRootRendersProviderFailure(t *testing.T) {

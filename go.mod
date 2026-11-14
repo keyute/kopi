@@ -9,6 +9,7 @@ require (
 	charm.land/lipgloss/v2 v2.1.0
 	github.com/MichaelKinsy/PiG v0.7.0
 	github.com/alecthomas/chroma/v2 v2.24.1
+	github.com/atotto/clipboard v0.1.4
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/knadh/koanf/parsers/json v1.0.1
@@ -27,7 +28,6 @@ require (
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/MichaelKinsy/PiG/extensions/sdk v0.7.0 // indirect
 	github.com/Microsoft/go-winio v0.6.4 // indirect
-	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20261008173134-6b8d4baf91b4 // indirect

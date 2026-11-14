@@ -1,8 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,6 +22,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/history"
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/policy"
@@ -461,18 +466,20 @@ func TestFailedResumeAsTurnFinishesKeepsSessionUsable(t *testing.T) {
 	assert.Equal(t, 2, h.faux.CallCount())
 }
 
-func TestPromptWhileBusyIsRefusedButStatusWorks(t *testing.T) {
+func TestPromptWhileBusyIsQueuedAndStatusWorks(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
-	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("done")})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "done")})
 
 	w, err := h.c.Submit(t.Context(), "hold")
 	require.NoError(t, err)
 	wait(t, started)
 
-	_, err = h.c.Submit(t.Context(), "another prompt")
-	require.ErrorIs(t, err, ErrBusy)
-	got, err := h.c.Submit(t.Context(), "/status")
+	got, err := h.c.Submit(t.Context(), "another prompt")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	got, err = h.c.Submit(t.Context(), "/status")
 	require.NoError(t, err)
 	assert.Nil(t, got)
 	assert.Contains(t, lastNotice(t, h.rec), "turn: running")
@@ -481,6 +488,527 @@ func TestPromptWhileBusyIsRefusedButStatusWorks(t *testing.T) {
 	close(release)
 	wait(t, w.Done())
 	assert.False(t, h.c.Status().Busy)
+	assert.Equal(t, []string{"hold", "another prompt"}, receive(t, requests).UserTexts)
+	evs := untimed(h.rec.all())
+	queuedAt := slices.IndexFunc(evs, func(ev event.Event) bool {
+		return assert.ObjectsAreEqual(event.QueueChanged{Pending: []string{"another prompt"}}, ev)
+	})
+	sentAt := slices.Index(evs, event.Event(event.UserMessage{Text: "another prompt"}))
+	require.GreaterOrEqual(t, queuedAt, 0)
+	assert.Less(t, queuedAt, sentAt)
+	assert.Equal(t, []event.TurnEnd{{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Completed}}}, ofType[event.TurnEnd](evs))
+}
+
+// blockTool blocks until its ctx is cancelled.
+func blockTool(started chan<- struct{}) tool.Tool {
+	return testTool("Block", policy.Read, func(ctx context.Context, _ json.RawMessage) (string, error) {
+		close(started)
+		<-ctx.Done()
+		return "", ctx.Err()
+	})
+}
+
+// turnEnds delivers every TurnEnd, untimed.
+func turnEnds(c *Controller) <-chan event.TurnEnd {
+	ends := make(chan event.TurnEnd, 8)
+	c.Subscribe(func(ev event.Event) {
+		if end, ok := ev.(event.TurnEnd); ok {
+			end.Elapsed = 0
+			ends <- end
+		}
+	})
+	return ends
+}
+
+func receiveEnd(t *testing.T, ends <-chan event.TurnEnd) event.TurnEnd {
+	t.Helper()
+	select {
+	case end := <-ends:
+		return end
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for TurnEnd")
+		return event.TurnEnd{}
+	}
+}
+
+// lifecycle keeps the TurnStart and TurnEnd events.
+func lifecycle(evs []event.Event) []event.Event {
+	return slices.DeleteFunc(evs, func(ev event.Event) bool {
+		switch ev.(type) {
+		case event.TurnStart, event.TurnEnd:
+			return false
+		}
+		return true
+	})
+}
+
+func TestInterruptHandsQueuedInputBack(t *testing.T) {
+	started := make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{blockTool(started)}})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "call-1")), pigruntimetest.Capture(t, requests, "fresh")})
+
+	w, err := h.c.Submit(t.Context(), "block")
+	require.NoError(t, err)
+	wait(t, started)
+	img := pngFile(t)
+	got, err := h.c.Submit(t.Context(), "look at [image #1]", img)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	assert.True(t, h.c.Interrupt())
+	wait(t, w.Done())
+
+	assert.Equal(t, []event.TurnEnd{{
+		WorkID:  w.ID(),
+		Outcome: event.Outcome{Status: event.Interrupted},
+		Unsent:  []event.Input{{Text: "look at [image #1]", Images: []string{img}}},
+	}}, ofType[event.TurnEnd](untimed(h.rec.all())))
+
+	h.turn(t, "after")
+	req := receive(t, requests)
+	assert.Equal(t, []string{"block", "after"}, req.UserTexts)
+	assert.NotContains(t, req.Raw, "look at")
+}
+
+func TestSendNowContinuesTurnWithQueuedAndDraft(t *testing.T) {
+	started := make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{blockTool(started)}})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "call-1")), pigruntimetest.Capture(t, requests, "joined")})
+
+	w, err := h.c.Submit(t.Context(), "block")
+	require.NoError(t, err)
+	wait(t, started)
+	got, err := h.c.Submit(t.Context(), "q")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	require.NoError(t, h.c.SendNow(t.Context(), "d"))
+	wait(t, w.Done())
+
+	assert.Equal(t, []string{"block", "q\n\nd"}, receive(t, requests).UserTexts)
+	assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
+	evs := untimed(h.rec.all())
+	// One Work throughout, and nothing between the interrupted send's end and
+	// the joined send's start, so the controller never went idle.
+	assert.Equal(t, []event.Event{
+		event.TurnStart{WorkID: w.ID(), Prompt: "block"},
+		event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted}},
+		event.TurnStart{WorkID: w.ID(), Prompt: "q\n\nd"},
+		event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Completed}},
+	}, lifecycle(slices.Clone(evs)))
+	endAt := slices.IndexFunc(evs, func(ev event.Event) bool {
+		return assert.ObjectsAreEqual(event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted}}, ev)
+	})
+	require.GreaterOrEqual(t, endAt, 0)
+	assert.Equal(t, event.TurnStart{WorkID: w.ID(), Prompt: "q\n\nd"}, evs[endAt+1])
+}
+
+func TestSendNowWithNothingToSendInterruptsNothing(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("done")})
+
+	w, err := h.c.Submit(t.Context(), "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	require.NoError(t, h.c.SendNow(t.Context(), ""))
+	require.NoError(t, h.c.SendNow(t.Context(), "  "))
+	close(release)
+	wait(t, w.Done())
+
+	assert.Equal(t, []event.TurnEnd{{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Completed}}}, ofType[event.TurnEnd](untimed(h.rec.all())))
+	assert.Equal(t, 2, h.faux.CallCount())
+}
+
+func TestSendNowAtIdleSubmits(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "ok")})
+	ends := turnEnds(h.c)
+
+	require.NoError(t, h.c.SendNow(t.Context(), ""))
+	assert.Empty(t, ofType[event.TurnStart](h.rec.all()), "a blank send-now at idle starts nothing")
+	require.NoError(t, h.c.SendNow(t.Context(), "hi"))
+
+	assert.Equal(t, []string{"hi"}, receive(t, requests).UserTexts)
+	end := receiveEnd(t, ends)
+	assert.Equal(t, event.Outcome{Status: event.Completed}, end.Outcome)
+	assert.Equal(t, []event.TurnStart{{WorkID: end.WorkID, Prompt: "hi"}}, ofType[event.TurnStart](h.rec.all()))
+}
+
+func TestTakeQueuedEmptiesQueueAndTurnContinues(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "done")})
+	assert.Nil(t, h.c.TakeQueued(), "nothing runs")
+
+	w, err := h.c.Submit(t.Context(), "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	img := pngFile(t)
+	_, err = h.c.Submit(t.Context(), "q1")
+	require.NoError(t, err)
+	_, err = h.c.Submit(t.Context(), "q2 [image #1]", img)
+	require.NoError(t, err)
+	assert.Equal(t, []event.Input{{Text: "q1"}, {Text: "q2 [image #1]", Images: []string{img}}}, h.c.TakeQueued())
+	assert.Empty(t, h.c.TakeQueued())
+	close(release)
+	wait(t, w.Done())
+
+	assert.Equal(t, []string{"hold"}, receive(t, requests).UserTexts)
+	evs := untimed(h.rec.all())
+	assert.Equal(t, []event.TurnEnd{{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Completed}}}, ofType[event.TurnEnd](evs))
+	queues := ofType[event.QueueChanged](evs)
+	require.NotEmpty(t, queues)
+	assert.Empty(t, queues[len(queues)-1].Pending)
+}
+
+func TestSessionSwitchDiscardsQueuedInput(t *testing.T) {
+	const queued = "queued-5e1d"
+	for _, tc := range []struct {
+		name      string
+		resume    bool
+		wantAfter []string
+	}{
+		{name: "new", wantAfter: []string{"after"}},
+		{name: "resume", resume: true, wantAfter: []string{"first", "after"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			started := make(chan struct{})
+			h, _ := openHarness(t, Config{Tools: []tool.Tool{blockTool(started)}})
+			switchTo := "/new"
+			if tc.resume {
+				h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first answer")})
+				h.turn(t, "first")
+				switchTo = "/resume " + h.c.Status().SessionID
+				require.NoError(t, h.c.NewSession(t.Context()))
+			}
+			requests := make(chan pigruntimetest.Request, 2)
+			h.faux.SetResponses([]ai.FauxResponseStep{
+				pigruntimetest.ToolCalls(call("Block", "call-1")),
+				pigruntimetest.Capture(t, requests, "fresh"),
+				pigruntimetest.Capture(t, requests, "back"),
+			})
+			ends := turnEnds(h.c)
+			oldID := h.c.Status().SessionID
+
+			w, err := h.c.Submit(t.Context(), "block")
+			require.NoError(t, err)
+			wait(t, started)
+			_, err = h.c.Submit(t.Context(), queued)
+			require.NoError(t, err)
+			_, err = h.c.Submit(t.Context(), switchTo)
+			require.NoError(t, err)
+
+			assert.Equal(t, event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted}}, receiveEnd(t, ends))
+			h.turn(t, "after")
+			req := receive(t, requests)
+			assert.Equal(t, tc.wantAfter, req.UserTexts)
+			assert.NotContains(t, req.Raw, queued)
+
+			_, err = h.c.Submit(t.Context(), "/resume "+oldID)
+			require.NoError(t, err)
+			h.turn(t, "check")
+			req = receive(t, requests)
+			assert.Equal(t, []string{"block", "check"}, req.UserTexts)
+			assert.NotContains(t, req.Raw, queued, "the old session never received it")
+		})
+	}
+}
+
+// widePNGFile is wider than PiG's default longest side of 2000 pixels.
+func widePNGFile(t *testing.T) (path string, data []byte) {
+	t.Helper()
+	var b bytes.Buffer
+	require.NoError(t, png.Encode(&b, image.NewRGBA(image.Rect(0, 0, 6000, 40))))
+	path = filepath.Join(t.TempDir(), "wide.png")
+	require.NoError(t, os.WriteFile(path, b.Bytes(), 0o600))
+	return path, b.Bytes()
+}
+
+func TestSteeredImageIsResizedAndKeepsOrder(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "done")})
+	path, data := widePNGFile(t)
+
+	w, err := h.c.Submit(t.Context(), "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	_, err = h.c.Submit(t.Context(), "wide [image #1]", path)
+	require.NoError(t, err)
+	_, err = h.c.Submit(t.Context(), "after")
+	require.NoError(t, err)
+	close(release)
+	wait(t, w.Done())
+
+	req := receive(t, requests)
+	assert.Equal(t, []string{"hold", "wide [image #1]", "after"}, req.UserTexts)
+	assert.Equal(t, 1, strings.Count(req.Raw, `"type":"image"`))
+	assert.NotContains(t, req.Raw, base64.StdEncoding.EncodeToString(data), "the image was resized")
+	assert.Equal(t, []event.TurnEnd{{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Completed}}}, ofType[event.TurnEnd](untimed(h.rec.all())))
+}
+
+func TestTurnEndingWhileImageIsPreparedStartsNewTurn(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(call("Hold", "call-1")),
+		pigruntimetest.Text("done"),
+		pigruntimetest.Capture(t, requests, "fresh"),
+	})
+	preparing, proceed := make(chan struct{}), make(chan struct{})
+	h.c.prepareSteer = func(sess *pigruntime.Session, p pigruntime.Prompt) pigruntime.Steering {
+		close(preparing)
+		<-proceed
+		return sess.PrepareSteer(p)
+	}
+	path := pngFile(t)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	w, err := h.c.Submit(t.Context(), "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	submitted := make(chan *Work, 1)
+	go func() {
+		next, err := h.c.Submit(context.Background(), "look [image #1]", path)
+		assert.NoError(t, err)
+		submitted <- next
+	}()
+	wait(t, preparing)
+	close(release)
+	wait(t, w.Done())
+	close(proceed)
+
+	var next *Work
+	select {
+	case next = <-submitted:
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for Submit")
+	}
+	require.NotNil(t, next, "the prompt started a turn of its own")
+	wait(t, next.Done())
+	req := receive(t, requests)
+	assert.Equal(t, []string{"hold", "look [image #1]"}, req.UserTexts)
+	assert.Contains(t, req.Raw, base64.StdEncoding.EncodeToString(data))
+	assert.Equal(t, []event.Event{
+		event.TurnStart{WorkID: w.ID(), Prompt: "hold"},
+		event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Completed}},
+		event.TurnStart{WorkID: next.ID(), Prompt: "look [image #1]"},
+		event.TurnEnd{WorkID: next.ID(), Outcome: event.Outcome{Status: event.Completed}},
+	}, lifecycle(untimed(h.rec.all())))
+}
+
+// Input given after an interrupt, while the stopped turn is still finishing,
+// starts the next turn instead of being handed back with the stopped one's.
+func TestInputAfterInterruptStartsNextTurn(t *testing.T) {
+	for name, now := range map[string]bool{"submit": false, "send-now": true} {
+		t.Run(name, func(t *testing.T) {
+			started, release := make(chan struct{}), make(chan struct{})
+			h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
+			requests := make(chan pigruntimetest.Request, 1)
+			h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "fresh")})
+			ends := turnEnds(h.c)
+
+			w, err := h.c.Submit(t.Context(), "hold")
+			require.NoError(t, err)
+			wait(t, started)
+			_, err = h.c.Submit(t.Context(), "before")
+			require.NoError(t, err)
+			require.True(t, h.c.Interrupt())
+			sent := make(chan error, 1)
+			go func() {
+				if now {
+					sent <- h.c.SendNow(context.Background(), "after")
+					return
+				}
+				_, err := h.c.Submit(context.Background(), "after")
+				sent <- err
+			}()
+			select {
+			case err := <-sent:
+				t.Fatalf("input returned before the stopped turn ended: %v", err)
+			case <-w.Done():
+				t.Fatal("the held turn ended early")
+			default:
+			}
+			close(release)
+
+			select {
+			case err := <-sent:
+				require.NoError(t, err)
+			case <-time.After(waitLimit):
+				t.Fatal("timed out waiting for the input to return")
+			}
+			select {
+			case <-w.Done():
+			default:
+				t.Fatal("the input returned before the stopped turn ended")
+			}
+			old, fresh := receiveEnd(t, ends), receiveEnd(t, ends)
+			assert.Equal(t, event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted}, Unsent: []event.Input{{Text: "before"}}}, old)
+			assert.NotEqual(t, w.ID(), fresh.WorkID)
+			assert.Equal(t, event.Outcome{Status: event.Completed}, fresh.Outcome)
+			assert.Equal(t, []string{"hold", "after"}, receive(t, requests).UserTexts)
+			assert.Equal(t, []event.Event{
+				event.TurnStart{WorkID: w.ID(), Prompt: "hold"},
+				old,
+				event.TurnStart{WorkID: fresh.WorkID, Prompt: "after"},
+				fresh,
+			}, lifecycle(untimed(h.rec.all())))
+		})
+	}
+}
+
+func TestSettle(t *testing.T) {
+	a, b, c := pigruntime.Prompt{Text: "a"}, pigruntime.Prompt{Text: "b"}, pigruntime.Prompt{Text: "c"}
+	completed, interrupted, failed := event.Outcome{Status: event.Completed}, event.Outcome{Status: event.Interrupted}, event.Outcome{Status: event.Failed, Message: "boom"}
+	ps := func(p ...pigruntime.Prompt) []pigruntime.Prompt { return p }
+	for _, tc := range []struct {
+		name               string
+		stopped            bool
+		outcome            event.Outcome
+		next, left         []pigruntime.Prompt
+		wantNext, wantLeft []pigruntime.Prompt
+	}{
+		{name: "completed alone ends", outcome: completed},
+		{name: "stopped hands everything back", stopped: true, outcome: interrupted, next: ps(a), left: ps(b), wantLeft: ps(a, b)},
+		{name: "stopped after completing hands stragglers back", stopped: true, outcome: completed, left: ps(c), wantLeft: ps(c)},
+		{name: "send-now continues with stragglers", outcome: interrupted, next: ps(a, b), left: ps(c), wantNext: ps(a, b, c)},
+		{name: "send-now continues after a failure", outcome: failed, next: ps(a), wantNext: ps(a)},
+		{name: "completed with stragglers continues", outcome: completed, left: ps(a, b), wantNext: ps(a, b)},
+		{name: "failed hands stragglers back", outcome: failed, left: ps(a), wantLeft: ps(a)},
+		{name: "interrupted by the provider hands stragglers back", outcome: interrupted, left: ps(a), wantLeft: ps(a)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			next, left := settle(tc.stopped, tc.outcome, tc.next, tc.left)
+			assert.Equal(t, tc.wantNext, next)
+			assert.Equal(t, tc.wantLeft, left)
+		})
+	}
+}
+
+func TestJoinedPromptsKeepOrder(t *testing.T) {
+	i1, i2 := pigruntime.Image{Path: "/1.png"}, pigruntime.Image{Path: "/2.png"}
+	got := joined([]pigruntime.Prompt{{Text: "one [image #1]", Images: []pigruntime.Image{i1}}, {Text: "two"}, {Text: "three [image #2]", Images: []pigruntime.Image{i2}}})
+	assert.Equal(t, pigruntime.Prompt{Text: "one [image #1]\n\ntwo\n\nthree [image #2]", Images: []pigruntime.Image{i1, i2}}, got)
+}
+
+func TestBadImageRefusesInput(t *testing.T) {
+	store := historyStore(t)
+	started, release := make(chan struct{}), make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}, History: store})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("done")})
+	bad := badImages(t)
+
+	for name, path := range bad {
+		_, err := h.c.Submit(t.Context(), "look [image #1]", path)
+		require.ErrorIs(t, err, ErrBadImage, name)
+		require.ErrorIs(t, h.c.SendNow(t.Context(), "look [image #1]", path), ErrBadImage, name)
+	}
+	assert.Zero(t, h.faux.CallCount())
+	assert.Empty(t, ofType[event.TurnStart](h.rec.all()))
+
+	w, err := h.c.Submit(t.Context(), "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	for name, path := range bad {
+		_, err := h.c.Submit(t.Context(), "queued [image #1]", path)
+		require.ErrorIs(t, err, ErrBadImage, name)
+	}
+	assert.Nil(t, h.c.TakeQueued())
+	close(release)
+	wait(t, w.Done())
+	assert.Equal(t, []string{"hold"}, h.c.History())
+	assert.Empty(t, ofType[event.QueueChanged](h.rec.all()))
+}
+
+func TestImageReachesProvider(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "a square")})
+	path := pngFile(t)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	w, err := h.c.Submit(t.Context(), "what is [image #1]", path)
+	require.NoError(t, err)
+	wait(t, w.Done())
+
+	req := receive(t, requests)
+	assert.Equal(t, []string{"what is [image #1]"}, req.UserTexts)
+	assert.Contains(t, req.Raw, base64.StdEncoding.EncodeToString(data))
+	assert.Equal(t, []event.TurnStart{{WorkID: w.ID(), Prompt: "what is [image #1]"}}, ofType[event.TurnStart](h.rec.all()))
+}
+
+func TestToggleModeSwitchesBothWays(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	h.c.ToggleMode()
+	assert.Equal(t, policy.Execute, h.c.Status().Mode)
+	h.c.ToggleMode()
+	assert.Equal(t, policy.Plan, h.c.Status().Mode)
+	assert.Equal(t, []event.ModeChanged{{Mode: policy.Execute}, {Mode: policy.Plan}}, ofType[event.ModeChanged](h.rec.all()))
+
+	require.NoError(t, h.c.Close(t.Context()))
+	delivered := len(h.rec.all())
+	mode, gen := h.c.authority.Snapshot()
+	h.c.ToggleMode()
+	gotMode, gotGen := h.c.authority.Snapshot()
+	assert.Equal(t, mode, gotMode)
+	assert.Equal(t, gen, gotGen)
+	assert.Len(t, h.rec.all(), delivered)
+}
+
+func historyStore(t *testing.T) *history.Store {
+	t.Helper()
+	s, err := history.Open(filepath.Join(t.TempDir(), "history.jsonl"), "/work", 100)
+	require.NoError(t, err)
+	return s
+}
+
+func TestInputIsRecordedInHistory(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}, History: historyStore(t)})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("done")})
+
+	w, err := h.c.Submit(t.Context(), "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	for _, input := range []string{"queued", "/status", "/status", "  "} {
+		_, err := h.c.Submit(t.Context(), input)
+		require.NoError(t, err, input)
+	}
+	_, err = h.c.Submit(t.Context(), "/nope")
+	require.ErrorIs(t, err, ErrUnknownCommand)
+	require.NoError(t, h.c.SendNow(t.Context(), ""))
+	h.c.ToggleMode()
+	close(release)
+	wait(t, w.Done())
+
+	assert.Equal(t, []string{"hold", "queued", "/status", "/nope"}, h.c.History())
+}
+
+func TestUnwritableHistoryNeverFailsSubmit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	store, err := history.Open(path, "/work", 100)
+	require.NoError(t, err)
+	// A directory where the file belongs makes every append fail.
+	require.NoError(t, os.Mkdir(path, 0o700))
+	h, _ := openHarness(t, Config{History: store})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("answer")})
+
+	assert.Equal(t, event.Outcome{Status: event.Completed}, h.turn(t, "hello").Outcome())
+}
+
+func TestHistoryIsNilWithoutStore(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	_, err := h.c.Submit(t.Context(), "/status")
+	require.NoError(t, err)
+	assert.Nil(t, h.c.History())
 }
 
 func TestUnknownCommandNeverReachesProvider(t *testing.T) {
@@ -577,7 +1105,9 @@ func TestNewSessionStopsRunningTurn(t *testing.T) {
 	newID := h.c.Status().SessionID
 	assert.NotEqual(t, oldID, newID)
 	evs := untimed(h.rec.all())
-	endAt := slices.Index(evs, event.Event(event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted}}))
+	endAt := slices.IndexFunc(evs, func(ev event.Event) bool {
+		return assert.ObjectsAreEqual(event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted}}, ev)
+	})
 	// SessionChanged holds a slice, so it cannot be found with ==.
 	changedAt := slices.IndexFunc(evs, func(ev event.Event) bool {
 		return assert.ObjectsAreEqual(event.SessionChanged{SessionID: newID}, ev)
@@ -813,6 +1343,33 @@ func TestCloseJoinsRunningTurn(t *testing.T) {
 	}
 	assert.Equal(t, event.Interrupted, w.Outcome().Status)
 	goleak.VerifyNone(t, ignore)
+}
+
+func TestCloseDiscardsQueuedInput(t *testing.T) {
+	const queued = "queued-9b2c"
+	started := make(chan struct{})
+	tools := []tool.Tool{blockTool(started)}
+	h, sb := openHarness(t, Config{Tools: tools})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "call-1")), pigruntimetest.Text("unreached")})
+	id := h.c.Status().SessionID
+
+	w, err := h.c.Submit(t.Context(), "block")
+	require.NoError(t, err)
+	wait(t, started)
+	_, err = h.c.Submit(t.Context(), queued)
+	require.NoError(t, err)
+	require.NoError(t, h.c.Close(t.Context()))
+
+	assert.Equal(t, []event.TurnEnd{{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted}}}, ofType[event.TurnEnd](untimed(h.rec.all())))
+
+	fresh := newHarness(t, sb, Config{Tools: tools})
+	require.NoError(t, fresh.c.Open(t.Context(), OpenRequest{ResumeID: id}))
+	requests := make(chan pigruntimetest.Request, 1)
+	fresh.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "resumed")})
+	fresh.turn(t, "check")
+	req := receive(t, requests)
+	assert.Equal(t, []string{"block", "check"}, req.UserTexts)
+	assert.NotContains(t, req.Raw, queued)
 }
 
 func TestCloseKeepsSessionWhileWorkWillNotStop(t *testing.T) {

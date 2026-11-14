@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
@@ -22,8 +23,13 @@ func rowOf(t *testing.T, m *model, text string) int {
 	return i
 }
 
+// clickRow is a left press and release at row y, a second after the previous
+// press so it is never a double click.
 func clickRow(m *model, y int) {
+	at := m.now().Add(time.Second)
+	m.now = func() time.Time { return at }
 	m.Update(tea.MouseClickMsg{X: 4, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.MouseReleaseMsg{X: 4, Y: y})
 }
 
 func clickText(t *testing.T, m *model, text string) {

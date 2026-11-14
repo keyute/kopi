@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MichaelKinsy/PiG/agent"
@@ -23,6 +24,12 @@ func translate(ev agent.AgentEvent) (event.Event, bool) {
 		case ai.ThinkingDeltaEvent:
 			return event.ThinkingDelta{Text: d.Delta}, true
 		}
+	case agent.MessageStartEvent:
+		if ev.Message.User != nil {
+			return event.UserMessage{Text: userText(ev.Message.User.Content)}, true
+		}
+	case agent.QueueUpdateEvent:
+		return event.QueueChanged{Pending: ev.Steering}, true
 	case agent.ToolExecutionStartEvent:
 		return event.ToolStart{CallID: ev.ToolCallID, Name: ev.ToolName, Args: compactJSON(ev.Args)}, true
 	case agent.ToolExecutionEndEvent:
@@ -47,10 +54,17 @@ func translate(ev agent.AgentEvent) (event.Event, bool) {
 // textJoiner puts a blank line before a text block that directly follows
 // emitted text, as history does with afterText, so the reducer's
 // concatenation draws separate paragraphs live and restored. Thinking does not
-// separate text; a tool call, notice or new run does. Tool events can arrive
-// from concurrent goroutines.
+// separate text, nor does a queue update; a tool call, notice, user message or
+// new run does. Tool and queue events can arrive from concurrent goroutines.
+//
+// It also drops each prompt's own user message, which TurnStart already
+// carries, so only steered messages become UserMessage.
 type textJoiner struct {
 	mu sync.Mutex
+	// sends is the session's prompt count; seen is its value when the last
+	// prompt's user message was dropped.
+	sends *atomic.Uint64
+	seen  uint64
 	// afterText: the last event emitted was text. newBlock: a text block has
 	// started and none of its text has been emitted yet.
 	afterText, newBlock bool
@@ -71,6 +85,12 @@ func (j *textJoiner) translate(ev agent.AgentEvent) (event.Event, bool) {
 			j.afterText = false
 		}
 	}
+	if _, user := e.(event.UserMessage); user {
+		if n := j.sends.Load(); n != j.seen {
+			j.seen = n
+			e, ok = nil, false
+		}
+	}
 	switch d := e.(type) {
 	case event.TextDelta:
 		// History skips empty text, so an empty delta neither takes nor
@@ -82,7 +102,7 @@ func (j *textJoiner) translate(ev agent.AgentEvent) (event.Event, bool) {
 			e = event.TextDelta{Text: "\n\n" + d.Text}
 		}
 		j.newBlock, j.afterText = false, true
-	case event.ThinkingDelta, nil:
+	case event.ThinkingDelta, event.QueueChanged, nil:
 	default:
 		j.afterText = false
 	}

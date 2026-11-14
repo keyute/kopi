@@ -20,7 +20,7 @@ import (
 
 // pigSettings is unmarshalled rather than built because the nested settings
 // types live in a PiG internal package and cannot be named here.
-const pigSettings = `{"retry":{"enabled":true},"compaction":{"enabled":true},"cacheWarming":"off"}`
+const pigSettings = `{"retry":{"enabled":true},"compaction":{"enabled":true},"cacheWarming":"off","steeringMode":"all"}`
 
 type Options struct {
 	AgentDir, CWD string
