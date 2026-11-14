@@ -67,3 +67,53 @@ func TestTranslate(t *testing.T) {
 		})
 	}
 }
+
+func TestTextJoinerSeparatesAdjacentTextBlocks(t *testing.T) {
+	update := func(e ai.AssistantMessageEvent) agent.AgentEvent {
+		return agent.MessageUpdateEvent{AssistantMessageEvent: e}
+	}
+	textStart := update(ai.TextStartEvent{})
+	text := func(s string) agent.AgentEvent { return update(ai.TextDeltaEvent{Delta: s}) }
+	for _, tc := range []struct {
+		name string
+		in   []agent.AgentEvent
+		want []event.Event
+	}{
+		{
+			name: "second block after thinking",
+			in:   []agent.AgentEvent{textStart, text("one"), text(" more"), update(ai.ThinkingDeltaEvent{Delta: "hmm"}), textStart, text("two")},
+			want: []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: " more"}, event.ThinkingDelta{Text: "hmm"}, event.TextDelta{Text: "\n\ntwo"}},
+		},
+		{
+			name: "tool call block between",
+			in:   []agent.AgentEvent{textStart, text("one"), update(ai.ToolCallStartEvent{}), textStart, text("two")},
+			want: []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: "two"}},
+		},
+		{
+			name: "new run",
+			in:   []agent.AgentEvent{textStart, text("one"), agent.AgentStartEvent{}, textStart, text("two")},
+			want: []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: "two"}},
+		},
+		{
+			name: "notice between",
+			in:   []agent.AgentEvent{textStart, text("one"), agent.AutoRetryStartEvent{Attempt: 1, MaxAttempts: 2}, textStart, text("two")},
+			want: []event.Event{event.TextDelta{Text: "one"}, event.Notice{Text: "retrying (attempt 1/2) in 0s: "}, event.TextDelta{Text: "two"}},
+		},
+		{
+			name: "empty delta waits for text",
+			in:   []agent.AgentEvent{textStart, text("one"), textStart, text(""), text("two")},
+			want: []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: ""}, event.TextDelta{Text: "\n\ntwo"}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var j textJoiner
+			var got []event.Event
+			for _, ev := range tc.in {
+				if e, ok := j.translate(ev); ok {
+					got = append(got, e)
+				}
+			}
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}

@@ -177,9 +177,12 @@ func (c *Controller) Status() Status {
 	c.mu.Unlock()
 
 	mode, _ := c.authority.Snapshot()
-	s := Status{SessionID: sessID, Mode: mode, Model: c.cfg.Model, Workspace: c.cfg.Workspace, Busy: busy}
+	s := Status{SessionID: sessID, Mode: mode, Model: c.cfg.Model, Workspace: c.cfg.Workspace, Busy: busy, Branch: gitBranch(c.cfg.Workspace)}
 	if sess != nil {
 		s.MessageCount = sess.MessageCount()
+		if tokens, window, ok := sess.ContextUsage(); ok {
+			s.ContextTokens, s.ContextWindow = tokens, window
+		}
 	}
 	for _, t := range c.cfg.Tools {
 		allowed := !t.Capability.NeedsExecute() || mode == policy.Execute
@@ -242,6 +245,7 @@ func (c *Controller) startTurn(ctx context.Context, prompt string) (*Work, error
 	c.turn = w
 	c.mu.Unlock()
 
+	emit(event.TurnStart{WorkID: w.id, Prompt: prompt})
 	c.wg.Go(func() { c.runTurn(turnCtx, sess, emit, w, prompt) })
 	return w, nil
 }
@@ -249,14 +253,16 @@ func (c *Controller) startTurn(ctx context.Context, prompt string) (*Work, error
 // runTurn emits TurnEnd before deregistering the work, so a transition that
 // finds no work never races an undelivered TurnEnd of the old session.
 func (c *Controller) runTurn(ctx context.Context, sess *pigruntime.Session, emit func(event.Event), w *Work, prompt string) {
+	start := time.Now()
 	outcome, err := sess.Send(ctx, prompt)
+	elapsed := time.Since(start)
 	w.cancel()
 	if err != nil {
 		outcome = event.Outcome{Status: event.Failed, Message: err.Error()}
 		emit(event.Error{Err: err})
 	}
 	w.outcome = outcome
-	emit(event.TurnEnd{WorkID: w.id, Outcome: outcome})
+	emit(event.TurnEnd{WorkID: w.id, Outcome: outcome, Elapsed: elapsed})
 	c.mu.Lock()
 	if c.turn == w {
 		c.turn = nil
@@ -322,17 +328,27 @@ func (c *Controller) start(ctx context.Context, req OpenRequest) error {
 	// Execute mode is never carried into a session start.
 	c.EnterPlan()
 
-	emit := c.relay.bind()
+	bound, d := c.relay.bind(), newDisplay(c.cfg.Tools)
+	emit := func(ev event.Event) { bound(d.apply(ev)) }
 	unsubscribe := sess.Subscribe(emit)
 	id := sess.ID()
 	c.mu.Lock()
 	c.sess, c.sessID, c.emit, c.unsubscribe = sess, id, emit, unsubscribe
 	c.mu.Unlock()
-	c.relay.emit(event.SessionChanged{
+	changed := event.SessionChanged{
 		SessionID:    id,
 		Resumed:      req.ResumeID != "" || req.Continue,
 		MessageCount: sess.MessageCount(),
-	})
+	}
+	if changed.Resumed {
+		// A display of its own, so the args of calls that never finished in
+		// the stored history do not linger in the live one.
+		hd := newDisplay(c.cfg.Tools)
+		for _, ev := range sess.History() {
+			changed.History = append(changed.History, hd.apply(ev))
+		}
+	}
+	c.relay.emit(changed)
 	return nil
 }
 

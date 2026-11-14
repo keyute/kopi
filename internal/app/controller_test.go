@@ -58,6 +58,18 @@ func ofType[T event.Event](evs []event.Event) []T {
 	return out
 }
 
+// untimed zeroes each TurnEnd's Elapsed, which is wall time, so expectations
+// can compare whole events.
+func untimed(evs []event.Event) []event.Event {
+	for i, ev := range evs {
+		if end, ok := ev.(event.TurnEnd); ok {
+			end.Elapsed = 0
+			evs[i] = end
+		}
+	}
+	return evs
+}
+
 func lastNotice(t *testing.T, rec *recorder) string {
 	t.Helper()
 	notices := ofType[event.Notice](rec.all())
@@ -173,7 +185,7 @@ func TestTurnStreamsTextThenEnds(t *testing.T) {
 
 	w := h.turn(t, "hi")
 
-	evs := h.rec.all()
+	evs := untimed(h.rec.all())
 	var text strings.Builder
 	for _, d := range ofType[event.TextDelta](evs) {
 		text.WriteString(d.Text)
@@ -182,6 +194,47 @@ func TestTurnStreamsTextThenEnds(t *testing.T) {
 	assert.Greater(t, len(ofType[event.TextDelta](evs)), 1, "the reply streams in several deltas")
 	assert.Equal(t, event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Completed}}, evs[len(evs)-1])
 	assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
+}
+
+func TestTurnStartOpensTurnAndTurnEndIsTimed(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("hello from the faux model")})
+
+	w := h.turn(t, "  //hi there ")
+
+	evs := h.rec.all()
+	startAt := slices.IndexFunc(evs, func(ev event.Event) bool { _, ok := ev.(event.TurnStart); return ok })
+	textAt := slices.IndexFunc(evs, func(ev event.Event) bool { _, ok := ev.(event.TextDelta); return ok })
+	require.GreaterOrEqual(t, startAt, 0)
+	assert.Less(t, startAt, textAt)
+	assert.Equal(t, event.TurnStart{WorkID: w.ID(), Prompt: "/hi there"}, evs[startAt])
+	ends := ofType[event.TurnEnd](evs)
+	require.Len(t, ends, 1)
+	assert.Equal(t, w.ID(), ends[0].WorkID)
+	assert.Positive(t, ends[0].Elapsed)
+}
+
+func TestDeniedCallHasNoSummary(t *testing.T) {
+	var ran atomic.Int32
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{execTool(&ran)}})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Exec", "call-1")), pigruntimetest.Text("ok")})
+
+	w := h.turn(t, "run it")
+
+	evs := h.rec.all()
+	startAt := slices.Index(evs, event.Event(event.TurnStart{WorkID: w.ID(), Prompt: "run it"}))
+	toolAt := slices.IndexFunc(evs, func(ev event.Event) bool { _, ok := ev.(event.ToolStart); return ok })
+	require.GreaterOrEqual(t, startAt, 0)
+	assert.Less(t, startAt, toolAt)
+	starts := ofType[event.ToolStart](evs)
+	require.Len(t, starts, 1)
+	assert.Equal(t, "Exec", starts[0].Title)
+	assert.Equal(t, fallbackAction, starts[0].Action)
+	ends := ofType[event.ToolEnd](evs)
+	require.Len(t, ends, 1)
+	assert.True(t, ends[0].IsError)
+	assert.Empty(t, ends[0].Summary)
+	assert.Zero(t, ran.Load())
 }
 
 func TestReadResultReachesNextRequest(t *testing.T) {
@@ -198,14 +251,52 @@ func TestReadResultReachesNextRequest(t *testing.T) {
 	h.turn(t, "read notes.txt")
 
 	evs := h.rec.all()
-	assert.Equal(t, []event.ToolStart{{CallID: "call-1", Name: "Read", Args: `{"file_path":"notes.txt"}`}}, ofType[event.ToolStart](evs))
+	assert.Equal(t, []event.ToolStart{{
+		CallID: "call-1", Name: "Read", Args: `{"file_path":"notes.txt"}`,
+		Title: "Read notes.txt", Action: tool.Action{Verb: "Read", One: "file", Many: "files"},
+	}}, ofType[event.ToolStart](evs))
 	ends := ofType[event.ToolEnd](evs)
 	require.Len(t, ends, 1)
 	assert.False(t, ends[0].IsError)
 	assert.Contains(t, ends[0].Output, "kopi fixture 42")
+	assert.Equal(t, "1 line", ends[0].Summary)
 	req := receive(t, requests)
 	require.Len(t, req.ToolResults, 1)
 	assert.Contains(t, req.ToolResults[0], "kopi fixture 42")
+}
+
+func TestResumeDeliversDisplayedHistory(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	require.NoError(t, os.WriteFile(filepath.Join(sb.Workspace, "notes.txt"), []byte("kopi fixture 42\n"), 0o600))
+	read := readTool(t, sb)
+	h := newHarness(t, sb, Config{Tools: []tool.Tool{read}})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	changed := ofType[event.SessionChanged](h.rec.all())
+	require.Len(t, changed, 1)
+	assert.Nil(t, changed[0].History)
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(pigruntimetest.Call{Name: "Read", ID: "call-1", Args: map[string]any{"file_path": "notes.txt"}}),
+		pigruntimetest.Text("read it"),
+	})
+	h.turn(t, "read notes.txt")
+	id := h.c.Status().SessionID
+	require.NoError(t, h.c.Close(t.Context()))
+
+	fresh := newHarness(t, sb, Config{Tools: []tool.Tool{read}})
+	require.NoError(t, fresh.c.Open(t.Context(), OpenRequest{ResumeID: id}))
+	changed = ofType[event.SessionChanged](fresh.rec.all())
+	require.Len(t, changed, 1)
+	history := changed[0].History
+	require.NotEmpty(t, history)
+	assert.Equal(t, event.TurnStart{Prompt: "read notes.txt"}, history[0])
+	assert.Equal(t, []event.ToolStart{{
+		CallID: "call-1", Name: "Read", Args: `{"file_path":"notes.txt"}`,
+		Title: "Read notes.txt", Action: tool.Action{Verb: "Read", One: "file", Many: "files"},
+	}}, ofType[event.ToolStart](history))
+	ends := ofType[event.ToolEnd](history)
+	require.Len(t, ends, 1)
+	assert.Contains(t, ends[0].Output, "kopi fixture 42")
+	assert.Equal(t, "1 line", ends[0].Summary)
 }
 
 func TestExecToolFollowsMode(t *testing.T) {
@@ -273,7 +364,7 @@ func TestProviderFailureEndsTurnFailed(t *testing.T) {
 
 	want := event.Outcome{Status: event.Failed, Message: "invalid request: bad thing"}
 	assert.Equal(t, want, w.Outcome())
-	assert.Equal(t, []event.TurnEnd{{WorkID: w.ID(), Outcome: want}}, ofType[event.TurnEnd](h.rec.all()))
+	assert.Equal(t, []event.TurnEnd{{WorkID: w.ID(), Outcome: want}}, ofType[event.TurnEnd](untimed(h.rec.all())))
 }
 
 func TestInterruptDuringToolEndsInterruptedAndPersists(t *testing.T) {
@@ -294,7 +385,7 @@ func TestInterruptDuringToolEndsInterruptedAndPersists(t *testing.T) {
 	wait(t, w.Done())
 
 	assert.Equal(t, event.Outcome{Status: event.Interrupted}, w.Outcome())
-	assert.Equal(t, []event.TurnEnd{{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted}}}, ofType[event.TurnEnd](h.rec.all()))
+	assert.Equal(t, []event.TurnEnd{{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted}}}, ofType[event.TurnEnd](untimed(h.rec.all())))
 	id := h.c.Status().SessionID
 	require.NoError(t, h.c.Close(t.Context()))
 
@@ -447,7 +538,7 @@ func TestNewSessionIsRefusedWhileWorkWillNotStop(t *testing.T) {
 	_, err = h.c.Submit(t.Context(), "/new")
 	require.NoError(t, err)
 
-	evs := h.rec.all()
+	evs := untimed(h.rec.all())
 	changedAt := slices.IndexFunc(evs, func(ev event.Event) bool {
 		changed, ok := ev.(event.SessionChanged)
 		return ok && changed.SessionID != oldID
@@ -485,9 +576,12 @@ func TestNewSessionStopsRunningTurn(t *testing.T) {
 	assert.Equal(t, event.Outcome{Status: event.Interrupted}, w.Outcome())
 	newID := h.c.Status().SessionID
 	assert.NotEqual(t, oldID, newID)
-	evs := h.rec.all()
+	evs := untimed(h.rec.all())
 	endAt := slices.Index(evs, event.Event(event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted}}))
-	changedAt := slices.Index(evs, event.Event(event.SessionChanged{SessionID: newID}))
+	// SessionChanged holds a slice, so it cannot be found with ==.
+	changedAt := slices.IndexFunc(evs, func(ev event.Event) bool {
+		return assert.ObjectsAreEqual(event.SessionChanged{SessionID: newID}, ev)
+	})
 	require.GreaterOrEqual(t, endAt, 0)
 	assert.Less(t, endAt, changedAt)
 
@@ -631,6 +725,29 @@ func TestStatusReportsToolsHonestly(t *testing.T) {
 
 	h.c.EnterExecute()
 	assert.Equal(t, []ToolStatus{{"Read", policy.Read, true}, {"Exec", policy.Exec, true}}, h.c.Status().Tools)
+}
+
+func TestStatusReportsContextUsageAndBranch(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	h := newHarness(t, sb, Config{})
+	assert.Empty(t, h.c.Status().Branch, "the sandbox workspace is in no repository")
+	status := h.c.Status()
+	assert.Zero(t, status.ContextTokens)
+	assert.Zero(t, status.ContextWindow)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(sb.Workspace, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sb.Workspace, ".git", "HEAD"), []byte("ref: refs/heads/feature/status\n"), 0o600))
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("counted")})
+	h.turn(t, "count me")
+
+	status = h.c.Status()
+	tokens, window, ok := h.c.sess.ContextUsage()
+	require.True(t, ok)
+	assert.Positive(t, tokens)
+	assert.Equal(t, tokens, status.ContextTokens)
+	assert.Equal(t, window, status.ContextWindow)
+	assert.Equal(t, "feature/status", status.Branch)
 }
 
 func TestHelpListsCommands(t *testing.T) {

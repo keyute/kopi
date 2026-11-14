@@ -34,11 +34,23 @@ func (s *Session) MessageCount() int {
 	return n
 }
 
+// ContextUsage reports the session's projected context tokens and the
+// model's window. ok is false when the model declares no window or the
+// tokens are unknown, as they are right after a compaction.
+func (s *Session) ContextUsage() (tokens, window int, ok bool) {
+	u := s.inner.ContextUsage()
+	if u == nil || u.Tokens == nil {
+		return 0, 0, false
+	}
+	return *u.Tokens, u.ContextWindow, true
+}
+
 // Subscribe registers fn to run synchronously on PiG's event executor; a slow
 // fn stalls the turn. Every call for a turn has run when Send returns.
 func (s *Session) Subscribe(fn func(event.Event)) func() {
+	var j textJoiner
 	return s.inner.Subscribe(func(ev agent.AgentEvent) {
-		if e, ok := translate(ev); ok {
+		if e, ok := j.translate(ev); ok {
 			fn(e)
 		}
 	})

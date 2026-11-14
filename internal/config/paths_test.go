@@ -20,6 +20,7 @@ func TestResolvePathsPrefersKopiHome(t *testing.T) {
 		Home:       kopiHome,
 		ConfigFile: filepath.Join(kopiHome, "config.json"),
 		AgentDir:   filepath.Join(kopiHome, "agent"),
+		LogFile:    filepath.Join(kopiHome, "kopi.log"),
 	}, p)
 	assert.NoDirExists(t, kopiHome)
 }
@@ -59,6 +60,7 @@ func TestResolvePathsDefaultsUnderUserHome(t *testing.T) {
 				Home:       want,
 				ConfigFile: filepath.Join(want, "config.json"),
 				AgentDir:   filepath.Join(want, "agent"),
+				LogFile:    filepath.Join(want, "kopi.log"),
 			}, p)
 			assert.NoDirExists(t, want)
 		})

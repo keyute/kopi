@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MichaelKinsy/PiG/agent"
@@ -41,6 +42,51 @@ func translate(ev agent.AgentEvent) (event.Event, bool) {
 		return event.Notice{Text: "compaction done"}, true
 	}
 	return nil, false
+}
+
+// textJoiner puts a blank line before a text block that directly follows
+// emitted text, as history does with afterText, so the reducer's
+// concatenation draws separate paragraphs live and restored. Thinking does not
+// separate text; a tool call, notice or new run does. Tool events can arrive
+// from concurrent goroutines.
+type textJoiner struct {
+	mu sync.Mutex
+	// afterText: the last event emitted was text. newBlock: a text block has
+	// started and none of its text has been emitted yet.
+	afterText, newBlock bool
+}
+
+func (j *textJoiner) translate(ev agent.AgentEvent) (event.Event, bool) {
+	e, ok := translate(ev)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	switch ev := ev.(type) {
+	case agent.AgentStartEvent:
+		j.afterText = false
+	case agent.MessageUpdateEvent:
+		switch ev.AssistantMessageEvent.(type) {
+		case ai.TextStartEvent:
+			j.newBlock = true
+		case ai.ToolCallStartEvent:
+			j.afterText = false
+		}
+	}
+	switch d := e.(type) {
+	case event.TextDelta:
+		// History skips empty text, so an empty delta neither takes nor
+		// leaves the separator.
+		if d.Text == "" {
+			break
+		}
+		if j.newBlock && j.afterText {
+			e = event.TextDelta{Text: "\n\n" + d.Text}
+		}
+		j.newBlock, j.afterText = false, true
+	case event.ThinkingDelta, nil:
+	default:
+		j.afterText = false
+	}
+	return e, ok
 }
 
 func compactJSON(raw json.RawMessage) string {

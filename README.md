@@ -1,7 +1,7 @@
 # Kopi
 
 Kopi is a coding-agent CLI built on [PiG](https://github.com/MichaelKinsy/PiG).
-It is early: one read-only tool and a line-oriented interface.
+It is early: one read-only tool, a fullscreen terminal interface, and a line interface for piped use.
 
 ## Build and run
 
@@ -26,8 +26,22 @@ bin/kopi --model provider/id -r <id>
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
 
-- Ctrl+C interrupts the running turn; at idle it exits.
+- When stdin and stdout are both terminals, Kopi opens a fullscreen interface; with piped or redirected stdin or stdout it uses the line interface.
 - With piped stdin, lines run in order, each prompt's turn finishes before the next line is read, and Kopi exits at EOF.
+- Resuming (`-c`, `-r` or `/resume`) redraws the earlier conversation in the fullscreen interface, with its tool activity folded.
+- On exit from a session with messages, the fullscreen interface prints the command to resume it.
+
+Keys in the fullscreen interface:
+
+- Enter sends the prompt or command.
+- Alt+Enter, Shift+Enter (in terminals with key disambiguation) or Ctrl+J inserts a newline.
+- Esc interrupts the running turn.
+- Ctrl+C interrupts the running turn; at idle it exits. In the line interface it does the same.
+- Mouse wheel or PgUp/PgDn scrolls the transcript.
+- Click a folded group to open it, and a call to show its output.
+- Ctrl+O expands every group and call output until pressed again.
+
+While the interface captures the mouse, selecting text needs the terminal's modifier-drag (Shift, or Option in some terminals).
 
 ## Configuration
 
@@ -39,6 +53,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 - `config.json` in the home; precedence is default < config file < flags.
 - `kopi config` shows each value and its origin; unknown keys are rejected.
+- The fullscreen interface logs to `kopi.log` in the home; the line interface logs to stderr.
 - `agent/` is PiG's agent directory, created on first run: its credential file (`auth.json`), session logs (`sessions/`), other PiG state and an optional `models.json`.
 
 ## Modes and tools
@@ -73,7 +88,9 @@ Manual live check: `kopi login openai-codex`, run with a model, ask it to read a
 
 ## Not implemented
 
-Project-level config and trust, loading project instruction files, sandboxed shell and file-modifying tools, approval classification, delegation and workflows, background jobs, a fullscreen TUI, MCP, a Kopi provider identity, release packaging and self-update, and login for providers that need an installation device ID (`openai`).
+Project-level config and trust, loading project instruction files, sandboxed shell and file-modifying tools, approval classification, delegation and workflows, background jobs, MCP, a Kopi provider identity, release packaging and self-update, and login for providers that need an installation device ID (`openai`).
+
+The fullscreen interface has no queued input while a turn runs, no in-app text selection and copy, and no slash-command completion menu.
 
 ## Contributing
 

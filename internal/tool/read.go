@@ -22,6 +22,9 @@ const (
 	// noticeReserve keeps room under maxReadBytes for the final notice line.
 	noticeReserve = 256
 	lineCutMarker = " [line truncated]"
+
+	emptyFileNotice = "(empty file)"
+	pastEndNotice   = "(offset "
 )
 
 type readArgs struct {
@@ -65,7 +68,42 @@ func NewRead(ws *Workspace) Tool {
 			}
 			return read(ctx, ws, args)
 		},
+		Display: Display{
+			Title:   readTitle,
+			Summary: readSummary,
+			Action:  Action{Verb: "Read", One: "file", Many: "files"},
+		},
 	}
+}
+
+// readTitle runs before the arguments are validated, so it decodes leniently.
+func readTitle(raw json.RawMessage) string {
+	var args readArgs
+	_ = json.Unmarshal(raw, &args)
+	if args.FilePath == "" {
+		return "Read"
+	}
+	return "Read " + args.FilePath
+}
+
+// readSummary relies on read's output shape: every file line and the
+// continuation notice end in "\n", and only the notice starts with "[".
+func readSummary(_ json.RawMessage, output string) string {
+	switch {
+	case output == emptyFileNotice:
+		return "empty file"
+	case strings.HasPrefix(output, pastEndNotice):
+		return "past end of file"
+	}
+	n := strings.Count(output, "\n")
+	lastLine := output[strings.LastIndex(strings.TrimSuffix(output, "\n"), "\n")+1:]
+	if strings.HasPrefix(lastLine, "[") {
+		n--
+	}
+	if n == 1 {
+		return "1 line"
+	}
+	return fmt.Sprintf("%d lines", n)
 }
 
 func decodeReadArgs(raw json.RawMessage) (readArgs, error) {
@@ -124,7 +162,7 @@ func read(ctx context.Context, ws *Workspace, args readArgs) (string, error) {
 		return "", fmt.Errorf("%w: %s", ErrBinary, args.FilePath)
 	}
 	if len(head) == 0 {
-		return "(empty file)", nil
+		return emptyFileNotice, nil
 	}
 
 	var out strings.Builder
@@ -163,7 +201,7 @@ func read(ctx context.Context, ws *Workspace, args readArgs) (string, error) {
 	}
 
 	if last == 0 {
-		return fmt.Sprintf("(offset %d is past the end of the file, which has %d lines)", offset, lineNo), nil
+		return fmt.Sprintf(pastEndNotice+"%d is past the end of the file, which has %d lines)", offset, lineNo), nil
 	}
 	if more {
 		fmt.Fprintf(&out, "[Showing lines %d-%d. More lines remain; use offset=%d to continue.]\n", offset, last, last+1)

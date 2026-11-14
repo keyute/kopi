@@ -20,6 +20,7 @@ import (
 	"github.com/keyute/kopi/internal/line"
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/tool"
+	"github.com/keyute/kopi/internal/tui"
 )
 
 const joinTimeout = 5 * time.Second
@@ -65,18 +66,50 @@ func rootCmd() *cobra.Command {
 }
 
 func setupLogging(cmd *cobra.Command) error {
-	name, err := cmd.Flags().GetString("log-level")
+	level, err := logLevel(cmd)
 	if err != nil {
 		return err
-	}
-	levels := map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}
-	level, ok := levels[name]
-	if !ok {
-		return fmt.Errorf("invalid --log-level %q: want debug, info, warn or error", name)
 	}
 	stderr := cmd.ErrOrStderr()
 	slog.SetDefault(slog.New(tint.NewTextHandler(stderr, &tint.Options{Level: level, NoColor: !isTerminal(stderr)})))
 	return nil
+}
+
+func logLevel(cmd *cobra.Command) (slog.Level, error) {
+	name, err := cmd.Flags().GetString("log-level")
+	if err != nil {
+		return 0, err
+	}
+	levels := map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}
+	level, ok := levels[name]
+	if !ok {
+		return 0, fmt.Errorf("invalid --log-level %q: want debug, info, warn or error", name)
+	}
+	return level, nil
+}
+
+// logToFile sends slog to path, which must not be stderr while the
+// fullscreen UI owns the terminal. The returned func restores the previous
+// logger and closes the file.
+func logToFile(cmd *cobra.Command, path string) (func(), error) {
+	level, err := logLevel(cmd)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file: %w", err)
+	}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(tint.NewTextHandler(f, &tint.Options{Level: level, NoColor: true})))
+	return func() {
+		slog.SetDefault(prev)
+		_ = f.Close()
+	}, nil
+}
+
+type frontend interface {
+	Run(ctx context.Context, interrupts <-chan os.Signal) error
 }
 
 func isTerminal(v any) bool {
@@ -148,6 +181,18 @@ func runInteractive(cmd *cobra.Command, req app.OpenRequest) (err error) {
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM)
 	defer stop()
 
+	fullscreen := isTerminal(cmd.InOrStdin()) && isTerminal(cmd.OutOrStdout())
+	if fullscreen {
+		if err := os.MkdirAll(paths.Home, 0o700); err != nil {
+			return fmt.Errorf("failed to create kopi home: %w", err)
+		}
+		restore, err := logToFile(cmd, paths.LogFile)
+		if err != nil {
+			return err
+		}
+		defer restore()
+	}
+
 	// workRunning is set when Close leaves work running; see below.
 	var workRunning bool
 	rt, err := openRuntime(ctx, paths, cwd)
@@ -170,8 +215,13 @@ func runInteractive(cmd *cobra.Command, req app.OpenRequest) (err error) {
 	}()
 
 	c := app.NewController(rt, app.Config{Model: model, Workspace: cwd, Tools: []tool.Tool{tool.NewRead(ws)}, JoinTimeout: joinTimeout})
-	// Created before Open so the session line is printed.
-	frontend := line.New(c, cmd.InOrStdin(), cmd.OutOrStdout(), isTerminal(cmd.InOrStdin()))
+	// Created before Open so the session event is shown.
+	var f frontend
+	if fullscreen {
+		f = tui.New(c, cmd.InOrStdin(), cmd.OutOrStdout(), kopiVersion())
+	} else {
+		f = line.New(c, cmd.InOrStdin(), cmd.OutOrStdout(), isTerminal(cmd.InOrStdin()))
+	}
 	// Only Open may be cancelled by SIGINT; ctx outlives it as the runtime's
 	// signal.
 	openCtx, stopOpen := signal.NotifyContext(ctx, os.Interrupt)
@@ -187,7 +237,7 @@ func runInteractive(cmd *cobra.Command, req app.OpenRequest) (err error) {
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
 	stopOpen()
-	runErr := frontend.Run(ctx, interrupts)
+	runErr := f.Run(ctx, interrupts)
 
 	// Close must not inherit SIGTERM's cancellation; it bounds itself by
 	// JoinTimeout.

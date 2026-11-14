@@ -15,12 +15,17 @@ func versionCmd() *cobra.Command {
 		Short: "Print the Kopi and PiG versions",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			kopi := "dev"
-			if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
-				kopi = info.Main.Version
-			}
-			_, err := fmt.Fprintf(cmd.OutOrStdout(), "kopi %s\npig %s\n", kopi, pigruntime.Version())
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "kopi %s\npig %s\n", kopiVersion(), pigruntime.Version())
 			return err
 		},
 	}
+}
+
+// kopiVersion is the module version of a tagged build, such as "v1.2.3", or
+// "dev".
+func kopiVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return "dev"
 }
