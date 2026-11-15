@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/transcript"
@@ -230,6 +231,13 @@ func shade(th theme) lipgloss.Style {
 // wrap breaks text into lines no wider than width. Tabs become spaces because
 // they have no fixed width.
 func wrap(text string, width int) []string {
+	// Strip removes escape sequences but retains executable controls.
+	text = strings.Map(func(r rune) rune {
+		if (r < 0x20 && r != '\n' && r != '\t') || (r >= 0x7f && r <= 0x9f) {
+			return -1
+		}
+		return r
+	}, ansi.Strip(text))
 	text = strings.ReplaceAll(text, "\t", "    ")
 	return strings.Split(lipgloss.Wrap(text, max(1, width), ""), "\n")
 }

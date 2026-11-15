@@ -408,7 +408,14 @@ func (c *composer) insertImage(path string) tea.Cmd {
 	mk := fmt.Sprintf("[image #%d]", imageCount.Add(1))
 	c.blocks[mk] = block{image: path}
 	c.imageOf[mk] = path
-	return c.forward(tea.PasteMsg{Content: mk})
+	trial, want, cmd := c.trialPaste(mk)
+	if trial.ta.Value() == want {
+		c.ta = trial.ta
+		return cmd
+	}
+	full, imgs := c.expand(want)
+	c.ta.SetValue(c.collapse(full, imgs))
+	return nil
 }
 
 // expanded is the draft as sent: paste markers become their text, image

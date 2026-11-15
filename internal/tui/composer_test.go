@@ -706,3 +706,42 @@ func TestRestoreRegistersOnlyMarkersThatWereImages(t *testing.T) {
 	assert.Equal(t, block{image: "/tmp/b.png"}, m.composer.blocks[real])
 	assert.NotContains(t, m.composer.blocks, "[image #999]", "a typed marker stays plain text")
 }
+
+func TestImageAtWrappedCapacityPreservesDraft(t *testing.T) {
+	for _, replace := range []bool{false, true} {
+		t.Run(fmt.Sprintf("selection=%t", replace), func(t *testing.T) {
+			m, _ := newTestModel(t, 20, 30)
+			c := &m.composer
+			c.insertImage("/synthetic/existing.png")
+			existing := c.value()
+			payload := linesOf(11)
+			c.paste(payload)
+			marker := c.lastPaste
+			prefix := existing + marker + strings.Repeat("w", c.ta.Width()*3)
+			draft := prefix + "old suffix"
+			c.ta.SetValue(draft)
+			require.Equal(t, draft, c.value())
+			c.ta.MaxContentHeight = c.ta.Height()
+			pos := len([]rune(prefix))
+			end := pos
+			if replace {
+				end += len("old")
+			}
+			c.selectRange(selection{anchor: point{0, pos}, head: point{0, end}})
+			mk := fmt.Sprintf("[image #%d]", imageCount.Load()+1)
+
+			c.insertImage("/synthetic/new.png")
+
+			tail := "old suffix"
+			if replace {
+				tail = " suffix"
+			}
+			text, imgs := c.expanded()
+			assert.Equal(t, existing+payload+strings.Repeat("w", c.ta.Width()*3)+mk+tail, text)
+			assert.Equal(t, []string{"/synthetic/existing.png", "/synthetic/new.png"}, imgs)
+			assert.Contains(t, c.blocks, marker)
+			assert.Empty(t, c.lastPaste)
+			assert.NotEqual(t, draft, c.value())
+		})
+	}
+}
