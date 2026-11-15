@@ -1,7 +1,6 @@
 package transcript
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,35 +16,11 @@ func TestApplyIgnoresEndOfSettledCall(t *testing.T) {
 	assert.Equal(t, []Block{row("a", Unfinished), Turn{key: "item:1"}}, tr.Blocks())
 }
 
-func TestTurnEndDrawsFailureReasonOnce(t *testing.T) {
+func TestTurnEndKeepsFailureReason(t *testing.T) {
 	failed := event.Outcome{Status: event.Failed, Message: "failed to send prompt: boom"}
-	for _, tc := range []struct {
-		name   string
-		events []event.Event
-		want   []Block
-	}{
-		{
-			name:   "error then turn end with the same text",
-			events: []event.Event{event.Error{Err: errors.New(failed.Message)}, event.TurnEnd{Outcome: failed}},
-			want: []Block{
-				Error{key: "item:0", Text: failed.Message},
-				Turn{key: "item:1", Outcome: event.Outcome{Status: event.Failed}},
-			},
-		},
-		{
-			name:   "turn end alone keeps its message",
-			events: []event.Event{event.TurnEnd{Outcome: failed}},
-			want:   []Block{Turn{key: "item:0", Outcome: failed}},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var tr Transcript
-			for _, ev := range tc.events {
-				tr.Apply(ev)
-			}
-			assert.Equal(t, tc.want, tr.Blocks())
-		})
-	}
+	var tr Transcript
+	tr.Apply(event.TurnEnd{Outcome: failed})
+	assert.Equal(t, []Block{Turn{key: "item:0", Outcome: failed}}, tr.Blocks())
 }
 
 func TestSteeredMessageDrawsAsRestored(t *testing.T) {

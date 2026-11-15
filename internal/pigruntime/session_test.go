@@ -8,12 +8,11 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
-	"slices"
-	"sync"
 	"testing"
 
 	"github.com/MichaelKinsy/PiG/agent"
 	"github.com/MichaelKinsy/PiG/ai"
+	"github.com/MichaelKinsy/PiG/coding"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -34,28 +33,23 @@ func heldProbe(started chan<- struct{}, release <-chan struct{}) tool.Tool {
 	})
 }
 
-func sendAsync(t *testing.T, sess *Session, text string, images ...Image) <-chan error {
+func sendAsync(t *testing.T, sess *Session, text string) <-chan error {
 	t.Helper()
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := sess.Send(t.Context(), text, images...)
+		_, _, _, err := sess.Send(t.Context(), Prompt{Text: text}, nil)
 		done <- err
 	}()
 	return done
 }
 
-func steer(sess *Session, text string, images ...Image) {
-	sess.Steer(sess.PrepareSteer(Prompt{Text: text, Images: images}))
-}
-
-// recordQueue collects the QueueChanged and UserMessage events; all of a
-// turn's have been sent once its Send returned.
-func recordQueue(t *testing.T, sess *Session) <-chan event.Event {
+// recordUserMessages collects the UserMessage events; all of a turn's have
+// been sent once its Send returned.
+func recordUserMessages(t *testing.T, sess *Session) <-chan event.Event {
 	t.Helper()
 	evs := make(chan event.Event, 32)
 	t.Cleanup(sess.Subscribe(func(ev event.Event) {
-		switch ev.(type) {
-		case event.QueueChanged, event.UserMessage:
+		if _, ok := ev.(event.UserMessage); ok {
 			evs <- ev
 		}
 	}))
@@ -104,204 +98,294 @@ func userImages(msgs []ai.Message) []ai.ImageContent {
 	return out
 }
 
-// queueChanged normalises an empty Pending so event lists compare whether PiG
-// reports an empty queue as nil or empty.
-func queueChanged(evs []event.Event) []event.Event {
-	out := make([]event.Event, 0, len(evs))
-	for _, ev := range evs {
-		if q, ok := ev.(event.QueueChanged); ok && len(q.Pending) == 0 {
-			ev = event.QueueChanged{}
-		}
-		out = append(out, ev)
-	}
-	return out
-}
-
-func TestSteerDeliversAtNextBoundary(t *testing.T) {
-	sb := newSandbox(t)
-	r, faux := newTestRuntime(t, sb)
-	requests := make(chan []ai.Message, 1)
-	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done")})
-	started, release := make(chan struct{}), make(chan struct{})
-	sess := openTestSession(t, r, heldProbe(started, release))
-	evs := recordQueue(t, sess)
-
-	done := sendAsync(t, sess, "prompt")
-	<-started
-	steer(sess, "x")
-	close(release)
-	require.NoError(t, <-done)
-
-	assert.Equal(t, []string{"prompt", "x"}, userTexts(<-requests))
-	assert.Equal(t, []event.Event{
-		event.QueueChanged{Pending: []string{"x"}},
-		event.QueueChanged{},
-		event.UserMessage{Text: "x"},
-	}, queueChanged(drain(evs)))
-	assert.Empty(t, sess.TakeQueued())
-}
-
-func TestSteersDeliveredInOneRequest(t *testing.T) {
-	sb := newSandbox(t)
-	r, faux := newTestRuntime(t, sb)
-	requests := make(chan []ai.Message, 1)
-	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done")})
-	started, release := make(chan struct{}), make(chan struct{})
-	sess := openTestSession(t, r, heldProbe(started, release))
-	evs := recordQueue(t, sess)
-
-	done := sendAsync(t, sess, "prompt")
-	<-started
-	steer(sess, "x")
-	steer(sess, "y")
-	close(release)
-	require.NoError(t, <-done)
-
-	assert.Equal(t, []string{"prompt", "x", "y"}, userTexts(<-requests))
-	assert.Equal(t, 2, faux.CallCount())
-	assert.Equal(t, []event.Event{
-		event.QueueChanged{Pending: []string{"x"}},
-		event.QueueChanged{Pending: []string{"x", "y"}},
-		event.QueueChanged{Pending: []string{"y"}},
-		event.UserMessage{Text: "x"},
-		event.QueueChanged{},
-		event.UserMessage{Text: "y"},
-	}, queueChanged(drain(evs)))
-}
-
-func TestTakeQueuedReturnsUndeliveredPrompts(t *testing.T) {
-	sb := newSandbox(t)
-	r, faux := newTestRuntime(t, sb)
-	first, second := make(chan []ai.Message, 1), make(chan []ai.Message, 1)
-	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(first, "done"), captureRequest(second, "next done")})
-	started, release := make(chan struct{}), make(chan struct{})
-	sess := openTestSession(t, r, heldProbe(started, release))
-
-	done := sendAsync(t, sess, "prompt")
-	<-started
-	img := Image{Path: "/shots/a.png", MimeType: "image/png", Data: pngBytes(t)}
-	steer(sess, "x", img)
-	steer(sess, "y")
-	assert.Equal(t, []Prompt{{Text: "x", Images: []Image{img}}, {Text: "y"}}, sess.TakeQueued())
-	close(release)
-	require.NoError(t, <-done)
-	assert.Equal(t, []string{"prompt"}, userTexts(<-first))
-
-	_, _, err := sess.Send(t.Context(), "next")
-	require.NoError(t, err)
-	assert.Equal(t, []string{"prompt", "next"}, userTexts(<-second))
-	assert.Empty(t, sess.TakeQueued())
-}
-
-func TestQueueChangedNeverListsDeliveredMessage(t *testing.T) {
-	sb := newSandbox(t)
-	r, faux := newTestRuntime(t, sb)
-	faux.SetResponses([]ai.FauxResponseStep{callProbe(), reply("done"), reply("done")})
-	started, release := make(chan struct{}), make(chan struct{})
-	sess := openTestSession(t, r, heldProbe(started, release))
-	// Subscribed before recordQueue so it runs first. Only steer(sess, "y")'s
-	// own caller reports [x y]; it is held there until x has been delivered.
-	held, resume := make(chan struct{}), make(chan struct{})
+// onFirstTurnEnd runs fn from the listener for the first turn_end, which PiG
+// emits just before it polls for steering.
+func onFirstTurnEnd(t *testing.T, sess *Session, fn func()) {
+	t.Helper()
+	done := false
 	t.Cleanup(sess.inner.Subscribe(func(ev agent.AgentEvent) {
-		if q, ok := ev.(agent.QueueUpdateEvent); ok && slices.Equal(q.Steering, []string{"x", "y"}) {
-			close(held)
-			<-resume
+		if _, ok := ev.(agent.TurnEndEvent); ok && !done {
+			done = true
+			fn()
 		}
 	}))
-	evs := recordQueue(t, sess)
-
-	done := sendAsync(t, sess, "prompt")
-	<-started
-	steer(sess, "x")
-	steered := make(chan struct{})
-	go func() {
-		defer close(steered)
-		steer(sess, "y")
-	}()
-	<-held
-	close(release)
-	var got []event.Event
-	for ev := range evs {
-		got = append(got, ev)
-		if ev == (event.UserMessage{Text: "x"}) {
-			break
-		}
-	}
-	close(resume)
-	<-steered
-	require.NoError(t, <-done)
-	got = append(got, drain(evs)...)
-
-	delivered := slices.Index(got, event.Event(event.UserMessage{Text: "x"}))
-	for _, ev := range got[delivered+1:] {
-		if q, ok := ev.(event.QueueChanged); ok {
-			assert.NotContains(t, q.Pending, "x", "events: %v", got)
-		}
-	}
 }
 
-func TestTakeQueuedKeepsSteerWithPromptText(t *testing.T) {
-	sb := newSandbox(t)
-	r, faux := newTestRuntime(t, sb)
-	faux.SetResponses([]ai.FauxResponseStep{reply("done"), reply("done")})
-	sess := openTestSession(t, r)
-	steer(sess, "T")
-	var once sync.Once
-	var taken []Prompt
+// recordUserStarts returns the texts of the user message_start events seen so
+// far; all of a run's have been seen once its SendContent returned.
+func recordUserStarts(t *testing.T, sess *Session) func() []string {
+	t.Helper()
+	var texts []string
 	t.Cleanup(sess.inner.Subscribe(func(ev agent.AgentEvent) {
 		if start, ok := ev.(agent.MessageStartEvent); ok && start.Message.User != nil {
-			once.Do(func() { taken = sess.TakeQueued() })
+			texts = append(texts, userText(start.Message.User.Content))
 		}
 	}))
-
-	_, _, err := sess.Send(t.Context(), "T")
-	require.NoError(t, err)
-
-	sent := 0
-	for _, m := range sess.inner.Messages() {
-		if m.User != nil && userText(m.User.Content) == "T" {
-			sent++
-		}
-	}
-	returned := slices.ContainsFunc(taken, func(p Prompt) bool { return p.Text == "T" })
-	assert.True(t, returned || sent == 2, "the steer is neither returned (%v) nor delivered (%d sent)", taken, sent)
+	return func() []string { return texts }
 }
 
-func TestSendAndSteerCarryImages(t *testing.T) {
+func sendInner(t *testing.T, sess *Session, text string) {
+	t.Helper()
+	_, err := sess.inner.SendContent(t.Context(), coding.BuildUserContent(text, nil))
+	require.NoError(t, err)
+}
+
+func lastRequest(requests <-chan []ai.Message) []ai.Message {
+	var last []ai.Message
+	for len(requests) > 0 {
+		last = <-requests
+	}
+	return last
+}
+
+func TestPiGSteerFromTurnEndAfterToolTurn(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)
 	requests := make(chan []ai.Message, 1)
 	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done")})
-	started, release := make(chan struct{}), make(chan struct{})
-	sess := openTestSession(t, r, heldProbe(started, release))
+	sess := openTestSession(t, r, probeTool(func(context.Context, json.RawMessage) (string, error) {
+		return toolOutput, nil
+	}))
+	starts := recordUserStarts(t, sess)
+	onFirstTurnEnd(t, sess, func() {
+		sess.inner.QueueSteer("x", nil)
+		sess.inner.QueueSteer("y", nil)
+	})
 
+	sendInner(t, sess, "prompt")
+
+	assert.Equal(t, []string{"prompt", "x", "y"}, userTexts(<-requests))
+	assert.Equal(t, []string{"prompt", "x", "y"}, starts())
+	assert.Zero(t, sess.inner.PendingMessageCount())
+}
+
+func TestPiGSteerFromTurnEndAfterTextReply(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{reply("first"), captureRequest(requests, "done")})
+	sess := openTestSession(t, r)
+	onFirstTurnEnd(t, sess, func() { sess.inner.QueueSteer("x", nil) })
+
+	sendInner(t, sess, "prompt")
+
+	assert.Equal(t, 2, faux.CallCount())
+	assert.Equal(t, []string{"prompt", "x"}, userTexts(<-requests))
+}
+
+func TestPiGSteerFromTurnEndThenAbort(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 2)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "aborted"), captureRequest(requests, "done")})
+	sess := openTestSession(t, r, probeTool(func(context.Context, json.RawMessage) (string, error) {
+		return toolOutput, nil
+	}))
+	starts := recordUserStarts(t, sess)
+	onFirstTurnEnd(t, sess, func() {
+		sess.inner.QueueSteer("x", nil)
+		sess.inner.RequestAbort()
+	})
+
+	sendInner(t, sess, "prompt")
+	assert.Equal(t, 1, countOf(starts(), "x"), "user message starts: %v", starts())
+	steering, _ := sess.inner.ClearQueue()
+	assert.Empty(t, steering)
+
+	sendInner(t, sess, "next")
+	texts := userTexts(lastRequest(requests))
+	assert.Contains(t, texts, "next")
+	assert.Equal(t, 1, countOf(texts, "x"), "next request user texts: %v", texts)
+}
+
+func TestPiGSteerFromTurnEndAfterAbortAtStart(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "done")})
+	sess := openTestSession(t, r)
+	starts := recordUserStarts(t, sess)
+	started := false
+	t.Cleanup(sess.inner.Subscribe(func(ev agent.AgentEvent) {
+		if _, ok := ev.(agent.AgentStartEvent); ok && !started {
+			started = true
+			sess.inner.RequestAbort()
+		}
+	}))
+	onFirstTurnEnd(t, sess, func() { sess.inner.QueueSteer("x", nil) })
+
+	sendInner(t, sess, "prompt")
+	assert.Zero(t, faux.CallCount())
+	assert.NotContains(t, starts(), "x")
+	steering, _ := sess.inner.ClearQueue()
+	assert.Equal(t, []string{"x"}, steering)
+
+	sendInner(t, sess, "next")
+	texts := userTexts(<-requests)
+	assert.Contains(t, texts, "next")
+	assert.NotContains(t, texts, "x")
+}
+
+func TestPiGSteerFromTurnEndAfterProviderError(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	providerError := ai.FauxAssistantMessage(ai.FauxContentString(""), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonError), ErrorMessage: "provider exploded"})
+	faux.SetResponses([]ai.FauxResponseStep{providerError, captureRequest(requests, "done")})
+	sess := openTestSession(t, r)
+	onFirstTurnEnd(t, sess, func() { sess.inner.QueueSteer("x", nil) })
+
+	sendInner(t, sess, "prompt")
+
+	require.Equal(t, 2, faux.CallCount())
+	assert.Contains(t, userTexts(<-requests), "x")
+}
+
+// moreOnce hands over prompts at its first call and nothing after; calls
+// counts its calls.
+func moreOnce(prompts ...Prompt) (more func() []Prompt, calls *int) {
+	n := 0
+	return func() []Prompt {
+		n++
+		if n > 1 {
+			return nil
+		}
+		return prompts
+	}, &n
+}
+
+func okProbe(context.Context, json.RawMessage) (string, error) { return toolOutput, nil }
+
+func TestSendHandsOverAtToolTurnEnd(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done")})
+	sess := openTestSession(t, r, probeTool(okProbe))
+	evs := recordUserMessages(t, sess)
+	more, _ := moreOnce(Prompt{Text: "x"}, Prompt{Text: "y"})
+
+	outcome, sent, undelivered, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+	require.NoError(t, err)
+	assert.Equal(t, event.Outcome{Status: event.Completed}, outcome)
+	assert.True(t, sent)
+	assert.Empty(t, undelivered)
+	assert.Equal(t, 2, faux.CallCount())
+	assert.Equal(t, []string{"prompt", "x", "y"}, userTexts(<-requests))
+	assert.Equal(t, []event.Event{event.UserMessage{Text: "x"}, event.UserMessage{Text: "y"}}, drain(evs))
+}
+
+func TestSendHandsOverAfterTextReply(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{reply("first"), captureRequest(requests, "done")})
+	sess := openTestSession(t, r)
+	more, _ := moreOnce(Prompt{Text: "x"})
+
+	_, sent, undelivered, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+	require.NoError(t, err)
+	assert.True(t, sent)
+	assert.Empty(t, undelivered)
+	assert.Equal(t, 2, faux.CallCount())
+	assert.Equal(t, []string{"prompt", "x"}, userTexts(<-requests))
+}
+
+func TestSendSkipsMore(t *testing.T) {
+	providerError := ai.FauxAssistantMessage(ai.FauxContentString(""), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonError), ErrorMessage: "provider exploded"})
+	t.Run("after a failed turn", func(t *testing.T) {
+		sb := newSandbox(t)
+		r, faux := newTestRuntime(t, sb)
+		faux.SetResponses([]ai.FauxResponseStep{providerError, reply("should not be requested")})
+		sess := openTestSession(t, r)
+		more, calls := moreOnce(Prompt{Text: "x"})
+
+		outcome, _, _, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+		require.NoError(t, err)
+		assert.Equal(t, event.Failed, outcome.Status)
+		assert.Zero(t, *calls)
+		assert.Equal(t, 1, faux.CallCount())
+	})
+	t.Run("after an aborted turn", func(t *testing.T) {
+		sb := newSandbox(t)
+		r, faux := newTestRuntime(t, sb)
+		aborted := ai.FauxAssistantMessage(ai.FauxContentString(""), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonAborted)})
+		faux.SetResponses([]ai.FauxResponseStep{aborted, reply("should not be requested")})
+		sess := openTestSession(t, r)
+		more, calls := moreOnce(Prompt{Text: "x"})
+
+		outcome, _, _, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+		require.NoError(t, err)
+		assert.Equal(t, event.Interrupted, outcome.Status)
+		assert.Zero(t, *calls)
+		assert.Equal(t, 1, faux.CallCount())
+	})
+	t.Run("once ctx is cancelled", func(t *testing.T) {
+		sb := newSandbox(t)
+		r, faux := newTestRuntime(t, sb)
+		faux.SetResponses([]ai.FauxResponseStep{callProbe(), reply("done")})
+		turnCtx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		sess := openTestSession(t, r, probeTool(func(context.Context, json.RawMessage) (string, error) {
+			cancel()
+			return toolOutput, nil
+		}))
+		more, calls := moreOnce(Prompt{Text: "x"})
+
+		_, _, _, err := sess.Send(turnCtx, Prompt{Text: "prompt"}, more)
+		require.NoError(t, err)
+		assert.Zero(t, *calls)
+	})
+}
+
+func TestSendHandOverOmitsUnprocessableImage(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done")})
+	sess := openTestSession(t, r, probeTool(okProbe))
+	good := Image{MimeType: "image/png", Data: pngBytes(t)}
+	more, _ := moreOnce(Prompt{Text: "x [image #1] [image #2]", Images: []Image{corruptPNG(), good}})
+
+	_, _, _, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+	require.NoError(t, err)
+
+	msgs := <-requests
+	assert.Equal(t, []string{"prompt", "x [image #1] [image #2]\n\n" + omittedImageNote}, userTexts(msgs))
+	images := userImages(msgs)
+	require.Len(t, images, 1)
+	assert.Equal(t, "image/png", images[0].MimeType)
+}
+
+func TestSendHandOverCarriesImages(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done")})
+	sess := openTestSession(t, r, probeTool(okProbe))
 	sent := Image{MimeType: "image/png", Data: pngBytes(t)}
-	done := sendAsync(t, sess, "look [image #1]", sent)
-	<-started
-	steered := Image{MimeType: "image/jpeg", Data: jpegBytes(t)}
-	steer(sess, "and [image #2]", steered)
-	close(release)
-	require.NoError(t, <-done)
+	handed := Image{MimeType: "image/jpeg", Data: jpegBytes(t)}
+	more, _ := moreOnce(Prompt{Text: "and [image #2]", Images: []Image{handed}})
+
+	_, _, _, err := sess.Send(t.Context(), Prompt{Text: "look [image #1]", Images: []Image{sent}}, more)
+	require.NoError(t, err)
 
 	assert.Equal(t, []ai.ImageContent{
 		{Data: base64.StdEncoding.EncodeToString(sent.Data), MimeType: "image/png"},
-		{Data: base64.StdEncoding.EncodeToString(steered.Data), MimeType: "image/jpeg"},
+		{Data: base64.StdEncoding.EncodeToString(handed.Data), MimeType: "image/jpeg"},
 	}, userImages(<-requests))
 }
 
-func TestSteerResizesLargeImage(t *testing.T) {
+func TestSendHandOverResizesLargeImage(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)
 	requests := make(chan []ai.Message, 1)
 	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done")})
-	started, release := make(chan struct{}), make(chan struct{})
-	sess := openTestSession(t, r, heldProbe(started, release))
+	sess := openTestSession(t, r, probeTool(okProbe))
+	more, _ := moreOnce(Prompt{Text: "x [image #1]", Images: []Image{{MimeType: "image/png", Data: widePNG(t)}}})
 
-	done := sendAsync(t, sess, "prompt")
-	<-started
-	steer(sess, "x [image #1]", Image{MimeType: "image/png", Data: widePNG(t)})
-	close(release)
-	require.NoError(t, <-done)
+	_, _, _, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+	require.NoError(t, err)
 
 	images := userImages(<-requests)
 	require.Len(t, images, 1)
@@ -313,63 +397,58 @@ func TestSteerResizesLargeImage(t *testing.T) {
 	assert.Less(t, cfg.Height, 40)
 }
 
-func TestTakeQueuedReturnsOriginalLargeImage(t *testing.T) {
+func TestSendRejectedPromptIsNotSent(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)
-	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(make(chan []ai.Message, 1), "done")})
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), reply("done")})
 	started, release := make(chan struct{}), make(chan struct{})
 	sess := openTestSession(t, r, heldProbe(started, release))
 
-	done := sendAsync(t, sess, "prompt")
+	done := sendAsync(t, sess, "first")
 	<-started
-	img := Image{Path: "/shots/wide.png", MimeType: "image/png", Data: widePNG(t)}
-	steer(sess, "x", img)
-	assert.Equal(t, []Prompt{{Text: "x", Images: []Image{img}}}, sess.TakeQueued())
+	_, sent, undelivered, err := sess.Send(t.Context(), Prompt{Text: "second"}, nil)
 	close(release)
 	require.NoError(t, <-done)
+
+	require.Error(t, err)
+	assert.False(t, sent)
+	assert.Empty(t, undelivered)
 }
 
-func TestSteerOmitsUnprocessableImage(t *testing.T) {
+func TestSendReturnsUndeliveredHandOver(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)
 	requests := make(chan []ai.Message, 1)
 	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done")})
-	started, release := make(chan struct{}), make(chan struct{})
-	sess := openTestSession(t, r, heldProbe(started, release))
+	var sess *Session
+	// Subscribed while the run is going, so after Send's listener: it empties
+	// PiG's queue after the handover and before the steering poll.
+	sess = openTestSession(t, r, probeTool(func(context.Context, json.RawMessage) (string, error) {
+		onFirstTurnEnd(t, sess, func() { _, _ = sess.inner.ClearQueue() })
+		return toolOutput, nil
+	}))
+	// Handed back as given: neither resized nor omitted.
+	wide := Image{Path: "/shots/wide.png", MimeType: "image/png", Data: widePNG(t)}
+	broken := corruptPNG()
+	broken.Path = "/shots/broken.png"
+	handed := Prompt{Text: "x [image #1] [image #2]", Images: []Image{wide, broken}}
+	more, _ := moreOnce(handed)
 
-	done := sendAsync(t, sess, "prompt")
-	<-started
-	good := Image{MimeType: "image/png", Data: pngBytes(t)}
-	steer(sess, "x [image #1] [image #2] [image #3]", corruptPNG(), good, corruptPNG())
-	close(release)
-	require.NoError(t, <-done)
-
-	msgs := <-requests
-	want := "x [image #1] [image #2] [image #3]\n\n" + omittedImageNote + "\n" + omittedImageNote
-	assert.Equal(t, []string{"prompt", want}, userTexts(msgs))
-	images := userImages(msgs)
-	require.Len(t, images, 1)
-	assert.Equal(t, "image/png", images[0].MimeType)
-	sess.queuedMu.Lock()
-	assert.Empty(t, sess.queued, "the delivered message left the mirror")
-	sess.queuedMu.Unlock()
+	_, sent, undelivered, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+	require.NoError(t, err)
+	assert.True(t, sent)
+	assert.Equal(t, []Prompt{handed}, undelivered)
+	assert.Equal(t, []string{"prompt"}, userTexts(<-requests))
 }
 
-func TestTakeQueuedReturnsOriginalOfOmittedImage(t *testing.T) {
-	sb := newSandbox(t)
-	r, faux := newTestRuntime(t, sb)
-	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(make(chan []ai.Message, 1), "done")})
-	started, release := make(chan struct{}), make(chan struct{})
-	sess := openTestSession(t, r, heldProbe(started, release))
-
-	done := sendAsync(t, sess, "prompt")
-	<-started
-	img := corruptPNG()
-	img.Path = "/shots/broken.png"
-	steer(sess, "x [image #1]", img)
-	assert.Equal(t, []Prompt{{Text: "x [image #1]", Images: []Image{img}}}, sess.TakeQueued())
-	close(release)
-	require.NoError(t, <-done)
+func countOf(texts []string, text string) int {
+	n := 0
+	for _, s := range texts {
+		if s == text {
+			n++
+		}
+	}
+	return n
 }
 
 // corruptPNG has a PNG signature, so it passes a content sniff, but cannot be
@@ -398,4 +477,92 @@ func jpegBytes(t *testing.T) []byte {
 	var b bytes.Buffer
 	require.NoError(t, jpeg.Encode(&b, image.NewRGBA(image.Rect(0, 0, 2, 2)), nil))
 	return b.Bytes()
+}
+
+func TestReply(t *testing.T) {
+	lookFirst := ai.FauxAssistantMessage(ai.FauxContentBlocks{
+		ai.FauxText("Let me look."),
+		ai.FauxToolCall("Probe", map[string]any{}, &ai.FauxToolCallOptions{ID: "call-1"}),
+	}, ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)})
+	final := func(blocks ...ai.FauxContentBlock) ai.FauxResponseStep {
+		return ai.FauxAssistantMessage(ai.FauxContentBlocks(blocks), ai.FauxAssistantMessageOptions{})
+	}
+	for _, tt := range []struct {
+		name  string
+		steps []ai.FauxResponseStep
+		want  string
+	}{
+		{name: "after a tool", steps: []ai.FauxResponseStep{lookFirst, reply("The answer.")}, want: "The answer."},
+		{name: "joined text blocks", steps: []ai.FauxResponseStep{final(ai.FauxText("First."), ai.FauxThinking("Hmm."), ai.FauxText(""), ai.FauxText("Second."))}, want: "First.\n\nSecond."},
+		{name: "no text after a tool", steps: []ai.FauxResponseStep{lookFirst, final(ai.FauxThinking("Considering."))}},
+		{name: "failed", steps: []ai.FauxResponseStep{ai.FauxAssistantMessage(ai.FauxContentString("partial"), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonError), ErrorMessage: "provider exploded"})}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sb := newSandbox(t)
+			r, faux := newTestRuntime(t, sb)
+			faux.SetResponses(tt.steps)
+			sess := openTestSession(t, r, probeTool(okProbe))
+
+			_, _, _, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, sess.Reply())
+		})
+	}
+	for _, tt := range []struct {
+		name  string
+		store func(t *testing.T, manager *coding.SessionManager)
+		want  string
+	}{
+		{name: "after an omitted failed attempt", want: "recovered", store: func(t *testing.T, manager *coding.SessionManager) {
+			appendHistoryMessage(t, manager, `{"role":"user","content":"go","timestamp":1}`)
+			failed := appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"failed partial"}],"stopReason":"error","errorMessage":"overloaded","timestamp":2}`)
+			_, err := manager.AppendContextEdit(failed, nil)
+			require.NoError(t, err)
+			appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"recovered"}],"stopReason":"stop","timestamp":3}`)
+		}},
+		{name: "aborted with partial text", store: func(t *testing.T, manager *coding.SessionManager) {
+			appendHistoryMessage(t, manager, `{"role":"user","content":"go","timestamp":1}`)
+			appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"partial"}],"stopReason":"aborted","timestamp":2}`)
+		}},
+		{name: "compacted after the reply", want: "the answer", store: func(t *testing.T, manager *coding.SessionManager) {
+			kept := appendHistoryMessage(t, manager, `{"role":"user","content":"go","timestamp":1}`)
+			appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"the answer"}],"stopReason":"stop","timestamp":2}`)
+			_, err := manager.AppendCompaction("summary", kept, 1000, nil, false, nil)
+			require.NoError(t, err)
+		}},
+		{name: "compacted keeping nothing after the reply", want: "the answer", store: func(t *testing.T, manager *coding.SessionManager) {
+			appendHistoryMessage(t, manager, `{"role":"user","content":"go","timestamp":1}`)
+			appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"the answer"}],"stopReason":"stop","timestamp":2}`)
+			_, err := manager.AppendCompaction("summary", "", 1000, nil, false, nil)
+			require.NoError(t, err)
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sb := newSandbox(t)
+			r, _ := newTestRuntime(t, sb)
+			sess := openTestSession(t, r)
+			tt.store(t, sess.inner.SessionManager())
+			require.NoError(t, sess.Close(t.Context()))
+
+			assert.Equal(t, tt.want, resume(t, r, sess.ID()).Reply())
+		})
+	}
+	t.Run("interrupted", func(t *testing.T) {
+		sb := newSandbox(t)
+		r, faux := newTestRuntime(t, sb)
+		faux.SetResponses([]ai.FauxResponseStep{lookFirst, reply("unreached")})
+		started := make(chan struct{})
+		sess := openTestSession(t, r, heldProbe(started, make(chan struct{})))
+		turnCtx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go func() {
+			<-started
+			cancel()
+		}()
+
+		outcome, _, _, err := sess.Send(turnCtx, Prompt{Text: "prompt"}, nil)
+		require.NoError(t, err)
+		require.Equal(t, event.Interrupted, outcome.Status)
+		assert.Empty(t, sess.Reply())
+	})
 }

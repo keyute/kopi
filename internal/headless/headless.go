@@ -17,11 +17,6 @@ type Frontend struct {
 	c      *app.Controller
 	prompt string
 	out    io.Writer
-	// text is the last stretch of text in the reply; over is whether a
-	// notice has followed it, so that later text replaces it. Both are
-	// written only while the turn runs and read only once it is done.
-	text strings.Builder
-	over bool
 }
 
 // New returns a frontend for prompt, which must not be blank.
@@ -32,7 +27,6 @@ func New(c *app.Controller, prompt string, out io.Writer) *Frontend {
 // Run sends the prompt and waits for its turn to end. interrupts delivers
 // SIGINT, which interrupts the turn.
 func (f *Frontend) Run(ctx context.Context, interrupts <-chan os.Signal) error {
-	defer f.c.Subscribe(f.render)()
 	w, err := f.c.Prompt(ctx, f.prompt)
 	if err != nil {
 		return err
@@ -44,38 +38,18 @@ func (f *Frontend) Run(ctx context.Context, interrupts <-chan os.Signal) error {
 		case <-interrupts:
 			f.c.Interrupt()
 		case <-w.Done():
-			return f.finish(w.Outcome())
+			return f.finish(w.Outcome(), w.Reply())
 		}
 	}
 }
 
-// render keeps only the final message: text before a tool call is
-// intermediate, and a notice (such as a retry) ends a failed attempt's text.
-// A notice after the final text, such as compaction, leaves it in place.
-func (f *Frontend) render(ev event.Event) {
-	switch e := ev.(type) {
-	case event.TextDelta:
-		if f.over {
-			f.text.Reset()
-			f.over = false
-		}
-		f.text.WriteString(e.Text)
-	case event.ToolStart:
-		f.text.Reset()
-		f.over = false
-	case event.Notice:
-		f.over = true
-	}
-}
-
-func (f *Frontend) finish(outcome event.Outcome) error {
+func (f *Frontend) finish(outcome event.Outcome, text string) error {
 	switch outcome.Status {
 	case event.Failed:
 		return fmt.Errorf("%w: %s", ErrFailed, outcome.Message)
 	case event.Interrupted:
 		return ErrInterrupted
 	}
-	text := f.text.String()
 	if text == "" {
 		return nil
 	}

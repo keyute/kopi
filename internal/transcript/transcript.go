@@ -80,13 +80,7 @@ func (t *Transcript) Apply(ev event.Event) {
 		t.items = append(t.items, item{kind: errorItem, text: ev.Err.Error()})
 	case event.TurnEnd:
 		t.settleUnfinished()
-		outcome := ev.Outcome
-		// A turn whose Send failed carries the error's text that was just
-		// drawn as the Error before it; keep the reason drawn once.
-		if n := len(t.items); n > 0 && t.items[n-1].kind == errorItem && t.items[n-1].text == outcome.Message {
-			outcome.Message = ""
-		}
-		t.items = append(t.items, item{kind: turnItem, outcome: outcome, elapsed: ev.Elapsed})
+		t.items = append(t.items, item{kind: turnItem, outcome: ev.Outcome, elapsed: ev.Elapsed})
 	}
 }
 

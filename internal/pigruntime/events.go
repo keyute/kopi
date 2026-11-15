@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/MichaelKinsy/PiG/agent"
@@ -23,10 +22,6 @@ func translate(ev agent.AgentEvent) (event.Event, bool) {
 			return event.TextDelta{Text: d.Delta}, true
 		case ai.ThinkingDeltaEvent:
 			return event.ThinkingDelta{Text: d.Delta}, true
-		}
-	case agent.MessageStartEvent:
-		if ev.Message.User != nil {
-			return event.UserMessage{Text: userText(ev.Message.User.Content)}, true
 		}
 	case agent.ToolExecutionStartEvent:
 		return event.ToolStart{CallID: ev.ToolCallID, Name: ev.ToolName, Args: compactJSON(ev.Args)}, true
@@ -54,15 +49,8 @@ func translate(ev agent.AgentEvent) (event.Event, bool) {
 // concatenation draws separate paragraphs live and restored. Thinking does not
 // separate text; a tool call, notice, user message or new run does. Tool events
 // can arrive from concurrent goroutines.
-//
-// It also drops each prompt's own user message, which TurnStart already
-// carries, so only steered messages become UserMessage.
 type textJoiner struct {
 	mu sync.Mutex
-	// sends is the session's prompt count; seen is its value when the last
-	// prompt's user message was dropped.
-	sends *atomic.Uint64
-	seen  uint64
 	// afterText: the last event emitted was text. newBlock: a text block has
 	// started and none of its text has been emitted yet.
 	afterText, newBlock bool
@@ -75,18 +63,16 @@ func (j *textJoiner) translate(ev agent.AgentEvent) (event.Event, bool) {
 	switch ev := ev.(type) {
 	case agent.AgentStartEvent:
 		j.afterText = false
+	case agent.MessageStartEvent:
+		if ev.Message.User != nil {
+			j.afterText = false
+		}
 	case agent.MessageUpdateEvent:
 		switch ev.AssistantMessageEvent.(type) {
 		case ai.TextStartEvent:
 			j.newBlock = true
 		case ai.ToolCallStartEvent:
 			j.afterText = false
-		}
-	}
-	if _, user := e.(event.UserMessage); user {
-		if n := j.sends.Load(); n != j.seen {
-			j.seen = n
-			e, ok = nil, false
 		}
 	}
 	switch d := e.(type) {

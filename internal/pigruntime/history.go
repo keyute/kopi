@@ -21,6 +21,18 @@ func (s *Session) History() []event.Event {
 }
 
 func historyEntries(entries []coding.SessionEntry) []event.Event {
+	msgs, err := branchMessages(entries)
+	out := history(msgs)
+	if err != nil {
+		out = append(out, event.Error{Err: err})
+	}
+	return out
+}
+
+// branchMessages decodes the messages of entries that no context edit
+// omitted. On a failed message decode it returns those before it; on a failed
+// context edit decode, none.
+func branchMessages(entries []coding.SessionEntry) ([]agent.AgentMessage, error) {
 	omitted := make(map[string]bool)
 	for _, entry := range entries {
 		if entry.Base().Type != "context_edit" {
@@ -35,7 +47,7 @@ func historyEntries(entries []coding.SessionEntry) []event.Event {
 			err = fmt.Errorf("missing targetId or replacement")
 		}
 		if err != nil {
-			return []event.Event{event.Error{Err: fmt.Errorf("failed to decode history context edit %s: %w", entry.Base().ID, err)}}
+			return nil, fmt.Errorf("failed to decode history context edit %s: %w", entry.Base().ID, err)
 		}
 		// Non-null replacements change model context, not display content.
 		omitted[edit.TargetID] = strings.TrimSpace(string(edit.Replacement)) == "null"
@@ -50,11 +62,11 @@ func historyEntries(entries []coding.SessionEntry) []event.Event {
 			Message agent.AgentMessage `json:"message"`
 		}
 		if err := json.Unmarshal(entry.Raw(), &record); err != nil {
-			return append(history(msgs), event.Error{Err: fmt.Errorf("failed to decode history message %s: %w", entry.Base().ID, err)})
+			return msgs, fmt.Errorf("failed to decode history message %s: %w", entry.Base().ID, err)
 		}
 		msgs = append(msgs, record.Message)
 	}
-	return history(msgs)
+	return msgs, nil
 }
 
 // history skips system and custom messages, which include compaction and

@@ -19,7 +19,6 @@ import (
 
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/headless"
-	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/tool"
 )
@@ -54,14 +53,7 @@ func newTestEnv(t *testing.T) testEnv {
 	t.Setenv("HOME", e.home)
 	t.Setenv("KOPI_HOME", e.kopiHome)
 	t.Setenv("PATH", "")
-	set, unset := pigruntime.IsolationEnv(e.kopiHome, e.agentDir)
-	for k := range set {
-		t.Setenv(k, os.Getenv(k))
-	}
-	for _, k := range unset {
-		t.Setenv(k, "")
-		require.NoError(t, os.Unsetenv(k))
-	}
+	pigruntimetest.RestoreEnv(t)
 	t.Chdir(e.workspace)
 	return e
 }

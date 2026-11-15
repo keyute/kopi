@@ -23,27 +23,11 @@ import (
 // ListSessions reads ~/.pig.
 type Session struct {
 	inner *coding.Session
-	// sends counts the prompts handed to PiG, so translation can tell a
-	// prompt's own user message from a steered one.
-	sends atomic.Uint64
-	// steerMu keeps queued and PiG's steering queue changing together. It is
-	// held across PiG calls that notify listeners on the caller's goroutine,
-	// so no listener may take it.
-	steerMu sync.Mutex
-	// queuedMu guards queued, listeners, nextID and skipped. dropDelivered
-	// takes it on PiG's event executor, so it is never held across a PiG call.
-	// Lock order is steerMu, queuedMu, then whatever a listener takes;
-	// listeners are called with it held and must not call back into Session.
-	queuedMu sync.Mutex
-	// queued is the source of QueueChanged: the steered messages not yet
-	// delivered, with the prompts as written. PiG's own text list can drop a
-	// steer whose text matches the prompt, and its updates are unordered.
-	queued    []Steering
-	listeners []listener
-	nextID    int
-	// skipped is sends when dropDelivered last skipped a prompt's own user
-	// message.
-	skipped uint64
+	// listenersMu guards listeners and nextID. notify holds it while calling
+	// listeners, so no listener may call back into Session.
+	listenersMu sync.Mutex
+	listeners   []listener
+	nextID      int
 }
 
 type listener struct {
@@ -84,6 +68,29 @@ func (s *Session) MessageCount() int {
 	return n
 }
 
+// Reply is the text of the active branch's last assistant message when it
+// ended its turn normally, else "". It reads the stored branch, as History
+// does, because a compaction can drop the reply from the model's context. Its
+// text blocks are joined as History joins them.
+func (s *Session) Reply() string {
+	msgs, err := branchMessages(s.inner.SessionManager().GetBranch())
+	if err != nil {
+		slog.Warn("failed to read the reply", "error", err)
+		return ""
+	}
+	last := lastAssistant(msgs)
+	if last == nil || last.StopReason != ai.StopReasonStop {
+		return ""
+	}
+	var parts []string
+	for _, block := range last.Content {
+		if b, ok := block.(ai.TextContent); ok && b.Text != "" {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
 // ContextUsage reports the session's projected context tokens and the
 // model's window. ok is false when the model declares no window or the
 // tokens are unknown, as they are right after a compaction.
@@ -95,17 +102,16 @@ func (s *Session) ContextUsage() (tokens, window int, ok bool) {
 	return *u.Tokens, u.ContextWindow, true
 }
 
-// Subscribe registers fn to run synchronously on PiG's event executor and,
-// for QueueChanged, on the goroutine that changed the queue. A slow fn stalls
-// the turn, and fn must not call back into the Session. Every call for a turn
-// has run when Send returns.
+// Subscribe registers fn to run synchronously on PiG's event executor. A slow
+// fn stalls the turn, and fn must not call back into the Session. Every call
+// for a turn has run when Send returns.
 func (s *Session) Subscribe(fn func(event.Event)) func() {
-	s.queuedMu.Lock()
+	s.listenersMu.Lock()
 	s.nextID++
 	id := s.nextID
 	s.listeners = append(s.listeners, listener{id: id, fn: fn})
-	s.queuedMu.Unlock()
-	j := textJoiner{sends: &s.sends}
+	s.listenersMu.Unlock()
+	var j textJoiner
 	unsubscribe := s.inner.Subscribe(func(ev agent.AgentEvent) {
 		if e, ok := j.translate(ev); ok {
 			fn(e)
@@ -113,21 +119,9 @@ func (s *Session) Subscribe(fn func(event.Event)) func() {
 	})
 	return func() {
 		unsubscribe()
-		s.queuedMu.Lock()
-		defer s.queuedMu.Unlock()
+		s.listenersMu.Lock()
+		defer s.listenersMu.Unlock()
 		s.listeners = slices.DeleteFunc(s.listeners, func(l listener) bool { return l.id == id })
-	}
-}
-
-// notifyQueue reports the mirror to every listener. Called with queuedMu held,
-// so reports arrive in the order the mirror changed.
-func (s *Session) notifyQueue() {
-	pending := make([]string, 0, len(s.queued))
-	for _, st := range s.queued {
-		pending = append(pending, st.text)
-	}
-	for _, l := range s.listeners {
-		l.fn(event.QueueChanged{Pending: pending})
 	}
 }
 
@@ -137,18 +131,61 @@ func (s *Session) notifyQueue() {
 // stopped normally (PiG reports an abort during a tool as StopReason "error"
 // with "context canceled"). Model failures are not
 // errors: they surface as a Failed outcome carrying the provider's error text.
-// sent is false only when ctx was already done and the prompt never reached
-// PiG.
-func (s *Session) Send(ctx context.Context, text string, images ...Image) (_ event.Outcome, sent bool, _ error) {
+//
+// At the end of each turn that did not fail and was not aborted, while ctx is
+// not cancelled, Send calls more, if not nil, for prompts to hand over; the
+// model reads them at the next boundary of the same run. more is called on
+// PiG's event executor, with no Session lock held. Each handed-over prompt becomes a UserMessage when it is
+// delivered; p does not, as the caller draws it.
+//
+// sent reports that p was delivered; it is false when ctx was already done or
+// PiG rejected the prompt. undelivered are the handed-over prompts the model
+// never read, as given.
+func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (_ event.Outcome, sent bool, undelivered []Prompt, _ error) {
 	if ctx.Err() != nil {
-		return event.Outcome{Status: event.Interrupted}, false, nil
+		return event.Outcome{Status: event.Interrupted}, false, nil, nil
 	}
 	var aborted atomic.Bool
 	abort := func() {
 		aborted.Store(true)
 		s.inner.RequestAbort()
 	}
-	unsubscribe := s.inner.Subscribe(abortAtRunStart(ctx, abort))
+	runStart := abortAtRunStart(ctx, abort)
+	// handed is the handed-over prompts not yet delivered. Send is the only
+	// producer into PiG's queue and PiG delivers in queue order, after p, so
+	// each user message after p's is the head.
+	var handed []Prompt
+	unsubscribe := s.inner.Subscribe(func(ev agent.AgentEvent) {
+		runStart(ev)
+		switch ev := ev.(type) {
+		case agent.MessageStartEvent:
+			if ev.Message.User == nil {
+				return
+			}
+			if !sent {
+				sent = true
+				return
+			}
+			if len(handed) > 0 {
+				handed = handed[1:]
+			}
+			s.notify(event.UserMessage{Text: userText(ev.Message.User.Content)})
+		case agent.TurnEndEvent:
+			// A steer after a failed or aborted turn would continue a run
+			// that should end.
+			if more == nil || aborted.Load() || ctx.Err() != nil {
+				return
+			}
+			if a := ev.Message.Assistant; a != nil && (a.StopReason == ai.StopReasonError || a.StopReason == ai.StopReasonAborted) {
+				return
+			}
+			for _, q := range more() {
+				text, images := s.steerContent(q)
+				handed = append(handed, q)
+				s.inner.QueueSteer(text, images)
+			}
+		}
+	})
 	defer unsubscribe()
 	abortDone := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() {
@@ -157,73 +194,64 @@ func (s *Session) Send(ctx context.Context, text string, images ...Image) (_ eve
 	})
 	// PiG gets an uncancellable ctx: a cancelled one makes it return
 	// ctx.Err() instead of the turn, so RequestAbort is the only abort path.
-	s.sends.Add(1)
-	msgs, err := s.inner.SendContent(context.WithoutCancel(ctx), coding.BuildUserContent(text, toAI(images)))
+	msgs, err := s.inner.SendContent(context.WithoutCancel(ctx), coding.BuildUserContent(p.Text, toAI(p.Images)))
 	// An abort already under way must finish before Send returns, or its
 	// RequestAbort could land on the following turn.
 	if !stop() {
 		<-abortDone
 	}
+	// What PiG has not drained must not reach the next run.
+	_, _ = s.inner.ClearQueue()
 	if err != nil {
-		return event.Outcome{}, true, fmt.Errorf("failed to send prompt: %w", err)
+		return event.Outcome{}, sent, handed, fmt.Errorf("failed to send prompt: %w", err)
 	}
 	last := lastAssistant(msgs)
 	// A cancel can land after PiG finished the turn but before stop(); a
 	// turn that ended normally is complete whatever the abort hook saw.
 	if aborted.Load() && (last == nil || last.StopReason != ai.StopReasonStop) {
-		return event.Outcome{Status: event.Interrupted}, true, nil
+		return event.Outcome{Status: event.Interrupted}, sent, handed, nil
 	}
 	if last != nil {
 		switch last.StopReason {
 		case ai.StopReasonAborted:
-			return event.Outcome{Status: event.Interrupted}, true, nil
+			return event.Outcome{Status: event.Interrupted}, sent, handed, nil
 		case ai.StopReasonError:
-			return event.Outcome{Status: event.Failed, Message: last.ErrorMessage}, true, nil
+			return event.Outcome{Status: event.Failed, Message: last.ErrorMessage}, sent, handed, nil
 		}
 	}
-	return event.Outcome{Status: event.Completed}, true, nil
+	return event.Outcome{Status: event.Completed}, sent, handed, nil
 }
 
-// Steering is a message prepared by PrepareSteer for Steer.
-type Steering struct {
-	// Prompt is what was written; TakeQueued hands it back.
-	Prompt Prompt
-	// text is what is queued: Prompt.Text plus a note per omitted image.
-	text   string
-	images []ai.ImageContent
+// notify sends e to every listener, in the order they subscribed.
+func (s *Session) notify(e event.Event) {
+	s.listenersMu.Lock()
+	defer s.listenersMu.Unlock()
+	for _, l := range s.listeners {
+		l.fn(e)
+	}
 }
 
 const omittedImageNote = "[Image omitted: it could not be processed.]"
 
-// PrepareSteer does the image work PiG's prompt path does before images enter
+// steerContent does the image work PiG's prompt path does before images enter
 // history and QueueSteer does not: it resizes p's images to the model's limits
 // and, as that path does, omits an image that cannot be processed and notes
-// the omission in the text. It takes no lock and can be slow.
-func (s *Session) PrepareSteer(p Prompt) Steering {
-	st := Steering{Prompt: p, text: p.Text}
+// the omission in the text.
+func (s *Session) steerContent(p Prompt) (string, []ai.ImageContent) {
+	text := p.Text
+	var images []ai.ImageContent
 	var notes []string
 	for _, img := range s.resize(toAI(p.Images)) {
 		if img == nil {
 			notes = append(notes, omittedImageNote)
 			continue
 		}
-		st.images = append(st.images, *img)
+		images = append(images, *img)
 	}
 	if len(notes) > 0 {
-		st.text += "\n\n" + strings.Join(notes, "\n")
+		text += "\n\n" + strings.Join(notes, "\n")
 	}
-	return st
-}
-
-// Steer queues st for the model to read at the running turn's next boundary.
-func (s *Session) Steer(st Steering) {
-	s.steerMu.Lock()
-	defer s.steerMu.Unlock()
-	s.queuedMu.Lock()
-	s.queued = append(s.queued, st)
-	s.notifyQueue()
-	s.queuedMu.Unlock()
-	s.inner.QueueSteer(st.text, st.images)
+	return text, images
 }
 
 // resize returns each image resized, or nil for one that cannot be processed.
@@ -256,49 +284,6 @@ func (s *Session) resize(images []ai.ImageContent) []*ai.ImageContent {
 		out = append(out, &ai.ImageContent{Data: res.Image.Data, MimeType: res.Image.MimeType})
 	}
 	return out
-}
-
-// TakeQueued removes and returns the messages not yet delivered, in queue
-// order. A message PiG has already drained for delivery is returned and is
-// delivered too.
-func (s *Session) TakeQueued() []Prompt {
-	s.steerMu.Lock()
-	defer s.steerMu.Unlock()
-	_, _ = s.inner.ClearQueue()
-	s.queuedMu.Lock()
-	defer s.queuedMu.Unlock()
-	out := make([]Prompt, 0, len(s.queued))
-	for _, st := range s.queued {
-		out = append(out, st.Prompt)
-	}
-	s.queued = nil
-	s.notifyQueue()
-	return out
-}
-
-// dropDelivered removes a delivered message from the mirror: the first queued
-// entry with the user message's non-empty text. It skips each Send's first
-// user message, the prompt itself, as textJoiner does; PiG emits it before any
-// steered one.
-func (s *Session) dropDelivered(ev agent.AgentEvent) {
-	start, ok := ev.(agent.MessageStartEvent)
-	if !ok || start.Message.User == nil {
-		return
-	}
-	s.queuedMu.Lock()
-	defer s.queuedMu.Unlock()
-	if n := s.sends.Load(); n != s.skipped {
-		s.skipped = n
-		return
-	}
-	text := userText(start.Message.User.Content)
-	if text == "" {
-		return
-	}
-	if i := slices.IndexFunc(s.queued, func(st Steering) bool { return st.text == text }); i >= 0 {
-		s.queued = slices.Delete(s.queued, i, i+1)
-		s.notifyQueue()
-	}
 }
 
 // abortAtRunStart re-issues the abort at agent_start when ctx is already

@@ -27,7 +27,7 @@ type Sandbox struct {
 }
 
 // NewSandbox creates temp home/, kopi/ (with agent/) and ws/ directories and
-// points the process environment at them, with an empty PATH.
+// points HOME at home/, with an empty PATH and PiG's variables cleared.
 func NewSandbox(t testing.TB) Sandbox {
 	t.Helper()
 	root := t.TempDir()
@@ -42,15 +42,22 @@ func NewSandbox(t testing.TB) Sandbox {
 	}
 	t.Setenv("HOME", sb.Home)
 	t.Setenv("PATH", "")
-	set, unset := pigruntime.IsolationEnv(sb.KopiHome, sb.AgentDir)
-	for k, v := range set {
-		t.Setenv(k, v)
+	RestoreEnv(t)
+	return sb
+}
+
+// RestoreEnv clears the variables pigruntime.New pins process-wide and
+// restores their original values when t ends.
+func RestoreEnv(t testing.TB) {
+	t.Helper()
+	set, unset := pigruntime.IsolationEnv("", "")
+	for k := range set {
+		unset = append(unset, k)
 	}
 	for _, k := range unset {
 		t.Setenv(k, "") // registers restoration of the original value
 		require.NoError(t, os.Unsetenv(k))
 	}
-	return sb
 }
 
 // PlantDecoys writes the pi, pig and Claude settings and workspace
@@ -100,7 +107,7 @@ func Snapshot(t testing.TB, roots ...string) map[string]FileStamp {
 // NewRuntime opens a runtime over the sandbox and closes it in cleanup.
 func NewRuntime(t testing.TB, sb Sandbox) *pigruntime.Runtime {
 	t.Helper()
-	r, err := pigruntime.New(t.Context(), pigruntime.Options{AgentDir: sb.AgentDir, CWD: sb.Workspace})
+	r, err := pigruntime.New(t.Context(), pigruntime.Options{Home: sb.KopiHome, AgentDir: sb.AgentDir, CWD: sb.Workspace})
 	require.NoError(t, err)
 	t.Cleanup(r.Close)
 	return r

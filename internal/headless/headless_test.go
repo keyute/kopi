@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/app"
-	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
@@ -158,61 +157,4 @@ func TestCommandTextIsSentAsPrompt(t *testing.T) {
 	}
 	assert.Equal(t, policy.Plan, h.c.Status().Mode)
 	assert.Equal(t, "not a command\n", h.out.String())
-}
-
-func TestNoFinalTextAfterToolPrintsNothing(t *testing.T) {
-	for _, tt := range []struct {
-		name  string
-		final []event.Event
-	}{
-		{name: "empty"},
-		{name: "thinking only", final: []event.Event{event.ThinkingDelta{Text: "Considering the result."}}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			out := &bytes.Buffer{}
-			f := &Frontend{out: out}
-			f.render(event.TextDelta{Text: "Let me look."})
-			f.render(event.ToolStart{Name: "Read"})
-			f.render(event.ToolEnd{Name: "Read", Output: "The notes."})
-			for _, ev := range tt.final {
-				f.render(ev)
-			}
-
-			require.NoError(t, f.finish(event.Outcome{Status: event.Completed}))
-			assert.Empty(t, out.String())
-		})
-	}
-}
-
-func TestTextAfterNoticeReplacesPriorText(t *testing.T) {
-	out := &bytes.Buffer{}
-	f := &Frontend{out: out}
-
-	for _, ev := range []event.Event{
-		event.TextDelta{Text: "Failed attempt."},
-		event.Notice{Text: "retrying"},
-		event.TextDelta{Text: "The answer."},
-	} {
-		f.render(ev)
-	}
-
-	require.NoError(t, f.finish(event.Outcome{Status: event.Completed}))
-	assert.Equal(t, "The answer.\n", out.String())
-}
-
-func TestNoticeAfterFinalTextKeepsIt(t *testing.T) {
-	out := &bytes.Buffer{}
-	f := &Frontend{out: out}
-
-	for _, ev := range []event.Event{
-		event.TextDelta{Text: "Let me look."},
-		event.ToolStart{Name: "Read"},
-		event.TextDelta{Text: "The answer."},
-		event.Notice{Text: "compaction done"},
-	} {
-		f.render(ev)
-	}
-
-	require.NoError(t, f.finish(event.Outcome{Status: event.Completed}))
-	assert.Equal(t, "The answer.\n", out.String())
 }

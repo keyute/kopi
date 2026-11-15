@@ -31,8 +31,9 @@ type Config struct {
 // and render the events they subscribe to.
 //
 // Lock order is life, then queue, then mu. mu is never held while calling
-// into PiG or delivering events; life and queue are held across both, which is
-// safe because subscribers must not call back into the Controller.
+// into PiG or delivering events; life is held across both and queue across
+// delivering events, which is safe because subscribers must not call back into
+// the Controller.
 type Controller struct {
 	rt        *pigruntime.Runtime
 	cfg       Config
@@ -40,17 +41,17 @@ type Controller struct {
 	authority *policy.Authority
 	relay     relay
 	wg        sync.WaitGroup
-	// prepareSteer is a field so tests can hold a prompt between its
-	// preparation and the decision made after it.
-	prepareSteer func(*pigruntime.Session, pigruntime.Prompt) pigruntime.Steering
 
 	// life serialises session start, switch and close.
 	life sync.Mutex
-	// queue makes steering into the running Work atomic with taking PiG's
-	// queue and deciding to stop, continue or end that Work; it guards the
-	// Work's queue fields. PiG's abort leaves its queue in place and the next
-	// run would drain it, so the queue is always taken before a cancel.
+	// queue makes queueing input atomic with taking it from pending and with
+	// deciding to stop, continue or end the running Work; it guards pending
+	// and the Work's queue fields. PiG calls back under its own lock to take
+	// pending, so nothing may call into PiG with queue held.
 	queue sync.Mutex
+	// pending is the input queued for the running turn, the only source of
+	// QueueChanged. It is non-empty only while a turn is registered.
+	pending []pigruntime.Prompt
 
 	mu     sync.Mutex
 	sess   *pigruntime.Session
@@ -70,11 +71,10 @@ type Controller struct {
 
 func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
 	return &Controller{
-		rt:           rt,
-		cfg:          cfg,
-		prompt:       systemPrompt(cfg.Workspace, cfg.Tools),
-		authority:    policy.NewAuthority(),
-		prepareSteer: (*pigruntime.Session).PrepareSteer,
+		rt:        rt,
+		cfg:       cfg,
+		prompt:    systemPrompt(cfg.Workspace, cfg.Tools),
+		authority: policy.NewAuthority(),
 	}
 }
 
@@ -124,7 +124,8 @@ func (c *Controller) SendNow(ctx context.Context, text string, images ...string)
 }
 
 // Prompt sends text verbatim as a prompt, even when it reads as a control
-// command, for input that must never change mode. It records no history.
+// command, for input that must never change mode. It records no history. Like
+// Submit, it returns a nil Work when the input is queued behind a running turn.
 func (c *Controller) Prompt(ctx context.Context, text string) (*Work, error) {
 	return c.submitPrompt(ctx, pigruntime.Prompt{Text: text}, false)
 }
@@ -180,89 +181,59 @@ func (c *Controller) History() []string {
 	return c.cfg.History.Texts()
 }
 
-// submitPrompt starts a turn with p, or hands p to the running one. A Work that
-// has been stopped or has already decided to end is waited for, so that p
-// starts the next turn. Images are prepared for steering without queue held,
-// and the decision is then made again.
+// submitPrompt starts a turn with p or queues p for the running one. It never
+// waits for a turn to end: input given after an interrupt starts the next turn
+// once the stopped one ends.
 func (c *Controller) submitPrompt(ctx context.Context, p pigruntime.Prompt, now bool) (*Work, error) {
-	var (
-		steering pigruntime.Steering
-		// preparedFor is the session steering was prepared for, if any.
-		preparedFor *pigruntime.Session
-	)
-	for {
-		c.queue.Lock()
-		c.mu.Lock()
-		if c.sess == nil || c.closed {
-			c.mu.Unlock()
-			c.queue.Unlock()
-			return nil, ErrNoSession
-		}
-		if c.switching {
-			c.mu.Unlock()
-			c.queue.Unlock()
-			return nil, ErrBusy
-		}
-		sess, w := c.sess, c.turn
-		if w == nil {
-			if p.Text == "" {
-				c.mu.Unlock()
-				c.queue.Unlock()
-				return nil, nil
-			}
-			w = c.startTurn(ctx, p)
-			c.queue.Unlock()
-			return w, nil
-		}
+	c.queue.Lock()
+	defer c.queue.Unlock()
+	c.mu.Lock()
+	if c.sess == nil || c.closed {
 		c.mu.Unlock()
-		if !w.ending && !w.stopped {
-			if now {
-				c.sendNow(sess, w, p)
-				c.queue.Unlock()
-				return nil, nil
-			}
-			if preparedFor != sess {
-				if len(p.Images) > 0 {
-					c.queue.Unlock()
-					steering, preparedFor = c.prepareSteer(sess, p), sess
-					continue
-				}
-				steering = sess.PrepareSteer(p)
-			}
-			sess.Steer(steering)
-			w.steered = true
-			c.queue.Unlock()
+		return nil, ErrNoSession
+	}
+	if c.switching {
+		c.mu.Unlock()
+		return nil, ErrBusy
+	}
+	w, emit := c.turn, c.emit
+	if w == nil {
+		if p.Text == "" {
+			c.mu.Unlock()
 			return nil, nil
 		}
-		c.queue.Unlock()
-		select {
-		case <-w.done:
-		case <-ctx.Done():
-			return nil, fmt.Errorf("failed to submit prompt: %w", ctx.Err())
-		}
+		return c.startTurn(ctx, []pigruntime.Prompt{p}), nil
 	}
-}
-
-// sendNow must be called with queue held.
-func (c *Controller) sendNow(sess *pigruntime.Session, w *Work, p pigruntime.Prompt) {
-	next := c.take(sess, w)
+	c.mu.Unlock()
 	if p.Text != "" {
-		next = append(next, p)
+		c.pending = append(c.pending, p)
+		c.queueChanged(emit)
 	}
-	if len(next) == 0 {
-		return
+	if now && !w.stopped && len(c.pending) > 0 {
+		// Not stopped: the end of the send continues the Work with pending.
+		w.cancel()
 	}
-	w.next = append(w.next, next...)
-	w.cancel()
+	return nil, nil
 }
 
-// take empties PiG's queue for w; it must be called with queue held.
-func (c *Controller) take(sess *pigruntime.Session, w *Work) []pigruntime.Prompt {
-	if !w.steered {
-		return nil
+// take empties pending; it must be called with queue held.
+func (c *Controller) take(emit func(event.Event)) []pigruntime.Prompt {
+	taken := c.pending
+	if len(taken) > 0 {
+		c.pending = nil
+		c.queueChanged(emit)
 	}
-	w.steered = false
-	return sess.TakeQueued()
+	return taken
+}
+
+// queueChanged must be called with queue held, so reports arrive in the order
+// pending changed.
+func (c *Controller) queueChanged(emit func(event.Event)) {
+	texts := make([]string, 0, len(c.pending))
+	for _, p := range c.pending {
+		texts = append(texts, p.Text)
+	}
+	emit(event.QueueChanged{Pending: texts})
 }
 
 // TakeQueued removes and returns the input queued for the running turn.
@@ -270,12 +241,9 @@ func (c *Controller) TakeQueued() []event.Input {
 	c.queue.Lock()
 	defer c.queue.Unlock()
 	c.mu.Lock()
-	sess, w := c.sess, c.turn
+	emit := c.emit
 	c.mu.Unlock()
-	if w == nil {
-		return nil
-	}
-	return inputs(c.take(sess, w))
+	return inputs(c.take(emit))
 }
 
 func (c *Controller) Commands() []Command {
@@ -293,21 +261,18 @@ func (c *Controller) Interrupt() bool {
 	c.queue.Lock()
 	defer c.queue.Unlock()
 	c.mu.Lock()
-	sess, w := c.sess, c.turn
+	w, emit := c.turn, c.emit
 	c.mu.Unlock()
 	if w == nil {
 		return false
 	}
-	c.stop(sess, w)
+	c.stop(w, emit)
 	return true
 }
 
 // stop must be called with queue held.
-func (c *Controller) stop(sess *pigruntime.Session, w *Work) {
-	if w.ending {
-		return
-	}
-	w.next = append(w.next, c.take(sess, w)...)
+func (c *Controller) stop(w *Work, emit func(event.Event)) {
+	w.handBack = append(w.handBack, c.take(emit)...)
 	w.stopped = true
 	w.cancel()
 }
@@ -388,7 +353,7 @@ func (c *Controller) Close(ctx context.Context) error {
 
 	ctx, cancel := context.WithTimeout(ctx, c.cfg.JoinTimeout)
 	defer cancel()
-	if w != nil && !c.halt(ctx, sess, w) {
+	if w != nil && !c.halt(ctx, w) {
 		return fmt.Errorf("failed to close controller: work %s did not stop: %w", w.id, pigruntime.ErrJoinTimeout)
 	}
 	c.wg.Wait()
@@ -403,7 +368,7 @@ func (c *Controller) Close(ctx context.Context) error {
 }
 
 // startTurn must be called with queue and mu held; it releases mu.
-func (c *Controller) startTurn(ctx context.Context, p pigruntime.Prompt) *Work {
+func (c *Controller) startTurn(ctx context.Context, parts []pigruntime.Prompt) *Work {
 	sess, emit := c.sess, c.emit
 	// The turn outlives the Submit call: only Interrupt, SendNow, a session
 	// switch or Close may stop a send, by cancelling its context. Cancelling
@@ -416,70 +381,107 @@ func (c *Controller) startTurn(ctx context.Context, p pigruntime.Prompt) *Work {
 	c.turn = w
 	c.mu.Unlock()
 
-	emit(event.TurnStart{WorkID: w.id, Prompt: p.Text})
-	c.wg.Go(func() { c.runTurn(base, sendCtx, sess, emit, w, p) })
+	emit(event.TurnStart{WorkID: w.id, Prompt: joined(parts).Text})
+	c.wg.Go(func() { c.runTurn(base, sendCtx, sess, emit, w, parts) })
 	return w
 }
 
-// runTurn sends p, then keeps sending while settle finds input to continue
-// with. It emits the final TurnEnd before deregistering the work, so a
+// runTurn sends parts, then keeps sending while settle finds input to continue
+// with. The decision, the final TurnEnd and what follows it are one queue
+// section, so no input or interrupt lands after the Work found nothing left
+// but before it is deregistered. The TurnEnd precedes the deregistration, so a
 // transition that finds no work never races an undelivered TurnEnd of the old
 // session.
-func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session, emit func(event.Event), w *Work, p pigruntime.Prompt) {
-	parts := []pigruntime.Prompt{p}
+func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session, emit func(event.Event), w *Work, parts []pigruntime.Prompt) {
 	for {
 		start := time.Now()
-		outcome, sent, err := sess.Send(ctx, p.Text, p.Images...)
+		outcome, sent, undelivered, err := sess.Send(ctx, joined(parts), c.pull(ctx, emit, w))
 		elapsed := time.Since(start)
 		if err != nil {
 			outcome = event.Outcome{Status: event.Failed, Message: err.Error()}
-			emit(event.Error{Err: err})
+		}
+		// Read before taking queue: PiG must not be called with queue held.
+		var reply string
+		if outcome.Status == event.Completed {
+			reply = sess.Reply()
 		}
 
 		c.queue.Lock()
-		if !sent {
-			w.next = slices.Concat(parts, w.next)
-		}
-		next, unsent := settle(w.stopped, outcome, w.next, c.take(sess, w))
-		w.next = nil
+		cancelled := ctx.Err() != nil
 		w.cancel()
-		if len(next) == 0 {
-			w.ending = true
-			if w.discard {
-				unsent = nil
-			}
-			c.queue.Unlock()
-			w.outcome = outcome
-			emit(event.TurnEnd{WorkID: w.id, Outcome: outcome, Elapsed: elapsed, Unsent: inputs(unsent)})
-			c.mu.Lock()
-			if c.turn == w {
-				c.turn = nil
-			}
-			c.mu.Unlock()
-			close(w.done)
-			return
+		next, unsent := settle(w.stopped, cancelled, outcome, sent, parts, undelivered, w.handBack, c.pending)
+		if !w.stopped {
+			c.take(emit)
 		}
-		ctx, w.cancel = context.WithCancel(base)
-		p = joined(next)
-		parts = next
-		emit(event.TurnEnd{WorkID: w.id, Outcome: outcome, Elapsed: elapsed})
-		emit(event.TurnStart{WorkID: w.id, Prompt: p.Text})
+		if len(next) > 0 {
+			ctx, w.cancel = context.WithCancel(base)
+			parts = next
+			emit(event.TurnEnd{WorkID: w.id, Outcome: outcome, Elapsed: elapsed})
+			emit(event.TurnStart{WorkID: w.id, Prompt: joined(parts).Text})
+			c.queue.Unlock()
+			continue
+		}
+		if w.discard {
+			unsent = nil
+		}
+		w.outcome = outcome
+		w.reply = reply
+		emit(event.TurnEnd{WorkID: w.id, Outcome: outcome, Elapsed: elapsed, Unsent: inputs(unsent)})
+		c.finish(base, w, emit)
 		c.queue.Unlock()
+		close(w.done)
+		return
 	}
 }
 
-// settle decides what follows a finished send: the input to send next or,
-// when there is none, the input to hand back unsent. next is the input taken
-// for the Work while the send ran; left is what was still queued after it.
-func settle(stopped bool, outcome event.Outcome, next, left []pigruntime.Prompt) (continueWith, unsent []pigruntime.Prompt) {
-	pending := slices.Concat(next, left)
-	switch {
-	case stopped:
-		return nil, pending
-	case len(next) > 0:
-		return pending, nil
-	// left was queued after PiG's last drain of the completed send.
-	case outcome.Status == event.Completed && len(left) > 0:
+// pull returns the callback through which the send on ctx takes pending at a
+// boundary. It hands nothing over once w is stopped or ctx is cancelled:
+// send-now queues and cancels in one queue section, and input handed to a run
+// being cancelled would enter history with no reply.
+func (c *Controller) pull(ctx context.Context, emit func(event.Event), w *Work) func() []pigruntime.Prompt {
+	return func() []pigruntime.Prompt {
+		c.queue.Lock()
+		defer c.queue.Unlock()
+		if w.stopped || ctx.Err() != nil {
+			return nil
+		}
+		return c.take(emit)
+	}
+}
+
+// finish deregisters the ended w and starts the next turn with the input given
+// after w was stopped, unless the session is closing or being switched; that
+// input is then dropped. It must be called with queue held.
+func (c *Controller) finish(base context.Context, w *Work, emit func(event.Event)) {
+	parts := c.take(emit)
+	c.mu.Lock()
+	if c.turn == w {
+		c.turn = nil
+	}
+	if len(parts) == 0 || c.closed || c.switching {
+		c.mu.Unlock()
+		return
+	}
+	c.startTurn(base, parts)
+}
+
+// settle decides what follows a finished send of parts: the input to send next
+// or, when there is none, the input to hand back unsent. undelivered is what
+// the send took from pending but the model never read; handBack is what was
+// pending when the Work was stopped. Input pending after a stop is neither: it
+// starts the next turn.
+func settle(stopped, cancelled bool, outcome event.Outcome, sent bool, parts, undelivered, handBack, pending []pigruntime.Prompt) (next, unsent []pigruntime.Prompt) {
+	left := undelivered
+	if !sent {
+		left = slices.Concat(parts, undelivered)
+	}
+	if stopped {
+		return nil, slices.Concat(left, handBack)
+	}
+	left = slices.Concat(left, pending)
+	// Cancelled without a stop is send-now, which continues whatever the
+	// outcome.
+	if cancelled || outcome.Status == event.Completed && sent {
 		return left, nil
 	}
 	return nil, left
@@ -534,7 +536,7 @@ func (c *Controller) start(ctx context.Context, req OpenRequest) error {
 
 	if w != nil {
 		joinCtx, cancel := context.WithTimeout(ctx, c.cfg.JoinTimeout)
-		stopped := c.halt(joinCtx, old, w)
+		stopped := c.halt(joinCtx, w)
 		cancel()
 		if !stopped {
 			return fmt.Errorf("failed to switch session: work %s did not stop: %w", w.id, ErrWorkStillRunning)
@@ -593,10 +595,13 @@ func (c *Controller) start(ctx context.Context, req OpenRequest) error {
 
 // halt stops w as Interrupt does, but discards its queued input, and reports
 // whether it finished before ctx ended.
-func (c *Controller) halt(ctx context.Context, sess *pigruntime.Session, w *Work) bool {
+func (c *Controller) halt(ctx context.Context, w *Work) bool {
 	c.queue.Lock()
+	c.mu.Lock()
+	emit := c.emit
+	c.mu.Unlock()
 	w.discard = true
-	c.stop(sess, w)
+	c.stop(w, emit)
 	c.queue.Unlock()
 	select {
 	case <-w.done:

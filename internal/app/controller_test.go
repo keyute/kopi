@@ -199,6 +199,7 @@ func TestTurnStreamsTextThenEnds(t *testing.T) {
 	assert.Greater(t, len(ofType[event.TextDelta](evs)), 1, "the reply streams in several deltas")
 	assert.Equal(t, event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Completed}}, evs[len(evs)-1])
 	assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
+	assert.Equal(t, "hello from the faux model", w.Reply())
 }
 
 func TestTurnStartOpensTurnAndTurnEndIsTimed(t *testing.T) {
@@ -369,6 +370,7 @@ func TestProviderFailureEndsTurnFailed(t *testing.T) {
 
 	want := event.Outcome{Status: event.Failed, Message: "invalid request: bad thing"}
 	assert.Equal(t, want, w.Outcome())
+	assert.Empty(t, w.Reply())
 	assert.Equal(t, []event.TurnEnd{{WorkID: w.ID(), Outcome: want}}, ofType[event.TurnEnd](untimed(h.rec.all())))
 }
 
@@ -390,6 +392,7 @@ func TestInterruptDuringToolEndsInterruptedAndPersists(t *testing.T) {
 	wait(t, w.Done())
 
 	assert.Equal(t, event.Outcome{Status: event.Interrupted}, w.Outcome())
+	assert.Empty(t, w.Reply())
 	assert.Equal(t, []event.TurnEnd{{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted}}}, ofType[event.TurnEnd](untimed(h.rec.all())))
 	id := h.c.Status().SessionID
 	require.NoError(t, h.c.Close(t.Context()))
@@ -436,17 +439,94 @@ func TestInterruptAfterTurnFinishedSparesNextTurn(t *testing.T) {
 	w, err := h.c.Submit(t.Context(), "first")
 	require.NoError(t, err)
 	wait(t, reached)
-	assert.True(t, h.c.Interrupt(), "the finished turn is still registered")
+	// The TurnEnd is delivered under the lock Interrupt takes.
+	interrupted := make(chan bool, 1)
+	go func() { interrupted <- h.c.Interrupt() }()
 	close(unblock)
 	wait(t, w.Done())
 	assert.Equal(t, event.Completed, w.Outcome().Status)
+	select {
+	case ok := <-interrupted:
+		assert.False(t, ok, "the turn was deregistered with its TurnEnd")
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for Interrupt")
+	}
 
 	assert.Equal(t, event.Outcome{Status: event.Completed}, h.turn(t, "second").Outcome())
 	assert.Equal(t, 2, h.faux.CallCount())
 }
 
+func TestSubmitAsTurnFinishesStartsNextTurn(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first"), pigruntimetest.Text("second")})
+	reached, unblock := blockOnFirstTurnEnd(h.c)
+
+	w, err := h.c.Submit(t.Context(), "first")
+	require.NoError(t, err)
+	wait(t, reached)
+	// The TurnEnd is delivered under the lock Submit takes to queue input.
+	type submitted struct {
+		w   *Work
+		err error
+	}
+	second := make(chan submitted, 1)
+	go func() {
+		w, err := h.c.Submit(context.Background(), "second")
+		second <- submitted{w, err}
+	}()
+	close(unblock)
+	wait(t, w.Done())
+	var next *Work
+	select {
+	case got := <-second:
+		require.NoError(t, got.err)
+		require.NotNil(t, got.w, "the prompt starts a turn instead of queueing behind the finished one")
+		next = got.w
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for Submit")
+	}
+	wait(t, next.Done())
+
+	assert.NotEqual(t, w.ID(), next.ID())
+	assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
+	assert.Equal(t, event.Outcome{Status: event.Completed}, next.Outcome())
+	assert.Equal(t, 2, h.faux.CallCount())
+	if queues := ofType[event.QueueChanged](h.rec.all()); len(queues) > 0 {
+		assert.Empty(t, queues[len(queues)-1].Pending)
+	}
+}
+
+// A second send on a session already running a turn is rejected by PiG.
+func TestRejectedSendIsHandedBackOnce(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("done")})
+	running, err := h.c.Submit(t.Context(), "hold")
+	require.NoError(t, err)
+	wait(t, started)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	w := &Work{id: "turn-rejected", done: make(chan struct{}), cancel: cancel}
+	h.c.runTurn(t.Context(), ctx, h.c.sess, h.c.emit, w, []pigruntime.Prompt{{Text: "rejected"}})
+	wait(t, w.Done())
+	close(release)
+	wait(t, running.Done())
+
+	assert.Equal(t, event.Failed, w.Outcome().Status)
+	assert.Contains(t, w.Outcome().Message, "failed to send prompt")
+	var rejected []event.TurnEnd
+	for _, end := range ofType[event.TurnEnd](untimed(h.rec.all())) {
+		if end.WorkID == w.ID() {
+			rejected = append(rejected, end)
+		}
+	}
+	assert.Equal(t, []event.TurnEnd{{WorkID: w.ID(), Outcome: w.Outcome(), Unsent: []event.Input{{Text: "rejected"}}}}, rejected)
+	assert.Empty(t, ofType[event.Error](h.rec.all()))
+	assert.Equal(t, event.Outcome{Status: event.Completed}, running.Outcome())
+}
+
 func TestFailedResumeAsTurnFinishesKeepsSessionUsable(t *testing.T) {
-	h, _ := openHarness(t, Config{JoinTimeout: 50 * time.Millisecond})
+	h, _ := openHarness(t, Config{})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first"), pigruntimetest.Text("second")})
 	reached, unblock := blockOnFirstTurnEnd(h.c)
 	id := h.c.Status().SessionID
@@ -454,10 +534,20 @@ func TestFailedResumeAsTurnFinishesKeepsSessionUsable(t *testing.T) {
 	w, err := h.c.Submit(t.Context(), "first")
 	require.NoError(t, err)
 	wait(t, reached)
-	_, err = h.c.Submit(t.Context(), "/resume no-such-session")
-	assert.ErrorIs(t, err, ErrWorkStillRunning)
+	// The TurnEnd is delivered under the lock the switch takes to stop the turn.
+	resumed := make(chan error, 1)
+	go func() {
+		_, err := h.c.Submit(context.Background(), "/resume no-such-session")
+		resumed <- err
+	}()
 	close(unblock)
 	wait(t, w.Done())
+	select {
+	case err := <-resumed:
+		require.ErrorIs(t, err, pigruntime.ErrSessionNotFound)
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for /resume")
+	}
 
 	_, err = h.c.Submit(t.Context(), "/resume no-such-session")
 	require.ErrorIs(t, err, pigruntime.ErrSessionNotFound)
@@ -497,6 +587,35 @@ func TestPromptWhileBusyIsQueuedAndStatusWorks(t *testing.T) {
 	require.GreaterOrEqual(t, queuedAt, 0)
 	assert.Less(t, queuedAt, sentAt)
 	assert.Equal(t, []event.TurnEnd{{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Completed}}}, ofType[event.TurnEnd](evs))
+}
+
+func TestQueuedInputIsDeliveredAtBoundary(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "done")})
+
+	w, err := h.c.Submit(t.Context(), "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	_, err = h.c.Submit(t.Context(), "next")
+	require.NoError(t, err)
+	close(release)
+	wait(t, w.Done())
+
+	assert.Equal(t, []string{"hold", "next"}, receive(t, requests).UserTexts)
+	queueing := slices.DeleteFunc(h.rec.all(), func(ev event.Event) bool {
+		switch ev.(type) {
+		case event.QueueChanged, event.UserMessage:
+			return false
+		}
+		return true
+	})
+	assert.Equal(t, []event.Event{
+		event.QueueChanged{Pending: []string{"next"}},
+		event.QueueChanged{Pending: []string{}},
+		event.UserMessage{Text: "next"},
+	}, queueing)
 }
 
 // blockTool blocks until its ctx is cancelled.
@@ -585,15 +704,15 @@ func TestInterruptBeforeSendHandsOriginalAndQueuedInputBack(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	w := &Work{
-		id:      "turn-1",
-		done:    make(chan struct{}),
-		cancel:  cancel,
-		next:    []pigruntime.Prompt{later},
-		stopped: true,
+		id:       "turn-1",
+		done:     make(chan struct{}),
+		cancel:   cancel,
+		handBack: []pigruntime.Prompt{later},
+		stopped:  true,
 	}
 	h.c.turn = w
 
-	h.c.runTurn(t.Context(), ctx, h.c.sess, h.c.emit, w, original)
+	h.c.runTurn(t.Context(), ctx, h.c.sess, h.c.emit, w, []pigruntime.Prompt{original})
 	wait(t, w.Done())
 
 	assert.Zero(t, h.faux.CallCount())
@@ -703,6 +822,30 @@ func TestTakeQueuedEmptiesQueueAndTurnContinues(t *testing.T) {
 	assert.Empty(t, queues[len(queues)-1].Pending)
 }
 
+func TestTakeQueuedDuringSendIsNeverDelivered(t *testing.T) {
+	const queued = "queued-3f7a"
+	started, release := make(chan struct{}), make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "done")})
+
+	w, err := h.c.Submit(t.Context(), "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	_, err = h.c.Submit(t.Context(), queued)
+	require.NoError(t, err)
+	assert.Equal(t, []event.Input{{Text: queued}}, h.c.TakeQueued())
+	evs := h.rec.all()
+	assert.Equal(t, event.QueueChanged{Pending: []string{}}, evs[len(evs)-1])
+	close(release)
+	wait(t, w.Done())
+
+	req := receive(t, requests)
+	assert.Equal(t, []string{"hold"}, req.UserTexts)
+	assert.NotContains(t, req.Raw, queued)
+	assert.Equal(t, 2, h.faux.CallCount())
+}
+
 func TestSessionSwitchDiscardsQueuedInput(t *testing.T) {
 	const queued = "queued-5e1d"
 	for _, tc := range []struct {
@@ -790,58 +933,6 @@ func TestSteeredImageIsResizedAndKeepsOrder(t *testing.T) {
 	assert.Equal(t, []event.TurnEnd{{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Completed}}}, ofType[event.TurnEnd](untimed(h.rec.all())))
 }
 
-func TestTurnEndingWhileImageIsPreparedStartsNewTurn(t *testing.T) {
-	started, release := make(chan struct{}), make(chan struct{})
-	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
-	requests := make(chan pigruntimetest.Request, 1)
-	h.faux.SetResponses([]ai.FauxResponseStep{
-		pigruntimetest.ToolCalls(call("Hold", "call-1")),
-		pigruntimetest.Text("done"),
-		pigruntimetest.Capture(t, requests, "fresh"),
-	})
-	preparing, proceed := make(chan struct{}), make(chan struct{})
-	h.c.prepareSteer = func(sess *pigruntime.Session, p pigruntime.Prompt) pigruntime.Steering {
-		close(preparing)
-		<-proceed
-		return sess.PrepareSteer(p)
-	}
-	path := pngFile(t)
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-
-	w, err := h.c.Submit(t.Context(), "hold")
-	require.NoError(t, err)
-	wait(t, started)
-	submitted := make(chan *Work, 1)
-	go func() {
-		next, err := h.c.Submit(context.Background(), "look [image #1]", path)
-		assert.NoError(t, err)
-		submitted <- next
-	}()
-	wait(t, preparing)
-	close(release)
-	wait(t, w.Done())
-	close(proceed)
-
-	var next *Work
-	select {
-	case next = <-submitted:
-	case <-time.After(waitLimit):
-		t.Fatal("timed out waiting for Submit")
-	}
-	require.NotNil(t, next, "the prompt started a turn of its own")
-	wait(t, next.Done())
-	req := receive(t, requests)
-	assert.Equal(t, []string{"hold", "look [image #1]"}, req.UserTexts)
-	assert.Contains(t, req.Raw, base64.StdEncoding.EncodeToString(data))
-	assert.Equal(t, []event.Event{
-		event.TurnStart{WorkID: w.ID(), Prompt: "hold"},
-		event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Completed}},
-		event.TurnStart{WorkID: next.ID(), Prompt: "look [image #1]"},
-		event.TurnEnd{WorkID: next.ID(), Outcome: event.Outcome{Status: event.Completed}},
-	}, lifecycle(untimed(h.rec.all())))
-}
-
 // Input given after an interrupt, while the stopped turn is still finishing,
 // starts the next turn instead of being handed back with the stopped one's.
 func TestInputAfterInterruptStartsNextTurn(t *testing.T) {
@@ -859,35 +950,15 @@ func TestInputAfterInterruptStartsNextTurn(t *testing.T) {
 			_, err = h.c.Submit(t.Context(), "before")
 			require.NoError(t, err)
 			require.True(t, h.c.Interrupt())
-			sent := make(chan error, 1)
-			go func() {
-				if now {
-					sent <- h.c.SendNow(context.Background(), "after")
-					return
-				}
-				_, err := h.c.Submit(context.Background(), "after")
-				sent <- err
-			}()
-			select {
-			case err := <-sent:
-				t.Fatalf("input returned before the stopped turn ended: %v", err)
-			case <-w.Done():
-				t.Fatal("the held turn ended early")
-			default:
+			if now {
+				require.NoError(t, h.c.SendNow(t.Context(), "after"))
+			} else {
+				got, err := h.c.Submit(t.Context(), "after")
+				require.NoError(t, err)
+				assert.Nil(t, got)
 			}
 			close(release)
 
-			select {
-			case err := <-sent:
-				require.NoError(t, err)
-			case <-time.After(waitLimit):
-				t.Fatal("timed out waiting for the input to return")
-			}
-			select {
-			case <-w.Done():
-			default:
-				t.Fatal("the input returned before the stopped turn ended")
-			}
 			old, fresh := receiveEnd(t, ends), receiveEnd(t, ends)
 			assert.Equal(t, event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted}, Unsent: []event.Input{{Text: "before"}}}, old)
 			assert.NotEqual(t, w.ID(), fresh.WorkID)
@@ -904,29 +975,32 @@ func TestInputAfterInterruptStartsNextTurn(t *testing.T) {
 }
 
 func TestSettle(t *testing.T) {
-	a, b, c := pigruntime.Prompt{Text: "a"}, pigruntime.Prompt{Text: "b"}, pigruntime.Prompt{Text: "c"}
+	a, b, c, d := pigruntime.Prompt{Text: "a"}, pigruntime.Prompt{Text: "b"}, pigruntime.Prompt{Text: "c"}, pigruntime.Prompt{Text: "d"}
 	completed, interrupted, failed := event.Outcome{Status: event.Completed}, event.Outcome{Status: event.Interrupted}, event.Outcome{Status: event.Failed, Message: "boom"}
 	ps := func(p ...pigruntime.Prompt) []pigruntime.Prompt { return p }
 	for _, tc := range []struct {
-		name               string
-		stopped            bool
-		outcome            event.Outcome
-		next, left         []pigruntime.Prompt
-		wantNext, wantLeft []pigruntime.Prompt
+		name                           string
+		stopped, cancelled, sent       bool
+		outcome                        event.Outcome
+		undelivered, handBack, pending []pigruntime.Prompt
+		wantNext, wantUnsent           []pigruntime.Prompt
 	}{
-		{name: "completed alone ends", outcome: completed},
-		{name: "stopped hands everything back", stopped: true, outcome: interrupted, next: ps(a), left: ps(b), wantLeft: ps(a, b)},
-		{name: "stopped after completing hands stragglers back", stopped: true, outcome: completed, left: ps(c), wantLeft: ps(c)},
-		{name: "send-now continues with stragglers", outcome: interrupted, next: ps(a, b), left: ps(c), wantNext: ps(a, b, c)},
-		{name: "send-now continues after a failure", outcome: failed, next: ps(a), wantNext: ps(a)},
-		{name: "completed with stragglers continues", outcome: completed, left: ps(a, b), wantNext: ps(a, b)},
-		{name: "failed hands stragglers back", outcome: failed, left: ps(a), wantLeft: ps(a)},
-		{name: "interrupted by the provider hands stragglers back", outcome: interrupted, left: ps(a), wantLeft: ps(a)},
+		{name: "completed alone ends", sent: true, outcome: completed},
+		{name: "completed continues with undelivered then pending", sent: true, outcome: completed, undelivered: ps(b), pending: ps(c), wantNext: ps(b, c)},
+		{name: "stopped hands back unsent parts, undelivered and hand-back", stopped: true, cancelled: true, outcome: interrupted, undelivered: ps(b), handBack: ps(c), wantUnsent: ps(a, b, c)},
+		{name: "stopped keeps pending for the next turn", stopped: true, cancelled: true, sent: true, outcome: interrupted, handBack: ps(b), pending: ps(c), wantUnsent: ps(b)},
+		{name: "stopped after completing hands back", stopped: true, cancelled: true, sent: true, outcome: completed, handBack: ps(b), wantUnsent: ps(b)},
+		{name: "send-now continues with pending", cancelled: true, sent: true, outcome: interrupted, undelivered: ps(b), pending: ps(c, d), wantNext: ps(b, c, d)},
+		{name: "send-now before the prompt was read resends it", cancelled: true, outcome: interrupted, pending: ps(b), wantNext: ps(a, b)},
+		{name: "send-now continues after a failure", cancelled: true, sent: true, outcome: failed, pending: ps(b), wantNext: ps(b)},
+		{name: "failed hands everything back", sent: true, outcome: failed, undelivered: ps(b), pending: ps(c), wantUnsent: ps(b, c)},
+		{name: "rejected prompt is handed back", outcome: failed, pending: ps(b), wantUnsent: ps(a, b)},
+		{name: "interrupted by the provider hands pending back", sent: true, outcome: interrupted, pending: ps(b), wantUnsent: ps(b)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			next, left := settle(tc.stopped, tc.outcome, tc.next, tc.left)
+			next, unsent := settle(tc.stopped, tc.cancelled, tc.outcome, tc.sent, ps(a), tc.undelivered, tc.handBack, tc.pending)
 			assert.Equal(t, tc.wantNext, next)
-			assert.Equal(t, tc.wantLeft, left)
+			assert.Equal(t, tc.wantUnsent, unsent)
 		})
 	}
 }

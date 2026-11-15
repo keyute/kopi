@@ -142,26 +142,8 @@ func resolveConfig(cmd *cobra.Command, paths config.Paths) (*config.Resolved, er
 	return config.Resolve(config.Defaults(), global, config.Map("flags", flags))
 }
 
-// openRuntime pins PiG's environment, creates the agent dir and builds the
-// runtime for cwd.
 func openRuntime(ctx context.Context, paths config.Paths, cwd string) (*pigruntime.Runtime, error) {
-	// PiG's session lookup still consults its default dirs even with an
-	// explicit agent dir, so they are pointed into Kopi home process-wide.
-	set, unset := pigruntime.IsolationEnv(paths.Home, paths.AgentDir)
-	for k, v := range set {
-		if err := os.Setenv(k, v); err != nil {
-			return nil, fmt.Errorf("failed to set %s: %w", k, err)
-		}
-	}
-	for _, k := range unset {
-		if err := os.Unsetenv(k); err != nil {
-			return nil, fmt.Errorf("failed to unset %s: %w", k, err)
-		}
-	}
-	if err := os.MkdirAll(paths.AgentDir, 0o700); err != nil {
-		return nil, fmt.Errorf("failed to create agent dir: %w", err)
-	}
-	return pigruntime.New(ctx, pigruntime.Options{AgentDir: paths.AgentDir, CWD: cwd})
+	return pigruntime.New(ctx, pigruntime.Options{Home: paths.Home, AgentDir: paths.AgentDir, CWD: cwd})
 }
 
 // readPrompt joins piped stdin and the argument, in that order.

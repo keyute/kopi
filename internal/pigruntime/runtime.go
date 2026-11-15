@@ -23,7 +23,8 @@ import (
 const pigSettings = `{"retry":{"enabled":true},"compaction":{"enabled":true},"cacheWarming":"off","steeringMode":"all"}`
 
 type Options struct {
-	AgentDir, CWD string
+	// Home is Kopi's home; PiG's own home is pinned beneath it.
+	Home, AgentDir, CWD string
 }
 
 type Runtime struct {
@@ -34,7 +35,12 @@ type Runtime struct {
 // New builds a PiG runtime whose every input is explicit: in-memory settings,
 // untrusted project, and (in Open) no resources, no built-in tools. Leaving
 // any of these nil makes PiG read ~/.pig, project settings or AGENTS.md.
+// New also pins PiG's environment process-wide (see IsolationEnv) and creates
+// the agent dir.
 func New(ctx context.Context, opts Options) (*Runtime, error) {
+	if err := isolate(opts.Home, opts.AgentDir); err != nil {
+		return nil, err
+	}
 	var s coding.Settings
 	if err := json.Unmarshal([]byte(pigSettings), &s); err != nil {
 		return nil, fmt.Errorf("failed to decode pig settings: %w", err)
@@ -155,11 +161,7 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	if err != nil {
 		return nil, fmt.Errorf("failed to open session: %w", err)
 	}
-	s := &Session{inner: sess}
-	// Subscribed before any Session.Subscribe: PiG runs listeners in
-	// subscription order, so QueueChanged precedes the delivered UserMessage.
-	sess.Subscribe(s.dropDelivered)
-	return s, nil
+	return &Session{inner: sess}, nil
 }
 
 // resume and continueLatest check the listing first because PiG reports a

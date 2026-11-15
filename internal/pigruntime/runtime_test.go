@@ -98,7 +98,7 @@ func snapshot(t *testing.T, roots ...string) map[string]fileStamp {
 
 func newTestRuntime(t *testing.T, sb sandbox) (*Runtime, *ai.FauxProviderHandle) {
 	t.Helper()
-	r, err := New(t.Context(), Options{AgentDir: sb.agentDir, CWD: sb.ws})
+	r, err := New(t.Context(), Options{Home: sb.kopiHome, AgentDir: sb.agentDir, CWD: sb.ws})
 	require.NoError(t, err)
 	t.Cleanup(r.Close)
 	faux := ai.NewFauxProvider(ai.FauxConfig{ProviderID: fauxProvider, Model: "faux-1"})
@@ -200,7 +200,7 @@ func TestSeamOpenStreamsFauxTurnWithZeroAmbient(t *testing.T) {
 	})
 	defer unsubscribe()
 
-	outcome, _, err := sess.Send(t.Context(), "probe please")
+	outcome, _, _, err := sess.Send(t.Context(), Prompt{Text: "probe please"}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, outcome)
 
@@ -269,7 +269,7 @@ func TestSeamCancelDuringToolReportsInterrupted(t *testing.T) {
 	defer cancel()
 	done := make(chan result, 1)
 	go func() {
-		outcome, _, err := sess.Send(turnCtx, "block")
+		outcome, _, _, err := sess.Send(turnCtx, Prompt{Text: "block"}, nil)
 		done <- result{outcome, err}
 	}()
 	<-started
@@ -307,14 +307,15 @@ func TestCancelledBeforeSendInterruptsWithoutProviderCall(t *testing.T) {
 
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
-	outcome, sent, err := sess.Send(cancelled, "cancelled before start")
+	outcome, sent, undelivered, err := sess.Send(cancelled, Prompt{Text: "cancelled before start"}, nil)
 	require.NoError(t, err)
 	assert.False(t, sent)
+	assert.Empty(t, undelivered)
 	assert.Equal(t, event.Outcome{Status: event.Interrupted}, outcome)
 	assert.Zero(t, faux.CallCount())
 	assert.Zero(t, sess.MessageCount())
 
-	outcome, sent, err = sess.Send(t.Context(), "next turn")
+	outcome, sent, _, err = sess.Send(t.Context(), Prompt{Text: "next turn"}, nil)
 	require.NoError(t, err)
 	assert.True(t, sent)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, outcome)
@@ -339,7 +340,7 @@ func TestCancelBeforeRunStartIsReissued(t *testing.T) {
 	})
 	defer unsubscribe()
 
-	outcome, _, err := sess.Send(turnCtx, "abort me")
+	outcome, _, _, err := sess.Send(turnCtx, Prompt{Text: "abort me"}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, event.Outcome{Status: event.Interrupted}, outcome)
 	assert.Zero(t, faux.CallCount())
@@ -360,11 +361,11 @@ func TestCancelRacingSendReturnSparesNextTurn(t *testing.T) {
 			cancel()
 		}
 	})
-	_, _, err := sess.Send(turnCtx, "first turn")
+	_, _, _, err := sess.Send(turnCtx, Prompt{Text: "first turn"}, nil)
 	require.NoError(t, err)
 	unsubscribe()
 
-	outcome, _, err := sess.Send(t.Context(), "second turn")
+	outcome, _, _, err := sess.Send(t.Context(), Prompt{Text: "second turn"}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, outcome)
 	assert.Equal(t, 2, faux.CallCount())
@@ -386,7 +387,7 @@ func TestCancelAfterTurnFinishedReportsCompleted(t *testing.T) {
 	})
 	defer unsubscribe()
 
-	outcome, _, err := sess.Send(turnCtx, "finish me")
+	outcome, _, _, err := sess.Send(turnCtx, Prompt{Text: "finish me"}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, outcome)
 	assert.Equal(t, 1, faux.CallCount())
@@ -467,7 +468,7 @@ func TestSessionsListsOnlyKopiAgentDir(t *testing.T) {
 	r, faux := newTestRuntime(t, sb)
 	faux.SetResponses([]ai.FauxResponseStep{reply("hello back")})
 	sess := openTestSession(t, r)
-	_, _, err := sess.Send(t.Context(), "hello kopi")
+	_, _, _, err := sess.Send(t.Context(), Prompt{Text: "hello kopi"}, nil)
 	require.NoError(t, err)
 
 	// A decoy session in PiG's default tree, in the same per-workspace
@@ -493,7 +494,7 @@ func sendOnce(t *testing.T, r *Runtime, faux *ai.FauxProviderHandle, prompt, ans
 	faux.SetResponses([]ai.FauxResponseStep{reply(answer)})
 	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
 	require.NoError(t, err)
-	_, _, err = sess.Send(t.Context(), prompt)
+	_, _, _, err = sess.Send(t.Context(), Prompt{Text: prompt}, nil)
 	require.NoError(t, err)
 	require.NoError(t, sess.Close(t.Context()))
 	return sess
@@ -517,7 +518,7 @@ func TestResumeFromFreshRuntimeRestoresConversation(t *testing.T) {
 	assert.Equal(t, saved.ID(), sess.ID())
 	assert.Equal(t, 2, sess.MessageCount())
 
-	outcome, _, err := sess.Send(t.Context(), "second question")
+	outcome, _, _, err := sess.Send(t.Context(), Prompt{Text: "second question"}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, event.Completed, outcome.Status)
 	raw, err := json.Marshal(<-requests)
@@ -583,7 +584,7 @@ func TestCloseReportsJoinTimeout(t *testing.T) {
 	sent := make(chan struct{})
 	go func() {
 		defer close(sent)
-		_, _, _ = sess.Send(context.Background(), "block")
+		_, _, _, _ = sess.Send(context.Background(), Prompt{Text: "block"}, nil)
 	}()
 	// Runs before the runtime's Close cleanup.
 	t.Cleanup(func() {
@@ -615,7 +616,7 @@ func TestSendOutcome(t *testing.T) {
 			r, faux := newTestRuntime(t, sb)
 			faux.SetResponses([]ai.FauxResponseStep{tc.step})
 			sess := openTestSession(t, r)
-			outcome, _, err := sess.Send(t.Context(), "go")
+			outcome, _, _, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, outcome)
 		})

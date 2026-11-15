@@ -18,6 +18,7 @@
 - Never import PiG `internal/` packages, never use `coding/cli`, never add a `replace` for PiG, and never copy upstream code.
 - Create every PiG session with every input explicit: agent dir, in-memory settings, `coding.NoResources`, `SkipBuiltinTools`, and explicit tool names for both `AllowedTools` and `InitialActiveToolNames`. A nil there turns on ambient discovery or stock tools.
 - Never call PiG's `Session.ListSessions` or `Session.Events`.
+- `internal/pigruntime`'s exported API is stated in Kopi's terms; nothing exported may exist only because of how PiG works internally.
 
 ## Authority
 
