@@ -148,18 +148,23 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case autoScrollMsg:
 		return m, m.autoScroll()
 	case submitDoneMsg:
+		defer m.refreshPending()
 		return m, m.submitDone(msg)
 	case interruptMsg:
+		defer m.refreshPending()
 		return m, m.cancel()
 	case flashMsg:
 		if msg.seq == m.flashSeq {
 			m.flashText, m.exitArmed = "", false
 		}
 	case tea.KeyPressMsg:
+		defer m.refreshPending()
 		return m, m.key(msg)
 	case tea.PasteMsg:
+		defer m.refreshPending()
 		return m, m.paste(msg.Content)
 	case imagePastedMsg:
+		defer m.refreshPending()
 		return m, m.composer.insertImage(msg.path)
 	case pasteFailedMsg:
 		return m, m.flash("paste failed")
@@ -302,14 +307,18 @@ func (m *model) editQueue() {
 	m.composer.restore(m.c.TakeQueued())
 	// QueueChanged follows; clearing now keeps a second press from taking again.
 	m.queued = nil
-	m.relayout()
+	m.refreshPending()
 }
 
 // applyBatch applies events in order, refreshes the status when one of them
 // can change it, and starts the spinner when a turn starts.
 func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 	wasBusy, refresh := m.busy, false
+	pureThinking := len(evs) > 0
 	for _, ev := range evs {
+		if _, ok := ev.(event.ThinkingDelta); !ok {
+			pureThinking = false
+		}
 		switch ev.(type) {
 		case event.SessionChanged, event.ModeChanged, event.ToolEnd, event.TurnEnd:
 			refresh = true
@@ -319,7 +328,9 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 	if refresh {
 		m.status = m.c.Status()
 	}
-	m.relayout()
+	if !pureThinking {
+		m.relayout()
+	}
 	cmds := []tea.Cmd{m.bridge.wait()}
 	if m.busy && !wasBusy {
 		cmds = append(cmds, m.spinner.Tick)
@@ -386,7 +397,7 @@ func (m *model) relayout() {
 	if m.width == 0 {
 		return
 	}
-	m.pending = pendingRows(m.queued, &m.keys, m.width, max(2, m.height/3), m.th)
+	m.refreshPending()
 	blocks := m.tr.Blocks()
 	m.folds.settle(blocks)
 	old := m.lines
@@ -410,6 +421,19 @@ func (m *model) relayout() {
 			m.drag = drag{}
 		}
 	}
+}
+
+// refreshPending updates queue geometry without rebuilding transcript lines.
+func (m *model) refreshPending() {
+	if m.width <= 0 {
+		m.pending = nil
+		return
+	}
+	budget := m.height - m.composer.height() - chromeRows
+	if m.busy {
+		budget -= busyRows
+	}
+	m.pending = pendingRows(m.queued, &m.keys, m.width, max(2, m.height/3), budget, m.th)
 }
 
 func (m *model) transcriptHeight() int {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/MichaelKinsy/PiG/agent"
 	"github.com/MichaelKinsy/PiG/ai"
+	"github.com/MichaelKinsy/PiG/coding"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -147,6 +148,82 @@ func TestHistoryEndsFailedAndInterruptedTurns(t *testing.T) {
 			event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}},
 		}, resume(t, r, sess.ID(), block).History())
 	})
+}
+
+func TestHistoryRetainsCompactedConversationOnActiveBranch(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	sess := openTestSession(t, r)
+	manager := sess.inner.SessionManager()
+	appendMessage := func(raw string) string {
+		t.Helper()
+		var msg agent.AgentMessage
+		require.NoError(t, json.Unmarshal([]byte(raw), &msg))
+		id, err := manager.AppendMessage(msg)
+		require.NoError(t, err)
+		return id
+	}
+	appendMessage(`{"role":"user","content":"old prompt","timestamp":1}`)
+	appendMessage(`{"role":"assistant","content":[{"type":"text","text":"old answer"},{"type":"toolCall","id":"old-call","name":"Probe","arguments":{}}],"stopReason":"toolUse","timestamp":2}`)
+	appendMessage(`{"role":"toolResult","toolCallId":"old-call","toolName":"Probe","content":[{"type":"text","text":"old output"}],"isError":false,"timestamp":3}`)
+	forkPoint := appendMessage(`{"role":"assistant","content":[{"type":"text","text":"old conclusion"}],"stopReason":"stop","timestamp":4}`)
+	appendMessage(`{"role":"user","content":"sibling prompt","timestamp":5}`)
+	appendMessage(`{"role":"assistant","content":[{"type":"text","text":"sibling answer"}],"stopReason":"stop","timestamp":6}`)
+	require.NoError(t, sess.inner.Fork(forkPoint))
+	_, err := manager.AppendCompaction("summary, not conversation", "", 1000, nil, false, nil)
+	require.NoError(t, err)
+	appendMessage(`{"role":"user","content":"new prompt","timestamp":7}`)
+	appendMessage(`{"role":"assistant","content":[{"type":"text","text":"new answer"}],"stopReason":"stop","timestamp":8}`)
+	require.NoError(t, sess.Close(t.Context()))
+
+	resumed := resume(t, r, sess.ID())
+	assert.Equal(t, []event.Event{
+		event.TurnStart{Prompt: "old prompt"},
+		event.TextDelta{Text: "old answer"},
+		event.ToolStart{CallID: "old-call", Name: "Probe", Args: "{}"},
+		event.ToolEnd{CallID: "old-call", Name: "Probe", Output: "old output"},
+		event.TextDelta{Text: "old conclusion"},
+		event.TurnStart{Prompt: "new prompt"},
+		event.TextDelta{Text: "new answer"},
+	}, resumed.History())
+	assert.NotContains(t, history(resumed.inner.Messages()), event.Event(event.TurnStart{Prompt: "old prompt"}))
+}
+
+type corruptHistoryEntry struct {
+	coding.SessionEntry
+	raw json.RawMessage
+}
+
+func (e corruptHistoryEntry) Raw() json.RawMessage { return e.raw }
+
+func TestHistoryStopsOnDecodeError(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	sess := openTestSession(t, r)
+	manager := sess.inner.SessionManager()
+	for _, prompt := range []string{"before", "corrupt", "after"} {
+		_, err := manager.AppendMessage(agent.AgentMessage{User: &agent.UserMessage{Role: agent.RoleUser, Content: ai.UserText(prompt)}})
+		require.NoError(t, err)
+	}
+	entries := manager.GetBranch()
+	var messages []coding.SessionEntry
+	for _, entry := range entries {
+		if entry.Base().Type == "message" {
+			messages = append(messages, entry)
+		}
+	}
+	require.Len(t, messages, 3)
+	for _, raw := range []string{`{"message":`, `{"message":{"role":"user","content":"unterminated}}`} {
+		t.Run(raw, func(t *testing.T) {
+			got := historyEntries([]coding.SessionEntry{messages[0], corruptHistoryEntry{SessionEntry: messages[1], raw: json.RawMessage(raw)}, messages[2]})
+			require.Len(t, got, 2)
+			assert.Equal(t, event.TurnStart{Prompt: "before"}, got[0])
+			failure, ok := got[1].(event.Error)
+			require.True(t, ok)
+			require.ErrorContains(t, failure.Err, "failed to decode history message "+messages[1].Base().ID)
+			assert.Error(t, errors.Unwrap(failure.Err))
+		})
+	}
 }
 
 // The faux provider cannot store a message with StopReason "aborted", user

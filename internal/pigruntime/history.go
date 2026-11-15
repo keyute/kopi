@@ -2,10 +2,13 @@ package pigruntime
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/MichaelKinsy/PiG/agent"
 	"github.com/MichaelKinsy/PiG/ai"
+	"github.com/MichaelKinsy/PiG/coding"
 
 	"github.com/keyute/kopi/internal/event"
 )
@@ -14,7 +17,24 @@ import (
 // would have delivered for it. Durations and work IDs are not stored, and a
 // normally completed turn ends without a TurnEnd.
 func (s *Session) History() []event.Event {
-	return history(s.inner.Messages())
+	return historyEntries(s.inner.SessionManager().GetBranch())
+}
+
+func historyEntries(entries []coding.SessionEntry) []event.Event {
+	var msgs []agent.AgentMessage
+	for _, entry := range entries {
+		if entry.Base().Type != "message" {
+			continue
+		}
+		var record struct {
+			Message agent.AgentMessage `json:"message"`
+		}
+		if err := json.Unmarshal(entry.Raw(), &record); err != nil {
+			return append(history(msgs), event.Error{Err: fmt.Errorf("failed to decode history message %s: %w", entry.Base().ID, err)})
+		}
+		msgs = append(msgs, record.Message)
+	}
+	return history(msgs)
 }
 
 // history skips system and custom messages, which include compaction and

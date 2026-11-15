@@ -2,9 +2,11 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/policy"
@@ -71,10 +73,13 @@ func renderSegments(names []string, in statusInput, th theme) []string {
 	return parts
 }
 
-// statusLine sits two in from both edges. The right side always shows;
-// left segments that do not fit are dropped from its right end. notice is
-// drawn only where the layout places the notice segment.
+// statusLine sits two in from both edges. Left segments that do not fit
+// are dropped from its right end. At narrow widths the right side is
+// truncated, preserving the configured mode when it fits.
 func statusLine(s app.Status, layout statusLayout, notice string, width int, th theme) string {
+	if width <= 0 {
+		return ""
+	}
 	in := statusInput{Status: s, notice: notice}
 	sep := fg(th.dim).Render(" · ")
 	right := strings.Join(renderSegments(layout.right, in, th), sep) + "  "
@@ -90,7 +95,22 @@ func statusLine(s app.Status, layout statusLayout, notice string, width int, th 
 			break
 		}
 	}
-	gap := max(1, width-lipgloss.Width(left)-lipgloss.Width(right))
+	mode, _ := segments["mode"](in, th)
+	configuredMode := slices.Contains(layout.left, "mode") || slices.Contains(layout.right, "mode")
+	if lipgloss.Width(right)+1 > width || (configuredMode && !strings.Contains(left+right, mode)) {
+		left = ""
+		right = ansi.Truncate(strings.TrimRight(right, " "), width, "")
+		if configuredMode && lipgloss.Width(mode) <= width {
+			names := slices.DeleteFunc(slices.Clone(layout.right), func(name string) bool { return name == "mode" })
+			other := strings.Join(renderSegments(names, in, th), sep)
+			budget := width - lipgloss.Width(mode) - lipgloss.Width(sep)
+			right = mode
+			if budget > 0 && other != "" {
+				right = ansi.Truncate(other, budget, "") + sep + mode
+			}
+		}
+	}
+	gap := max(0, width-lipgloss.Width(left)-lipgloss.Width(right))
 	return left + strings.Repeat(" ", gap) + right
 }
 

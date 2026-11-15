@@ -51,6 +51,26 @@ func TestStatusLine(t *testing.T) {
 	}
 }
 
+func TestStatusLineFitsNarrowWidthsAndKeepsMode(t *testing.T) {
+	for _, layout := range []statusLayout{
+		defaultLayout,
+		{right: []string{"branch", "mode", "notice"}},
+		{left: []string{"mode"}, right: []string{"branch"}},
+	} {
+		for width := 0; width <= 30; width++ {
+			s := app.Status{Branch: "\x1b[31m" + strings.Repeat("界", 30) + "\x1b[0m", Mode: policy.Execute}
+			got := statusLine(s, layout, "ctrl+c again to exit", width, mocha())
+			assert.LessOrEqual(t, ansi.StringWidth(got), width)
+			if width >= len("execute") {
+				assert.Contains(t, ansi.Strip(got), "execute")
+			}
+		}
+	}
+	got := statusLine(app.Status{}, defaultLayout, "ctrl+c again to exit", 20, mocha())
+	assert.Equal(t, 20, ansi.StringWidth(got))
+	assert.Contains(t, ansi.Strip(got), "plan")
+}
+
 func TestStatusLineWarnsFromNinetyPercent(t *testing.T) {
 	th := mocha()
 	s := app.Status{Model: "a/b", ContextTokens: 899, ContextWindow: 1000}

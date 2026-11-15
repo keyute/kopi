@@ -17,9 +17,9 @@ type Frontend struct {
 	c      *app.Controller
 	prompt string
 	out    io.Writer
-	// text is the last stretch of text in the reply; over is whether a tool
-	// call or notice has followed it, so that later text replaces it. Both
-	// are written only while the turn runs and read only once it is done.
+	// text is the last stretch of text in the reply; over is whether a
+	// notice has followed it, so that later text replaces it. Both are
+	// written only while the turn runs and read only once it is done.
 	text strings.Builder
 	over bool
 }
@@ -60,7 +60,10 @@ func (f *Frontend) render(ev event.Event) {
 			f.over = false
 		}
 		f.text.WriteString(e.Text)
-	case event.ToolStart, event.Notice:
+	case event.ToolStart:
+		f.text.Reset()
+		f.over = false
+	case event.Notice:
 		f.over = true
 	}
 }

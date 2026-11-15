@@ -630,6 +630,34 @@ func TestReboundKeys(t *testing.T) {
 	assert.Zero(t, c.interrupts)
 }
 
+func TestThinkingBatchKeepsLayoutAndRearmsBridge(t *testing.T) {
+	m, _ := newTestModel(t, 80, 24)
+	send(m, event.TurnStart{Prompt: "go"}, event.Notice{Text: "visible"})
+	oldLines := &m.lines[0]
+	oldView := m.View().Content
+	m.bridge.push(event.ThinkingDelta{Text: "thinking"})
+	_, cmd := m.Update(m.bridge.wait()())
+	require.NotNil(t, cmd)
+	assert.Same(t, oldLines, &m.lines[0])
+	assert.Equal(t, oldView, m.View().Content)
+	assert.True(t, m.busy)
+	m.bridge.push(event.TextDelta{Text: "answer"})
+	m.Update(cmd())
+	assert.Contains(t, body(m), "answer", "the bridge wait was rearmed")
+	assert.NotSame(t, oldLines, &m.lines[0])
+}
+
+func TestMixedThinkingBatchRebuildsVisibleLayout(t *testing.T) {
+	m, _ := newTestModel(t, 80, 24)
+	_, cmd := m.Update(eventsMsg{event.ThinkingDelta{Text: "thinking"}, event.TurnStart{Prompt: "go"}, event.TextDelta{Text: "answer"}})
+	require.NotNil(t, cmd)
+	assert.True(t, m.busy)
+	assert.Contains(t, body(m), "answer")
+	batch, ok := cmd().(tea.BatchMsg)
+	require.True(t, ok)
+	assert.Len(t, batch, 2, "mixed turn start still starts the spinner and rearms the bridge")
+}
+
 func TestInitWaitsForEvents(t *testing.T) {
 	m, _ := newTestModel(t, 30, 20)
 	m.bridge.push(event.Notice{Text: "early"})

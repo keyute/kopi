@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -94,6 +95,83 @@ func TestLongQueueIsCapped(t *testing.T) {
 	want = append(want, "  … 21 more lines", "")
 	assert.Equal(t, want, s[w-15:w-3], "the box holds a third of the height")
 	assert.Len(t, s, 30)
+}
+
+func TestPendingBudgetTracksComposerGrowth(t *testing.T) {
+	m, _ := newTestModel(t, 80, 24)
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []string{linesOf(30)}})
+	oldLines := &m.lines[0]
+	for range 7 {
+		press(m, tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt})
+		press(m, tea.KeyPressMsg{Code: 'a', Text: "a"})
+		assert.Len(t, screen(m), 24)
+		assert.Equal(t, 24-m.composer.height()-2, m.composerTop())
+		assert.Contains(t, statusText(m), "plan")
+	}
+	assert.Equal(t, 8, m.composer.height())
+	assert.Len(t, m.pending, 10)
+	assert.Same(t, oldLines, &m.lines[0], "typing must not rebuild the transcript")
+}
+
+func TestPendingBudgetIncludesWrappedHelp(t *testing.T) {
+	km := newKeyMap(testOptions().Keys)
+	th := mocha()
+	for _, width := range []int{20, 80} {
+		for budget := 0; budget <= 20; budget++ {
+			rows := pendingRows([]string{linesOf(30)}, &km, width, 8, budget, th)
+			assert.LessOrEqual(t, len(rows), budget)
+		}
+	}
+	assert.Empty(t, pendingRows([]string{"a"}, &km, 20, 8, 0, th))
+	assert.Len(t, pendingRows([]string{linesOf(30)}, &km, 80, 8, 20, th), 13)
+}
+
+func TestPendingGeometryInputPaths(t *testing.T) {
+	for _, path := range []string{"paste", "image", "history", "queue edit", "submit", "unsent", "deferred unsent", "cancel", "resize", "busy"} {
+		t.Run(path, func(t *testing.T) {
+			m, c := newTestModel(t, 80, 24)
+			send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []string{linesOf(30)}})
+			switch path {
+			case "paste":
+				pasteText(m, linesOf(8))
+			case "image":
+				pasteText(m, strings.Repeat("a", 75))
+				m.Update(imagePastedMsg{path: "synthetic.png"})
+			case "history":
+				m.composer.setHistory([]string{linesOf(8)})
+				m.keys.queueEdit.SetEnabled(false)
+				press(m, up)
+			case "queue edit":
+				c.queued = []event.Input{{Text: linesOf(8)}}
+				press(m, up)
+			case "submit":
+				pasteText(m, linesOf(8))
+				cmd := press(m, enter)
+				require.NotNil(t, cmd)
+				m.Update(cmd())
+			case "unsent":
+				send(m, event.TurnEnd{Unsent: []event.Input{{Text: linesOf(8)}}})
+			case "deferred unsent":
+				m.submitting = true
+				send(m, event.TurnEnd{Unsent: []event.Input{{Text: linesOf(8)}}})
+				m.Update(submitDoneMsg{})
+			case "cancel":
+				pasteText(m, linesOf(8))
+				press(m, ctrlC)
+			case "resize":
+				m.Update(tea.WindowSizeMsg{Width: 20, Height: 24})
+			case "busy":
+				send(m, event.TurnEnd{})
+			}
+			budget := m.height - m.composer.height() - chromeRows
+			if m.busy {
+				budget -= busyRows
+			}
+			assert.Equal(t, pendingRows(m.queued, &m.keys, m.width, max(2, m.height/3), budget, m.th), m.pending)
+			assert.Len(t, screen(m), m.height)
+			assert.Equal(t, m.height-m.composer.height()-2, m.composerTop())
+		})
+	}
 }
 
 func TestFoldClickHitsTranscriptWhilePendingShown(t *testing.T) {
