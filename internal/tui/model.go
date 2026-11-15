@@ -68,8 +68,9 @@ type model struct {
 	status app.Status
 	busy   bool
 	// queued is the input queued for the running turn; pending is its rows.
-	queued  []string
-	pending []string
+	queued       []string
+	pending      []string
+	pendingCache pendingCache
 	// flashText is the status line's notice until flashMsg{flashSeq}.
 	flashText string
 	flashSeq  int
@@ -111,13 +112,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.sel = selection{}
+		m.clearSelection()
 		m.composer.resize(m.width, m.height)
 		m.relayout()
 	case tea.BackgroundColorMsg:
 		if !msg.IsDark() {
 			m.th = latte()
-			m.sel = selection{}
+			m.clearSelection()
 			m.composer.style(m.th)
 			m.spinner.Style = fg(m.th.accent)
 			m.relayout()
@@ -158,7 +159,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
-	m.sel = selection{}
+	m.clearSelection()
 	km := &m.keys
 	if key.Matches(msg, km.cancel) {
 		return m.cancel()
@@ -308,7 +309,7 @@ func (m *model) apply(ev event.Event) {
 		}
 		m.folds = newFolds()
 		m.cache.reset()
-		m.sel = selection{}
+		m.clearSelection()
 		m.follow = true
 		m.queued = nil
 		return
@@ -338,7 +339,7 @@ func (m *model) apply(ev event.Event) {
 // still at the bottom.
 func (m *model) holdTop(change func()) {
 	top := m.top()
-	m.sel = selection{}
+	m.clearSelection()
 	change()
 	m.relayout()
 	m.offset = min(top, m.maxOffset())
@@ -371,10 +372,7 @@ func (m *model) relayout() {
 	n := max(m.sel.anchor.line, m.sel.head.line) + 1
 	sameText := func(a, b line) bool { return a.text == b.text }
 	if !slices.EqualFunc(old[:min(n, len(old))], m.lines[:min(n, len(m.lines))], sameText) {
-		m.sel = selection{}
-		if m.drag.region == regionTranscript {
-			m.drag = drag{}
-		}
+		m.clearSelection()
 	}
 }
 
@@ -388,7 +386,7 @@ func (m *model) refreshPending() {
 	if m.busy {
 		budget -= busyRows
 	}
-	m.pending = pendingRows(m.queued, &m.keys, m.width, max(2, m.height/3), budget, m.th)
+	m.pending = m.pendingCache.rows(m.queued, &m.keys, m.width, max(2, m.height/3), budget, m.th)
 }
 
 func (m *model) transcriptHeight() int {

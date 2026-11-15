@@ -42,6 +42,15 @@ type drag struct {
 	x, edge int
 }
 
+// clearSelection also discards the transcript drag's coordinates. A pending
+// auto-scroll tick will stop when it finds no transcript drag.
+func (m *model) clearSelection() {
+	m.sel = selection{}
+	if m.drag.region == regionTranscript {
+		m.drag = drag{}
+	}
+}
+
 func (m *model) mouse(msg tea.MouseMsg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.MouseClickMsg:

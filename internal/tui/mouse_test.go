@@ -292,6 +292,57 @@ func TestSelectionClearsOnResizeFoldSessionAndTheme(t *testing.T) {
 	}
 }
 
+func TestActiveTranscriptDragClearsWhenCoordinatesChange(t *testing.T) {
+	for name, invalidate := range map[string]func(*model){
+		"resize":     func(m *model) { m.Update(tea.WindowSizeMsg{Width: 50, Height: 30}) },
+		"theme":      func(m *model) { m.Update(tea.BackgroundColorMsg{Color: color.White}) },
+		"session":    func(m *model) { send(m, event.SessionChanged{}) },
+		"expand all": func(m *model) { press(m, ctrlO) },
+		"fold":       func(m *model) { m.holdTop(m.folds.toggleAll) },
+		"key":        func(m *model) { press(m, left) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, _ := newTestModel(t, 40, 30)
+			notices(m, 30)
+			pressAt(m, 2, 2)
+			require.NotNil(t, moveTo(m, 6, 0))
+			require.False(t, m.sel.empty())
+			require.True(t, m.ticking)
+
+			invalidate(m)
+
+			assert.Equal(t, drag{}, m.drag)
+			assert.True(t, m.sel.empty())
+			top := m.top()
+			_, cmd := m.Update(autoScrollMsg{})
+			assert.Nil(t, cmd, "a late tick cannot restart the drag")
+			assert.Equal(t, top, m.top())
+			assert.False(t, m.ticking)
+			assert.Nil(t, moveTo(m, 10, 1))
+			assert.Nil(t, releaseAt(m, 10, 1))
+			assert.True(t, m.sel.empty())
+			assert.Empty(t, reversedRows(m))
+			assert.Empty(t, m.clip.(*fakeClipboard).written)
+		})
+	}
+}
+
+func TestActiveTranscriptDragClearsWhenLinesAboveChange(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	send(m, start("a"), okOut("a", "3 lines", "a1\na2\n"), start("b"), ok("b", "1 line"))
+	row := rowOf(t, m, "  ↳ b.go · 1 line")
+	pressAt(m, 4, row)
+	moveTo(m, 8, row)
+
+	send(m, event.TextDelta{Text: "Done."})
+
+	assert.Equal(t, drag{}, m.drag)
+	assert.Nil(t, moveTo(m, 10, row))
+	assert.Nil(t, releaseAt(m, 10, row))
+	assert.True(t, m.sel.empty())
+	assert.Empty(t, m.clip.(*fakeClipboard).written)
+}
+
 func TestSelectionClearsWhenLinesAboveChange(t *testing.T) {
 	m, _ := newTestModel(t, 40, 30)
 	send(m, start("a"), okOut("a", "3 lines", "a1\na2\n"), start("b"), ok("b", "1 line"))

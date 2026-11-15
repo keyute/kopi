@@ -89,6 +89,51 @@ func TestRepeatedPasteExpandsThenCollapsesAgain(t *testing.T) {
 	assert.Equal(t, "> "+linesOf(11)+"[paste #2 +11 lines]", m.composer.value())
 }
 
+func TestRepeatedPasteExpandsSanitizedText(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, want string
+	}{
+		{"tabs", strings.Repeat("\tline\n", 11), strings.Repeat("    line\n", 11)},
+		{"controls and invalid runes", strings.Repeat("a\x00\x1b\u007f\u0085\ufffd\xffb\n", 11), strings.Repeat("ab\n", 11)},
+		{"carriage returns", strings.Repeat("a\rb\n", 11), strings.Repeat("a\nb\n", 11)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newTestModel(t, 60, 30)
+			c := &m.composer
+			c.ta.SetValue("prefix suffix")
+			c.selectRange(selection{anchor: point{0, 7}, head: point{0, 7}})
+			c.paste(tc.text)
+			require.NotEmpty(t, c.blocks)
+
+			c.paste(tc.text)
+
+			assert.Equal(t, "prefix "+tc.want+"suffix", c.value())
+			assert.Empty(t, c.blocks)
+		})
+	}
+}
+
+func TestRestoreSmallTextUsesTextareaSanitization(t *testing.T) {
+	for _, text := range []string{
+		"\tindented\n\t\tnested",
+		"a\x00\x1b\u007f\u0085\ufffd\xffb",
+		"a\rb\r\nc",
+	} {
+		t.Run(fmt.Sprintf("%q", text), func(t *testing.T) {
+			m, _ := newTestModel(t, 60, 30)
+			c := &m.composer
+			c.ta.SetValue(text + "\n\ndraft")
+			want := c.value()
+			c.ta.SetValue("draft")
+
+			c.restore([]event.Input{{Text: text}})
+
+			assert.Equal(t, want, c.value())
+			assert.Empty(t, c.blocks)
+		})
+	}
+}
+
 func TestInputBetweenIdenticalPastesKeepsBothBlocks(t *testing.T) {
 	m, _ := newTestModel(t, 40, 30)
 	pasteText(m, linesOf(11))
@@ -326,6 +371,133 @@ func TestComposerClickIsOtherInputBetweenPastes(t *testing.T) {
 	pasteText(m, linesOf(11))
 
 	assert.Equal(t, "[paste #1 +11 lines][paste #2 +11 lines]", m.composer.value())
+}
+
+func TestComposerOverflowStaysBlockBacked(t *testing.T) {
+	for _, tc := range []struct {
+		name, text string
+	}{
+		{"logical lines", linesOf(10001)},
+		{"wrapped rows", strings.Repeat("w", 200001)},
+		{"tab-indented logical lines", strings.Repeat("\tline\n", 10001)},
+		{"tab-expanded wrapped rows", strings.Repeat("\t", 50001)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newTestModel(t, 20, 30)
+			c := &m.composer
+			c.restore([]event.Input{{Text: tc.text}})
+			assert.NotEqual(t, tc.text, c.value())
+			text, imgs := c.expanded()
+			assert.Equal(t, tc.text, text)
+			assert.Empty(t, imgs)
+
+			c.reset()
+			c.paste(tc.text)
+			mk := c.value()
+			for range 2 {
+				c.paste(tc.text)
+				assert.Equal(t, mk, c.value(), "failed expansion leaves the marker intact")
+				assert.Contains(t, c.blocks, mk)
+				text, _ = c.expanded()
+				assert.Equal(t, tc.text, text)
+			}
+		})
+	}
+}
+
+func TestRepeatedPasteChecksCombinedCapacity(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	c := &m.composer
+	draft := linesOf(9995)
+	c.ta.SetValue(draft)
+	payload := linesOf(11)
+	c.paste(payload)
+	before := c.value()
+	marker := c.lastPaste
+
+	c.paste(payload)
+
+	assert.Equal(t, before, c.value())
+	assert.Contains(t, c.blocks, marker)
+	text, _ := c.expanded()
+	assert.Equal(t, draft+payload, text)
+}
+
+func TestRestoreCombinedCapacityKeepsDraftAndImages(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	c := &m.composer
+	c.insertImage("/synthetic/restored.png")
+	restoredImage := c.value()
+	c.reset()
+	c.insertImage("/synthetic/draft.png")
+	draftImage := c.value()
+	c.paste(linesOf(11))
+	inputs := []event.Input{
+		{Text: linesOf(6000) + " " + restoredImage, Images: []string{"/synthetic/restored.png"}},
+		{Text: linesOf(5000)},
+	}
+
+	c.restore(inputs)
+
+	text, imgs := c.expanded()
+	assert.Equal(t, inputs[0].Text+"\n\n"+inputs[1].Text+"\n\n"+draftImage+linesOf(11), text)
+	assert.Equal(t, []string{"/synthetic/restored.png", "/synthetic/draft.png"}, imgs)
+	assert.Less(t, len(c.value()), 100)
+}
+
+func TestDuplicateMarkersKeepTheirBlocksUntilLastDeletion(t *testing.T) {
+	for _, kind := range []string{"paste", "image"} {
+		for _, direction := range []string{"backward", "forward"} {
+			t.Run(kind+"/"+direction, func(t *testing.T) {
+				m, _ := newTestModel(t, 60, 30)
+				c := &m.composer
+				if kind == "paste" {
+					c.paste(linesOf(11))
+				} else {
+					c.insertImage("/synthetic/image.png")
+				}
+				mk := c.value()
+				c.ta.SetValue(mk + mk)
+				k := backspace
+				if direction == "forward" {
+					c.update(home)
+					k = del
+				}
+				c.update(k)
+				assert.Equal(t, mk, c.value())
+				assert.Contains(t, c.blocks, mk)
+				text, imgs := c.expanded()
+				if kind == "paste" {
+					assert.Equal(t, linesOf(11), text)
+					assert.Empty(t, imgs)
+				} else {
+					assert.Equal(t, mk, text)
+					assert.Equal(t, []string{"/synthetic/image.png"}, imgs)
+				}
+				c.update(k)
+				assert.Empty(t, c.value())
+				assert.NotContains(t, c.blocks, mk)
+			})
+		}
+	}
+}
+
+func TestDuplicatePasteExpansionKeepsOtherOccurrence(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	c := &m.composer
+	payload := linesOf(11)
+	c.paste(payload)
+	mk := c.value()
+	c.ta.SetValue(mk + mk)
+	c.paste(payload)
+
+	assert.Equal(t, mk+payload, c.value())
+	assert.Contains(t, c.blocks, mk)
+	text, _ := c.expanded()
+	assert.Equal(t, payload+payload, text)
+	c.update(tea.KeyPressMsg{Code: tea.KeyHome, Mod: tea.ModCtrl})
+	c.update(del)
+	assert.NotContains(t, c.blocks, mk)
 }
 
 func TestRestoreRegistersOnlyMarkersThatWereImages(t *testing.T) {

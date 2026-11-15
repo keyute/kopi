@@ -22,7 +22,8 @@ import (
 // are never used: an un-drained Events channel stalls the agent loop, and
 // ListSessions reads ~/.pig.
 type Session struct {
-	inner *coding.Session
+	inner          *coding.Session
+	sendInProgress atomic.Bool
 	// listenersMu guards listeners and nextID. notify holds it while calling
 	// listeners, so no listener may call back into Session.
 	listenersMu sync.Mutex
@@ -121,6 +122,7 @@ type SendResult struct {
 // stopped normally (PiG reports an abort during a tool as StopReason "error"
 // with "context canceled"). Model failures are not
 // errors: they surface as a Failed outcome carrying the provider's error text.
+// An overlapping call returns ErrSendInProgress unless ctx is already done.
 //
 // At the end of each turn that did not fail and was not aborted, while ctx is
 // not cancelled, Send calls more, if not nil, for prompts to hand over; the
@@ -131,6 +133,10 @@ func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (Sen
 	if ctx.Err() != nil {
 		return SendResult{Outcome: event.Outcome{Status: event.Interrupted}}, nil
 	}
+	if !s.sendInProgress.CompareAndSwap(false, true) {
+		return SendResult{}, fmt.Errorf("failed to send prompt: %w", ErrSendInProgress)
+	}
+	defer s.sendInProgress.Store(false)
 	var aborted atomic.Bool
 	abort := func() {
 		aborted.Store(true)

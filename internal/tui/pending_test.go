@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 	"testing"
 
@@ -166,6 +167,65 @@ func TestPendingGeometryInputPaths(t *testing.T) {
 			assert.Equal(t, m.height-m.composer.height()-2, m.composerTop())
 		})
 	}
+}
+
+func TestPendingCacheReusesRenderedQueue(t *testing.T) {
+	m, _ := newTestModel(t, 80, 30)
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []string{linesOf(100)}})
+	box, note := &m.pendingCache.box[0], &m.pendingCache.note[0]
+	for name, update := range map[string]func(){
+		"typing":          func() { press(m, tea.KeyPressMsg{Code: 'a', Text: "a"}) },
+		"unrelated event": func() { send(m, event.Notice{Text: "notice"}) },
+		"same content":    func() { send(m, event.QueueChanged{Pending: []string{linesOf(100)}}) },
+		"height":          func() { m.Update(tea.WindowSizeMsg{Width: 80, Height: 24}) },
+		"composer growth": func() { press(m, tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt}) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			update()
+			assert.Same(t, box, &m.pendingCache.box[0])
+			assert.Same(t, note, &m.pendingCache.note[0])
+			budget := m.height - m.composer.height() - chromeRows - busyRows
+			assert.Equal(t, pendingRows(m.queued, &m.keys, m.width, max(2, m.height/3), budget, m.th), m.pending)
+		})
+	}
+}
+
+func TestPendingCacheInvalidatesRenderedQueue(t *testing.T) {
+	for name, update := range map[string]func(*model){
+		"content":         func(m *model) { send(m, event.QueueChanged{Pending: []string{"changed"}}) },
+		"mutated content": func(m *model) { m.queued[0] = "changed"; m.refreshPending() },
+		"width":           func(m *model) { m.Update(tea.WindowSizeMsg{Width: 40, Height: 30}) },
+		"theme":           func(m *model) { m.Update(tea.BackgroundColorMsg{Color: color.White}) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, _ := newTestModel(t, 80, 30)
+			send(m, event.QueueChanged{Pending: []string{linesOf(100)}})
+			box, note := &m.pendingCache.box[0], &m.pendingCache.note[0]
+
+			update(m)
+
+			assert.NotSame(t, box, &m.pendingCache.box[0])
+			assert.NotSame(t, note, &m.pendingCache.note[0])
+			budget := m.height - m.composer.height() - chromeRows
+			assert.Equal(t, pendingRows(m.queued, &m.keys, m.width, max(2, m.height/3), budget, m.th), m.pending)
+			send(m, event.QueueChanged{})
+			assert.Empty(t, m.pending)
+			assert.Empty(t, m.pendingCache.box)
+		})
+	}
+}
+
+func TestPendingCacheBudgetDoesNotAlterFullBox(t *testing.T) {
+	var c pendingCache
+	km, th := newKeyMap(testOptions().Keys), mocha()
+	queued := []string{linesOf(30)}
+	full := c.rows(queued, &km, 80, 100, 100, th)
+	box := append([]string(nil), c.box...)
+	for budget := 0; budget < 40; budget++ {
+		assert.LessOrEqual(t, len(c.rows(queued, &km, 80, 8, budget, th)), budget)
+		assert.Equal(t, box, c.box)
+	}
+	assert.Equal(t, full, c.rows(queued, &km, 80, 100, 100, th))
 }
 
 func TestFoldClickHitsTranscriptWhilePendingShown(t *testing.T) {

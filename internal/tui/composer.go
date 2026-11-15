@@ -45,6 +45,8 @@ var imageMarker = regexp.MustCompile(`\[image #\d+\]`)
 // exact text is present.
 type block struct {
 	text, image string
+	// images accompanies text when an overflowing restore is collapsed.
+	images []string
 }
 
 // composer is the input box.
@@ -120,17 +122,25 @@ func (c *composer) update(msg tea.Msg) tea.Cmd {
 		switch {
 		case key.Matches(k, c.ta.KeyMap.DeleteCharacterBackward):
 			if mk := c.markerBefore(); mk != "" {
-				delete(c.blocks, mk)
-				return c.repeat(k, len([]rune(mk)))
+				cmd := c.repeat(k, len([]rune(mk)))
+				c.discardAbsent(mk)
+				return cmd
 			}
 		case key.Matches(k, c.ta.KeyMap.DeleteCharacterForward):
 			if mk := c.markerAfter(); mk != "" {
-				delete(c.blocks, mk)
-				return c.repeat(k, len([]rune(mk)))
+				cmd := c.repeat(k, len([]rune(mk)))
+				c.discardAbsent(mk)
+				return cmd
 			}
 		}
 	}
 	return c.forward(msg)
+}
+
+func (c *composer) discardAbsent(mk string) {
+	if !strings.Contains(c.ta.Value(), mk) {
+		delete(c.blocks, mk)
+	}
 }
 
 func (c *composer) forward(msg tea.Msg) tea.Cmd {
@@ -263,23 +273,64 @@ func (c *composer) paste(text string) tea.Cmd {
 	last := c.lastPaste
 	c.lastPaste = ""
 	if b, ok := c.blocks[last]; ok && b.text == text && c.markerBefore() == last {
-		delete(c.blocks, last)
-		del := c.repeat(tea.KeyPressMsg{Code: tea.KeyBackspace}, len([]rune(last)))
-		return tea.Batch(del, c.forward(tea.PasteMsg{Content: text}))
+		before, after := c.cursorLine()
+		lines := strings.Split(c.ta.Value(), "\n")
+		lines[c.ta.Line()] = strings.TrimSuffix(before, last) + sanitizedText(text) + after
+		want := strings.Join(lines, "\n")
+
+		// SetValue detaches the trial's content before editing: a shallow
+		// textarea copy alone still shares its rune slices with the draft.
+		trial := *c
+		trial.ta.SetValue(c.ta.Value())
+		p := point{c.ta.Line(), c.ta.Column()}
+		trial.selectRange(selection{anchor: p, head: p})
+		del := trial.repeat(tea.KeyPressMsg{Code: tea.KeyBackspace}, len([]rune(last)))
+		ins := trial.forward(tea.PasteMsg{Content: text})
+		if trial.ta.Value() != want {
+			c.lastPaste = last
+			return nil
+		}
+		c.ta = trial.ta
+		c.discardAbsent(last)
+		return tea.Batch(del, ins)
 	}
 	// A final newline ends the last line rather than starting another.
 	lines, runes := strings.Count(strings.TrimSuffix(text, "\n"), "\n")+1, len([]rune(text))
 	if lines <= pasteMaxLines && runes <= pasteMaxRunes {
 		return c.forward(tea.PasteMsg{Content: text})
 	}
+	mk := c.collapse(text, nil)
+	c.lastPaste = mk
+	return c.forward(tea.PasteMsg{Content: mk})
+}
+
+// sanitizedText uses textarea's input rules without its whole-draft limits.
+// Sanitizing one rune at a time cannot hit either logical or visual capacity.
+func sanitizedText(text string) string {
+	ta := textarea.New()
+	runes := make(map[rune]string)
+	var clean strings.Builder
+	for _, r := range text {
+		s, ok := runes[r]
+		if !ok {
+			ta.SetValue(string(r))
+			s = ta.Value()
+			runes[r] = s
+		}
+		clean.WriteString(s)
+	}
+	return clean.String()
+}
+
+func (c *composer) collapse(text string, images []string) string {
 	c.pastes++
-	mk := fmt.Sprintf("[paste #%d %d chars]", c.pastes, runes)
+	lines := strings.Count(strings.TrimSuffix(text, "\n"), "\n") + 1
+	mk := fmt.Sprintf("[paste #%d %d chars]", c.pastes, len([]rune(text)))
 	if lines > pasteMaxLines {
 		mk = fmt.Sprintf("[paste #%d +%d lines]", c.pastes, lines)
 	}
-	c.blocks[mk] = block{text: text}
-	c.lastPaste = mk
-	return c.forward(tea.PasteMsg{Content: mk})
+	c.blocks[mk] = block{text: text, images: images}
+	return mk
 }
 
 // insertImage inserts a new image block for the file at path, replacing
@@ -296,7 +347,11 @@ func (c *composer) insertImage(path string) tea.Cmd {
 // expanded is the draft as sent: paste markers become their text, image
 // markers stay and their files are listed in order of appearance.
 func (c *composer) expanded() (text string, imgs []string) {
-	text = markerPattern.ReplaceAllStringFunc(c.ta.Value(), func(mk string) string {
+	return c.expand(c.ta.Value())
+}
+
+func (c *composer) expand(value string) (text string, imgs []string) {
+	text = markerPattern.ReplaceAllStringFunc(value, func(mk string) string {
 		b, ok := c.blocks[mk]
 		switch {
 		case !ok:
@@ -305,6 +360,7 @@ func (c *composer) expanded() (text string, imgs []string) {
 			imgs = append(imgs, b.image)
 			return mk
 		}
+		imgs = append(imgs, b.images...)
 		return b.text
 	})
 	return text, imgs
@@ -345,7 +401,16 @@ func (c *composer) restore(inputs []event.Input) {
 	if draft := c.ta.Value(); draft != "" {
 		parts = append(parts, draft)
 	}
-	c.ta.SetValue(strings.Join(parts, "\n\n"))
+	joined := strings.Join(parts, "\n\n")
+	trial := c.ta
+	trial.SetValue(joined)
+	if trial.Value() != sanitizedText(joined) {
+		// Keep the full expanded input and its image references outside the
+		// textarea when either logical lines or soft wraps exceed its limits.
+		text, imgs := c.expand(joined)
+		trial.SetValue(c.collapse(text, imgs))
+	}
+	c.ta = trial
 	c.lastPaste = ""
 	c.stopBrowsing()
 }

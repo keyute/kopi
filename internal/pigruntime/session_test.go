@@ -415,6 +415,65 @@ func TestSendRejectedPromptIsNotSent(t *testing.T) {
 	assert.Empty(t, res.Undelivered)
 }
 
+func TestSendRejectedCallPreservesOwner(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 2)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done"), captureRequest(requests, "next done")})
+	handed, release := make(chan struct{}), make(chan struct{})
+	var sess *Session
+	sess = openTestSession(t, r, probeTool(func(context.Context, json.RawMessage) (string, error) {
+		// Installed after Send's listener, so the queue is populated but
+		// PiG cannot drain it until this listener returns.
+		onFirstTurnEnd(t, sess, func() {
+			close(handed)
+			<-release
+		})
+		return toolOutput, nil
+	}))
+	evs := recordUserMessages(t, sess)
+	more, _ := moreOnce(Prompt{Text: "steering"})
+	type result struct {
+		res SendResult
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		res, err := sess.Send(t.Context(), Prompt{Text: "owner"}, more)
+		done <- result{res: res, err: err}
+	}()
+	<-handed
+
+	ctx, cancel := context.WithCancel(t.Context())
+	res, err := sess.Send(ctx, Prompt{Text: "rejected"}, nil)
+	cancel()
+	assert.ErrorIs(t, err, ErrSendInProgress)
+	assert.False(t, res.Sent)
+	assert.Empty(t, res.Undelivered)
+
+	res, err = sess.Send(ctx, Prompt{Text: "already cancelled"}, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, event.Interrupted, res.Outcome.Status)
+	assert.False(t, res.Sent)
+	assert.Equal(t, 1, sess.inner.PendingMessageCount())
+	close(release)
+
+	owner := <-done
+	require.NoError(t, owner.err)
+	assert.Equal(t, event.Completed, owner.res.Outcome.Status)
+	assert.True(t, owner.res.Sent)
+	assert.Empty(t, owner.res.Undelivered)
+	require.Equal(t, 2, faux.CallCount())
+	assert.Equal(t, []string{"owner", "steering"}, userTexts(<-requests))
+	assert.Equal(t, []event.Event{event.UserMessage{Text: "steering"}}, drain(evs))
+
+	res, err = sess.Send(t.Context(), Prompt{Text: "next"}, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Sent)
+	assert.Equal(t, event.Completed, res.Outcome.Status)
+	assert.Equal(t, []string{"owner", "steering", "next"}, userTexts(<-requests))
+}
+
 func TestSendReturnsUndeliveredHandOver(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)
