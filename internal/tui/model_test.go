@@ -737,6 +737,74 @@ func TestQueueEditMovesQueueBeforeDraft(t *testing.T) {
 	assert.Equal(t, 1, c.takes, "a second press does not take again")
 }
 
+func TestQueueEditDuringSubmitRestoresOwnInputOnce(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	send(m, event.TurnStart{Prompt: "go"})
+	msg := submitText(t, m, "x")
+	c.queued = []event.Input{{Text: "x"}}
+	send(m, event.QueueChanged{Pending: []string{"x"}})
+
+	press(m, up)
+
+	assert.Equal(t, "x", m.composer.value(), "the submitted draft stays unchanged until completion")
+	assert.Equal(t, []event.Input{{Text: "x"}}, m.unsent)
+	assert.Empty(t, m.queued)
+	assert.Empty(t, m.pending)
+	press(m, up)
+	assert.Equal(t, 1, c.takes)
+
+	m.Update(msg)
+
+	assert.Equal(t, "x", m.composer.value())
+	assert.Empty(t, m.unsent)
+}
+
+func TestQueueEditAfterSubmitRestoresBeforeNewDraft(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	send(m, event.TurnStart{Prompt: "go"})
+	m.Update(submitText(t, m, "x"))
+	c.queued = []event.Input{{Text: "x"}}
+	send(m, event.QueueChanged{Pending: []string{"x"}})
+	typeText(m, "draft")
+
+	press(m, up)
+
+	assert.Equal(t, "x\n\ndraft", m.composer.value())
+	assert.Empty(t, m.unsent)
+	assert.Equal(t, 1, c.takes)
+}
+
+func TestQueueEditDuringSubmitPreservesEditedDraftAndImages(t *testing.T) {
+	m, c := newTestModel(t, 120, 30)
+	dir := t.TempDir()
+	a := writeImage(t, dir, "a.png")
+	b := writeImage(t, dir, "b.png")
+	draft := writeImage(t, dir, "draft.png")
+	send(m, event.TurnStart{Prompt: "go"})
+	typeText(m, "look ")
+	m.composer.insertImage(a)
+	m.composer.insertImage(b)
+	queued := m.composer.value()
+	cmd := press(m, enter)
+	require.NotNil(t, cmd)
+	msg := cmd()
+	c.queued = []event.Input{{Text: queued, Images: []string{a, b}}}
+	send(m, event.QueueChanged{Pending: []string{queued}})
+	typeText(m, " edited ")
+	m.composer.insertImage(draft)
+	edited := m.composer.value()
+
+	press(m, up)
+	assert.Equal(t, edited, m.composer.value())
+	m.Update(msg)
+
+	text, images := m.composer.expanded()
+	assert.Equal(t, queued+"\n\n"+edited, text)
+	assert.Equal(t, []string{a, b, a, b, draft}, images)
+	assert.Empty(t, m.unsent)
+	assert.Equal(t, 1, c.takes)
+}
+
 func TestQueueEditRegistersImages(t *testing.T) {
 	m, c := newTestModel(t, 60, 30)
 	m.composer.insertImage("/tmp/a.png")

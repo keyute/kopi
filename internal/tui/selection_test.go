@@ -74,6 +74,13 @@ func TestWordAt(t *testing.T) {
 		{"styled", lipgloss.NewStyle().Bold(true).Render("foo") + " bar", 1, 0, 3},
 		{"wide runes", "ab 漢字x yz", 5, 3, 8},
 		{"second cell of a wide rune", "漢字 x", 1, 0, 4},
+		{"joined emoji first cell", "👩‍💻 next", 0, 0, 2},
+		{"joined emoji second cell", "👩‍💻 next", 1, 0, 2},
+		{"space after joined emoji", "👩‍💻 next", 2, 2, 2},
+		{"word after joined emoji", "👩‍💻 next", 3, 3, 7},
+		{"last cell after joined emoji", "👩‍💻 next", 6, 3, 7},
+		{"embedded joined emoji", "a👩‍💻b next", 2, 0, 4},
+		{"word after embedded emoji", "a👩‍💻b next", 5, 5, 9},
 		{"on a space", "foo  bar", 4, 4, 4},
 		{"past the end", "foo", 7, 7, 7},
 	} {

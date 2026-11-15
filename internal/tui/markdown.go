@@ -47,7 +47,12 @@ func (md *markdown) lines(key, text string) []string {
 	prev := md.blocks[key]
 	var chunks []chunk
 	var out []string
-	for i, src := range splitChunks(text) {
+	sources := splitChunks(text)
+	// Reference definitions apply across the whole document, not just a chunk.
+	if strings.Contains(text, "]:") {
+		sources = []string{text}
+	}
+	for i, src := range sources {
 		c := chunk{source: src}
 		if i < len(prev) && prev[i].source == src {
 			c.lines = prev[i].lines

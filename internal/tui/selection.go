@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -93,10 +94,12 @@ func wordAt(text string, col int) (from, to int) {
 	}
 	var cells []cell
 	x := 0
-	for _, r := range ansi.Strip(text) {
-		w := ansi.StringWidth(string(r))
+	for rest := ansi.Strip(text); rest != ""; {
+		cluster, w := ansi.FirstGraphemeCluster(rest, ansi.GraphemeWidth)
+		r, _ := utf8.DecodeRuneInString(cluster)
 		cells = append(cells, cell{x, x + w, unicode.IsSpace(r)})
 		x += w
+		rest = rest[len(cluster):]
 	}
 	at := -1
 	for i, c := range cells {

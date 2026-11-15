@@ -304,7 +304,12 @@ func (m *model) submitDone(msg submitDoneMsg) tea.Cmd {
 
 // editQueue moves the queued input into the composer, before the draft.
 func (m *model) editQueue() {
-	m.composer.restore(m.c.TakeQueued())
+	inputs := m.c.TakeQueued()
+	if m.submitting {
+		m.unsent = append(m.unsent, inputs...)
+	} else {
+		m.composer.restore(inputs)
+	}
 	// QueueChanged follows; clearing now keeps a second press from taking again.
 	m.queued = nil
 	m.refreshPending()

@@ -39,6 +39,33 @@ func TestMarkdownInlineCodeAndLinkKeepText(t *testing.T) {
 	assert.Contains(t, got, "https://example.com")
 }
 
+func TestMarkdownReferenceLinksAcrossBlankLines(t *testing.T) {
+	for _, text := range []string{
+		"Read [the docs][docs].\n\nAnother paragraph.\n\n[docs]: https://example.com/docs",
+		"[docs]: https://example.com/docs\n\nAnother paragraph.\n\nRead [the docs][docs].",
+	} {
+		got := strings.Join(renderMarkdown(text, 80), "\n")
+		assert.Contains(t, got, "Read the docs")
+		assert.Contains(t, got, "https://example.com/docs")
+		assert.NotContains(t, got, "[docs]")
+	}
+}
+
+func TestMarkdownStreamingReferenceDefinitionResolvesEarlierLink(t *testing.T) {
+	md := newMarkdown(80, mocha())
+	text := "Read [the docs][docs].\n\nAnother paragraph."
+	got := strings.Join(stripped(md.lines("k", text)), "\n")
+	assert.Contains(t, got, "[the docs][docs]")
+
+	text += "\n\n[docs]: https://example.com/docs"
+	got = strings.Join(stripped(md.lines("k", text)), "\n")
+
+	assert.Contains(t, got, "Read the docs")
+	assert.Contains(t, got, "https://example.com/docs")
+	assert.NotContains(t, got, "[docs]")
+	assert.Equal(t, renderMarkdown(text, 80), stripped(md.lines("k", text)))
+}
+
 func TestMarkdownFenceIsVerbatimAndOneChunk(t *testing.T) {
 	src := "```go\nfunc A() {}\n\nfunc B() {}\n```"
 	assert.Equal(t, []string{src}, splitChunks(src))

@@ -570,6 +570,45 @@ func TestInterruptHandsQueuedInputBack(t *testing.T) {
 	assert.NotContains(t, req.Raw, "look at")
 }
 
+func TestInterruptBeforeSendHandsOriginalAndQueuedInputBack(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	originalImages := []string{pngFile(t), pngFile(t)}
+	laterImage := pngFile(t)
+	original := pigruntime.Prompt{
+		Text: "original [image #1] [image #2]",
+		Images: []pigruntime.Image{
+			{Path: originalImages[0]},
+			{Path: originalImages[1]},
+		},
+	}
+	later := pigruntime.Prompt{Text: "later [image #1]", Images: []pigruntime.Image{{Path: laterImage}}}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	w := &Work{
+		id:      "turn-1",
+		done:    make(chan struct{}),
+		cancel:  cancel,
+		next:    []pigruntime.Prompt{later},
+		stopped: true,
+	}
+	h.c.turn = w
+
+	h.c.runTurn(t.Context(), ctx, h.c.sess, h.c.emit, w, original)
+	wait(t, w.Done())
+
+	assert.Zero(t, h.faux.CallCount())
+	assert.Equal(t, event.Outcome{Status: event.Interrupted}, w.Outcome())
+	assert.Equal(t, []event.TurnEnd{{
+		WorkID:  w.ID(),
+		Outcome: event.Outcome{Status: event.Interrupted},
+		Unsent: []event.Input{
+			{Text: original.Text, Images: originalImages},
+			{Text: later.Text, Images: []string{laterImage}},
+		},
+	}}, ofType[event.TurnEnd](untimed(h.rec.all())))
+	assert.False(t, h.c.Status().Busy)
+}
+
 func TestSendNowContinuesTurnWithQueuedAndDraft(t *testing.T) {
 	started := make(chan struct{})
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{blockTool(started)}})

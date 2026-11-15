@@ -21,9 +21,29 @@ func (s *Session) History() []event.Event {
 }
 
 func historyEntries(entries []coding.SessionEntry) []event.Event {
+	omitted := make(map[string]bool)
+	for _, entry := range entries {
+		if entry.Base().Type != "context_edit" {
+			continue
+		}
+		var edit struct {
+			TargetID    string          `json:"targetId"`
+			Replacement json.RawMessage `json:"replacement"`
+		}
+		err := json.Unmarshal(entry.Raw(), &edit)
+		if err == nil && (edit.TargetID == "" || len(edit.Replacement) == 0) {
+			err = fmt.Errorf("missing targetId or replacement")
+		}
+		if err != nil {
+			return []event.Event{event.Error{Err: fmt.Errorf("failed to decode history context edit %s: %w", entry.Base().ID, err)}}
+		}
+		// Non-null replacements change model context, not display content.
+		omitted[edit.TargetID] = strings.TrimSpace(string(edit.Replacement)) == "null"
+	}
+
 	var msgs []agent.AgentMessage
 	for _, entry := range entries {
-		if entry.Base().Type != "message" {
+		if entry.Base().Type != "message" || omitted[entry.Base().ID] {
 			continue
 		}
 		var record struct {

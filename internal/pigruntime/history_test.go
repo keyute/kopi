@@ -9,6 +9,7 @@ import (
 	"github.com/MichaelKinsy/PiG/agent"
 	"github.com/MichaelKinsy/PiG/ai"
 	"github.com/MichaelKinsy/PiG/coding"
+	"github.com/MichaelKinsy/PiG/coding/extension"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -189,6 +190,96 @@ func TestHistoryRetainsCompactedConversationOnActiveBranch(t *testing.T) {
 	assert.NotContains(t, history(resumed.inner.Messages()), event.Event(event.TurnStart{Prompt: "old prompt"}))
 }
 
+func appendHistoryMessage(t *testing.T, manager *coding.SessionManager, raw string) string {
+	t.Helper()
+	var msg agent.AgentMessage
+	require.NoError(t, json.Unmarshal([]byte(raw), &msg))
+	id, err := manager.AppendMessage(msg)
+	require.NoError(t, err)
+	return id
+}
+
+func TestHistoryOmitsFailedRetryAttempt(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	sess := openTestSession(t, r)
+	manager := sess.inner.SessionManager()
+	appendHistoryMessage(t, manager, `{"role":"user","content":"earlier prompt","timestamp":1}`)
+	appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"earlier answer"}],"stopReason":"stop","timestamp":2}`)
+	appendHistoryMessage(t, manager, `{"role":"user","content":"try again","timestamp":3}`)
+	appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"toolCall","id":"call-1","name":"Probe","arguments":{}}],"stopReason":"toolUse","timestamp":4}`)
+	appendHistoryMessage(t, manager, `{"role":"toolResult","toolCallId":"call-1","toolName":"Probe","content":[{"type":"text","text":"kept output"}],"isError":false,"timestamp":5}`)
+	failed := appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"failed partial"}],"stopReason":"error","errorMessage":"overloaded","timestamp":6}`)
+	_, err := manager.AppendContextEdit(failed, nil)
+	require.NoError(t, err)
+	appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"recovered"}],"stopReason":"stop","timestamp":7}`)
+	require.NoError(t, sess.Close(t.Context()))
+
+	assert.Equal(t, []event.Event{
+		event.TurnStart{Prompt: "earlier prompt"},
+		event.TextDelta{Text: "earlier answer"},
+		event.TurnStart{Prompt: "try again"},
+		event.ToolStart{CallID: "call-1", Name: "Probe", Args: "{}"},
+		event.ToolEnd{CallID: "call-1", Name: "Probe", Output: "kept output"},
+		event.TextDelta{Text: "recovered"},
+	}, resume(t, r, sess.ID()).History())
+}
+
+func TestHistoryLatestContextEditWins(t *testing.T) {
+	replacement := &extension.ContextEditReplacement{Content: json.RawMessage(`[{"type":"text","text":"model-only replacement"}]`)}
+	for _, tc := range []struct {
+		name  string
+		edits []*extension.ContextEditReplacement
+		want  []event.Event
+	}{
+		{
+			name:  "non-null edit restores original display content",
+			edits: []*extension.ContextEditReplacement{nil, replacement},
+			want:  []event.Event{event.TurnStart{Prompt: "go"}, event.TextDelta{Text: "original"}},
+		},
+		{
+			name:  "null edit omits replaced message",
+			edits: []*extension.ContextEditReplacement{replacement, nil},
+			want:  []event.Event{event.TurnStart{Prompt: "go"}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sb := newSandbox(t)
+			r, _ := newTestRuntime(t, sb)
+			sess := openTestSession(t, r)
+			manager := sess.inner.SessionManager()
+			appendHistoryMessage(t, manager, `{"role":"user","content":"go","timestamp":1}`)
+			target := appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"original"}],"stopReason":"stop","timestamp":2}`)
+			for _, edit := range tc.edits {
+				_, err := manager.AppendContextEdit(target, edit)
+				require.NoError(t, err)
+			}
+			require.NoError(t, sess.Close(t.Context()))
+			assert.Equal(t, tc.want, resume(t, r, sess.ID()).History())
+		})
+	}
+}
+
+func TestHistoryIgnoresSiblingContextEdits(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	sess := openTestSession(t, r)
+	manager := sess.inner.SessionManager()
+	appendHistoryMessage(t, manager, `{"role":"user","content":"go","timestamp":1}`)
+	target := appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"shared answer"}],"stopReason":"stop","timestamp":2}`)
+	_, err := manager.AppendContextEdit(target, nil)
+	require.NoError(t, err)
+	require.NoError(t, sess.inner.Fork(target))
+	appendHistoryMessage(t, manager, `{"role":"user","content":"active prompt","timestamp":3}`)
+	require.NoError(t, sess.Close(t.Context()))
+
+	assert.Equal(t, []event.Event{
+		event.TurnStart{Prompt: "go"},
+		event.TextDelta{Text: "shared answer"},
+		event.TurnStart{Prompt: "active prompt"},
+	}, resume(t, r, sess.ID()).History())
+}
+
 type corruptHistoryEntry struct {
 	coding.SessionEntry
 	raw json.RawMessage
@@ -221,6 +312,33 @@ func TestHistoryStopsOnDecodeError(t *testing.T) {
 			failure, ok := got[1].(event.Error)
 			require.True(t, ok)
 			require.ErrorContains(t, failure.Err, "failed to decode history message "+messages[1].Base().ID)
+			assert.Error(t, errors.Unwrap(failure.Err))
+		})
+	}
+}
+
+func TestHistoryRejectsMalformedContextEdits(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	sess := openTestSession(t, r)
+	manager := sess.inner.SessionManager()
+	target := appendHistoryMessage(t, manager, `{"role":"user","content":"kept","timestamp":1}`)
+	editID, err := manager.AppendContextEdit(target, nil)
+	require.NoError(t, err)
+	entry, ok := manager.GetEntry(editID)
+	require.True(t, ok)
+	for _, raw := range []string{
+		`{"targetId":`,
+		`{"targetId":"` + target + `"}`,
+		`{"replacement":null}`,
+		`{"targetId":42,"replacement":null}`,
+	} {
+		t.Run(raw, func(t *testing.T) {
+			got := historyEntries([]coding.SessionEntry{corruptHistoryEntry{SessionEntry: entry, raw: json.RawMessage(raw)}})
+			require.Len(t, got, 1)
+			failure, ok := got[0].(event.Error)
+			require.True(t, ok)
+			require.ErrorContains(t, failure.Err, "failed to decode history context edit "+editID)
 			assert.Error(t, errors.Unwrap(failure.Err))
 		})
 	}
