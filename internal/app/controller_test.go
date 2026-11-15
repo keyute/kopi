@@ -536,21 +536,17 @@ func TestFailedResumeAsTurnFinishesKeepsSessionUsable(t *testing.T) {
 	wait(t, reached)
 	// The TurnEnd is delivered under the lock the switch takes to stop the turn.
 	resumed := make(chan error, 1)
-	go func() {
-		_, err := h.c.Submit(context.Background(), "/resume no-such-session")
-		resumed <- err
-	}()
+	go func() { resumed <- h.c.Resume(context.Background(), "no-such-session") }()
 	close(unblock)
 	wait(t, w.Done())
 	select {
 	case err := <-resumed:
 		require.ErrorIs(t, err, pigruntime.ErrSessionNotFound)
 	case <-time.After(waitLimit):
-		t.Fatal("timed out waiting for /resume")
+		t.Fatal("timed out waiting for Resume")
 	}
 
-	_, err = h.c.Submit(t.Context(), "/resume no-such-session")
-	require.ErrorIs(t, err, pigruntime.ErrSessionNotFound)
+	require.ErrorIs(t, h.c.Resume(t.Context(), "no-such-session"), pigruntime.ErrSessionNotFound)
 	assert.Equal(t, id, h.c.Status().SessionID)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, h.turn(t, "second").Outcome())
 	assert.Equal(t, 2, h.faux.CallCount())
@@ -859,11 +855,12 @@ func TestSessionSwitchDiscardsQueuedInput(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			started := make(chan struct{})
 			h, _ := openHarness(t, Config{Tools: []tool.Tool{blockTool(started)}})
-			switchTo := "/new"
+			switchTo := h.c.NewSession
 			if tc.resume {
 				h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first answer")})
 				h.turn(t, "first")
-				switchTo = "/resume " + h.c.Status().SessionID
+				id := h.c.Status().SessionID
+				switchTo = func(ctx context.Context) error { return h.c.Resume(ctx, id) }
 				require.NoError(t, h.c.NewSession(t.Context()))
 			}
 			requests := make(chan pigruntimetest.Request, 2)
@@ -880,8 +877,7 @@ func TestSessionSwitchDiscardsQueuedInput(t *testing.T) {
 			wait(t, started)
 			_, err = h.c.Submit(t.Context(), queued)
 			require.NoError(t, err)
-			_, err = h.c.Submit(t.Context(), switchTo)
-			require.NoError(t, err)
+			require.NoError(t, switchTo(t.Context()))
 
 			assert.Equal(t, event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted}}, receiveEnd(t, ends))
 			h.turn(t, "after")
@@ -889,8 +885,7 @@ func TestSessionSwitchDiscardsQueuedInput(t *testing.T) {
 			assert.Equal(t, tc.wantAfter, req.UserTexts)
 			assert.NotContains(t, req.Raw, queued)
 
-			_, err = h.c.Submit(t.Context(), "/resume "+oldID)
-			require.NoError(t, err)
+			require.NoError(t, h.c.Resume(t.Context(), oldID))
 			h.turn(t, "check")
 			req = receive(t, requests)
 			assert.Equal(t, []string{"block", "check"}, req.UserTexts)
@@ -974,6 +969,33 @@ func TestInputAfterInterruptStartsNextTurn(t *testing.T) {
 	}
 }
 
+func TestSecondInterruptHandsBackLaterInput(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("unused")})
+	ends := turnEnds(h.c)
+
+	w, err := h.c.Submit(t.Context(), "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	_, err = h.c.Submit(t.Context(), "before")
+	require.NoError(t, err)
+	require.True(t, h.c.Interrupt())
+	got, err := h.c.Submit(t.Context(), "after")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	require.True(t, h.c.Interrupt())
+	close(release)
+
+	assert.Equal(t, event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted}, Unsent: []event.Input{{Text: "before"}, {Text: "after"}}}, receiveEnd(t, ends))
+	wait(t, w.Done())
+	assert.Equal(t, []event.Event{
+		event.TurnStart{WorkID: w.ID(), Prompt: "hold"},
+		event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted}, Unsent: []event.Input{{Text: "before"}, {Text: "after"}}},
+	}, lifecycle(untimed(h.rec.all())))
+	assert.Equal(t, 1, h.faux.CallCount())
+}
+
 func TestSettle(t *testing.T) {
 	a, b, c, d := pigruntime.Prompt{Text: "a"}, pigruntime.Prompt{Text: "b"}, pigruntime.Prompt{Text: "c"}, pigruntime.Prompt{Text: "d"}
 	completed, interrupted, failed := event.Outcome{Status: event.Completed}, event.Outcome{Status: event.Interrupted}, event.Outcome{Status: event.Failed, Message: "boom"}
@@ -1003,6 +1025,20 @@ func TestSettle(t *testing.T) {
 			assert.Equal(t, tc.wantUnsent, unsent)
 		})
 	}
+}
+
+func TestPullHandsNothingToCancelledSend(t *testing.T) {
+	a := pigruntime.Prompt{Text: "a"}
+	c := &Controller{pending: []pigruntime.Prompt{a}}
+	emit := func(event.Event) {}
+
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	assert.Empty(t, c.pull(cancelled, emit)())
+	assert.Equal(t, []pigruntime.Prompt{a}, c.pending)
+
+	assert.Equal(t, []pigruntime.Prompt{a}, c.pull(t.Context(), emit)())
+	assert.Empty(t, c.pending)
 }
 
 func TestJoinedPromptsKeepOrder(t *testing.T) {
@@ -1184,16 +1220,14 @@ func TestNewSessionIsRefusedWhileWorkWillNotStop(t *testing.T) {
 	require.NoError(t, err)
 	wait(t, started)
 
-	_, err = h.c.Submit(t.Context(), "/new")
-	require.ErrorIs(t, err, ErrWorkStillRunning)
+	require.ErrorIs(t, h.c.NewSession(t.Context()), ErrWorkStillRunning)
 	status := h.c.Status()
 	assert.Equal(t, oldID, status.SessionID)
 	assert.True(t, status.Busy)
 
 	close(release)
 	wait(t, w.Done())
-	_, err = h.c.Submit(t.Context(), "/new")
-	require.NoError(t, err)
+	require.NoError(t, h.c.NewSession(t.Context()))
 
 	evs := untimed(h.rec.all())
 	changedAt := slices.IndexFunc(evs, func(ev event.Event) bool {
@@ -1222,13 +1256,12 @@ func TestNewSessionStopsRunningTurn(t *testing.T) {
 	w, err := h.c.Submit(t.Context(), "block")
 	require.NoError(t, err)
 	wait(t, started)
-	_, err = h.c.Submit(t.Context(), "/new")
-	require.NoError(t, err)
+	require.NoError(t, h.c.NewSession(t.Context()))
 
 	select {
 	case <-w.Done():
 	default:
-		t.Fatal("/new returned before the turn ended")
+		t.Fatal("NewSession returned before the turn ended")
 	}
 	assert.Equal(t, event.Outcome{Status: event.Interrupted}, w.Outcome())
 	newID := h.c.Status().SessionID
@@ -1262,24 +1295,90 @@ func TestPromptDuringSessionSwitchIsRefused(t *testing.T) {
 		}
 	})
 
-	switched := make(chan error, 1)
-	go func() {
-		_, err := h.c.Submit(context.Background(), "/new")
-		switched <- err
-	}()
+	_, err := h.c.Submit(t.Context(), "/new")
+	require.NoError(t, err)
 	wait(t, reached)
 	w, err := h.c.Submit(t.Context(), "too early")
 	close(unblock)
 	assert.ErrorIs(t, err, ErrBusy)
 	assert.Nil(t, w)
-
-	select {
-	case err := <-switched:
-		require.NoError(t, err)
-	case <-time.After(waitLimit):
-		t.Fatal("timed out waiting for /new")
-	}
+	assertSwitchDone(t, h)
 	assert.Zero(t, h.faux.CallCount())
+}
+
+// assertSwitchDone waits for a switch started by a command to finish: start
+// clears switching before it releases life.
+func assertSwitchDone(t *testing.T, h *harness) {
+	t.Helper()
+	h.c.life.Lock()
+	defer h.c.life.Unlock()
+	h.c.mu.Lock()
+	defer h.c.mu.Unlock()
+	assert.False(t, h.c.switching)
+}
+
+// subscribeTo delivers every event of type T.
+func subscribeTo[T event.Event](c *Controller) <-chan T {
+	ch := make(chan T, 8)
+	c.Subscribe(func(ev event.Event) {
+		if e, ok := ev.(T); ok {
+			ch <- e
+		}
+	})
+	return ch
+}
+
+func receiveEvent[T event.Event](t *testing.T, ch <-chan T) T {
+	t.Helper()
+	select {
+	case ev := <-ch:
+		return ev
+	case <-time.After(waitLimit):
+		var zero T
+		t.Fatalf("timed out waiting for %T", zero)
+		return zero
+	}
+}
+
+func TestSwitchCommandReturnsAtOnceAndRefusesInputUntilDone(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("fresh")})
+	oldID := h.c.Status().SessionID
+	changes := subscribeTo[event.SessionChanged](h.c)
+
+	// Holding life keeps the switch from starting; asserts only, so a failure
+	// cannot leave it held.
+	h.c.life.Lock()
+	_, err := h.c.Submit(t.Context(), "/new")
+	assert.NoError(t, err)
+	w, err := h.c.Submit(t.Context(), "too early")
+	assert.ErrorIs(t, err, ErrBusy)
+	assert.Nil(t, w)
+	_, err = h.c.Submit(t.Context(), "/new")
+	assert.ErrorIs(t, err, ErrBusy)
+	h.c.life.Unlock()
+
+	changed := receiveEvent(t, changes)
+	assert.NotEqual(t, oldID, changed.SessionID)
+	assertSwitchDone(t, h)
+	assert.Equal(t, changed.SessionID, h.c.Status().SessionID)
+	assert.Equal(t, event.Outcome{Status: event.Completed}, h.turn(t, "after switch").Outcome())
+	assert.Equal(t, 1, h.faux.CallCount())
+	assert.Len(t, ofType[event.SessionChanged](h.rec.all()), 2, "the refused /new switched nothing")
+}
+
+func TestFailedResumeCommandArrivesAsError(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("still here")})
+	id := h.c.Status().SessionID
+	errs := subscribeTo[event.Error](h.c)
+
+	_, err := h.c.Submit(t.Context(), "/resume no-such-session")
+	require.NoError(t, err)
+	require.ErrorIs(t, receiveEvent(t, errs).Err, pigruntime.ErrSessionNotFound)
+
+	assert.Equal(t, id, h.c.Status().SessionID)
+	assert.Equal(t, event.Outcome{Status: event.Completed}, h.turn(t, "after").Outcome())
 }
 
 func TestSessionStartAlwaysEntersPlan(t *testing.T) {
@@ -1314,8 +1413,7 @@ func TestResumeEntersPlan(t *testing.T) {
 	require.NoError(t, h.c.NewSession(t.Context()))
 
 	h.c.EnterExecute()
-	_, err := h.c.Submit(t.Context(), "/resume "+savedID)
-	require.NoError(t, err)
+	require.NoError(t, h.c.Resume(t.Context(), savedID))
 
 	status := h.c.Status()
 	assert.Equal(t, savedID, status.SessionID)
@@ -1325,15 +1423,16 @@ func TestResumeEntersPlan(t *testing.T) {
 
 func TestResumeWithoutIDListsSessions(t *testing.T) {
 	h, _ := openHarness(t, Config{})
+	notices := subscribeTo[event.Notice](h.c)
 	_, err := h.c.Submit(t.Context(), "/resume")
 	require.NoError(t, err)
-	assert.Equal(t, "no saved sessions for this workspace", lastNotice(t, h.rec))
+	assert.Equal(t, "no saved sessions for this workspace", receiveEvent(t, notices).Text)
 
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("answer")})
 	h.turn(t, "list me")
 	_, err = h.c.Submit(t.Context(), "/resume")
 	require.NoError(t, err)
-	notice := lastNotice(t, h.rec)
+	notice := receiveEvent(t, notices).Text
 	assert.Contains(t, notice, h.c.Status().SessionID)
 	assert.Contains(t, notice, "list me")
 	assert.NotContains(t, notice, "messages")
@@ -1535,7 +1634,7 @@ func assertInertAfterClose(t *testing.T, h *harness) {
 	t.Helper()
 	delivered := len(h.rec.all())
 	mode, gen := h.c.authority.Snapshot()
-	for _, cmd := range []string{"/execute", "/status", "/help", "/plan"} {
+	for _, cmd := range []string{"/execute", "/status", "/help", "/plan", "/new", "/resume", "/resume no-such-session"} {
 		_, err := h.c.Submit(t.Context(), cmd)
 		assert.ErrorIs(t, err, ErrNoSession, cmd)
 	}

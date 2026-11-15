@@ -127,7 +127,7 @@ func TestPendingBudgetIncludesWrappedHelp(t *testing.T) {
 }
 
 func TestPendingGeometryInputPaths(t *testing.T) {
-	for _, path := range []string{"paste", "image", "history", "queue edit", "submit", "unsent", "deferred unsent", "cancel", "resize", "busy"} {
+	for _, path := range []string{"paste", "image", "history", "queue edit", "submit", "unsent", "cancel", "resize", "busy"} {
 		t.Run(path, func(t *testing.T) {
 			m, c := newTestModel(t, 80, 24)
 			send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []string{linesOf(30)}})
@@ -146,15 +146,9 @@ func TestPendingGeometryInputPaths(t *testing.T) {
 				press(m, up)
 			case "submit":
 				pasteText(m, linesOf(8))
-				cmd := press(m, enter)
-				require.NotNil(t, cmd)
-				m.Update(cmd())
+				press(m, enter)
 			case "unsent":
 				send(m, event.TurnEnd{Unsent: []event.Input{{Text: linesOf(8)}}})
-			case "deferred unsent":
-				m.submitting = true
-				send(m, event.TurnEnd{Unsent: []event.Input{{Text: linesOf(8)}}})
-				m.Update(submitDoneMsg{})
 			case "cancel":
 				pasteText(m, linesOf(8))
 				press(m, ctrlC)

@@ -46,18 +46,30 @@ func NewSandbox(t testing.TB) Sandbox {
 	return sb
 }
 
-// RestoreEnv clears the variables pigruntime.New pins process-wide and
-// restores their original values when t ends.
+// RestoreEnv unsets every PIG_ variable for t, then when t ends unsets those
+// set meanwhile (as pigruntime.New does) and restores the originals.
 func RestoreEnv(t testing.TB) {
 	t.Helper()
-	set, unset := pigruntime.IsolationEnv("", "")
-	for k := range set {
-		unset = append(unset, k)
-	}
-	for _, k := range unset {
+	for _, k := range pigEnv() {
 		t.Setenv(k, "") // registers restoration of the original value
 		require.NoError(t, os.Unsetenv(k))
 	}
+	// Registered after the restorations so it runs before them.
+	t.Cleanup(func() {
+		for _, k := range pigEnv() {
+			require.NoError(t, os.Unsetenv(k))
+		}
+	})
+}
+
+func pigEnv() []string {
+	var keys []string
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "PIG_") {
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }
 
 // PlantDecoys writes the pi, pig and Claude settings and workspace

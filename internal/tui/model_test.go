@@ -23,6 +23,8 @@ import (
 )
 
 type fakeController struct {
+	// calls logs Submit, SendNow and Interrupt in the order they were made.
+	calls      []string
 	status     app.Status
 	running    bool
 	interrupts int
@@ -47,12 +49,14 @@ func (f *fakeController) Subscribe(fn func(event.Event)) func() {
 }
 
 func (f *fakeController) Submit(_ context.Context, text string, images ...string) (*app.Work, error) {
+	f.calls = append(f.calls, "submit "+text)
 	f.submitted = append(f.submitted, text)
 	f.images = append(f.images, images)
 	return nil, f.submitErr
 }
 
 func (f *fakeController) SendNow(_ context.Context, text string, images ...string) error {
+	f.calls = append(f.calls, "send-now "+text)
 	f.sentNow = append(f.sentNow, text)
 	f.nowImages = append(f.nowImages, images)
 	return f.sendNowErr
@@ -73,6 +77,7 @@ func (f *fakeController) History() []string {
 }
 
 func (f *fakeController) Interrupt() bool {
+	f.calls = append(f.calls, "interrupt")
 	f.interrupts++
 	return f.running
 }
@@ -390,32 +395,23 @@ func TestHeaderShowsVersion(t *testing.T) {
 	assert.Equal(t, "        ▄ ▄", screen(m)[0])
 }
 
-// submitText types text, presses Enter and runs the submit command,
-// returning its result for the test to deliver.
-func submitText(t *testing.T, m *model, text string) tea.Msg {
-	t.Helper()
+// submitText types text and presses Enter, returning the key's command.
+func submitText(m *model, text string) tea.Cmd {
 	typeText(m, text)
-	cmd := press(m, enter)
-	require.NotNil(t, cmd)
-	return cmd()
+	return press(m, enter)
 }
 
-func TestEnterKeepsTextUntilAcceptedThenClears(t *testing.T) {
+func TestEnterSubmitsInlineAndClearsOnlyOnAcceptance(t *testing.T) {
 	m, c := newTestModel(t, 30, 20)
-	typeText(m, "hello")
 
-	cmd := press(m, enter)
-
-	require.NotNil(t, cmd)
-	assert.Equal(t, "hello", m.composer.value())
-	assert.Empty(t, c.submitted, "Submit runs in the command, not in Update")
-	assert.Nil(t, press(m, enter), "a second Enter while in flight submits nothing")
-	msg := cmd()
+	assert.Nil(t, submitText(m, "hello"))
 	assert.Equal(t, []string{"hello"}, c.submitted)
-	assert.Equal(t, "hello", m.composer.value())
-
-	m.Update(msg)
 	assert.Empty(t, m.composer.value())
+
+	c.submitErr = errors.New("boom")
+	submitText(m, "again")
+	assert.Equal(t, []string{"hello", "again"}, c.submitted)
+	assert.Equal(t, "again", m.composer.value())
 }
 
 func TestSubmitSendsExpandedTextAndImages(t *testing.T) {
@@ -426,24 +422,12 @@ func TestSubmitSendsExpandedTextAndImages(t *testing.T) {
 	pasteText(m, img)
 	pasteText(m, linesOf(11))
 
-	cmd := press(m, enter)
-	require.NotNil(t, cmd)
-	m.Update(cmd())
+	assert.Nil(t, press(m, enter))
 
 	assert.Equal(t, []string{fmt.Sprintf("look [image #%d]", n) + linesOf(11)}, c.submitted)
 	assert.Equal(t, [][]string{{img}}, c.images)
-	assert.Empty(t, m.composer.value(), "the unchanged raw draft is cleared")
+	assert.Empty(t, m.composer.value())
 	assert.Empty(t, m.composer.blocks)
-}
-
-func TestTextTypedWhileSubmittingIsKept(t *testing.T) {
-	m, _ := newTestModel(t, 30, 20)
-	msg := submitText(t, m, "hello")
-	typeText(m, " again")
-
-	m.Update(msg)
-
-	assert.Equal(t, "hello again", m.composer.value())
 }
 
 func TestBlankEnterDoesNothing(t *testing.T) {
@@ -475,7 +459,7 @@ func TestEnterWhileBusyQueuesAndClears(t *testing.T) {
 	m, c := newTestModel(t, 60, 20)
 	send(m, event.TurnStart{Prompt: "first"})
 
-	m.Update(submitText(t, m, "more"))
+	submitText(m, "more")
 
 	assert.Equal(t, []string{"more"}, c.submitted)
 	assert.Empty(t, m.composer.value())
@@ -487,7 +471,7 @@ func TestBusyRefusalKeepsDraftAndFlashes(t *testing.T) {
 	m, c := newTestModel(t, 60, 20)
 	c.submitErr = app.ErrBusy
 
-	_, cmd := m.Update(submitText(t, m, "more"))
+	cmd := submitText(m, "more")
 
 	assert.NotNil(t, cmd, "the flash expires")
 	assert.Equal(t, "more", m.composer.value())
@@ -499,7 +483,7 @@ func TestBadImageRefusalKeepsDraft(t *testing.T) {
 	m, c := newTestModel(t, 60, 20)
 	c.submitErr = fmt.Errorf("%w: content is text/plain", app.ErrBadImage)
 
-	m.Update(submitText(t, m, "look"))
+	submitText(m, "look")
 
 	assert.Equal(t, "look", m.composer.value())
 	assert.Equal(t, []string{"", "κ not a supported image: content is text/plain"}, body(m))
@@ -509,7 +493,7 @@ func TestCommandDuringTurnIsSubmitted(t *testing.T) {
 	m, c := newTestModel(t, 30, 20)
 	send(m, event.TurnStart{Prompt: "first"})
 
-	submitText(t, m, "/status")
+	submitText(m, "/status")
 
 	assert.Equal(t, []string{"/status"}, c.submitted)
 }
@@ -518,14 +502,13 @@ func TestSubmitErrors(t *testing.T) {
 	m, c := newTestModel(t, 60, 20)
 	c.submitErr = fmt.Errorf("%w: /nope", app.ErrUnknownCommand)
 
-	_, cmd := m.Update(submitText(t, m, "/nope"))
-	assert.Nil(t, cmd)
+	assert.Nil(t, submitText(m, "/nope"))
 	assert.Equal(t, "/nope", m.composer.value(), "the draft is kept so a typo can be fixed")
 	assert.Equal(t, []string{"", "κ unknown command: /nope"}, body(m))
 
 	m.composer.reset()
 	c.submitErr = app.ErrQuit
-	_, cmd = m.Update(submitText(t, m, "/quit"))
+	cmd := submitText(m, "/quit")
 	require.NotNil(t, cmd)
 	assert.Equal(t, tea.QuitMsg{}, cmd())
 }
@@ -620,9 +603,7 @@ func TestReboundKeys(t *testing.T) {
 
 	press(m, enter)
 	assert.Empty(t, c.submitted, "enter no longer submits")
-	cmd := press(m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-	require.NotNil(t, cmd)
-	cmd()
+	press(m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	assert.Equal(t, []string{"hi"}, c.submitted)
 
 	assert.False(t, isQuit(press(m, ctrlC)), "cancel is unbound")
@@ -683,10 +664,7 @@ func TestSendNowSendsExpandedTextAndImages(t *testing.T) {
 	pasteText(m, img)
 	pasteText(m, linesOf(11))
 
-	cmd := press(m, ctrlEnter)
-	require.NotNil(t, cmd)
-	assert.Empty(t, c.sentNow, "SendNow runs in the command, not in Update")
-	m.Update(cmd())
+	assert.Nil(t, press(m, ctrlEnter))
 
 	assert.Equal(t, []string{fmt.Sprintf("look [image #%d]", n) + linesOf(11)}, c.sentNow)
 	assert.Equal(t, [][]string{{img}}, c.nowImages)
@@ -697,9 +675,7 @@ func TestSendNowSendsExpandedTextAndImages(t *testing.T) {
 func TestSendNowWithEmptyDraftSendsTheQueue(t *testing.T) {
 	m, c := newTestModel(t, 40, 20)
 
-	cmd := press(m, ctrlEnter)
-	require.NotNil(t, cmd)
-	m.Update(cmd())
+	assert.Nil(t, press(m, ctrlEnter))
 
 	assert.Equal(t, []string{""}, c.sentNow)
 }
@@ -709,9 +685,7 @@ func TestSendNowRefusalKeepsDraft(t *testing.T) {
 	c.sendNowErr = errors.New("boom")
 	typeText(m, "draft")
 
-	cmd := press(m, ctrlEnter)
-	require.NotNil(t, cmd)
-	m.Update(cmd())
+	press(m, ctrlEnter)
 
 	assert.Equal(t, "draft", m.composer.value())
 	assert.Equal(t, []string{"", "κ boom"}, body(m))
@@ -737,32 +711,10 @@ func TestQueueEditMovesQueueBeforeDraft(t *testing.T) {
 	assert.Equal(t, 1, c.takes, "a second press does not take again")
 }
 
-func TestQueueEditDuringSubmitRestoresOwnInputOnce(t *testing.T) {
-	m, c := newTestModel(t, 60, 30)
-	send(m, event.TurnStart{Prompt: "go"})
-	msg := submitText(t, m, "x")
-	c.queued = []event.Input{{Text: "x"}}
-	send(m, event.QueueChanged{Pending: []string{"x"}})
-
-	press(m, up)
-
-	assert.Equal(t, "x", m.composer.value(), "the submitted draft stays unchanged until completion")
-	assert.Equal(t, []event.Input{{Text: "x"}}, m.unsent)
-	assert.Empty(t, m.queued)
-	assert.Empty(t, m.pending)
-	press(m, up)
-	assert.Equal(t, 1, c.takes)
-
-	m.Update(msg)
-
-	assert.Equal(t, "x", m.composer.value())
-	assert.Empty(t, m.unsent)
-}
-
 func TestQueueEditAfterSubmitRestoresBeforeNewDraft(t *testing.T) {
 	m, c := newTestModel(t, 60, 30)
 	send(m, event.TurnStart{Prompt: "go"})
-	m.Update(submitText(t, m, "x"))
+	submitText(m, "x")
 	c.queued = []event.Input{{Text: "x"}}
 	send(m, event.QueueChanged{Pending: []string{"x"}})
 	typeText(m, "draft")
@@ -770,38 +722,6 @@ func TestQueueEditAfterSubmitRestoresBeforeNewDraft(t *testing.T) {
 	press(m, up)
 
 	assert.Equal(t, "x\n\ndraft", m.composer.value())
-	assert.Empty(t, m.unsent)
-	assert.Equal(t, 1, c.takes)
-}
-
-func TestQueueEditDuringSubmitPreservesEditedDraftAndImages(t *testing.T) {
-	m, c := newTestModel(t, 120, 30)
-	dir := t.TempDir()
-	a := writeImage(t, dir, "a.png")
-	b := writeImage(t, dir, "b.png")
-	draft := writeImage(t, dir, "draft.png")
-	send(m, event.TurnStart{Prompt: "go"})
-	typeText(m, "look ")
-	m.composer.insertImage(a)
-	m.composer.insertImage(b)
-	queued := m.composer.value()
-	cmd := press(m, enter)
-	require.NotNil(t, cmd)
-	msg := cmd()
-	c.queued = []event.Input{{Text: queued, Images: []string{a, b}}}
-	send(m, event.QueueChanged{Pending: []string{queued}})
-	typeText(m, " edited ")
-	m.composer.insertImage(draft)
-	edited := m.composer.value()
-
-	press(m, up)
-	assert.Equal(t, edited, m.composer.value())
-	m.Update(msg)
-
-	text, images := m.composer.expanded()
-	assert.Equal(t, queued+"\n\n"+edited, text)
-	assert.Equal(t, []string{a, b, a, b, draft}, images)
-	assert.Empty(t, m.unsent)
 	assert.Equal(t, 1, c.takes)
 }
 
@@ -856,64 +776,70 @@ func TestUnsentInputReturnsBeforeDraft(t *testing.T) {
 	assert.Equal(t, "a\n\nb\n\ndraft", m.composer.value())
 }
 
-// submitDuringStop types text and presses Enter in a running turn, then
-// delivers the stopped turn's TurnEnd handing back unsent before the
-// submit's result, which it returns.
-func submitDuringStop(t *testing.T, m *model, text string, unsent ...event.Input) tea.Msg {
-	t.Helper()
+// submitThenStop types text and presses Enter in a running turn, then
+// delivers the stopped turn's TurnEnd handing back unsent.
+func submitThenStop(m *model, text string, unsent ...event.Input) {
 	send(m, event.TurnStart{Prompt: "go"})
-	msg := submitText(t, m, text)
+	submitText(m, text)
 	send(m, event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}, Unsent: unsent})
-	require.Equal(t, text, m.composer.value(), "held while the submit is in flight")
-	return msg
 }
 
-func TestUnsentInputDuringAcceptedSubmitReplacesIt(t *testing.T) {
+func TestUnsentInputAfterAcceptedSubmitIsAllThatIsLeft(t *testing.T) {
 	m, _ := newTestModel(t, 60, 30)
-	msg := submitDuringStop(t, m, "/new", event.Input{Text: "fix the test"})
 
-	m.Update(msg)
+	submitThenStop(m, "/new", event.Input{Text: "fix the test"})
 
 	assert.Equal(t, "fix the test", m.composer.value())
 }
 
-func TestUnsentInputDuringRefusedSubmitGoesBeforeIt(t *testing.T) {
+func TestUnsentInputAfterRefusedSubmitGoesBeforeIt(t *testing.T) {
 	m, c := newTestModel(t, 60, 30)
 	c.submitErr = errors.New("boom")
-	msg := submitDuringStop(t, m, "/new", event.Input{Text: "fix the test"})
 
-	m.Update(msg)
+	submitThenStop(m, "/new", event.Input{Text: "fix the test"})
 
 	assert.Equal(t, "fix the test\n\n/new", m.composer.value())
 }
 
-func TestUnsentInputDuringBusyRefusalGoesBeforeIt(t *testing.T) {
+func TestUnsentInputAfterBusyRefusalGoesBeforeIt(t *testing.T) {
 	m, c := newTestModel(t, 60, 30)
 	c.submitErr = app.ErrBusy
-	msg := submitDuringStop(t, m, "/new", event.Input{Text: "fix the test"})
 
-	m.Update(msg)
+	submitThenStop(m, "/new", event.Input{Text: "fix the test"})
 
 	assert.Equal(t, "fix the test\n\n/new", m.composer.value())
 }
 
-func TestOwnTextHandedBackDuringAcceptedSubmitAppearsOnce(t *testing.T) {
+func TestOwnTextHandedBackAfterAcceptedSubmitAppearsOnce(t *testing.T) {
 	m, _ := newTestModel(t, 60, 30)
-	msg := submitDuringStop(t, m, "x", event.Input{Text: "x"})
 
-	m.Update(msg)
+	submitThenStop(m, "x", event.Input{Text: "x"})
 
+	assert.Equal(t, "x", m.composer.value())
+}
+
+func TestEnterThenCancelSubmitsBeforeInterrupting(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	c.running = true
+	send(m, event.TurnStart{Prompt: "go"})
+
+	submitText(m, "x")
+	assert.Empty(t, m.composer.value())
+	press(m, ctrlC)
+
+	assert.Equal(t, []string{"submit x", "interrupt"}, c.calls)
+	send(m, event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}, Unsent: []event.Input{{Text: "x"}}})
 	assert.Equal(t, "x", m.composer.value())
 }
 
 func TestAcceptedSubmitReloadsHistory(t *testing.T) {
 	m, c := newTestModel(t, 60, 30)
 	require.Equal(t, 1, c.histories, "loaded at start")
-	msg := submitText(t, m, "hello")
 	c.history = []string{"hello"}
 
-	m.Update(msg)
+	submitText(m, "hello")
 
+	assert.Equal(t, 2, c.histories)
 	press(m, up)
 	assert.Equal(t, "hello", m.composer.value())
 }

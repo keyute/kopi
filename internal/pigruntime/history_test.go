@@ -78,9 +78,9 @@ func TestHistoryReplaysStoredTurnAsLiveEvents(t *testing.T) {
 
 	live := []event.Event{event.TurnStart{Prompt: "probe please"}}
 	unsubscribe := sess.Subscribe(func(ev event.Event) { live = append(live, ev) })
-	outcome, _, _, err := sess.Send(t.Context(), Prompt{Text: "probe please"}, nil)
+	res, err := sess.Send(t.Context(), Prompt{Text: "probe please"}, nil)
 	require.NoError(t, err)
-	require.Equal(t, event.Outcome{Status: event.Completed}, outcome)
+	require.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
 	unsubscribe()
 	require.NoError(t, sess.Close(t.Context()))
 
@@ -108,7 +108,7 @@ func TestHistoryEndsFailedAndInterruptedTurns(t *testing.T) {
 		})
 		sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, Authority: policy.NewAuthority()})
 		require.NoError(t, err)
-		_, _, _, err = sess.Send(t.Context(), Prompt{Text: "go"}, nil)
+		_, err = sess.Send(t.Context(), Prompt{Text: "go"}, nil)
 		require.NoError(t, err)
 		require.NoError(t, sess.Close(t.Context()))
 
@@ -135,7 +135,7 @@ func TestHistoryEndsFailedAndInterruptedTurns(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			_, _, _, _ = sess.Send(turnCtx, Prompt{Text: "block"}, nil)
+			_, _ = sess.Send(turnCtx, Prompt{Text: "block"}, nil)
 		}()
 		<-started
 		cancel()
@@ -426,7 +426,7 @@ func TestContextUsageMirrorsPiG(t *testing.T) {
 		return tokens
 	}
 	before := mirrors()
-	_, _, _, err := sess.Send(t.Context(), Prompt{Text: "count me"}, nil)
+	_, err := sess.Send(t.Context(), Prompt{Text: "count me"}, nil)
 	require.NoError(t, err)
 	assert.Greater(t, mirrors(), before)
 }

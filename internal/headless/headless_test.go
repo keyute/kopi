@@ -89,23 +89,44 @@ func blockSteps() []ai.FauxResponseStep {
 }
 
 func TestPrintsOnlyFinalMessage(t *testing.T) {
-	sb := pigruntimetest.NewSandbox(t)
-	require.NoError(t, os.WriteFile(filepath.Join(sb.Workspace, "notes.txt"), []byte("fixture-body-77\n"), 0o600))
-	ws, err := tool.NewWorkspace(sb.Workspace, nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
-	steps := []ai.FauxResponseStep{
-		ai.FauxAssistantMessage(ai.FauxContentBlocks{
-			ai.FauxText("Let me read the notes."),
-			ai.FauxToolCall("Read", map[string]any{"file_path": "notes.txt"}, &ai.FauxToolCallOptions{ID: "call-1"}),
-		}, ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)}),
-		pigruntimetest.Text("The notes are short."),
-	}
+	for _, tt := range []struct {
+		name  string
+		final ai.FauxResponseStep
+		want  string
+	}{
+		{name: "text", final: pigruntimetest.Text("The notes are short."), want: "The notes are short.\n"},
+		{name: "thinking only", final: ai.FauxAssistantMessage(ai.FauxContentBlocks{ai.FauxThinking("Considering.")}, ai.FauxAssistantMessageOptions{})},
+		{name: "empty content", final: ai.FauxAssistantMessage(ai.FauxContentBlocks{}, ai.FauxAssistantMessageOptions{})},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sb := pigruntimetest.NewSandbox(t)
+			require.NoError(t, os.WriteFile(filepath.Join(sb.Workspace, "notes.txt"), []byte("fixture-body-77\n"), 0o600))
+			ws, err := tool.NewWorkspace(sb.Workspace, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, ws.Close()) })
+			steps := []ai.FauxResponseStep{
+				ai.FauxAssistantMessage(ai.FauxContentBlocks{
+					ai.FauxText("Let me read the notes."),
+					ai.FauxToolCall("Read", map[string]any{"file_path": "notes.txt"}, &ai.FauxToolCallOptions{ID: "call-1"}),
+				}, ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)}),
+				tt.final,
+			}
 
-	h := start(t, sb, "read the notes", steps, tool.NewRead(ws))
+			h := start(t, sb, "read the notes", steps, tool.NewRead(ws))
+
+			require.NoError(t, h.wait(t))
+			assert.Equal(t, tt.want, h.out.String())
+		})
+	}
+}
+
+func TestPrintsLengthTruncatedReply(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	truncated := ai.FauxAssistantMessage(ai.FauxContentString("partial"), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonLength)})
+	h := start(t, sb, "go", []ai.FauxResponseStep{truncated})
 
 	require.NoError(t, h.wait(t))
-	assert.Equal(t, "The notes are short.\n", h.out.String())
+	assert.Equal(t, "partial\n", h.out.String())
 }
 
 func TestFailureReturnsProviderError(t *testing.T) {

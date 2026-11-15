@@ -102,15 +102,38 @@ func (c *Controller) Resume(ctx context.Context, id string) error {
 	return c.start(ctx, OpenRequest{ResumeID: id})
 }
 
+// switchTo starts the switch to req in the background; its failure arrives as
+// an Error event. It marks the switch before returning, so input given
+// meanwhile is refused rather than landing on the session being replaced. The
+// goroutine is not in wg: Close holds life across wg.Wait, and start needs
+// life. start refuses once closed, and Close shuts the relay before releasing
+// life, so nothing reaches the runtime or a subscriber after Close.
+func (c *Controller) switchTo(ctx context.Context, req OpenRequest) error {
+	c.mu.Lock()
+	if c.switching {
+		c.mu.Unlock()
+		return ErrBusy
+	}
+	c.switching = true
+	c.mu.Unlock()
+	go func() {
+		if err := c.start(ctx, req); err != nil {
+			c.relay.emit(event.Error{Err: err})
+		}
+	}()
+	return nil
+}
+
 func (c *Controller) Sessions() ([]pigruntime.SessionInfo, error) {
 	return c.rt.Sessions()
 }
 
 // Submit takes one message of human input with the paths of its images. A
 // control command is executed and returns (nil, nil), ErrQuit for /quit or
-// ErrUnknownCommand. Anything else is a prompt: it starts a root turn or,
-// while one runs, is queued for that turn and returns (nil, nil). After Close
-// every input but a blank line returns ErrNoSession.
+// ErrUnknownCommand. /new and /resume return at once and report their result
+// through events. Anything else is a prompt: it starts a root turn or, while
+// one runs, is queued for that turn and returns (nil, nil). After Close every
+// input but a blank line returns ErrNoSession.
 func (c *Controller) Submit(ctx context.Context, text string, images ...string) (*Work, error) {
 	return c.input(ctx, text, images, false)
 }
@@ -334,7 +357,8 @@ func (c *Controller) Status() Status {
 }
 
 // Close stops running work and closes the session within min(ctx,
-// JoinTimeout). It does not close the Runtime. If work does not stop, the
+// JoinTimeout). Before that it waits for any session start or listing
+// already in progress, which that bound does not cover. It does not close the Runtime. If work does not stop, the
 // session is left open, the work stays tracked and the error wraps
 // pigruntime.ErrJoinTimeout; a later Close tries again. No event is delivered
 // after Close returns.
@@ -395,28 +419,23 @@ func (c *Controller) startTurn(ctx context.Context, parts []pigruntime.Prompt) *
 func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session, emit func(event.Event), w *Work, parts []pigruntime.Prompt) {
 	for {
 		start := time.Now()
-		outcome, sent, undelivered, err := sess.Send(ctx, joined(parts), c.pull(ctx, emit, w))
+		res, err := sess.Send(ctx, joined(parts), c.pull(ctx, emit))
 		elapsed := time.Since(start)
 		if err != nil {
-			outcome = event.Outcome{Status: event.Failed, Message: err.Error()}
-		}
-		// Read before taking queue: PiG must not be called with queue held.
-		var reply string
-		if outcome.Status == event.Completed {
-			reply = sess.Reply()
+			res.Outcome = event.Outcome{Status: event.Failed, Message: err.Error()}
 		}
 
 		c.queue.Lock()
 		cancelled := ctx.Err() != nil
 		w.cancel()
-		next, unsent := settle(w.stopped, cancelled, outcome, sent, parts, undelivered, w.handBack, c.pending)
+		next, unsent := settle(w.stopped, cancelled, res.Outcome, res.Sent, parts, res.Undelivered, w.handBack, c.pending)
 		if !w.stopped {
 			c.take(emit)
 		}
 		if len(next) > 0 {
 			ctx, w.cancel = context.WithCancel(base)
 			parts = next
-			emit(event.TurnEnd{WorkID: w.id, Outcome: outcome, Elapsed: elapsed})
+			emit(event.TurnEnd{WorkID: w.id, Outcome: res.Outcome, Elapsed: elapsed})
 			emit(event.TurnStart{WorkID: w.id, Prompt: joined(parts).Text})
 			c.queue.Unlock()
 			continue
@@ -424,9 +443,9 @@ func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session
 		if w.discard {
 			unsent = nil
 		}
-		w.outcome = outcome
-		w.reply = reply
-		emit(event.TurnEnd{WorkID: w.id, Outcome: outcome, Elapsed: elapsed, Unsent: inputs(unsent)})
+		w.outcome = res.Outcome
+		w.reply = res.Reply
+		emit(event.TurnEnd{WorkID: w.id, Outcome: res.Outcome, Elapsed: elapsed, Unsent: inputs(unsent)})
 		c.finish(base, w, emit)
 		c.queue.Unlock()
 		close(w.done)
@@ -435,14 +454,14 @@ func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session
 }
 
 // pull returns the callback through which the send on ctx takes pending at a
-// boundary. It hands nothing over once w is stopped or ctx is cancelled:
-// send-now queues and cancels in one queue section, and input handed to a run
-// being cancelled would enter history with no reply.
-func (c *Controller) pull(ctx context.Context, emit func(event.Event), w *Work) func() []pigruntime.Prompt {
+// boundary. It hands nothing over once ctx is cancelled: a stop or a send-now
+// cancels ctx in the same queue section as it changes pending, and input handed
+// to a run being cancelled would enter history with no reply.
+func (c *Controller) pull(ctx context.Context, emit func(event.Event)) func() []pigruntime.Prompt {
 	return func() []pigruntime.Prompt {
 		c.queue.Lock()
 		defer c.queue.Unlock()
-		if w.stopped || ctx.Err() != nil {
+		if ctx.Err() != nil {
 			return nil
 		}
 		return c.take(emit)
@@ -519,6 +538,13 @@ func inputs(ps []pigruntime.Prompt) []event.Input {
 func (c *Controller) start(ctx context.Context, req OpenRequest) error {
 	c.life.Lock()
 	defer c.life.Unlock()
+	// Cleared on every return, including a refusal once closed, since
+	// switchTo marks the switch before start runs.
+	defer func() {
+		c.mu.Lock()
+		c.switching = false
+		c.mu.Unlock()
+	}()
 
 	c.mu.Lock()
 	if c.closed {
@@ -528,11 +554,6 @@ func (c *Controller) start(ctx context.Context, req OpenRequest) error {
 	c.switching = true
 	old, oldUnsubscribe, w := c.sess, c.unsubscribe, c.turn
 	c.mu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		c.switching = false
-		c.mu.Unlock()
-	}()
 
 	if w != nil {
 		joinCtx, cancel := context.WithTimeout(ctx, c.cfg.JoinTimeout)

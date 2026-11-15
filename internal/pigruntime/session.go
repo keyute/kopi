@@ -68,29 +68,6 @@ func (s *Session) MessageCount() int {
 	return n
 }
 
-// Reply is the text of the active branch's last assistant message when it
-// ended its turn normally, else "". It reads the stored branch, as History
-// does, because a compaction can drop the reply from the model's context. Its
-// text blocks are joined as History joins them.
-func (s *Session) Reply() string {
-	msgs, err := branchMessages(s.inner.SessionManager().GetBranch())
-	if err != nil {
-		slog.Warn("failed to read the reply", "error", err)
-		return ""
-	}
-	last := lastAssistant(msgs)
-	if last == nil || last.StopReason != ai.StopReasonStop {
-		return ""
-	}
-	var parts []string
-	for _, block := range last.Content {
-		if b, ok := block.(ai.TextContent); ok && b.Text != "" {
-			parts = append(parts, b.Text)
-		}
-	}
-	return strings.Join(parts, "\n\n")
-}
-
 // ContextUsage reports the session's projected context tokens and the
 // model's window. ok is false when the model declares no window or the
 // tokens are unknown, as they are right after a compaction.
@@ -125,6 +102,19 @@ func (s *Session) Subscribe(fn func(event.Event)) func() {
 	}
 }
 
+// SendResult is what one Send did.
+type SendResult struct {
+	Outcome event.Outcome
+	// Reply is the text of the run's last assistant message when Outcome is
+	// Completed, else "". Its text blocks are joined as History joins them.
+	Reply string
+	// Sent reports that p was delivered; it is false when ctx was already done
+	// or PiG rejected the prompt.
+	Sent bool
+	// Undelivered are the handed-over prompts the model never read, as given.
+	Undelivered []Prompt
+}
+
 // Send runs one turn. Cancelling ctx is the abort request for this turn
 // only: a ctx already done returns Interrupted without calling the provider,
 // and a turn Kopi aborted reports Interrupted unless its last assistant message
@@ -137,13 +127,9 @@ func (s *Session) Subscribe(fn func(event.Event)) func() {
 // model reads them at the next boundary of the same run. more is called on
 // PiG's event executor, with no Session lock held. Each handed-over prompt becomes a UserMessage when it is
 // delivered; p does not, as the caller draws it.
-//
-// sent reports that p was delivered; it is false when ctx was already done or
-// PiG rejected the prompt. undelivered are the handed-over prompts the model
-// never read, as given.
-func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (_ event.Outcome, sent bool, undelivered []Prompt, _ error) {
+func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (SendResult, error) {
 	if ctx.Err() != nil {
-		return event.Outcome{Status: event.Interrupted}, false, nil, nil
+		return SendResult{Outcome: event.Outcome{Status: event.Interrupted}}, nil
 	}
 	var aborted atomic.Bool
 	abort := func() {
@@ -155,6 +141,10 @@ func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (_ e
 	// producer into PiG's queue and PiG delivers in queue order, after p, so
 	// each user message after p's is the head.
 	var handed []Prompt
+	var sent bool
+	// last is the run's last assistant message. SendContent returns PiG's
+	// whole transcript, so it cannot say which assistant message is this run's.
+	var last *agent.AssistantMessage
 	unsubscribe := s.inner.Subscribe(func(ev agent.AgentEvent) {
 		runStart(ev)
 		switch ev := ev.(type) {
@@ -170,6 +160,10 @@ func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (_ e
 				handed = handed[1:]
 			}
 			s.notify(event.UserMessage{Text: userText(ev.Message.User.Content)})
+		case agent.MessageEndEvent:
+			if ev.Message.Assistant != nil {
+				last = ev.Message.Assistant
+			}
 		case agent.TurnEndEvent:
 			// A steer after a failed or aborted turn would continue a run
 			// that should end.
@@ -194,7 +188,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (_ e
 	})
 	// PiG gets an uncancellable ctx: a cancelled one makes it return
 	// ctx.Err() instead of the turn, so RequestAbort is the only abort path.
-	msgs, err := s.inner.SendContent(context.WithoutCancel(ctx), coding.BuildUserContent(p.Text, toAI(p.Images)))
+	_, err := s.inner.SendContent(context.WithoutCancel(ctx), coding.BuildUserContent(p.Text, toAI(p.Images)))
 	// An abort already under way must finish before Send returns, or its
 	// RequestAbort could land on the following turn.
 	if !stop() {
@@ -202,24 +196,36 @@ func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (_ e
 	}
 	// What PiG has not drained must not reach the next run.
 	_, _ = s.inner.ClearQueue()
+	res := SendResult{Sent: sent, Undelivered: handed}
 	if err != nil {
-		return event.Outcome{}, sent, handed, fmt.Errorf("failed to send prompt: %w", err)
+		return res, fmt.Errorf("failed to send prompt: %w", err)
 	}
-	last := lastAssistant(msgs)
 	// A cancel can land after PiG finished the turn but before stop(); a
 	// turn that ended normally is complete whatever the abort hook saw.
 	if aborted.Load() && (last == nil || last.StopReason != ai.StopReasonStop) {
-		return event.Outcome{Status: event.Interrupted}, sent, handed, nil
+		res.Outcome = event.Outcome{Status: event.Interrupted}
+		return res, nil
 	}
-	if last != nil {
-		switch last.StopReason {
-		case ai.StopReasonAborted:
-			return event.Outcome{Status: event.Interrupted}, sent, handed, nil
-		case ai.StopReasonError:
-			return event.Outcome{Status: event.Failed, Message: last.ErrorMessage}, sent, handed, nil
+	if last == nil {
+		res.Outcome = event.Outcome{Status: event.Completed}
+		return res, nil
+	}
+	switch last.StopReason {
+	case ai.StopReasonAborted:
+		res.Outcome = event.Outcome{Status: event.Interrupted}
+	case ai.StopReasonError:
+		res.Outcome = event.Outcome{Status: event.Failed, Message: last.ErrorMessage}
+	default:
+		res.Outcome = event.Outcome{Status: event.Completed}
+		var parts []string
+		for _, block := range last.Content {
+			if b, ok := block.(ai.TextContent); ok && b.Text != "" {
+				parts = append(parts, b.Text)
+			}
 		}
+		res.Reply = strings.Join(parts, "\n\n")
 	}
-	return event.Outcome{Status: event.Completed}, sent, handed, nil
+	return res, nil
 }
 
 // notify sends e to every listener, in the order they subscribed.
@@ -298,15 +304,6 @@ func abortAtRunStart(ctx context.Context, abort func()) func(agent.AgentEvent) {
 			abort()
 		}
 	}
-}
-
-func lastAssistant(msgs []agent.AgentMessage) *agent.AssistantMessage {
-	for _, m := range slices.Backward(msgs) {
-		if m.Assistant != nil {
-			return m.Assistant
-		}
-	}
-	return nil
 }
 
 // Close aborts any running turn, waits for it within ctx, and always releases

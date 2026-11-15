@@ -35,8 +35,8 @@ type Runtime struct {
 // New builds a PiG runtime whose every input is explicit: in-memory settings,
 // untrusted project, and (in Open) no resources, no built-in tools. Leaving
 // any of these nil makes PiG read ~/.pig, project settings or AGENTS.md.
-// New also pins PiG's environment process-wide (see IsolationEnv) and creates
-// the agent dir.
+// New also pins PiG's environment process-wide (see isolate) and creates the
+// agent dir; Home and AgentDir must be absolute.
 func New(ctx context.Context, opts Options) (*Runtime, error) {
 	if err := isolate(opts.Home, opts.AgentDir); err != nil {
 		return nil, err

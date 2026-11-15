@@ -37,7 +37,7 @@ func sendAsync(t *testing.T, sess *Session, text string) <-chan error {
 	t.Helper()
 	done := make(chan error, 1)
 	go func() {
-		_, _, _, err := sess.Send(t.Context(), Prompt{Text: text}, nil)
+		_, err := sess.Send(t.Context(), Prompt{Text: text}, nil)
 		done <- err
 	}()
 	return done
@@ -265,11 +265,11 @@ func TestSendHandsOverAtToolTurnEnd(t *testing.T) {
 	evs := recordUserMessages(t, sess)
 	more, _ := moreOnce(Prompt{Text: "x"}, Prompt{Text: "y"})
 
-	outcome, sent, undelivered, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
 	require.NoError(t, err)
-	assert.Equal(t, event.Outcome{Status: event.Completed}, outcome)
-	assert.True(t, sent)
-	assert.Empty(t, undelivered)
+	assert.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
+	assert.True(t, res.Sent)
+	assert.Empty(t, res.Undelivered)
 	assert.Equal(t, 2, faux.CallCount())
 	assert.Equal(t, []string{"prompt", "x", "y"}, userTexts(<-requests))
 	assert.Equal(t, []event.Event{event.UserMessage{Text: "x"}, event.UserMessage{Text: "y"}}, drain(evs))
@@ -283,10 +283,10 @@ func TestSendHandsOverAfterTextReply(t *testing.T) {
 	sess := openTestSession(t, r)
 	more, _ := moreOnce(Prompt{Text: "x"})
 
-	_, sent, undelivered, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
 	require.NoError(t, err)
-	assert.True(t, sent)
-	assert.Empty(t, undelivered)
+	assert.True(t, res.Sent)
+	assert.Empty(t, res.Undelivered)
 	assert.Equal(t, 2, faux.CallCount())
 	assert.Equal(t, []string{"prompt", "x"}, userTexts(<-requests))
 }
@@ -300,9 +300,9 @@ func TestSendSkipsMore(t *testing.T) {
 		sess := openTestSession(t, r)
 		more, calls := moreOnce(Prompt{Text: "x"})
 
-		outcome, _, _, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+		res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
 		require.NoError(t, err)
-		assert.Equal(t, event.Failed, outcome.Status)
+		assert.Equal(t, event.Failed, res.Outcome.Status)
 		assert.Zero(t, *calls)
 		assert.Equal(t, 1, faux.CallCount())
 	})
@@ -314,9 +314,9 @@ func TestSendSkipsMore(t *testing.T) {
 		sess := openTestSession(t, r)
 		more, calls := moreOnce(Prompt{Text: "x"})
 
-		outcome, _, _, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+		res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
 		require.NoError(t, err)
-		assert.Equal(t, event.Interrupted, outcome.Status)
+		assert.Equal(t, event.Interrupted, res.Outcome.Status)
 		assert.Zero(t, *calls)
 		assert.Equal(t, 1, faux.CallCount())
 	})
@@ -332,7 +332,7 @@ func TestSendSkipsMore(t *testing.T) {
 		}))
 		more, calls := moreOnce(Prompt{Text: "x"})
 
-		_, _, _, err := sess.Send(turnCtx, Prompt{Text: "prompt"}, more)
+		_, err := sess.Send(turnCtx, Prompt{Text: "prompt"}, more)
 		require.NoError(t, err)
 		assert.Zero(t, *calls)
 	})
@@ -347,7 +347,7 @@ func TestSendHandOverOmitsUnprocessableImage(t *testing.T) {
 	good := Image{MimeType: "image/png", Data: pngBytes(t)}
 	more, _ := moreOnce(Prompt{Text: "x [image #1] [image #2]", Images: []Image{corruptPNG(), good}})
 
-	_, _, _, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+	_, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
 	require.NoError(t, err)
 
 	msgs := <-requests
@@ -367,7 +367,7 @@ func TestSendHandOverCarriesImages(t *testing.T) {
 	handed := Image{MimeType: "image/jpeg", Data: jpegBytes(t)}
 	more, _ := moreOnce(Prompt{Text: "and [image #2]", Images: []Image{handed}})
 
-	_, _, _, err := sess.Send(t.Context(), Prompt{Text: "look [image #1]", Images: []Image{sent}}, more)
+	_, err := sess.Send(t.Context(), Prompt{Text: "look [image #1]", Images: []Image{sent}}, more)
 	require.NoError(t, err)
 
 	assert.Equal(t, []ai.ImageContent{
@@ -384,7 +384,7 @@ func TestSendHandOverResizesLargeImage(t *testing.T) {
 	sess := openTestSession(t, r, probeTool(okProbe))
 	more, _ := moreOnce(Prompt{Text: "x [image #1]", Images: []Image{{MimeType: "image/png", Data: widePNG(t)}}})
 
-	_, _, _, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+	_, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
 	require.NoError(t, err)
 
 	images := userImages(<-requests)
@@ -406,13 +406,13 @@ func TestSendRejectedPromptIsNotSent(t *testing.T) {
 
 	done := sendAsync(t, sess, "first")
 	<-started
-	_, sent, undelivered, err := sess.Send(t.Context(), Prompt{Text: "second"}, nil)
+	res, err := sess.Send(t.Context(), Prompt{Text: "second"}, nil)
 	close(release)
 	require.NoError(t, <-done)
 
 	require.Error(t, err)
-	assert.False(t, sent)
-	assert.Empty(t, undelivered)
+	assert.False(t, res.Sent)
+	assert.Empty(t, res.Undelivered)
 }
 
 func TestSendReturnsUndeliveredHandOver(t *testing.T) {
@@ -434,10 +434,10 @@ func TestSendReturnsUndeliveredHandOver(t *testing.T) {
 	handed := Prompt{Text: "x [image #1] [image #2]", Images: []Image{wide, broken}}
 	more, _ := moreOnce(handed)
 
-	_, sent, undelivered, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
 	require.NoError(t, err)
-	assert.True(t, sent)
-	assert.Equal(t, []Prompt{handed}, undelivered)
+	assert.True(t, res.Sent)
+	assert.Equal(t, []Prompt{handed}, res.Undelivered)
 	assert.Equal(t, []string{"prompt"}, userTexts(<-requests))
 }
 
@@ -487,82 +487,53 @@ func TestReply(t *testing.T) {
 	final := func(blocks ...ai.FauxContentBlock) ai.FauxResponseStep {
 		return ai.FauxAssistantMessage(ai.FauxContentBlocks(blocks), ai.FauxAssistantMessageOptions{})
 	}
+	stopped := func(reason ai.StopReason, text, errorMessage string) ai.FauxResponseStep {
+		return ai.FauxAssistantMessage(ai.FauxContentString(text), ai.FauxAssistantMessageOptions{StopReason: string(reason), ErrorMessage: errorMessage})
+	}
 	for _, tt := range []struct {
-		name  string
-		steps []ai.FauxResponseStep
-		want  string
+		name   string
+		steps  []ai.FauxResponseStep
+		status event.Status
+		want   string
+		calls  int
+		// held cancels the turn while the probe runs.
+		held bool
 	}{
-		{name: "after a tool", steps: []ai.FauxResponseStep{lookFirst, reply("The answer.")}, want: "The answer."},
-		{name: "joined text blocks", steps: []ai.FauxResponseStep{final(ai.FauxText("First."), ai.FauxThinking("Hmm."), ai.FauxText(""), ai.FauxText("Second."))}, want: "First.\n\nSecond."},
-		{name: "no text after a tool", steps: []ai.FauxResponseStep{lookFirst, final(ai.FauxThinking("Considering."))}},
-		{name: "failed", steps: []ai.FauxResponseStep{ai.FauxAssistantMessage(ai.FauxContentString("partial"), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonError), ErrorMessage: "provider exploded"})}},
+		{name: "after a tool", steps: []ai.FauxResponseStep{lookFirst, reply("The answer.")}, status: event.Completed, want: "The answer.", calls: 2},
+		{name: "joined text blocks", steps: []ai.FauxResponseStep{final(ai.FauxText("First."), ai.FauxThinking("Hmm."), ai.FauxText(""), ai.FauxText("Second."))}, status: event.Completed, want: "First.\n\nSecond.", calls: 1},
+		{name: "thinking only after a tool", steps: []ai.FauxResponseStep{lookFirst, final(ai.FauxThinking("Considering."))}, status: event.Completed, calls: 2},
+		{name: "empty content after a tool", steps: []ai.FauxResponseStep{lookFirst, final()}, status: event.Completed, calls: 2},
+		{name: "length truncated", steps: []ai.FauxResponseStep{stopped(ai.StopReasonLength, "partial", "")}, status: event.Completed, want: "partial", calls: 1},
+		{name: "after a retried failure", steps: []ai.FauxResponseStep{stopped(ai.StopReasonError, "", "overloaded"), reply("recovered")}, status: event.Completed, want: "recovered", calls: 2},
+		{name: "failed", steps: []ai.FauxResponseStep{stopped(ai.StopReasonError, "partial", "provider exploded")}, status: event.Failed, calls: 1},
+		{name: "aborted with partial text", steps: []ai.FauxResponseStep{stopped(ai.StopReasonAborted, "partial", "")}, status: event.Interrupted, calls: 1},
+		{name: "interrupted", steps: []ai.FauxResponseStep{lookFirst, reply("unreached")}, status: event.Interrupted, calls: 1, held: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			sb := newSandbox(t)
 			r, faux := newTestRuntime(t, sb)
+			var s coding.Settings
+			require.NoError(t, json.Unmarshal([]byte(`{"retry":{"baseDelayMs":0}}`), &s))
+			r.svcs.SettingsManager().ApplyOverrides(s)
 			faux.SetResponses(tt.steps)
-			sess := openTestSession(t, r, probeTool(okProbe))
+			probe := probeTool(okProbe)
+			turnCtx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tt.held {
+				started := make(chan struct{})
+				probe = heldProbe(started, make(chan struct{}))
+				go func() {
+					<-started
+					cancel()
+				}()
+			}
+			sess := openTestSession(t, r, probe)
 
-			_, _, _, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil)
+			res, err := sess.Send(turnCtx, Prompt{Text: "prompt"}, nil)
 			require.NoError(t, err)
-			assert.Equal(t, tt.want, sess.Reply())
+			assert.Equal(t, tt.status, res.Outcome.Status)
+			assert.Equal(t, tt.want, res.Reply)
+			assert.Equal(t, tt.calls, faux.CallCount())
 		})
 	}
-	for _, tt := range []struct {
-		name  string
-		store func(t *testing.T, manager *coding.SessionManager)
-		want  string
-	}{
-		{name: "after an omitted failed attempt", want: "recovered", store: func(t *testing.T, manager *coding.SessionManager) {
-			appendHistoryMessage(t, manager, `{"role":"user","content":"go","timestamp":1}`)
-			failed := appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"failed partial"}],"stopReason":"error","errorMessage":"overloaded","timestamp":2}`)
-			_, err := manager.AppendContextEdit(failed, nil)
-			require.NoError(t, err)
-			appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"recovered"}],"stopReason":"stop","timestamp":3}`)
-		}},
-		{name: "aborted with partial text", store: func(t *testing.T, manager *coding.SessionManager) {
-			appendHistoryMessage(t, manager, `{"role":"user","content":"go","timestamp":1}`)
-			appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"partial"}],"stopReason":"aborted","timestamp":2}`)
-		}},
-		{name: "compacted after the reply", want: "the answer", store: func(t *testing.T, manager *coding.SessionManager) {
-			kept := appendHistoryMessage(t, manager, `{"role":"user","content":"go","timestamp":1}`)
-			appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"the answer"}],"stopReason":"stop","timestamp":2}`)
-			_, err := manager.AppendCompaction("summary", kept, 1000, nil, false, nil)
-			require.NoError(t, err)
-		}},
-		{name: "compacted keeping nothing after the reply", want: "the answer", store: func(t *testing.T, manager *coding.SessionManager) {
-			appendHistoryMessage(t, manager, `{"role":"user","content":"go","timestamp":1}`)
-			appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"the answer"}],"stopReason":"stop","timestamp":2}`)
-			_, err := manager.AppendCompaction("summary", "", 1000, nil, false, nil)
-			require.NoError(t, err)
-		}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			sb := newSandbox(t)
-			r, _ := newTestRuntime(t, sb)
-			sess := openTestSession(t, r)
-			tt.store(t, sess.inner.SessionManager())
-			require.NoError(t, sess.Close(t.Context()))
-
-			assert.Equal(t, tt.want, resume(t, r, sess.ID()).Reply())
-		})
-	}
-	t.Run("interrupted", func(t *testing.T) {
-		sb := newSandbox(t)
-		r, faux := newTestRuntime(t, sb)
-		faux.SetResponses([]ai.FauxResponseStep{lookFirst, reply("unreached")})
-		started := make(chan struct{})
-		sess := openTestSession(t, r, heldProbe(started, make(chan struct{})))
-		turnCtx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		go func() {
-			<-started
-			cancel()
-		}()
-
-		outcome, _, _, err := sess.Send(turnCtx, Prompt{Text: "prompt"}, nil)
-		require.NoError(t, err)
-		require.Equal(t, event.Interrupted, outcome.Status)
-		assert.Empty(t, sess.Reply())
-	})
 }

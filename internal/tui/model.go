@@ -28,12 +28,6 @@ const (
 	flashFor = 2 * time.Second
 )
 
-// submitDoneMsg is the result of submitting or sending now the draft text.
-type submitDoneMsg struct {
-	text string
-	err  error
-}
-
 // interruptMsg is an external SIGINT.
 type interruptMsg struct{}
 
@@ -73,12 +67,6 @@ type model struct {
 
 	status app.Status
 	busy   bool
-	// submitting is set while a Submit or SendNow runs; submit and send now
-	// do nothing meanwhile.
-	submitting bool
-	// unsent is input handed back while submitting, restored once the
-	// result has settled the draft.
-	unsent []event.Input
 	// queued is the input queued for the running turn; pending is its rows.
 	queued  []string
 	pending []string
@@ -147,9 +135,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.mouse(msg)
 	case autoScrollMsg:
 		return m, m.autoScroll()
-	case submitDoneMsg:
-		defer m.refreshPending()
-		return m, m.submitDone(msg)
 	case interruptMsg:
 		defer m.refreshPending()
 		return m, m.cancel()
@@ -244,72 +229,43 @@ func (m *model) flash(text string) tea.Cmd {
 	return tea.Tick(flashFor, func(time.Time) tea.Msg { return flashMsg{seq} })
 }
 
-// submit runs Submit off the update loop: /resume can block for seconds.
-// The draft stays in the composer until the Controller accepts it.
 func (m *model) submit() tea.Cmd {
 	if strings.TrimSpace(m.composer.value()) == "" {
 		return nil
 	}
-	return m.send(func(c Controller, ctx context.Context, text string, images []string) error {
-		_, err := c.Submit(ctx, text, images...)
-		return err
-	})
+	text, images := m.composer.expanded()
+	_, err := m.c.Submit(m.ctx, text, images...)
+	return m.submitted(err)
 }
 
 // sendNow is submit through SendNow; an empty draft sends just the queue.
 func (m *model) sendNow() tea.Cmd {
-	return m.send(func(c Controller, ctx context.Context, text string, images []string) error {
-		return c.SendNow(ctx, text, images...)
-	})
-}
-
-func (m *model) send(call func(c Controller, ctx context.Context, text string, images []string) error) tea.Cmd {
-	if m.submitting {
-		return nil
-	}
-	m.submitting = true
-	raw := m.composer.value()
 	text, images := m.composer.expanded()
-	ctx, c := m.ctx, m.c
-	return func() tea.Msg {
-		return submitDoneMsg{text: raw, err: call(c, ctx, text, images)}
-	}
+	return m.submitted(m.c.SendNow(m.ctx, text, images...))
 }
 
-// submitDone clears the draft only if it is still what was submitted, and
-// keeps it on any refusal so it can be fixed or sent again. Input handed
-// back meanwhile then goes before what remains.
-func (m *model) submitDone(msg submitDoneMsg) tea.Cmd {
-	m.submitting = false
+// submitted clears the draft once the Controller accepts it, and keeps it on
+// any refusal so it can be fixed or sent again.
+func (m *model) submitted(err error) tea.Cmd {
 	// The Controller records refused commands too.
 	m.composer.setHistory(m.c.History())
-	var cmd tea.Cmd
 	switch {
-	case errors.Is(msg.err, app.ErrQuit):
+	case errors.Is(err, app.ErrQuit):
 		return tea.Quit
-	case msg.err == nil:
-		if m.composer.value() == msg.text {
-			m.composer.reset()
-		}
-	case errors.Is(msg.err, app.ErrBusy):
-		cmd = m.flash("busy switching sessions")
+	case err == nil:
+		m.composer.reset()
+	case errors.Is(err, app.ErrBusy):
+		return m.flash("busy switching sessions")
 	default:
-		m.tr.Apply(event.Error{Err: msg.err})
+		m.tr.Apply(event.Error{Err: err})
 		m.relayout()
 	}
-	m.composer.restore(m.unsent)
-	m.unsent = nil
-	return cmd
+	return nil
 }
 
 // editQueue moves the queued input into the composer, before the draft.
 func (m *model) editQueue() {
-	inputs := m.c.TakeQueued()
-	if m.submitting {
-		m.unsent = append(m.unsent, inputs...)
-	} else {
-		m.composer.restore(inputs)
-	}
+	m.composer.restore(m.c.TakeQueued())
 	// QueueChanged follows; clearing now keeps a second press from taking again.
 	m.queued = nil
 	m.refreshPending()
@@ -371,13 +327,7 @@ func (m *model) apply(ev event.Event) {
 			m.folds.verbs[blocks[len(blocks)-1].Key()] = m.verb
 		}
 		m.busy = false
-		// Restoring now would change the draft an in-flight submit compares
-		// against.
-		if m.submitting {
-			m.unsent = append(m.unsent, ev.Unsent...)
-		} else {
-			m.composer.restore(ev.Unsent)
-		}
+		m.composer.restore(ev.Unsent)
 		return
 	}
 	m.tr.Apply(ev)

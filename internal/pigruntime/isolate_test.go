@@ -41,3 +41,25 @@ func TestNewPinsIsolationEnv(t *testing.T) {
 	assert.True(t, info.IsDir())
 	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
 }
+
+func TestNewRejectsNonAbsoluteRoots(t *testing.T) {
+	tests := map[string]func(sb sandbox) Options{
+		"relative home":      func(sb sandbox) Options { return Options{Home: "kopi", AgentDir: sb.agentDir, CWD: sb.ws} },
+		"empty home":         func(sb sandbox) Options { return Options{AgentDir: sb.agentDir, CWD: sb.ws} },
+		"relative agent dir": func(sb sandbox) Options { return Options{Home: sb.kopiHome, AgentDir: "agent", CWD: sb.ws} },
+		"empty agent dir":    func(sb sandbox) Options { return Options{Home: sb.kopiHome, CWD: sb.ws} },
+	}
+	for name, opts := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			sb := newSandbox(t)
+			t.Setenv("PIG_HOME", filepath.Join(sb.home, ".pig"))
+			t.Setenv("PIG_USE_PI_DIRS", "1")
+			before := os.Environ()
+
+			_, err := New(t.Context(), opts(sb))
+			require.Error(t, err)
+			assert.ElementsMatch(t, before, os.Environ())
+		})
+	}
+}
