@@ -193,7 +193,7 @@ func TestReadDisplaySummary(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			out, err := runRead(t, tool, tc.args)
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, tool.Display.Summary(json.RawMessage(tc.args), out))
+			assert.Equal(t, tc.want, tool.Display.Summary(out))
 		})
 	}
 }

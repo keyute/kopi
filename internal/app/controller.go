@@ -656,11 +656,8 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		MessageCount: sess.MessageCount(),
 	}
 	if changed.Resumed {
-		// A display of its own, so the args of calls that never finished in
-		// the stored history do not linger in the live one.
-		hd := newDisplay(c.cfg.Tools)
 		for _, ev := range sess.History() {
-			changed.History = append(changed.History, hd.apply(ev))
+			changed.History = append(changed.History, d.apply(ev))
 		}
 	}
 	c.relay.emit(changed)

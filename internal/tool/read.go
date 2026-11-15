@@ -88,7 +88,7 @@ func readTitle(raw json.RawMessage) string {
 
 // readSummary relies on read's output shape: every file line and the
 // continuation notice end in "\n", and only the notice starts with "[".
-func readSummary(_ json.RawMessage, output string) string {
+func readSummary(output string) string {
 	switch {
 	case output == emptyFileNotice:
 		return "empty file"

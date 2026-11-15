@@ -21,7 +21,7 @@ type Display struct {
 	// Title names one call: "Read cmd/root.go".
 	Title func(args json.RawMessage) string
 	// Summary is the line under a successfully finished call: "212 lines".
-	Summary func(args json.RawMessage, output string) string
+	Summary func(output string) string
 	// Action is how a group counts calls: "Read 3 files".
 	Action Action
 }

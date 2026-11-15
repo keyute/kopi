@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/tool"
@@ -12,19 +11,13 @@ import (
 
 var fallbackAction = tool.Action{Verb: "Ran", One: "tool", Many: "tools"}
 
-// display fills the transcript fields of tool events from each tool's
-// Display. A ToolEnd's Summary needs the call's arguments, which only its
-// ToolStart carries, so they are held by call ID in between. Tool events may
-// arrive from concurrent goroutines.
+// display fills the transcript fields of tool events from each tool's Display.
 type display struct {
 	tools map[string]tool.Tool
-
-	mu   sync.Mutex
-	args map[string]json.RawMessage
 }
 
 func newDisplay(tools []tool.Tool) *display {
-	d := &display{tools: make(map[string]tool.Tool, len(tools)), args: map[string]json.RawMessage{}}
+	d := &display{tools: make(map[string]tool.Tool, len(tools))}
 	for _, t := range tools {
 		d.tools[t.Name] = t
 	}
@@ -36,9 +29,6 @@ func (d *display) apply(ev event.Event) event.Event {
 	switch e := ev.(type) {
 	case event.ToolStart:
 		args := json.RawMessage(e.Args)
-		d.mu.Lock()
-		d.args[e.CallID] = args
-		d.mu.Unlock()
 		t := d.tools[e.Name]
 		switch {
 		case t.Display.Title != nil:
@@ -54,15 +44,11 @@ func (d *display) apply(ev event.Event) event.Event {
 		}
 		return e
 	case event.ToolEnd:
-		d.mu.Lock()
-		args := d.args[e.CallID]
-		delete(d.args, e.CallID)
-		d.mu.Unlock()
 		if e.IsError {
 			return e
 		}
 		if summary := d.tools[e.Name].Display.Summary; summary != nil {
-			e.Summary = summary(args, e.Output)
+			e.Summary = summary(e.Output)
 		} else {
 			e.Summary = lineCount(e.Output)
 		}

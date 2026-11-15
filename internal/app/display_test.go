@@ -12,15 +12,11 @@ import (
 )
 
 func TestDisplayUsesToolDisplay(t *testing.T) {
-	var gotArgs json.RawMessage
 	shown := testTool("Show", policy.Read, nil)
 	shown.Display = tool.Display{
-		Title: func(args json.RawMessage) string { return "Show " + string(args) },
-		Summary: func(args json.RawMessage, output string) string {
-			gotArgs = args
-			return "shown " + output
-		},
-		Action: tool.Action{Verb: "Showed", One: "thing", Many: "things"},
+		Title:   func(args json.RawMessage) string { return "Show " + string(args) },
+		Summary: func(output string) string { return "shown " + output },
+		Action:  tool.Action{Verb: "Showed", One: "thing", Many: "things"},
 	}
 	d := newDisplay([]tool.Tool{shown})
 
@@ -29,8 +25,6 @@ func TestDisplayUsesToolDisplay(t *testing.T) {
 
 	assert.Equal(t, event.ToolStart{CallID: "c1", Name: "Show", Args: `{"x":1}`, Title: `Show {"x":1}`, Action: shown.Display.Action}, start)
 	assert.Equal(t, event.ToolEnd{CallID: "c1", Name: "Show", Output: "ok", Summary: "shown ok"}, end)
-	assert.JSONEq(t, `{"x":1}`, string(gotArgs))
-	assert.Empty(t, d.args, "args are forgotten at ToolEnd")
 }
 
 func TestDisplayFallbacks(t *testing.T) {
@@ -55,7 +49,6 @@ func TestDisplayFallbacks(t *testing.T) {
 			assert.Equal(t, tc.summary, end.Summary)
 		})
 	}
-	assert.Empty(t, d.args)
 }
 
 func TestDisplayGivesFailedCallNoSummary(t *testing.T) {
@@ -65,7 +58,16 @@ func TestDisplayGivesFailedCallNoSummary(t *testing.T) {
 	end := d.apply(event.ToolEnd{CallID: "c1", Name: "Ghost", Output: "boom", IsError: true})
 
 	assert.Equal(t, event.ToolEnd{CallID: "c1", Name: "Ghost", Output: "boom", IsError: true}, end)
-	assert.Empty(t, d.args)
+}
+
+func TestDisplaySummarizesWithoutStart(t *testing.T) {
+	shown := testTool("Show", policy.Read, nil)
+	shown.Display.Summary = func(output string) string { return "shown " + output }
+	d := newDisplay([]tool.Tool{shown})
+
+	end := d.apply(event.ToolEnd{CallID: "c1", Name: "Show", Output: "ok"})
+
+	assert.Equal(t, event.ToolEnd{CallID: "c1", Name: "Show", Output: "ok", Summary: "shown ok"}, end)
 }
 
 func TestDisplayPassesOtherEventsThrough(t *testing.T) {
