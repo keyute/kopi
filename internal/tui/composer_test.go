@@ -89,6 +89,28 @@ func TestRepeatedPasteExpandsThenCollapsesAgain(t *testing.T) {
 	assert.Equal(t, "> "+linesOf(11)+"[paste #2 +11 lines]", m.composer.value())
 }
 
+func TestEmptyPastePreservesCollapsedBlockAndImages(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	c := &m.composer
+	c.insertImage("/synthetic/draft.png")
+	image := c.value()
+	payload := linesOf(11)
+	pasteText(m, payload)
+	marker := c.lastPaste
+	require.NotEmpty(t, marker)
+	require.Equal(t, image+marker, c.value())
+	before := c.blocks[marker]
+
+	pasteText(m, "")
+
+	assert.Equal(t, image+marker, c.value())
+	assert.Contains(t, c.blocks, marker)
+	assert.Equal(t, before, c.blocks[marker])
+	text, imgs := c.expanded()
+	assert.Equal(t, image+payload, text)
+	assert.Equal(t, []string{"/synthetic/draft.png"}, imgs)
+}
+
 func TestRepeatedPasteExpandsSanitizedText(t *testing.T) {
 	for _, tc := range []struct {
 		name, text, want string
@@ -401,6 +423,156 @@ func TestComposerOverflowStaysBlockBacked(t *testing.T) {
 				text, _ = c.expanded()
 				assert.Equal(t, tc.text, text)
 			}
+		})
+	}
+}
+
+func TestSmallPasteChecksCombinedCapacity(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	c := &m.composer
+	draft := linesOf(9998)
+	c.ta.SetValue(draft)
+	payload := linesOf(5)
+	c.paste(payload)
+	text, imgs := c.expanded()
+	assert.Equal(t, draft+payload, text)
+	assert.Empty(t, imgs)
+}
+
+func TestSmallPasteOverflowSanitizesAndMatchesOriginalClipboard(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload, clean string
+	}{
+		{"tabs", "\talpha\n\tbeta\n\tgamma", "    alpha\n    beta\n    gamma"},
+		{"controls", "a\x00\x1bb\nc\u007f\u0085d\ne\ufffd\xfff", "ab\ncd\nef"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newTestModel(t, 60, 30)
+			c := &m.composer
+			draft := linesOf(4)
+			c.ta.SetValue(draft)
+			c.ta.MaxContentHeight = 5
+
+			c.paste(tc.payload)
+
+			marker := c.lastPaste
+			require.NotEmpty(t, marker)
+			require.Equal(t, draft+marker, c.value(), "only the insertion collapses")
+			text, imgs := c.expanded()
+			assert.Equal(t, draft+tc.clean, text)
+			assert.Empty(t, imgs)
+
+			c.paste(tc.payload)
+
+			assert.Equal(t, draft+marker, c.value(), "failed expansion keeps the existing block")
+			text, _ = c.expanded()
+			assert.Equal(t, draft+tc.clean, text)
+
+			c.ta.MaxContentHeight = 20
+			c.paste(tc.payload)
+
+			assert.Equal(t, draft+tc.clean, c.value(), "the original clipboard expands in place once it fits")
+			assert.Empty(t, c.blocks)
+		})
+	}
+}
+
+func TestSmallPasteOverflowDoesNotMatchDifferentRawClipboard(t *testing.T) {
+	for _, other := range []string{"ab\ncd\nef", "a\x1bb\ncd\nef"} {
+		t.Run(fmt.Sprintf("%q", other), func(t *testing.T) {
+			m, _ := newTestModel(t, 60, 30)
+			c := &m.composer
+			draft := linesOf(4)
+			c.ta.SetValue(draft)
+			c.ta.MaxContentHeight = 5
+			payload := "a\x00b\ncd\nef"
+			clean := "ab\ncd\nef"
+			c.paste(payload)
+			marker := c.lastPaste
+			require.Equal(t, draft+marker, c.value())
+			c.ta.MaxContentHeight = 20
+
+			c.paste(other)
+
+			assert.Equal(t, draft+marker+clean, c.value())
+			text, _ := c.expanded()
+			assert.Equal(t, draft+clean+clean, text)
+			assert.Contains(t, c.blocks, marker)
+		})
+	}
+}
+
+func TestSmallPasteWrappedCapacityPreservesImagesAndSelection(t *testing.T) {
+	m, _ := newTestModel(t, 20, 30)
+	c := &m.composer
+	c.insertImage("/synthetic/draft.png")
+	image := c.value()
+	c.paste(linesOf(11))
+	block := c.lastPaste
+	c.ta.MaxContentHeight = 5
+	draft := image + block + "old"
+	c.ta.SetValue(draft)
+	require.Equal(t, draft, c.value())
+	c.selectRange(selection{anchor: point{0, len([]rune(image + block))}, head: point{0, len([]rune(draft))}})
+	payload := strings.Repeat("z", 90)
+	c.paste(payload)
+	text, imgs := c.expanded()
+	assert.Equal(t, image+linesOf(11)+payload, text)
+	assert.Equal(t, []string{"/synthetic/draft.png"}, imgs)
+	assert.Contains(t, c.blocks, block)
+}
+
+func TestPasteMarkerAtCapacityCollapsesWholeDraft(t *testing.T) {
+	m, _ := newTestModel(t, 20, 30)
+	c := &m.composer
+	draft := strings.Repeat("w", c.ta.Width()*4)
+	c.ta.SetValue(draft)
+	c.ta.MaxContentHeight = 5
+	require.Equal(t, draft, c.value())
+	payload := "\n1\n2\n3\n4"
+	c.paste(payload)
+	text, imgs := c.expanded()
+	assert.Equal(t, draft+payload, text)
+	assert.Empty(t, imgs)
+	assert.NotContains(t, c.value(), draft)
+}
+
+func TestComposerCharacterSelectionEndpoints(t *testing.T) {
+	for _, tc := range []struct {
+		name, text     string
+		x, y, toX, toY int
+	}{
+		{"backwards", "hello world", 10, 0, 3, 0},
+		{"wrapped", "alpha beta gamma delta epsilon", 5, 1, 4, 0},
+		{"scrolled", linesOf(20), 4, 1, 7, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newTestModel(t, 20, 30)
+			c := &m.composer
+			c.ta.SetValue(tc.text)
+			start := c.ta.PositionAt(tc.x, tc.y)
+			end := c.ta.PositionAt(tc.toX, tc.toY)
+			c.press(tc.x, tc.y, 1)
+			assert.Equal(t, start.Row, c.ta.Line())
+			assert.Equal(t, start.Col, c.ta.Column())
+			c.drag(tc.toX, tc.toY)
+			assert.Equal(t, end.Row, c.ta.Line())
+			assert.Equal(t, end.Col, c.ta.Column())
+			want := selection{anchor: point{start.Row, start.Col}, head: point{end.Row, end.Col}}
+			lines := strings.Split(tc.text, "\n")
+			from, to := want.ordered()
+			selected := string([]rune(lines[from.line])[from.col:])
+			if from.line == to.line {
+				selected = string([]rune(lines[from.line])[from.col:to.col])
+			} else {
+				for i := from.line + 1; i < to.line; i++ {
+					selected += "\n" + lines[i]
+				}
+				selected += "\n" + string([]rune(lines[to.line])[:to.col])
+			}
+			text, ok := c.release()
+			assert.True(t, ok)
+			assert.Equal(t, selected, text)
 		})
 	}
 }

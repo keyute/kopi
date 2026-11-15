@@ -83,6 +83,7 @@ func history(msgs []agent.AgentMessage) []event.Event {
 			out = append(out, event.TurnStart{Prompt: userText(m.User.Content)})
 			afterText = false
 		case m.Assistant != nil:
+			var toolStarts []event.Event
 			for _, block := range m.Assistant.Content {
 				switch b := block.(type) {
 				case ai.TextContent:
@@ -97,9 +98,14 @@ func history(msgs []agent.AgentMessage) []event.Event {
 					afterText = true
 				case ai.ToolCall:
 					args, _ := b.ArgumentsJSON()
-					out = append(out, event.ToolStart{CallID: b.ID, Name: b.Name, Args: compactJSON(args)})
+					toolStarts = append(toolStarts, event.ToolStart{CallID: b.ID, Name: b.Name, Args: compactJSON(args)})
 					afterText = false
 				}
+			}
+			// PiG streams the entire assistant message before executing tools.
+			if len(toolStarts) > 0 {
+				out = append(out, toolStarts...)
+				afterText = false
 			}
 			if end, ok := storedTurnEnd(m.Assistant); ok {
 				out = append(out, end)

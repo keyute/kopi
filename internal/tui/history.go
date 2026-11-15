@@ -43,7 +43,7 @@ func (c *composer) historyPrev() bool {
 	}
 	if h.back < len(h.entries) {
 		h.back++
-		c.ta.SetValue(h.entries[len(h.entries)-h.back])
+		c.showHistory(h.entries[len(h.entries)-h.back])
 	}
 	return true
 }
@@ -57,9 +57,24 @@ func (c *composer) historyNext() bool {
 	}
 	h.back--
 	if h.back == 0 {
-		c.ta.SetValue(h.saved)
+		trial := c.ta
+		trial.SetValue(h.saved)
+		if trial.Value() != sanitizedText(h.saved) {
+			text, imgs := c.expand(h.saved)
+			trial.SetValue(c.collapse(text, imgs))
+		}
+		c.ta = trial
 	} else {
-		c.ta.SetValue(h.entries[len(h.entries)-h.back])
+		c.showHistory(h.entries[len(h.entries)-h.back])
 	}
 	return true
+}
+
+func (c *composer) showHistory(text string) {
+	trial := c.ta
+	trial.SetValue(text)
+	if trial.Value() != sanitizedText(text) {
+		trial.SetValue(c.collapse(text, nil))
+	}
+	c.ta = trial
 }

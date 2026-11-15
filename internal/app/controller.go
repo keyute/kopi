@@ -61,12 +61,18 @@ type Controller struct {
 	unsubscribe func()
 	// switching refuses prompts while a session transition is under way, so
 	// no work can start on a session that is about to be replaced.
-	switching bool
+	switching *sessionSwitch
 	// closed is set by Close; afterwards the Controller refuses all input,
 	// leaves the mode alone and delivers no events.
 	closed  bool
 	turn    *Work
 	turnSeq int
+}
+
+// sessionSwitch retains work even after it deregisters while start waits for life.
+type sessionSwitch struct {
+	work *Work
+	emit func(event.Event)
 }
 
 func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
@@ -109,15 +115,14 @@ func (c *Controller) Resume(ctx context.Context, id string) error {
 // life. start refuses once closed, and Close shuts the relay before releasing
 // life, so nothing reaches the runtime or a subscriber after Close.
 func (c *Controller) switchTo(ctx context.Context, req OpenRequest) error {
-	c.mu.Lock()
-	if c.switching {
-		c.mu.Unlock()
-		return ErrBusy
+	op, err := c.beginSwitch()
+	if err != nil {
+		return err
 	}
-	c.switching = true
-	c.mu.Unlock()
 	go func() {
-		if err := c.start(ctx, req); err != nil {
+		c.life.Lock()
+		defer c.life.Unlock()
+		if err := c.startSwitch(ctx, req, op); err != nil {
 			c.relay.emit(event.Error{Err: err})
 		}
 	}()
@@ -215,7 +220,7 @@ func (c *Controller) submitPrompt(ctx context.Context, p pigruntime.Prompt, now 
 		c.mu.Unlock()
 		return nil, ErrNoSession
 	}
-	if c.switching {
+	if c.switching != nil {
 		c.mu.Unlock()
 		return nil, ErrBusy
 	}
@@ -367,10 +372,18 @@ func (c *Controller) Close(ctx context.Context) error {
 	defer c.life.Unlock()
 	defer c.relay.shut()
 
+	c.queue.Lock()
 	c.mu.Lock()
 	c.closed = true
 	sess, unsubscribe, w := c.sess, c.unsubscribe, c.turn
+	if c.switching != nil && c.switching.work != nil {
+		w = c.switching.work
+		w.discard = true
+		w.switchHold = false
+		w.terminal = nil
+	}
 	c.mu.Unlock()
+	c.queue.Unlock()
 	if sess == nil {
 		return nil
 	}
@@ -413,9 +426,9 @@ func (c *Controller) startTurn(ctx context.Context, parts []pigruntime.Prompt) *
 // runTurn sends parts, then keeps sending while settle finds input to continue
 // with. The decision, the final TurnEnd and what follows it are one queue
 // section, so no input or interrupt lands after the Work found nothing left
-// but before it is deregistered. The TurnEnd precedes the deregistration, so a
-// transition that finds no work never races an undelivered TurnEnd of the old
-// session.
+// but before it is deregistered. Only a switch-held terminal TurnEnd may be
+// deferred past deregistration; the switch resolves it before advancing the
+// relay epoch.
 func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session, emit func(event.Event), w *Work, parts []pigruntime.Prompt) {
 	for {
 		start := time.Now()
@@ -445,7 +458,12 @@ func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session
 		}
 		w.outcome = res.Outcome
 		w.reply = res.Reply
-		emit(event.TurnEnd{WorkID: w.id, Outcome: res.Outcome, Elapsed: elapsed, Unsent: inputs(unsent)})
+		end := event.TurnEnd{WorkID: w.id, Outcome: res.Outcome, Elapsed: elapsed, Unsent: inputs(unsent)}
+		if w.switchHold {
+			w.terminal = &end
+		} else {
+			emit(end)
+		}
 		c.finish(base, w, emit)
 		c.queue.Unlock()
 		close(w.done)
@@ -477,7 +495,7 @@ func (c *Controller) finish(base context.Context, w *Work, emit func(event.Event
 	if c.turn == w {
 		c.turn = nil
 	}
-	if len(parts) == 0 || c.closed || c.switching {
+	if len(parts) == 0 || c.closed || c.switching != nil {
 		c.mu.Unlock()
 		return
 	}
@@ -538,28 +556,60 @@ func inputs(ps []pigruntime.Prompt) []event.Input {
 func (c *Controller) start(ctx context.Context, req OpenRequest) error {
 	c.life.Lock()
 	defer c.life.Unlock()
-	// Cleared on every return, including a refusal once closed, since
-	// switchTo marks the switch before start runs.
+	op, err := c.beginSwitch()
+	if err != nil {
+		return err
+	}
+	return c.startSwitch(ctx, req, op)
+}
+
+// beginSwitch marks and stops in one queue section, before settlement can
+// drain input queued after an earlier Interrupt.
+func (c *Controller) beginSwitch() (*sessionSwitch, error) {
+	c.queue.Lock()
+	defer c.queue.Unlock()
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil, ErrNoSession
+	}
+	if c.switching != nil {
+		c.mu.Unlock()
+		return nil, ErrBusy
+	}
+	op := &sessionSwitch{work: c.turn, emit: c.emit}
+	c.switching = op
+	c.mu.Unlock()
+	if op.work != nil {
+		op.work.switchHold = true
+		c.stop(op.work, op.emit)
+	}
+	return op, nil
+}
+
+// startSwitch runs with life held and resolves the captured operation, not
+// the current turn, which may already have deregistered.
+func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessionSwitch) error {
 	defer func() {
 		c.mu.Lock()
-		c.switching = false
+		c.switching = nil
 		c.mu.Unlock()
 	}()
-
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
 		return ErrNoSession
 	}
-	c.switching = true
-	old, oldUnsubscribe, w := c.sess, c.unsubscribe, c.turn
+	old, oldUnsubscribe := c.sess, c.unsubscribe
 	c.mu.Unlock()
-
+	w, oldEmit := op.work, op.emit
 	if w != nil {
+		defer c.releaseSwitch(w, oldEmit, false)
 		joinCtx, cancel := context.WithTimeout(ctx, c.cfg.JoinTimeout)
-		stopped := c.halt(joinCtx, w)
-		cancel()
-		if !stopped {
+		defer cancel()
+		select {
+		case <-w.done:
+		case <-joinCtx.Done():
 			return fmt.Errorf("failed to switch session: work %s did not stop: %w", w.id, ErrWorkStillRunning)
 		}
 	}
@@ -576,6 +626,9 @@ func (c *Controller) start(ctx context.Context, req OpenRequest) error {
 		return err
 	}
 
+	if w != nil {
+		c.releaseSwitch(w, oldEmit, true)
+	}
 	c.relay.advance()
 	if old != nil {
 		oldUnsubscribe()
@@ -614,14 +667,15 @@ func (c *Controller) start(ctx context.Context, req OpenRequest) error {
 	return nil
 }
 
-// halt stops w as Interrupt does, but discards its queued input, and reports
-// whether it finished before ctx ended.
+// halt permanently discards Close's input and joins without queue held.
 func (c *Controller) halt(ctx context.Context, w *Work) bool {
 	c.queue.Lock()
 	c.mu.Lock()
 	emit := c.emit
 	c.mu.Unlock()
 	w.discard = true
+	w.switchHold = false
+	w.terminal = nil
 	c.stop(w, emit)
 	c.queue.Unlock()
 	select {
@@ -629,6 +683,22 @@ func (c *Controller) halt(ctx context.Context, w *Work) bool {
 		return true
 	case <-ctx.Done():
 		return false
+	}
+}
+
+// releaseSwitch resolves the held terminal event through the old session's
+// emitter before its relay epoch can be retired. It is safe to call again.
+func (c *Controller) releaseSwitch(w *Work, emit func(event.Event), committed bool) {
+	c.queue.Lock()
+	defer c.queue.Unlock()
+	w.switchHold = false
+	if w.terminal != nil {
+		end := *w.terminal
+		w.terminal = nil
+		if committed || w.discard {
+			end.Unsent = nil
+		}
+		emit(end)
 	}
 }
 

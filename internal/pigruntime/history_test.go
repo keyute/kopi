@@ -99,6 +99,50 @@ func TestHistoryReplaysStoredTurnAsLiveEvents(t *testing.T) {
 	assert.Contains(t, got, event.Event(event.ToolStart{CallID: "call-1", Name: "Probe", Args: `{"n":2,"path":"a b"}`}))
 }
 
+func TestHistoryReplaysTextAroundToolCallsAsLiveEvents(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		blocks ai.FauxContentBlocks
+	}{
+		{
+			name: "tool before text",
+			blocks: ai.FauxContentBlocks{
+				ai.FauxToolCall("Probe", map[string]any{}, &ai.FauxToolCallOptions{ID: "call-1"}),
+				ai.FauxText("after"),
+			},
+		},
+		{
+			name: "tool between text",
+			blocks: ai.FauxContentBlocks{
+				ai.FauxText("before"),
+				ai.FauxToolCall("Probe", map[string]any{}, &ai.FauxToolCallOptions{ID: "call-1"}),
+				ai.FauxText("after"),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sb := newSandbox(t)
+			r, faux := newTestRuntime(t, sb)
+			faux.SetResponses([]ai.FauxResponseStep{
+				ai.FauxAssistantMessage(tc.blocks, ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)}),
+				reply("done"),
+			})
+			probe := probeTool(func(context.Context, json.RawMessage) (string, error) { return toolOutput, nil })
+			sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, Tools: []tool.Tool{probe}, Authority: policy.NewAuthority()})
+			require.NoError(t, err)
+			live := []event.Event{event.TurnStart{Prompt: "go"}}
+			unsubscribe := sess.Subscribe(func(ev event.Event) { live = append(live, ev) })
+			res, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil)
+			require.NoError(t, err)
+			require.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
+			unsubscribe()
+			require.NoError(t, sess.Close(t.Context()))
+
+			assert.Equal(t, unstreamed(live), unstreamed(resume(t, r, sess.ID(), probe).History()))
+		})
+	}
+}
+
 func TestHistoryEndsFailedAndInterruptedTurns(t *testing.T) {
 	t.Run("failed", func(t *testing.T) {
 		sb := newSandbox(t)
@@ -391,6 +435,44 @@ func TestHistoryMapsStoredShapes(t *testing.T) {
 				event.TextDelta{Text: "before"},
 				event.ToolStart{CallID: "c", Name: "Probe", Args: "{}"},
 				event.TextDelta{Text: "after"},
+			},
+		},
+		{
+			name: "tool before text executes after text",
+			msgs: []agent.AgentMessage{
+				assistant(ai.StopReasonToolUse, "", ai.ToolCall{ID: "c", Name: "Probe"}, text("after")),
+			},
+			want: []event.Event{
+				event.TextDelta{Text: "after"},
+				event.ToolStart{CallID: "c", Name: "Probe", Args: "{}"},
+			},
+		},
+		{
+			name: "tool between text resets separator before execution",
+			msgs: []agent.AgentMessage{
+				assistant(ai.StopReasonToolUse, "", text("before"), ai.ToolCall{ID: "c", Name: "Probe"}, text("after")),
+				assistant(ai.StopReasonStop, "", text("next message")),
+			},
+			want: []event.Event{
+				event.TextDelta{Text: "before"},
+				event.TextDelta{Text: "after"},
+				event.ToolStart{CallID: "c", Name: "Probe", Args: "{}"},
+				event.TextDelta{Text: "next message"},
+			},
+		},
+		{
+			name: "multiple tools retain order with empty text and failure",
+			msgs: []agent.AgentMessage{
+				assistant(ai.StopReasonError, "failed", text("before"), ai.ToolCall{ID: "c1", Name: "Probe"}, text(""), ai.ToolCall{ID: "c2", Name: "Probe"}, text("after")),
+				assistant(ai.StopReasonStop, "", text("next message")),
+			},
+			want: []event.Event{
+				event.TextDelta{Text: "before"},
+				event.TextDelta{Text: "after"},
+				event.ToolStart{CallID: "c1", Name: "Probe", Args: "{}"},
+				event.ToolStart{CallID: "c2", Name: "Probe", Args: "{}"},
+				event.TurnEnd{Outcome: event.Outcome{Status: event.Failed, Message: "failed"}},
+				event.TextDelta{Text: "next message"},
 			},
 		},
 		{

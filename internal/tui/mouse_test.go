@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"image/color"
 	"regexp"
 	"strings"
@@ -250,6 +251,36 @@ func TestPressesOutsideTranscriptAndComposerDoNothing(t *testing.T) {
 		assert.False(t, m.composer.ta.HasSelection(), "row %d", y)
 	}
 	assert.Equal(t, "draft", m.composer.value())
+}
+
+func TestWheelInvalidatesHeldFoldClickOnlyWhenViewportMoves(t *testing.T) {
+	for _, scrolls := range []bool{false, true} {
+		t.Run(fmt.Sprint(scrolls), func(t *testing.T) {
+			m, _ := newTestModel(t, 40, 30)
+			if scrolls {
+				notices(m, 30)
+			}
+			send(m, sealedGroup()...)
+			row := rowOf(t, m, "▸ Read 2 files")
+			pressAt(m, 4, row)
+			top := m.top()
+			m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+			if scrolls {
+				require.NotEqual(t, top, m.top())
+				assert.Equal(t, drag{}, m.drag)
+			} else {
+				require.Equal(t, top, m.top())
+			}
+			assert.Nil(t, releaseAt(m, 4, row))
+			if scrolls {
+				m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+				assert.Contains(t, screen(m), "▸ Read 2 files")
+			} else {
+				assert.Contains(t, screen(m), "▾ Read 2 files")
+			}
+			assert.Empty(t, m.clip.(*fakeClipboard).written)
+		})
+	}
 }
 
 func TestWheelKeepsSelectionOnItsText(t *testing.T) {

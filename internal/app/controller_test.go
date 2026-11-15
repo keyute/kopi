@@ -685,6 +685,209 @@ func TestInterruptHandsQueuedInputBack(t *testing.T) {
 	assert.NotContains(t, req.Raw, "look at")
 }
 
+func TestFailedResumeCommandHandsQueuedInputBack(t *testing.T) {
+	started := make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{blockTool(started)}})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "call-1")), pigruntimetest.Text("after")})
+	id := h.c.Status().SessionID
+	errs := subscribeTo[event.Error](h.c)
+
+	w, err := h.c.Submit(t.Context(), "block")
+	require.NoError(t, err)
+	wait(t, started)
+	img := pngFile(t)
+	_, err = h.c.Submit(t.Context(), "queued [image #1]", img)
+	require.NoError(t, err)
+	_, err = h.c.Submit(t.Context(), "/resume no-such-session")
+	require.NoError(t, err)
+	require.ErrorIs(t, receiveEvent(t, errs).Err, pigruntime.ErrSessionNotFound)
+	wait(t, w.Done())
+	assertSwitchDone(t, h)
+
+	evs := untimed(h.rec.all())
+	assert.Equal(t, []event.TurnEnd{{
+		WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted},
+		Unsent: []event.Input{{Text: "queued [image #1]", Images: []string{img}}},
+	}}, ofType[event.TurnEnd](evs))
+	endAt := slices.IndexFunc(evs, func(ev event.Event) bool { _, ok := ev.(event.TurnEnd); return ok })
+	errorAt := slices.IndexFunc(evs, func(ev event.Event) bool { _, ok := ev.(event.Error); return ok })
+	assert.Less(t, endAt, errorAt)
+	assert.Len(t, ofType[event.SessionChanged](evs), 1)
+	assert.Equal(t, id, h.c.Status().SessionID)
+	assert.Equal(t, event.Completed, h.turn(t, "after").Outcome().Status)
+}
+
+func TestAsyncResumeCapturesInputBeforeWaitingForLife(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("after")})
+	errs := subscribeTo[event.Error](h.c)
+	w, err := h.c.Submit(t.Context(), "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	require.True(t, h.c.Interrupt())
+	img := pngFile(t)
+	_, err = h.c.Submit(t.Context(), "after interrupt [image #1]", img)
+	require.NoError(t, err)
+
+	// The command must capture the stopped turn before its starter gets life.
+	h.c.life.Lock()
+	_, err = h.c.Submit(t.Context(), "/resume no-such-session")
+	assert.NoError(t, err)
+	close(release)
+	wait(t, w.Done())
+	h.c.queue.Lock()
+	assert.Empty(t, h.c.pending)
+	assert.True(t, w.switchHold)
+	assert.NotNil(t, w.terminal)
+	h.c.queue.Unlock()
+	assert.Empty(t, ofType[event.TurnEnd](h.rec.all()))
+	h.c.life.Unlock()
+
+	require.ErrorIs(t, receiveEvent(t, errs).Err, pigruntime.ErrSessionNotFound)
+	assertSwitchDone(t, h)
+	assert.Equal(t, []event.TurnEnd{{
+		WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted},
+		Unsent: []event.Input{{Text: "after interrupt [image #1]", Images: []string{img}}},
+	}}, ofType[event.TurnEnd](untimed(h.rec.all())))
+	assert.Equal(t, event.Completed, h.turn(t, "after").Outcome().Status)
+}
+
+func TestSyncResumeHoldsSettlementWhileCapturingInput(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1"))})
+	w, err := h.c.Submit(t.Context(), "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	require.True(t, h.c.Interrupt())
+	img := pngFile(t)
+	_, err = h.c.Submit(t.Context(), "later [image #1]", img)
+	require.NoError(t, err)
+	capturing, proceed := make(chan struct{}), make(chan struct{})
+	h.c.Subscribe(func(ev event.Event) {
+		if q, ok := ev.(event.QueueChanged); ok && len(q.Pending) == 0 {
+			// Queue delivery occurs inside the initiating transaction.
+			assert.True(t, w.switchHold)
+			close(capturing)
+			<-proceed
+		}
+	})
+	result := make(chan error, 1)
+	go func() { result <- h.c.Resume(t.Context(), "no-such-session") }()
+	wait(t, capturing)
+	close(release)
+	select {
+	case <-w.Done():
+		t.Error("settlement escaped the initiating queue transaction")
+	default:
+	}
+	close(proceed)
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, pigruntime.ErrSessionNotFound)
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for Resume")
+	}
+	wait(t, w.Done())
+	assert.Equal(t, []event.TurnEnd{{
+		WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted},
+		Unsent: []event.Input{{Text: "later [image #1]", Images: []string{img}}},
+	}}, ofType[event.TurnEnd](untimed(h.rec.all())))
+}
+
+func TestCloseDiscardsDeregisteredSwitchWorkBeforeDelayedStart(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1"))})
+	w, err := h.c.Submit(t.Context(), "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	require.True(t, h.c.Interrupt())
+	_, err = h.c.Submit(t.Context(), "later [image #1]", pngFile(t))
+	require.NoError(t, err)
+	op, err := h.c.beginSwitch()
+	require.NoError(t, err)
+	// Delay the async starter explicitly so Close wins life after settlement.
+	start := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		<-start
+		h.c.life.Lock()
+		defer h.c.life.Unlock()
+		err := h.c.startSwitch(t.Context(), OpenRequest{ResumeID: "no-such-session"}, op)
+		if err != nil {
+			h.c.relay.emit(event.Error{Err: err})
+		}
+		result <- err
+	}()
+	close(release)
+	wait(t, w.Done())
+	require.False(t, h.c.Status().Busy)
+	require.NoError(t, h.c.Close(t.Context()))
+	delivered := len(h.rec.all())
+	close(start)
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, ErrNoSession)
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for delayed start")
+	}
+	h.c.queue.Lock()
+	assert.True(t, w.discard)
+	assert.False(t, w.switchHold)
+	assert.Nil(t, w.terminal)
+	h.c.queue.Unlock()
+	assert.Len(t, h.rec.all(), delivered)
+	assert.Empty(t, ofType[event.TurnEnd](h.rec.all()))
+	assert.Len(t, ofType[event.SessionChanged](h.rec.all()), 1)
+}
+
+func TestSwitchJoinTimeoutHandsQueuedInputBack(t *testing.T) {
+	started, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	block := testTool("Hold", policy.Read, func(ctx context.Context, _ json.RawMessage) (string, error) {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+		return "released", nil
+	})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{block}})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("after")})
+	id := h.c.Status().SessionID
+	w, err := h.c.Submit(t.Context(), "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	img := pngFile(t)
+	_, err = h.c.Submit(t.Context(), "queued [image #1]", img)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- h.c.Resume(ctx, "no-such-session") }()
+	wait(t, cancelled)
+	cancel()
+	// Release the tool even if an assertion fails, so cleanup can join it.
+	select {
+	case err := <-result:
+		assert.ErrorIs(t, err, ErrWorkStillRunning)
+	case <-time.After(waitLimit):
+		t.Error("timed out waiting for Resume")
+	}
+	assert.Empty(t, ofType[event.TurnEnd](h.rec.all()))
+	close(release)
+	wait(t, w.Done())
+
+	assert.Equal(t, []event.TurnEnd{{
+		WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted},
+		Unsent: []event.Input{{Text: "queued [image #1]", Images: []string{img}}},
+	}}, ofType[event.TurnEnd](untimed(h.rec.all())))
+	assert.Len(t, ofType[event.SessionChanged](h.rec.all()), 1)
+	assert.Equal(t, id, h.c.Status().SessionID)
+	assert.Equal(t, event.Completed, h.turn(t, "after").Outcome().Status)
+}
+
 func TestInterruptBeforeSendHandsOriginalAndQueuedInputBack(t *testing.T) {
 	h, _ := openHarness(t, Config{})
 	originalImages := []string{pngFile(t), pngFile(t)}
@@ -875,11 +1078,21 @@ func TestSessionSwitchDiscardsQueuedInput(t *testing.T) {
 			w, err := h.c.Submit(t.Context(), "block")
 			require.NoError(t, err)
 			wait(t, started)
-			_, err = h.c.Submit(t.Context(), queued)
+			img := pngFile(t)
+			_, err = h.c.Submit(t.Context(), queued, img)
 			require.NoError(t, err)
 			require.NoError(t, switchTo(t.Context()))
 
 			assert.Equal(t, event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted}}, receiveEnd(t, ends))
+			evs := h.rec.all()
+			workEnds := slices.DeleteFunc(ofType[event.TurnEnd](evs), func(end event.TurnEnd) bool { return end.WorkID != w.ID() })
+			require.Len(t, workEnds, 1)
+			endAt := slices.IndexFunc(evs, func(ev event.Event) bool {
+				end, ok := ev.(event.TurnEnd)
+				return ok && end.WorkID == w.ID()
+			})
+			changedAt := slices.IndexFunc(evs[endAt+1:], func(ev event.Event) bool { _, ok := ev.(event.SessionChanged); return ok })
+			assert.GreaterOrEqual(t, changedAt, 0, "the terminal event precedes SessionChanged")
 			h.turn(t, "after")
 			req := receive(t, requests)
 			assert.Equal(t, tc.wantAfter, req.UserTexts)
@@ -1307,14 +1520,14 @@ func TestPromptDuringSessionSwitchIsRefused(t *testing.T) {
 }
 
 // assertSwitchDone waits for a switch started by a command to finish: start
-// clears switching before it releases life.
+// clears the active operation before it releases life.
 func assertSwitchDone(t *testing.T, h *harness) {
 	t.Helper()
 	h.c.life.Lock()
 	defer h.c.life.Unlock()
 	h.c.mu.Lock()
 	defer h.c.mu.Unlock()
-	assert.False(t, h.c.switching)
+	assert.Nil(t, h.c.switching)
 }
 
 // subscribeTo delivers every event of type T.
@@ -1584,7 +1797,7 @@ func TestCloseDiscardsQueuedInput(t *testing.T) {
 	w, err := h.c.Submit(t.Context(), "block")
 	require.NoError(t, err)
 	wait(t, started)
-	_, err = h.c.Submit(t.Context(), queued)
+	_, err = h.c.Submit(t.Context(), queued, pngFile(t))
 	require.NoError(t, err)
 	require.NoError(t, h.c.Close(t.Context()))
 
@@ -1609,6 +1822,8 @@ func TestCloseKeepsSessionWhileWorkWillNotStop(t *testing.T) {
 	w, err := h.c.Submit(t.Context(), "hold")
 	require.NoError(t, err)
 	wait(t, started)
+	_, err = h.c.Submit(t.Context(), "queued [image #1]", pngFile(t))
+	require.NoError(t, err)
 
 	// Assertions only until the tool is released, so a failure cannot hang the test.
 	assert.ErrorIs(t, h.c.Close(t.Context()), pigruntime.ErrJoinTimeout)
@@ -1623,6 +1838,11 @@ func TestCloseKeepsSessionWhileWorkWillNotStop(t *testing.T) {
 
 	close(release)
 	wait(t, w.Done())
+	h.c.queue.Lock()
+	assert.True(t, w.discard, "Close's discard survives its join timeout")
+	assert.False(t, w.switchHold)
+	assert.Nil(t, w.terminal)
+	h.c.queue.Unlock()
 	assert.Len(t, h.rec.all(), delivered, "no event may be delivered after Close returned")
 	require.NoError(t, h.c.Close(t.Context()))
 	assert.Empty(t, h.c.Status().SessionID)

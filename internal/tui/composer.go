@@ -45,6 +45,8 @@ var imageMarker = regexp.MustCompile(`\[image #\d+\]`)
 // exact text is present.
 type block struct {
 	text, image string
+	// source preserves clipboard identity when a small overflow paste is sanitized.
+	source string
 	// images accompanies text when an overflowing restore is collapsed.
 	images []string
 }
@@ -167,6 +169,10 @@ func (c *composer) repeat(k tea.KeyPressMsg, n int) tea.Cmd {
 func (c *composer) press(x, y, n int) {
 	c.lastPaste = ""
 	c.clicks = n
+	if n == 1 {
+		c.ta.BeginSelection(x, y)
+		return
+	}
 	c.unit = c.unitAt(c.pointAt(x, y))
 	c.selectRange(c.unit)
 }
@@ -174,6 +180,10 @@ func (c *composer) press(x, y, n int) {
 // drag stretches the selection press started to (x, y) by the unit press
 // selected and moves the cursor with it.
 func (c *composer) drag(x, y int) {
+	if c.clicks == 1 {
+		c.ta.ExtendSelection(x, y)
+		return
+	}
 	c.selectRange(stretch(c.unit, c.unitAt(c.pointAt(x, y))))
 }
 
@@ -272,7 +282,7 @@ func (c *composer) paste(text string) tea.Cmd {
 	c.stopBrowsing()
 	last := c.lastPaste
 	c.lastPaste = ""
-	if b, ok := c.blocks[last]; ok && b.text == text && c.markerBefore() == last {
+	if b, ok := c.blocks[last]; ok && ((b.source == "" && b.text == text) || (b.source != "" && b.source == text)) && c.markerBefore() == last {
 		before, after := c.cursorLine()
 		lines := strings.Split(c.ta.Value(), "\n")
 		lines[c.ta.Line()] = strings.TrimSuffix(before, last) + sanitizedText(text) + after
@@ -296,12 +306,69 @@ func (c *composer) paste(text string) tea.Cmd {
 	}
 	// A final newline ends the last line rather than starting another.
 	lines, runes := strings.Count(strings.TrimSuffix(text, "\n"), "\n")+1, len([]rune(text))
-	if lines <= pasteMaxLines && runes <= pasteMaxRunes {
-		return c.forward(tea.PasteMsg{Content: text})
+	content := text
+	if lines > pasteMaxLines || runes > pasteMaxRunes {
+		content = c.collapse(text, nil)
+		c.lastPaste = content
 	}
-	mk := c.collapse(text, nil)
-	c.lastPaste = mk
-	return c.forward(tea.PasteMsg{Content: mk})
+	trial, want, cmd := c.trialPaste(content)
+	if trial.ta.Value() == want {
+		c.ta = trial.ta
+		return cmd
+	}
+	if content == text {
+		clean := sanitizedText(text)
+		content = c.collapse(clean, nil)
+		if clean != text {
+			b := c.blocks[content]
+			b.source = text
+			c.blocks[content] = b
+		}
+		c.lastPaste = content
+		var markerWant string
+		trial, markerWant, cmd = c.trialPaste(content)
+		if trial.ta.Value() == markerWant {
+			c.ta = trial.ta
+			return cmd
+		}
+	}
+	// Even a marker can exceed the remaining visual capacity. Collapse the
+	// whole intended draft so no part of the insertion is silently lost.
+	full, imgs := c.expand(want)
+	c.ta.SetValue(c.collapse(full, imgs))
+	c.lastPaste = ""
+	return nil
+}
+
+// trialPaste detaches the textarea before applying the insertion, including
+// selection replacement, and returns its uncapped sanitized target.
+func (c *composer) trialPaste(text string) (composer, string, tea.Cmd) {
+	start, end, selected := c.ta.Selection()
+	if !selected {
+		start.Row, start.Col = c.ta.Line(), c.ta.Column()
+		end = start
+	}
+	lines := strings.Split(c.value(), "\n")
+	before := strings.Join(lines[:start.Row], "\n")
+	if start.Row > 0 {
+		before += "\n"
+	}
+	before += string([]rune(lines[start.Row])[:start.Col])
+	after := string([]rune(lines[end.Row])[end.Col:])
+	if end.Row < len(lines)-1 {
+		after += "\n" + strings.Join(lines[end.Row+1:], "\n")
+	}
+	want := before + sanitizedText(text) + after
+	trial := *c
+	trial.ta.SetValue(c.value())
+	if selected || trial.ta.Line() != start.Row || trial.ta.Column() != start.Col {
+		ax, ay := trial.cellOf(point{start.Row, start.Col})
+		trial.ta.BeginSelection(ax, ay)
+		hx, hy := trial.cellOf(point{end.Row, end.Col})
+		trial.ta.ExtendSelection(hx, hy)
+	}
+	cmd := trial.forward(tea.PasteMsg{Content: text})
+	return trial, want, cmd
 }
 
 // sanitizedText uses textarea's input rules without its whole-draft limits.

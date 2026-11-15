@@ -60,11 +60,15 @@ func (m *model) mouse(msg tea.MouseMsg) tea.Cmd {
 	case tea.MouseReleaseMsg:
 		return m.release()
 	case tea.MouseWheelMsg:
+		top := m.top()
 		switch msg.Button {
 		case tea.MouseWheelUp:
 			m.scroll(-wheelStep)
 		case tea.MouseWheelDown:
 			m.scroll(wheelStep)
+		}
+		if m.top() != top && m.drag.region == regionTranscript && m.drag.count == 1 && !m.drag.moved {
+			m.drag = drag{}
 		}
 	}
 	return nil

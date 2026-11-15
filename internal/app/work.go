@@ -24,9 +24,12 @@ type Work struct {
 	// then no longer handed to this Work, and input given afterwards starts the
 	// next turn.
 	stopped bool
-	// discard is set by a session switch or Close: input left over when the
-	// Work ends is dropped rather than handed back.
+	// discard is set permanently by Close, including when joining times out.
 	discard bool
+	// switchHold defers only the terminal event until the switch commits or
+	// rolls back; done still closes so the switch can join the Work.
+	switchHold bool
+	terminal   *event.TurnEnd
 	// handBack is the queued input taken when the Work was stopped, handed
 	// back as unsent unless discarded.
 	handBack []pigruntime.Prompt

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,6 +13,54 @@ func newHistoryModel(t *testing.T, entries ...string) *model {
 	c.history = entries
 	m.composer.setHistory(c.History())
 	return m
+}
+
+func TestHistoryOverflowPreservesEntryAndDraft(t *testing.T) {
+	for _, text := range []string{linesOf(10001), strings.Repeat("w", 200001)} {
+		m := newHistoryModel(t, text, "newer")
+		c := &m.composer
+		c.resize(20, 30)
+		c.paste(linesOf(11))
+		c.insertImage("/synthetic/draft.png")
+		draft := c.value()
+		want, images := c.expanded()
+		c.update(home)
+		assert.True(t, c.historyPrev())
+		c.update(home)
+		assert.True(t, c.historyPrev())
+		got, imgs := c.expanded()
+		assert.Less(t, len(c.value()), 100)
+		assert.Equal(t, text, got)
+		assert.Empty(t, imgs, "history carries no image metadata")
+		assert.True(t, c.historyNext())
+		assert.Equal(t, "newer", c.value())
+		assert.True(t, c.historyNext())
+		assert.Equal(t, draft, c.value())
+		got, imgs = c.expanded()
+		assert.Equal(t, want, got)
+		assert.Equal(t, images, imgs)
+	}
+}
+
+func TestHistoryReturnCollapsesOverflowingSavedDraftWithImages(t *testing.T) {
+	m := newHistoryModel(t, "entry")
+	c := &m.composer
+	c.resize(20, 30)
+	c.paste(linesOf(11))
+	c.insertImage("/synthetic/draft.png")
+	c.ta.SetValue(c.value() + strings.Repeat("w", c.ta.Width()*4))
+	want, images := c.expanded()
+	c.ta.MaxContentHeight = 5
+	c.update(home)
+	assert.True(t, c.historyPrev())
+	assert.Equal(t, "entry", c.value())
+
+	assert.True(t, c.historyNext())
+
+	got, imgs := c.expanded()
+	assert.Equal(t, want, got)
+	assert.Equal(t, images, imgs)
+	assert.Less(t, len(c.value()), 100)
 }
 
 func TestHistoryWalksOlderThenBackToDraft(t *testing.T) {
