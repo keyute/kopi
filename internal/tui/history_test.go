@@ -16,9 +16,10 @@ func newHistoryModel(t *testing.T, entries ...string) *model {
 }
 
 func TestHistoryOverflowPreservesEntryAndDraft(t *testing.T) {
-	for _, text := range []string{linesOf(10001), strings.Repeat("w", 200001)} {
+	for _, text := range []string{linesOf(testContentHeight + 1), strings.Repeat("w", 20*testContentHeight+1)} {
 		m := newHistoryModel(t, text, "newer")
 		c := &m.composer
+		c.ta.MaxContentHeight = testContentHeight
 		c.resize(20, 30)
 		c.paste(linesOf(11))
 		c.insertImage("/synthetic/draft.png")

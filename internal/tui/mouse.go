@@ -82,7 +82,7 @@ func (m *model) press(mo tea.Mouse) {
 	if mo.Button != tea.MouseLeft {
 		return
 	}
-	n := m.clicks.press(m.now(), mo.X, mo.Y)
+	n := m.clicks.press(time.Now(), mo.X, mo.Y)
 	switch top := m.composerTop(); {
 	case mo.Y >= 0 && mo.Y < m.transcriptHeight():
 		p := point{line: m.top() + mo.Y, col: mo.X}

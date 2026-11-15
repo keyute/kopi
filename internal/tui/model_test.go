@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -530,32 +531,35 @@ func statusText(m *model) string {
 func TestCancelInterruptsThenClearsThenTakesTwoToQuit(t *testing.T) {
 	for _, msg := range []tea.Msg{ctrlC, interruptMsg{}} {
 		t.Run(fmt.Sprintf("%T", msg), func(t *testing.T) {
-			cancel := func(m *model) tea.Cmd { _, cmd := m.Update(msg); return cmd }
-			m, c := newTestModel(t, 40, 20)
-			typeText(m, "draft")
+			// isQuit runs the flash's tea.Tick; the bubble's fake clock fires it at once.
+			synctest.Test(t, func(t *testing.T) {
+				cancel := func(m *model) tea.Cmd { _, cmd := m.Update(msg); return cmd }
+				m, c := newTestModel(t, 40, 20)
+				typeText(m, "draft")
 
-			c.running = true
-			assert.Nil(t, cancel(m))
-			assert.Equal(t, 1, c.interrupts)
-			assert.Equal(t, "draft", m.composer.value(), "interrupting keeps the draft")
+				c.running = true
+				assert.Nil(t, cancel(m))
+				assert.Equal(t, 1, c.interrupts)
+				assert.Equal(t, "draft", m.composer.value(), "interrupting keeps the draft")
 
-			c.running = false
-			assert.Nil(t, cancel(m))
-			assert.Empty(t, m.composer.value(), "at idle the draft is cleared")
+				c.running = false
+				assert.Nil(t, cancel(m))
+				assert.Empty(t, m.composer.value(), "at idle the draft is cleared")
 
-			cmd := cancel(m)
-			assert.False(t, isQuit(cmd))
-			assert.True(t, strings.HasSuffix(statusText(m), "ctrl+c again to exit · plan"), statusText(m))
-			assert.True(t, isQuit(cancel(m)))
+				cmd := cancel(m)
+				assert.False(t, isQuit(cmd))
+				assert.True(t, strings.HasSuffix(statusText(m), "ctrl+c again to exit · plan"), statusText(m))
+				assert.True(t, isQuit(cancel(m)))
 
-			m.Update(flashMsg{m.flashSeq})
-			assert.False(t, strings.Contains(statusText(m), "again to exit"), "the hint expires")
-			assert.False(t, isQuit(cancel(m)), "the next press arms again")
-			assert.Contains(t, statusText(m), "ctrl+c again to exit")
+				m.Update(flashMsg{m.flashSeq})
+				assert.False(t, strings.Contains(statusText(m), "again to exit"), "the hint expires")
+				assert.False(t, isQuit(cancel(m)), "the next press arms again")
+				assert.Contains(t, statusText(m), "ctrl+c again to exit")
 
-			press(m, left)
-			assert.NotContains(t, statusText(m), "again to exit", "another key disarms")
-			assert.False(t, isQuit(cancel(m)))
+				press(m, left)
+				assert.NotContains(t, statusText(m), "again to exit", "another key disarms")
+				assert.False(t, isQuit(cancel(m)))
+			})
 		})
 	}
 }

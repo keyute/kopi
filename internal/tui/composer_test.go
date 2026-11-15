@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -19,6 +20,10 @@ var (
 	home      = tea.KeyPressMsg{Code: tea.KeyHome}
 	selectAll = tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl}
 )
+
+// testContentHeight stands in for maxComposerLines in capacity tests; a
+// draft near 10,000 lines is slow to edit.
+const testContentHeight = 30
 
 // linesOf is n lines of text.
 func linesOf(n int) string {
@@ -263,57 +268,61 @@ func TestComposerDoubleClickSelectsWord(t *testing.T) {
 		{"wrapped row", "alpha beta gamma delta epsilon", 5, 1, "delta", "alpha beta gamma X epsilon"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m, _ := newTestModel(t, 20, 30)
-			at := fixedClock(m)
-			typeText(m, tc.text)
-			y := m.composerTop() + tc.row
+			synctest.Test(t, func(t *testing.T) {
+				m, _ := newTestModel(t, 20, 30)
+				typeText(m, tc.text)
+				y := m.composerTop() + tc.row
 
-			pressAt(m, tc.x, y)
-			releaseAt(m, tc.x, y)
-			*at = at.Add(300 * time.Millisecond)
-			pressAt(m, tc.x, y)
-			cmd := releaseAt(m, tc.x, y)
+				pressAt(m, tc.x, y)
+				releaseAt(m, tc.x, y)
+				time.Sleep(300 * time.Millisecond)
+				pressAt(m, tc.x, y)
+				cmd := releaseAt(m, tc.x, y)
 
-			assertCopied(t, m, cmd, tc.word)
-			press(m, tea.KeyPressMsg{Code: 'X', Text: "X"})
-			assert.Equal(t, tc.typed, m.composer.value(), "typing replaces the word")
+				assertCopied(t, m, cmd, tc.word)
+				press(m, tea.KeyPressMsg{Code: 'X', Text: "X"})
+				assert.Equal(t, tc.typed, m.composer.value(), "typing replaces the word")
+			})
 		})
 	}
 }
 
 // clickTimes presses n times in quick succession at (x, y) without
-// releasing, so only the drag that follows copies.
-func clickTimes(m *model, at *time.Time, n, x, y int) {
+// releasing, so only the drag that follows copies. It must run in a synctest
+// bubble.
+func clickTimes(m *model, n, x, y int) {
 	for range n {
 		pressAt(m, x, y)
-		*at = at.Add(300 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 	}
 }
 
 func TestComposerDoubleClickOnSpaceIsPlainPress(t *testing.T) {
-	m, _ := newTestModel(t, 40, 30)
-	at := fixedClock(m)
-	typeText(m, "hello world")
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 40, 30)
+		typeText(m, "hello world")
 
-	clickTimes(m, at, 2, 7, m.composerTop())
+		clickTimes(m, 2, 7, m.composerTop())
 
-	assert.Nil(t, releaseAt(m, 7, m.composerTop()))
-	assert.False(t, m.composer.ta.HasSelection())
-	assert.Equal(t, 5, m.composer.ta.Column())
+		assert.Nil(t, releaseAt(m, 7, m.composerTop()))
+		assert.False(t, m.composer.ta.HasSelection())
+		assert.Equal(t, 5, m.composer.ta.Column())
+	})
 }
 
 func TestComposerTripleClickSelectsLogicalLine(t *testing.T) {
-	m, _ := newTestModel(t, 20, 30)
-	at := fixedClock(m)
-	typeText(m, "alpha beta gamma delta epsilon\nnext")
-	y := m.composerTop() + 1
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 20, 30)
+		typeText(m, "alpha beta gamma delta epsilon\nnext")
+		y := m.composerTop() + 1
 
-	clickTimes(m, at, 3, 5, y)
-	cmd := releaseAt(m, 5, y)
+		clickTimes(m, 3, 5, y)
+		cmd := releaseAt(m, 5, y)
 
-	assertCopied(t, m, cmd, "alpha beta gamma delta epsilon")
-	press(m, tea.KeyPressMsg{Code: 'X', Text: "X"})
-	assert.Equal(t, "X\nnext", m.composer.value())
+		assertCopied(t, m, cmd, "alpha beta gamma delta epsilon")
+		press(m, tea.KeyPressMsg{Code: 'X', Text: "X"})
+		assert.Equal(t, "X\nnext", m.composer.value())
+	})
 }
 
 func TestComposerDragAfterMultiClickExtendsByWholeUnits(t *testing.T) {
@@ -330,32 +339,34 @@ func TestComposerDragAfterMultiClickExtendsByWholeUnits(t *testing.T) {
 		{"lines backwards", "one two\nthree four\nfive", 3, 4, 1, 3, 0, "one two\nthree four"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m, _ := newTestModel(t, 40, 30)
-			at := fixedClock(m)
-			typeText(m, tc.text)
-			top := m.composerTop()
+			synctest.Test(t, func(t *testing.T) {
+				m, _ := newTestModel(t, 40, 30)
+				typeText(m, tc.text)
+				top := m.composerTop()
 
-			clickTimes(m, at, tc.clicks, tc.x, top+tc.row)
-			moveTo(m, tc.toX, top+tc.toRow)
-			cmd := releaseAt(m, tc.toX, top+tc.toRow)
+				clickTimes(m, tc.clicks, tc.x, top+tc.row)
+				moveTo(m, tc.toX, top+tc.toRow)
+				cmd := releaseAt(m, tc.toX, top+tc.toRow)
 
-			assertCopied(t, m, cmd, tc.want)
+				assertCopied(t, m, cmd, tc.want)
+			})
 		})
 	}
 }
 
 func TestComposerTripleClickInScrolledInput(t *testing.T) {
-	m, _ := newTestModel(t, 40, 30)
-	at := fixedClock(m)
-	typeText(m, linesOf(20))
-	off := m.composer.ta.ScrollYOffset()
-	require.Positive(t, off)
-	y := m.composerTop() + 1
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 40, 30)
+		typeText(m, linesOf(20))
+		off := m.composer.ta.ScrollYOffset()
+		require.Positive(t, off)
+		y := m.composerTop() + 1
 
-	clickTimes(m, at, 3, 4, y)
-	cmd := releaseAt(m, 4, y)
+		clickTimes(m, 3, 4, y)
+		cmd := releaseAt(m, 4, y)
 
-	assertCopied(t, m, cmd, fmt.Sprintf("line %d", off+1))
+		assertCopied(t, m, cmd, fmt.Sprintf("line %d", off+1))
+	})
 }
 
 func TestComposerClickPlacesCursor(t *testing.T) {
@@ -396,17 +407,23 @@ func TestComposerClickIsOtherInputBetweenPastes(t *testing.T) {
 }
 
 func TestComposerOverflowStaysBlockBacked(t *testing.T) {
+	const cols = 18 // the textarea's width in a 20-column terminal
+	// rows keeps every fixture over pasteMaxRunes too, so pasting collapses
+	// the raw text by size, not by capacity.
+	const rows = 250
 	for _, tc := range []struct {
 		name, text string
 	}{
-		{"logical lines", linesOf(10001)},
-		{"wrapped rows", strings.Repeat("w", 200001)},
-		{"tab-indented logical lines", strings.Repeat("\tline\n", 10001)},
-		{"tab-expanded wrapped rows", strings.Repeat("\t", 50001)},
+		{"logical lines", linesOf(rows + 1)},
+		{"wrapped rows", strings.Repeat("w", cols*rows+1)},
+		{"tab-indented logical lines", strings.Repeat("\tline\n", rows+1)},
+		{"tab-expanded wrapped rows", strings.Repeat("\t", cols*rows/4+1)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _ := newTestModel(t, 20, 30)
 			c := &m.composer
+			c.ta.MaxContentHeight = rows
+			require.Equal(t, cols, c.ta.Width())
 			c.restore([]event.Input{{Text: tc.text}})
 			assert.NotEqual(t, tc.text, c.value())
 			text, imgs := c.expanded()
@@ -430,7 +447,8 @@ func TestComposerOverflowStaysBlockBacked(t *testing.T) {
 func TestSmallPasteChecksCombinedCapacity(t *testing.T) {
 	m, _ := newTestModel(t, 40, 30)
 	c := &m.composer
-	draft := linesOf(9998)
+	c.ta.MaxContentHeight = testContentHeight
+	draft := linesOf(testContentHeight - 2)
 	c.ta.SetValue(draft)
 	payload := linesOf(5)
 	c.paste(payload)
@@ -580,7 +598,8 @@ func TestComposerCharacterSelectionEndpoints(t *testing.T) {
 func TestRepeatedPasteChecksCombinedCapacity(t *testing.T) {
 	m, _ := newTestModel(t, 40, 30)
 	c := &m.composer
-	draft := linesOf(9995)
+	c.ta.MaxContentHeight = testContentHeight
+	draft := linesOf(testContentHeight - 5)
 	c.ta.SetValue(draft)
 	payload := linesOf(11)
 	c.paste(payload)
@@ -598,6 +617,7 @@ func TestRepeatedPasteChecksCombinedCapacity(t *testing.T) {
 func TestRestoreCombinedCapacityKeepsDraftAndImages(t *testing.T) {
 	m, _ := newTestModel(t, 40, 30)
 	c := &m.composer
+	c.ta.MaxContentHeight = testContentHeight
 	c.insertImage("/synthetic/restored.png")
 	restoredImage := c.value()
 	c.reset()
@@ -605,8 +625,8 @@ func TestRestoreCombinedCapacityKeepsDraftAndImages(t *testing.T) {
 	draftImage := c.value()
 	c.paste(linesOf(11))
 	inputs := []event.Input{
-		{Text: linesOf(6000) + " " + restoredImage, Images: []string{"/synthetic/restored.png"}},
-		{Text: linesOf(5000)},
+		{Text: linesOf(testContentHeight*3/5) + " " + restoredImage, Images: []string{"/synthetic/restored.png"}},
+		{Text: linesOf(testContentHeight / 2)},
 	}
 
 	c.restore(inputs)

@@ -77,7 +77,6 @@ type model struct {
 	// exitArmed is set by a cancel at idle with an empty draft; the next
 	// cancel quits.
 	exitArmed bool
-	now       func() time.Time
 	// turnStart is when the running turn's TurnStart was applied.
 	turnStart time.Time
 	pickVerb  func() verb
@@ -96,7 +95,6 @@ func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model
 		folds:    newFolds(),
 		follow:   true,
 		status:   c.Status(),
-		now:      time.Now,
 		pickVerb: randomVerb,
 		verb:     fallbackVerb,
 	}
@@ -318,7 +316,7 @@ func (m *model) apply(ev event.Event) {
 		return
 	case event.TurnStart:
 		m.busy = true
-		m.turnStart = m.now()
+		m.turnStart = time.Now()
 		m.verb = m.pickVerb()
 	case event.TurnEnd:
 		m.tr.Apply(ev)
@@ -453,7 +451,7 @@ func (m *model) View() tea.View {
 	rows = append(rows, "")
 	rows = append(rows, m.pending...)
 	if m.busy {
-		rows = append(rows, workingRow(&m.spinner, m.verb, formatDuration(m.now().Sub(m.turnStart)), m.th), "")
+		rows = append(rows, workingRow(&m.spinner, m.verb, formatDuration(time.Since(m.turnStart)), m.th), "")
 	}
 	rows = append(rows, m.composer.view(m.width, m.th)...)
 	rows = append(rows, statusLine(m.status, m.layout, m.flashText, m.width, m.th))

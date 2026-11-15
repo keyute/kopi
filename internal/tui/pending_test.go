@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -229,15 +230,17 @@ func TestPendingCacheBudgetDoesNotAlterFullBox(t *testing.T) {
 }
 
 func TestFoldClickHitsTranscriptWhilePendingShown(t *testing.T) {
-	m, _ := newTestModel(t, 60, 30)
-	send(m, event.TurnStart{Prompt: "go"})
-	for i := range 20 {
-		send(m, event.Notice{Text: fmt.Sprintf("n%d", i)})
-	}
-	send(m, sealedGroup()...)
-	send(m, event.QueueChanged{Pending: []string{"a", "b"}})
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 60, 30)
+		send(m, event.TurnStart{Prompt: "go"})
+		for i := range 20 {
+			send(m, event.Notice{Text: fmt.Sprintf("n%d", i)})
+		}
+		send(m, sealedGroup()...)
+		send(m, event.QueueChanged{Pending: []string{"a", "b"}})
 
-	clickText(t, m, "▸ Read 2 files")
+		clickText(t, m, "▸ Read 2 files")
 
-	assert.Contains(t, screen(m), "▾ Read 2 files")
+		assert.Contains(t, screen(m), "▾ Read 2 files")
+	})
 }

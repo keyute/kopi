@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -31,13 +32,6 @@ func moveTo(m *model, x, y int) tea.Cmd {
 func releaseAt(m *model, x, y int) tea.Cmd {
 	_, cmd := m.Update(tea.MouseReleaseMsg{X: x, Y: y})
 	return cmd
-}
-
-// fixedClock makes m's clock read *at.
-func fixedClock(m *model) *time.Time {
-	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	m.now = func() time.Time { return at }
-	return &at
 }
 
 // runCopy runs a copy's clipboard writes, leaving its flash's tick unrun, and
@@ -123,27 +117,28 @@ func TestDragFoldHandleDoesNotToggle(t *testing.T) {
 }
 
 func TestDoubleAndTripleClickSelectWordAndLine(t *testing.T) {
-	m, _ := newTestModel(t, 40, 30)
-	at := fixedClock(m)
-	send(m, event.Notice{Text: "alpha beta gamma"})
-	row := rowOf(t, m, "κ alpha beta gamma")
-	click := func() tea.Cmd {
-		pressAt(m, 9, row)
-		return releaseAt(m, 9, row)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 40, 30)
+		send(m, event.Notice{Text: "alpha beta gamma"})
+		row := rowOf(t, m, "κ alpha beta gamma")
+		click := func() tea.Cmd {
+			pressAt(m, 9, row)
+			return releaseAt(m, 9, row)
+		}
 
-	require.Nil(t, click())
-	*at = at.Add(300 * time.Millisecond)
-	assertCopied(t, m, click(), "beta")
+		require.Nil(t, click())
+		time.Sleep(300 * time.Millisecond)
+		assertCopied(t, m, click(), "beta")
 
-	*at = at.Add(300 * time.Millisecond)
-	cmd := click()
-	assert.Equal(t, "κ alpha beta gamma", strings.TrimRight(m.sel.text(m.lines), " "))
-	runCopy(t, cmd)
+		time.Sleep(300 * time.Millisecond)
+		cmd := click()
+		assert.Equal(t, "κ alpha beta gamma", strings.TrimRight(m.sel.text(m.lines), " "))
+		runCopy(t, cmd)
 
-	*at = at.Add(401 * time.Millisecond)
-	assert.Nil(t, click(), "a press after 400 ms is a single click again")
-	assert.Empty(t, reversedRows(m))
+		time.Sleep(401 * time.Millisecond)
+		assert.Nil(t, click(), "a press after 400 ms is a single click again")
+		assert.Empty(t, reversedRows(m))
+	})
 }
 
 func TestDragAfterMultiClickExtendsByWholeUnits(t *testing.T) {
@@ -159,19 +154,20 @@ func TestDragAfterMultiClickExtendsByWholeUnits(t *testing.T) {
 		{"lines backwards", 3, 4, 1, 5, 0, "κ alpha beta gamma\n  second"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m, _ := newTestModel(t, 40, 30)
-			at := fixedClock(m)
-			send(m, event.Notice{Text: "alpha beta gamma\nsecond"})
-			first := rowOf(t, m, "κ alpha beta gamma")
+			synctest.Test(t, func(t *testing.T) {
+				m, _ := newTestModel(t, 40, 30)
+				send(m, event.Notice{Text: "alpha beta gamma\nsecond"})
+				first := rowOf(t, m, "κ alpha beta gamma")
 
-			for range tc.clicks {
-				pressAt(m, tc.x, first+tc.row)
-				*at = at.Add(300 * time.Millisecond)
-			}
-			moveTo(m, tc.toX, first+tc.toRow)
-			cmd := releaseAt(m, tc.toX, first+tc.toRow)
+				for range tc.clicks {
+					pressAt(m, tc.x, first+tc.row)
+					time.Sleep(300 * time.Millisecond)
+				}
+				moveTo(m, tc.toX, first+tc.toRow)
+				cmd := releaseAt(m, tc.toX, first+tc.toRow)
 
-			assertCopied(t, m, cmd, tc.want)
+				assertCopied(t, m, cmd, tc.want)
+			})
 		})
 	}
 }
