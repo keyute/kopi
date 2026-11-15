@@ -34,6 +34,8 @@ type drag struct {
 	at    tea.Mouse
 	press point
 	count int
+	// unit is what the press selected; a drag extends from it.
+	unit  selection
 	moved bool
 	// x is the pointer's last column; edge is -1 or 1 while it is held at the
 	// transcript's top or bottom row, else 0.
@@ -43,7 +45,7 @@ type drag struct {
 func (m *model) mouse(msg tea.MouseMsg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.MouseClickMsg:
-		return m.press(msg.Mouse())
+		m.press(msg.Mouse())
 	case tea.MouseMotionMsg:
 		return m.motion(msg.Mouse())
 	case tea.MouseReleaseMsg:
@@ -60,37 +62,38 @@ func (m *model) mouse(msg tea.MouseMsg) tea.Cmd {
 }
 
 // press starts a drag in the transcript or the composer. A double click
-// selects the word under the pointer; in the transcript a triple click selects
-// its line.
-func (m *model) press(mo tea.Mouse) tea.Cmd {
+// selects the word under the pointer and a triple click its line; in the
+// composer that is the logical line across soft wraps.
+func (m *model) press(mo tea.Mouse) {
 	m.sel, m.drag = selection{}, drag{}
 	if mo.Button != tea.MouseLeft {
-		return nil
+		return
 	}
 	n := m.clicks.press(m.now(), mo.X, mo.Y)
 	switch top := m.composerTop(); {
 	case mo.Y >= 0 && mo.Y < m.transcriptHeight():
 		p := point{line: m.top() + mo.Y, col: mo.X}
-		m.drag = drag{region: regionTranscript, at: mo, press: p, count: n, x: mo.X}
-		m.sel = selection{anchor: p, head: p}
-		if p.line >= len(m.lines) {
-			return nil
-		}
-		switch text := m.lines[p.line].text; n {
-		case 2:
-			from, to := wordAt(text, p.col)
-			m.sel = selection{anchor: point{p.line, from}, head: point{p.line, to}}
-		case 3:
-			m.sel = selection{anchor: point{p.line, 0}, head: point{p.line, ansi.StringWidth(text)}}
-		}
+		unit := m.unitAt(p, n)
+		m.drag = drag{region: regionTranscript, at: mo, press: p, count: n, unit: unit, x: mo.X}
+		m.sel = unit
 	case mo.Y >= top && mo.Y < top+m.composer.height():
 		m.drag = drag{region: regionComposer}
-		if n == 2 {
-			return m.composer.selectWord(mo.X, mo.Y-top)
-		}
-		m.composer.press(mo.X, mo.Y-top)
+		m.composer.press(mo.X, mo.Y-top, n)
 	}
-	return nil
+}
+
+// unitAt is what an n-th press at p selects in the transcript: the point
+// itself, its word or its line.
+func (m *model) unitAt(p point, n int) selection {
+	if n == 1 || p.line >= len(m.lines) {
+		return selection{anchor: p, head: p}
+	}
+	text := m.lines[p.line].text
+	if n == 2 {
+		from, to := wordAt(text, p.col)
+		return selection{anchor: point{p.line, from}, head: point{p.line, to}}
+	}
+	return selection{anchor: point{p.line, 0}, head: point{p.line, ansi.StringWidth(text)}}
 }
 
 // motion extends the drag in the region it began in. In the transcript the
@@ -119,10 +122,11 @@ func (m *model) motion(mo tea.Mouse) tea.Cmd {
 	return nil
 }
 
-// extend moves the selection's head to the drag's column on screen row y.
+// extend stretches the selection to the drag's column on screen row y, by
+// the unit the press selected: characters, words or lines.
 func (m *model) extend(y int) {
 	p := point{line: m.top() + y, col: m.drag.x}
-	m.sel.head = p
+	m.sel = stretch(m.drag.unit, m.unitAt(p, m.drag.count))
 	if p != m.drag.press {
 		m.drag.moved = true
 	}

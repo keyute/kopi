@@ -39,6 +39,29 @@ func TestSelectionTextIsPlainAndTrimmed(t *testing.T) {
 	assert.Equal(t, "ddl", selection{anchor: point{1, 2}, head: point{1, 5}}.text(lines))
 }
 
+func TestStretch(t *testing.T) {
+	at := func(p point) selection { return selection{anchor: p, head: p} }
+	word := selection{anchor: point{0, 6}, head: point{0, 10}}
+	line := selection{anchor: point{2, 0}, head: point{2, 8}}
+	for _, tc := range []struct {
+		name              string
+		unit, under, want selection
+	}{
+		{"point, pointer after", at(point{0, 3}), at(point{1, 2}), selection{point{0, 3}, point{1, 2}}},
+		{"point, pointer before", at(point{1, 2}), at(point{0, 3}), selection{point{1, 2}, point{0, 3}}},
+		{"word, pointer on a later word", word, selection{point{0, 11}, point{0, 15}}, selection{point{0, 6}, point{0, 15}}},
+		{"word, pointer on an earlier word", word, selection{point{0, 0}, point{0, 5}}, selection{point{0, 10}, point{0, 0}}},
+		{"pointer inside the unit", word, word, word},
+		{"pointer in a gap after the unit", word, at(point{0, 12}), selection{point{0, 6}, point{0, 12}}},
+		{"line, pointer on a later line", line, selection{point{3, 0}, point{3, 4}}, selection{point{2, 0}, point{3, 4}}},
+		{"line, pointer on an earlier line", line, selection{point{1, 0}, point{1, 5}}, selection{point{2, 8}, point{1, 0}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, stretch(tc.unit, tc.under))
+		})
+	}
+}
+
 func TestWordAt(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

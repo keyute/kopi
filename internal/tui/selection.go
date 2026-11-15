@@ -12,9 +12,10 @@ import (
 // one to count as a double or triple click.
 const multiClick = 400 * time.Millisecond
 
-// point is a transcript cell: an index into model.lines and a cell column.
-// Indices rather than screen rows keep a selection on its text while the view
-// scrolls.
+// point is a place in the text. In the transcript it is an index into
+// model.lines and a cell column; indices rather than screen rows keep a
+// selection on its text while the view scrolls. In the composer it is a
+// logical line and a rune index into it.
 type point struct{ line, col int }
 
 func (p point) before(q point) bool {
@@ -37,6 +38,20 @@ func (s selection) ordered() (from, to point) {
 }
 
 func (s selection) empty() bool { return s.anchor == s.head }
+
+// stretch is the selection of a drag that began on unit (the word or line a
+// double or triple press took, else the pressed point) and is now over under,
+// the same kind of unit at the pointer: both whole, anchored at unit's far
+// end. Both are ordered, anchor no later than head.
+func stretch(unit, under selection) selection {
+	if under.anchor.before(unit.anchor) {
+		return selection{anchor: unit.head, head: under.anchor}
+	}
+	if unit.head.before(under.head) {
+		return selection{anchor: unit.anchor, head: under.head}
+	}
+	return unit
+}
 
 // span is the cells [from, to) that s covers of line i, width cells wide;
 // from == to when it covers none.

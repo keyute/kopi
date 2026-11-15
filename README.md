@@ -1,7 +1,7 @@
 # Kopi
 
 Kopi is a coding-agent CLI built on [PiG](https://github.com/MichaelKinsy/PiG).
-It is early: one read-only tool, a fullscreen terminal interface, and a headless mode.
+It is early: one read-only tool, a fullscreen terminal interface, and a print mode that answers one prompt.
 
 ## Build and run
 
@@ -13,7 +13,11 @@ bin/kopi login <provider>          # list providers with: bin/kopi login
 bin/kopi --model provider/id
 bin/kopi --model provider/id -c    # continue the latest session in this directory
 bin/kopi --model provider/id -r <id>
+bin/kopi --model provider/id -p "explain main.go"
+git diff | bin/kopi --model provider/id -p "review this"
 ```
+
+Commands in the fullscreen interface:
 
 | Command | Effect |
 | --- | --- |
@@ -26,8 +30,9 @@ bin/kopi --model provider/id -r <id>
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
 
-- When stdin and stdout are both terminals, Kopi opens a fullscreen interface; otherwise it runs headless.
-- Headless, lines are read in order, each prompt's turn finishes before the next line is read, and Kopi exits at end of input. Ctrl+C interrupts the running turn; at idle it exits.
+- When stdin and stdout are both terminals and `-p` is not given, Kopi opens a fullscreen interface; otherwise it prints the response to one prompt and exits.
+- The prompt is the argument, piped stdin, or both (stdin, a blank line, then the argument). It is always sent as a prompt, never run as a command. Only the final message of the reply is printed.
+- Ctrl+C interrupts the turn; a failed or interrupted turn exits with status 1. `-c` and `-r` work with `-p`.
 - Resuming (`-c`, `-r` or `/resume`) redraws the earlier conversation in the fullscreen interface, with its tool activity folded.
 - On exit from a session with messages, the fullscreen interface prints the command to resume it.
 
@@ -50,7 +55,8 @@ Mouse:
 
 - Click a folded group to open it, and a call to show its output.
 - Drag in the transcript to select text; it is copied on release. Double-click selects a word, triple-click a line.
-- Drag in the input to select text; it is copied on release. A click places the cursor.
+- Drag in the input to select text; it is copied on release. A click places the cursor. Double-click selects a word, triple-click the whole line across wraps.
+- Dragging after a double- or triple-click extends the selection by words or lines.
 - Copies go to the terminal (OSC 52) and the system clipboard. The terminal's own modifier-drag selection (Shift, or Option in some terminals) still works.
 
 Paste and images:
@@ -70,7 +76,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 - `config.json` in the home; precedence is default < config file < flags.
 - `kopi config` shows each value and its origin; unknown keys are rejected.
-- The fullscreen interface logs to `kopi.log` in the home; headless runs log to stderr.
+- The fullscreen interface logs to `kopi.log` in the home; print mode logs to stderr.
 - `history.jsonl` holds input history per working directory, written by the fullscreen interface; the last 100 entries are recalled.
 - `images/` holds pasted clipboard images, removed after a day.
 - `agent/` is PiG's agent directory, created on first run: its credential file (`auth.json`), session logs (`sessions/`), other PiG state and an optional `models.json`.
@@ -131,13 +137,13 @@ task fmt
 
 Tests are mock-backed (PiG's faux provider and a local HTTP mock server); none use a live provider.
 
-Manual live check: `kopi login openai-codex`, run with a model, ask it to read a file, then try `/execute`, `/plan`, `/status`, Ctrl+C and `--continue`.
+Manual live check: `kopi login openai-codex`, run with a model, ask it to read a file, then try `/execute`, `/plan`, `/status`, Ctrl+C and `--continue`; then `kopi -p` with an argument and with piped input.
 
 ## Not implemented
 
 Project-level config and trust, loading project instruction files, sandboxed shell and file-modifying tools, approval classification, delegation and workflows, background jobs, MCP, a Kopi provider identity, release packaging and self-update, and login for providers that need an installation device ID (`openai`).
 
-The fullscreen interface has no slash-command completion menu and no double- or triple-click selection in the input. Recalled history and re-edited queued messages show their full text rather than paste blocks.
+The fullscreen interface has no slash-command completion menu. Recalled history and re-edited queued messages show their full text rather than paste blocks.
 
 ## Contributing
 

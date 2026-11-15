@@ -123,6 +123,12 @@ func (c *Controller) SendNow(ctx context.Context, text string, images ...string)
 	return err
 }
 
+// Prompt sends text verbatim as a prompt, even when it reads as a control
+// command, for input that must never change mode. It records no history.
+func (c *Controller) Prompt(ctx context.Context, text string) (*Work, error) {
+	return c.submitPrompt(ctx, pigruntime.Prompt{Text: text}, false)
+}
+
 func (c *Controller) input(ctx context.Context, text string, paths []string, now bool) (*Work, error) {
 	blank := strings.TrimSpace(text) == ""
 	if blank && !now {

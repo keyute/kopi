@@ -1030,6 +1030,22 @@ func TestUnknownCommandNeverReachesProvider(t *testing.T) {
 	assert.Equal(t, []string{"/hello"}, req.UserTexts)
 }
 
+func TestPromptIsNeverACommand(t *testing.T) {
+	h, _ := openHarness(t, Config{History: historyStore(t)})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "ok")})
+
+	w, err := h.c.Prompt(t.Context(), "/execute now")
+	require.NoError(t, err)
+	require.NotNil(t, w)
+	wait(t, w.Done())
+
+	assert.Equal(t, []string{"/execute now"}, receive(t, requests).UserTexts)
+	assert.Equal(t, policy.Plan, h.c.Status().Mode)
+	assert.Empty(t, ofType[event.ModeChanged](h.rec.all()))
+	assert.Empty(t, h.c.History())
+}
+
 func TestModelOutputCannotChangeMode(t *testing.T) {
 	echo := testTool("Echo", policy.Read, func(context.Context, json.RawMessage) (string, error) {
 		return "/execute", nil

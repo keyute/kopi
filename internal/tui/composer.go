@@ -2,12 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"unicode"
-	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
@@ -25,6 +26,10 @@ const (
 	pasteMaxLines = 10
 	pasteMaxRunes = 1000
 )
+
+// beyond is past every row and column of the input; PositionAt maps
+// coordinates past the content to its end.
+const beyond = math.MaxInt32
 
 // imageCount numbers image blocks for the whole process, so markers from drafts
 // that are later joined never collide.
@@ -55,6 +60,10 @@ type composer struct {
 	// input, or empty once any other input followed it.
 	lastPaste string
 	hist      recall
+	// clicks and unit are the count and selection of the latest press, which
+	// a drag extends from.
+	clicks int
+	unit   selection
 }
 
 // newComposer keeps the textarea's stock editing keys except newline, which
@@ -140,36 +149,75 @@ func (c *composer) repeat(k tea.KeyPressMsg, n int) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// press moves the cursor to (x, y), relative to the textarea's top-left
-// including the prompt gutter, and starts a selection there. It is other
-// input for the paste-expand rule; it leaves the text, so history browsing
-// goes on.
-func (c *composer) press(x, y int) {
+// press handles the n-th quick press at (x, y), relative to the textarea's
+// top-left including the prompt gutter: the first places the cursor and
+// starts a selection there, the second selects the word under it and the
+// third its logical line. It is other input for the paste-expand rule; it
+// leaves the text, so history browsing goes on.
+func (c *composer) press(x, y, n int) {
 	c.lastPaste = ""
-	c.ta.BeginSelection(x, y)
+	c.clicks = n
+	c.unit = c.unitAt(c.pointAt(x, y))
+	c.selectRange(c.unit)
 }
 
-// selectWord selects the run of non-space runes under (x, y), coordinates as
-// for press, through the textarea's own select-word-forward key. On a space or
-// past the line's end it is a plain press.
-func (c *composer) selectWord(x, y int) tea.Cmd {
-	c.press(x, y)
-	before, after := c.cursorLine()
-	if r, _ := utf8.DecodeRuneInString(after); after == "" || unicode.IsSpace(r) {
-		return nil
+// drag stretches the selection press started to (x, y) by the unit press
+// selected and moves the cursor with it.
+func (c *composer) drag(x, y int) {
+	c.selectRange(stretch(c.unit, c.unitAt(c.pointAt(x, y))))
+}
+
+// unitAt is what the latest press selects at p: the point itself, its word
+// or its logical line.
+func (c *composer) unitAt(p point) selection {
+	line := []rune(strings.Split(c.ta.Value(), "\n")[p.line])
+	switch c.clicks {
+	case 2:
+		from, to := runeWordAt(line, p.col)
+		return selection{anchor: point{p.line, from}, head: point{p.line, to}}
+	case 3:
+		return selection{anchor: point{p.line, 0}, head: point{p.line, len(line)}}
 	}
-	head := []rune(before)
-	from := len(head)
-	for from > 0 && !unicode.IsSpace(head[from-1]) {
+	return selection{anchor: p, head: p}
+}
+
+// runeWordAt is the runes [from, to) of the maximal run of non-space runes in
+// line covering line[i]; from == to == i when i is on a space or past the end.
+func runeWordAt(line []rune, i int) (from, to int) {
+	if i >= len(line) || unicode.IsSpace(line[i]) {
+		return i, i
+	}
+	from, to = i, i+1
+	for from > 0 && !unicode.IsSpace(line[from-1]) {
 		from--
 	}
-	c.ta.ClearSelection()
-	c.ta.SetCursorColumn(from)
-	return c.forward(tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModCtrl | tea.ModShift})
+	for to < len(line) && !unicode.IsSpace(line[to]) {
+		to++
+	}
+	return from, to
 }
 
-// drag extends the selection press started and moves the cursor with it.
-func (c *composer) drag(x, y int) { c.ta.ExtendSelection(x, y) }
+func (c *composer) pointAt(x, y int) point {
+	p := c.ta.PositionAt(x, y)
+	return point{line: p.Row, col: p.Col}
+}
+
+// cellOf is the first textarea-relative cell, in reading order, that
+// PositionAt maps to p or later. The textarea can select only between cells.
+func (c *composer) cellOf(p point) (x, y int) {
+	top := -c.ta.ScrollYOffset()
+	y = top + sort.Search(beyond, func(i int) bool { return !c.pointAt(beyond, top+i).before(p) })
+	x = sort.Search(beyond, func(x int) bool { return !c.pointAt(x, y).before(p) })
+	return x, y
+}
+
+// selectRange selects s and leaves the cursor at its head.
+func (c *composer) selectRange(s selection) {
+	ax, ay := c.cellOf(s.anchor)
+	hx, hy := c.cellOf(s.head)
+	c.ta.BeginSelection(ax, ay)
+	c.ta.ExtendSelection(hx, hy)
+}
 
 // release ends the drag, returning the selected text when there is any.
 func (c *composer) release() (text string, ok bool) {

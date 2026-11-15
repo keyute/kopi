@@ -145,6 +145,36 @@ func TestDoubleAndTripleClickSelectWordAndLine(t *testing.T) {
 	assert.Empty(t, reversedRows(m))
 }
 
+func TestDragAfterMultiClickExtendsByWholeUnits(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		clicks             int
+		x, row, toX, toRow int
+		want               string
+	}{
+		{"words forwards", 2, 9, 0, 15, 0, "beta gamma"},
+		{"words backwards", 2, 9, 0, 3, 0, "alpha beta"},
+		{"lines forwards", 3, 4, 0, 5, 1, "κ alpha beta gamma\n  second"},
+		{"lines backwards", 3, 4, 1, 5, 0, "κ alpha beta gamma\n  second"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newTestModel(t, 40, 30)
+			at := fixedClock(m)
+			send(m, event.Notice{Text: "alpha beta gamma\nsecond"})
+			first := rowOf(t, m, "κ alpha beta gamma")
+
+			for range tc.clicks {
+				pressAt(m, tc.x, first+tc.row)
+				*at = at.Add(300 * time.Millisecond)
+			}
+			moveTo(m, tc.toX, first+tc.toRow)
+			cmd := releaseAt(m, tc.toX, first+tc.toRow)
+
+			assertCopied(t, m, cmd, tc.want)
+		})
+	}
+}
+
 func TestDragAtTopEdgeAutoScrolls(t *testing.T) {
 	m, _ := newTestModel(t, 40, 20)
 	notices(m, 30)

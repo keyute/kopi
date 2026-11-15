@@ -214,6 +214,83 @@ func TestComposerDoubleClickSelectsWord(t *testing.T) {
 	}
 }
 
+// clickTimes presses n times in quick succession at (x, y) without
+// releasing, so only the drag that follows copies.
+func clickTimes(m *model, at *time.Time, n, x, y int) {
+	for range n {
+		pressAt(m, x, y)
+		*at = at.Add(300 * time.Millisecond)
+	}
+}
+
+func TestComposerDoubleClickOnSpaceIsPlainPress(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	at := fixedClock(m)
+	typeText(m, "hello world")
+
+	clickTimes(m, at, 2, 7, m.composerTop())
+
+	assert.Nil(t, releaseAt(m, 7, m.composerTop()))
+	assert.False(t, m.composer.ta.HasSelection())
+	assert.Equal(t, 5, m.composer.ta.Column())
+}
+
+func TestComposerTripleClickSelectsLogicalLine(t *testing.T) {
+	m, _ := newTestModel(t, 20, 30)
+	at := fixedClock(m)
+	typeText(m, "alpha beta gamma delta epsilon\nnext")
+	y := m.composerTop() + 1
+
+	clickTimes(m, at, 3, 5, y)
+	cmd := releaseAt(m, 5, y)
+
+	assertCopied(t, m, cmd, "alpha beta gamma delta epsilon")
+	press(m, tea.KeyPressMsg{Code: 'X', Text: "X"})
+	assert.Equal(t, "X\nnext", m.composer.value())
+}
+
+func TestComposerDragAfterMultiClickExtendsByWholeUnits(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		text               string
+		clicks             int
+		x, row, toX, toRow int
+		want               string
+	}{
+		{"words forwards", "alpha beta gamma", 2, 9, 0, 15, 0, "beta gamma"},
+		{"words backwards", "alpha beta gamma", 2, 9, 0, 4, 0, "alpha beta"},
+		{"lines forwards", "one two\nthree four\nfive", 3, 4, 1, 3, 2, "three four\nfive"},
+		{"lines backwards", "one two\nthree four\nfive", 3, 4, 1, 3, 0, "one two\nthree four"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newTestModel(t, 40, 30)
+			at := fixedClock(m)
+			typeText(m, tc.text)
+			top := m.composerTop()
+
+			clickTimes(m, at, tc.clicks, tc.x, top+tc.row)
+			moveTo(m, tc.toX, top+tc.toRow)
+			cmd := releaseAt(m, tc.toX, top+tc.toRow)
+
+			assertCopied(t, m, cmd, tc.want)
+		})
+	}
+}
+
+func TestComposerTripleClickInScrolledInput(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	at := fixedClock(m)
+	typeText(m, linesOf(20))
+	off := m.composer.ta.ScrollYOffset()
+	require.Positive(t, off)
+	y := m.composerTop() + 1
+
+	clickTimes(m, at, 3, 4, y)
+	cmd := releaseAt(m, 4, y)
+
+	assertCopied(t, m, cmd, fmt.Sprintf("line %d", off+1))
+}
+
 func TestComposerClickPlacesCursor(t *testing.T) {
 	m, _ := newTestModel(t, 40, 30)
 	typeText(m, "hello world")
