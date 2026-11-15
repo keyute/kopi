@@ -9,4 +9,5 @@ var (
 	ErrUnknownProvider = errors.New("unknown provider")
 	ErrNoOAuth         = errors.New("provider does not offer OAuth login")
 	ErrSessionNotFound = errors.New("session not found")
+	ErrSendInProgress  = errors.New("session send already in progress")
 )

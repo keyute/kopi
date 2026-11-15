@@ -1,0 +1,400 @@
+package tui
+
+import (
+	"fmt"
+	"image/color"
+	"regexp"
+	"strings"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/keyute/kopi/internal/event"
+)
+
+// reverseVideo is an SGR sequence that starts with reverse video.
+var reverseVideo = regexp.MustCompile(`\x1b\[7[;m]`)
+
+func pressAt(m *model, x, y int) {
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+}
+
+func moveTo(m *model, x, y int) tea.Cmd {
+	_, cmd := m.Update(tea.MouseMotionMsg{X: x, Y: y, Button: tea.MouseLeft})
+	return cmd
+}
+
+// releaseAt reports no button, as some terminals do.
+func releaseAt(m *model, x, y int) tea.Cmd {
+	_, cmd := m.Update(tea.MouseReleaseMsg{X: x, Y: y})
+	return cmd
+}
+
+// runCopy runs a copy's clipboard writes, leaving its flash's tick unrun, and
+// returns their messages.
+func runCopy(t *testing.T, cmd tea.Cmd) []tea.Msg {
+	t.Helper()
+	require.NotNil(t, cmd)
+	batch, ok := cmd().(tea.BatchMsg)
+	require.True(t, ok)
+	require.Len(t, batch, 2)
+	writes, ok := batch[0]().(tea.BatchMsg)
+	require.True(t, ok)
+	var msgs []tea.Msg
+	for _, c := range writes {
+		msgs = append(msgs, c())
+	}
+	return msgs
+}
+
+func assertCopied(t *testing.T, m *model, cmd tea.Cmd, want string) {
+	t.Helper()
+	assert.Contains(t, runCopy(t, cmd), tea.SetClipboard(want)(), "copied through OSC 52")
+	assert.Equal(t, []string{want}, m.clip.(*fakeClipboard).written, "and the system clipboard")
+	assert.Contains(t, statusText(m), "Copied")
+}
+
+// reversedRows is the transcript's screen rows drawn with reverse video; the
+// composer's cursor is reverse video too.
+func reversedRows(m *model) []int {
+	var out []int
+	for i, r := range strings.Split(m.View().Content, "\n")[:m.transcriptHeight()] {
+		if reverseVideo.MatchString(r) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+func TestSingleClickTogglesFoldAndCopiesNothing(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	send(m, sealedGroup()...)
+	row := rowOf(t, m, "▸ Read 2 files")
+
+	pressAt(m, 4, row)
+	assert.Contains(t, screen(m), "▸ Read 2 files", "the fold toggles on release")
+	cmd := releaseAt(m, 4, row)
+
+	assert.Nil(t, cmd)
+	assert.Contains(t, screen(m), "▾ Read 2 files")
+	assert.True(t, m.sel.empty())
+	assert.Empty(t, reversedRows(m))
+	assert.Empty(t, m.clip.(*fakeClipboard).written)
+}
+
+func TestDragSelectsAcrossLinesAndCopies(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	send(m, event.Notice{Text: "first\nsecond"}, event.Notice{Text: "other"})
+	row := rowOf(t, m, "κ first")
+
+	pressAt(m, 2, row)
+	assert.Nil(t, moveTo(m, 5, row+1))
+	cmd := releaseAt(m, 5, row+1)
+
+	assert.Equal(t, []int{row, row + 1}, reversedRows(m))
+	assert.Contains(t, screen(m), "κ first", "the text is unchanged")
+	assertCopied(t, m, cmd, "first\n  sec")
+
+	press(m, tea.KeyPressMsg{Code: 'x', Text: "x"})
+	assert.Empty(t, reversedRows(m))
+}
+
+func TestDragFoldHandleDoesNotToggle(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	send(m, sealedGroup()...)
+	row := rowOf(t, m, "▸ Read 2 files")
+
+	pressAt(m, 2, row)
+	moveTo(m, 6, row)
+	cmd := releaseAt(m, 6, row)
+
+	assert.Contains(t, screen(m), "▸ Read 2 files")
+	assertCopied(t, m, cmd, "Read")
+}
+
+func TestDoubleAndTripleClickSelectWordAndLine(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 40, 30)
+		send(m, event.Notice{Text: "alpha beta gamma"})
+		row := rowOf(t, m, "κ alpha beta gamma")
+		click := func() tea.Cmd {
+			pressAt(m, 9, row)
+			return releaseAt(m, 9, row)
+		}
+
+		require.Nil(t, click())
+		time.Sleep(300 * time.Millisecond)
+		assertCopied(t, m, click(), "beta")
+
+		time.Sleep(300 * time.Millisecond)
+		cmd := click()
+		assert.Equal(t, "κ alpha beta gamma", strings.TrimRight(m.sel.text(m.lines), " "))
+		runCopy(t, cmd)
+
+		time.Sleep(401 * time.Millisecond)
+		assert.Nil(t, click(), "a press after 400 ms is a single click again")
+		assert.Empty(t, reversedRows(m))
+	})
+}
+
+func TestDragAfterMultiClickExtendsByWholeUnits(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		clicks             int
+		x, row, toX, toRow int
+		want               string
+	}{
+		{"words forwards", 2, 9, 0, 15, 0, "beta gamma"},
+		{"words backwards", 2, 9, 0, 3, 0, "alpha beta"},
+		{"lines forwards", 3, 4, 0, 5, 1, "κ alpha beta gamma\n  second"},
+		{"lines backwards", 3, 4, 1, 5, 0, "κ alpha beta gamma\n  second"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				m, _ := newTestModel(t, 40, 30)
+				send(m, event.Notice{Text: "alpha beta gamma\nsecond"})
+				first := rowOf(t, m, "κ alpha beta gamma")
+
+				for range tc.clicks {
+					pressAt(m, tc.x, first+tc.row)
+					time.Sleep(300 * time.Millisecond)
+				}
+				moveTo(m, tc.toX, first+tc.toRow)
+				cmd := releaseAt(m, tc.toX, first+tc.toRow)
+
+				assertCopied(t, m, cmd, tc.want)
+			})
+		})
+	}
+}
+
+func TestDragAtTopEdgeAutoScrolls(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	notices(m, 30)
+	for range 3 {
+		m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	}
+	top := m.top()
+	require.Positive(t, top)
+
+	pressAt(m, 3, 2)
+	tick := moveTo(m, 3, 0)
+	require.NotNil(t, tick, "holding the top row starts the auto-scroll")
+	assert.Nil(t, moveTo(m, 4, 0), "one tick chain at a time")
+	assert.Equal(t, point{top, 4}, m.sel.head)
+
+	_, cmd := m.Update(autoScrollMsg{})
+	assert.NotNil(t, cmd, "it re-arms while held at the edge")
+	assert.Equal(t, top-1, m.top())
+	assert.Equal(t, point{top - 1, 4}, m.sel.head)
+	assert.Equal(t, point{top + 2, 3}, m.sel.anchor)
+
+	releaseAt(m, 4, 0)
+	_, cmd = m.Update(autoScrollMsg{})
+	assert.Nil(t, cmd)
+	assert.Equal(t, top-1, m.top(), "a tick after release does nothing")
+}
+
+func TestTranscriptDragStaysInTheTranscript(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	send(m, event.Notice{Text: "first"})
+	typeText(m, "draft")
+	row := rowOf(t, m, "κ first")
+	last := m.transcriptHeight() - 1
+
+	pressAt(m, 0, row)
+	moveTo(m, 30, m.composerTop())
+	cmd := releaseAt(m, 30, m.composerTop())
+
+	assert.Equal(t, point{m.top() + last, 30}, m.sel.head, "clamped to the last transcript row")
+	assert.False(t, m.composer.ta.HasSelection())
+	assert.Equal(t, "draft", m.composer.value())
+	assertCopied(t, m, cmd, "κ first")
+}
+
+func TestComposerDragNeverSelectsTranscript(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	send(m, event.Notice{Text: "first"})
+	typeText(m, "hello world")
+	top := m.composerTop()
+
+	pressAt(m, 7, top)
+	moveTo(m, 3, rowOf(t, m, "κ first"))
+	cmd := releaseAt(m, 3, 0)
+
+	assert.True(t, m.sel.empty())
+	assert.Empty(t, reversedRows(m))
+	assert.True(t, m.composer.ta.HasSelection())
+	assertCopied(t, m, cmd, "hello")
+}
+
+func TestPressesOutsideTranscriptAndComposerDoNothing(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	send(m, event.TurnStart{Prompt: "go"})
+	send(m, event.QueueChanged{Pending: []string{"a"}})
+	typeText(m, "draft")
+	top := m.composerTop()
+
+	for _, y := range []int{m.transcriptHeight(), top - 4, top - 2, top - 1, top + 1, len(screen(m)) - 1} {
+		pressAt(m, 3, y)
+		moveTo(m, 5, y)
+		assert.Nil(t, releaseAt(m, 5, y), "row %d", y)
+		assert.True(t, m.sel.empty(), "row %d", y)
+		assert.False(t, m.composer.ta.HasSelection(), "row %d", y)
+	}
+	assert.Equal(t, "draft", m.composer.value())
+}
+
+func TestWheelInvalidatesHeldFoldClickOnlyWhenViewportMoves(t *testing.T) {
+	for _, scrolls := range []bool{false, true} {
+		t.Run(fmt.Sprint(scrolls), func(t *testing.T) {
+			m, _ := newTestModel(t, 40, 30)
+			if scrolls {
+				notices(m, 30)
+			}
+			send(m, sealedGroup()...)
+			row := rowOf(t, m, "▸ Read 2 files")
+			pressAt(m, 4, row)
+			top := m.top()
+			m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+			if scrolls {
+				require.NotEqual(t, top, m.top())
+				assert.Equal(t, drag{}, m.drag)
+			} else {
+				require.Equal(t, top, m.top())
+			}
+			assert.Nil(t, releaseAt(m, 4, row))
+			if scrolls {
+				m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+				assert.Contains(t, screen(m), "▸ Read 2 files")
+			} else {
+				assert.Contains(t, screen(m), "▾ Read 2 files")
+			}
+			assert.Empty(t, m.clip.(*fakeClipboard).written)
+		})
+	}
+}
+
+func TestWheelKeepsSelectionOnItsText(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	notices(m, 30)
+	row := rowOf(t, m, "κ n25")
+	pressAt(m, 2, row)
+	moveTo(m, 4, row)
+	releaseAt(m, 4, row)
+	require.Equal(t, []int{row}, reversedRows(m))
+
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+
+	moved := rowOf(t, m, "κ n25")
+	assert.Equal(t, row+wheelStep, moved)
+	assert.Equal(t, []int{moved}, reversedRows(m))
+}
+
+func TestSelectionClearsOnResizeFoldSessionAndTheme(t *testing.T) {
+	for name, clear := range map[string]func(m *model){
+		"resize":     func(m *model) { m.Update(tea.WindowSizeMsg{Width: 50, Height: 30}) },
+		"expand all": func(m *model) { press(m, ctrlO) },
+		"session":    func(m *model) { send(m, event.SessionChanged{}) },
+		"theme":      func(m *model) { m.Update(tea.BackgroundColorMsg{Color: color.White}) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, _ := newTestModel(t, 40, 30)
+			send(m, sealedGroup()...)
+			row := rowOf(t, m, "Done.")
+			pressAt(m, 0, row)
+			moveTo(m, 3, row)
+			releaseAt(m, 3, row)
+			require.NotEmpty(t, reversedRows(m))
+
+			clear(m)
+
+			assert.True(t, m.sel.empty())
+			assert.Empty(t, reversedRows(m))
+		})
+	}
+}
+
+func TestActiveTranscriptDragClearsWhenCoordinatesChange(t *testing.T) {
+	for name, invalidate := range map[string]func(*model){
+		"resize":     func(m *model) { m.Update(tea.WindowSizeMsg{Width: 50, Height: 30}) },
+		"theme":      func(m *model) { m.Update(tea.BackgroundColorMsg{Color: color.White}) },
+		"session":    func(m *model) { send(m, event.SessionChanged{}) },
+		"expand all": func(m *model) { press(m, ctrlO) },
+		"fold":       func(m *model) { m.holdTop(m.folds.toggleAll) },
+		"key":        func(m *model) { press(m, left) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, _ := newTestModel(t, 40, 30)
+			notices(m, 30)
+			pressAt(m, 2, 2)
+			require.NotNil(t, moveTo(m, 6, 0))
+			require.False(t, m.sel.empty())
+			require.True(t, m.ticking)
+
+			invalidate(m)
+
+			assert.Equal(t, drag{}, m.drag)
+			assert.True(t, m.sel.empty())
+			top := m.top()
+			_, cmd := m.Update(autoScrollMsg{})
+			assert.Nil(t, cmd, "a late tick cannot restart the drag")
+			assert.Equal(t, top, m.top())
+			assert.False(t, m.ticking)
+			assert.Nil(t, moveTo(m, 10, 1))
+			assert.Nil(t, releaseAt(m, 10, 1))
+			assert.True(t, m.sel.empty())
+			assert.Empty(t, reversedRows(m))
+			assert.Empty(t, m.clip.(*fakeClipboard).written)
+		})
+	}
+}
+
+func TestActiveTranscriptDragClearsWhenLinesAboveChange(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	send(m, start("a"), okOut("a", "3 lines", "a1\na2\n"), start("b"), ok("b", "1 line"))
+	row := rowOf(t, m, "  ↳ b.go · 1 line")
+	pressAt(m, 4, row)
+	moveTo(m, 8, row)
+
+	send(m, event.TextDelta{Text: "Done."})
+
+	assert.Equal(t, drag{}, m.drag)
+	assert.Nil(t, moveTo(m, 10, row))
+	assert.Nil(t, releaseAt(m, 10, row))
+	assert.True(t, m.sel.empty())
+	assert.Empty(t, m.clip.(*fakeClipboard).written)
+}
+
+func TestSelectionClearsWhenLinesAboveChange(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	send(m, start("a"), okOut("a", "3 lines", "a1\na2\n"), start("b"), ok("b", "1 line"))
+	row := rowOf(t, m, "  ↳ b.go · 1 line")
+	pressAt(m, 4, row)
+	moveTo(m, 8, row)
+	releaseAt(m, 8, row)
+	require.Equal(t, []int{row}, reversedRows(m))
+
+	send(m, event.TextDelta{Text: "Done."})
+
+	assert.True(t, m.sel.empty())
+	assert.Empty(t, reversedRows(m))
+}
+
+func TestSelectionSurvivesBlockAppendedBelow(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	send(m, event.Notice{Text: "first"})
+	row := rowOf(t, m, "κ first")
+	pressAt(m, 2, row)
+	moveTo(m, 7, row)
+	releaseAt(m, 7, row)
+
+	send(m, event.Notice{Text: "other"})
+
+	assert.Equal(t, "first", m.sel.text(m.lines))
+	assert.Equal(t, []int{row}, reversedRows(m))
+}

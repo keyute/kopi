@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,12 +19,18 @@ import (
 
 	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/config"
-	"github.com/keyute/kopi/internal/line"
+	"github.com/keyute/kopi/internal/headless"
+	"github.com/keyute/kopi/internal/history"
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/tool"
+	"github.com/keyute/kopi/internal/tui"
 )
 
-const joinTimeout = 5 * time.Second
+const (
+	joinTimeout = 5 * time.Second
+	// historyLimit is how many prompts are kept for each workspace.
+	historyLimit = 100
+)
 
 func Execute() {
 	if err := newRoot().Execute(); err != nil {
@@ -42,41 +50,74 @@ func newRoot() *cobra.Command {
 
 func rootCmd() *cobra.Command {
 	var resumeID string
-	var cont bool
+	var cont, printOnly bool
 	cmd := &cobra.Command{
-		Use:           "kopi",
+		Use:           "kopi [prompt]",
 		Short:         "Kopi coding agent",
-		Args:          cobra.NoArgs,
+		Args:          cobra.MaximumNArgs(1),
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			return setupLogging(cmd)
 		},
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runInteractive(cmd, app.OpenRequest{ResumeID: resumeID, Continue: cont})
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return run(cmd, args, printOnly, app.OpenRequest{ResumeID: resumeID, Continue: cont})
 		},
 	}
 	cmd.PersistentFlags().String("model", "", "model as provider/id (overrides the config file)")
 	cmd.PersistentFlags().String("log-level", "warn", "log level: debug, info, warn or error")
 	cmd.Flags().BoolVarP(&cont, "continue", "c", false, "continue the most recent session in this directory")
 	cmd.Flags().StringVarP(&resumeID, "resume", "r", "", "resume the session with this id")
+	cmd.Flags().BoolVarP(&printOnly, "print", "p", false, "print the response to one prompt and exit")
 	cmd.MarkFlagsMutuallyExclusive("continue", "resume")
 	return cmd
 }
 
 func setupLogging(cmd *cobra.Command) error {
-	name, err := cmd.Flags().GetString("log-level")
+	level, err := logLevel(cmd)
 	if err != nil {
 		return err
-	}
-	levels := map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}
-	level, ok := levels[name]
-	if !ok {
-		return fmt.Errorf("invalid --log-level %q: want debug, info, warn or error", name)
 	}
 	stderr := cmd.ErrOrStderr()
 	slog.SetDefault(slog.New(tint.NewTextHandler(stderr, &tint.Options{Level: level, NoColor: !isTerminal(stderr)})))
 	return nil
+}
+
+func logLevel(cmd *cobra.Command) (slog.Level, error) {
+	name, err := cmd.Flags().GetString("log-level")
+	if err != nil {
+		return 0, err
+	}
+	levels := map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}
+	level, ok := levels[name]
+	if !ok {
+		return 0, fmt.Errorf("invalid --log-level %q: want debug, info, warn or error", name)
+	}
+	return level, nil
+}
+
+// logToFile sends slog to path, which must not be stderr while the
+// fullscreen UI owns the terminal. The returned func restores the previous
+// logger and closes the file.
+func logToFile(cmd *cobra.Command, path string) (func(), error) {
+	level, err := logLevel(cmd)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file: %w", err)
+	}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(tint.NewTextHandler(f, &tint.Options{Level: level, NoColor: true})))
+	return func() {
+		slog.SetDefault(prev)
+		_ = f.Close()
+	}, nil
+}
+
+type frontend interface {
+	Run(ctx context.Context, interrupts <-chan os.Signal) error
 }
 
 func isTerminal(v any) bool {
@@ -101,29 +142,34 @@ func resolveConfig(cmd *cobra.Command, paths config.Paths) (*config.Resolved, er
 	return config.Resolve(config.Defaults(), global, config.Map("flags", flags))
 }
 
-// openRuntime pins PiG's environment, creates the agent dir and builds the
-// runtime for cwd.
 func openRuntime(ctx context.Context, paths config.Paths, cwd string) (*pigruntime.Runtime, error) {
-	// PiG's session lookup still consults its default dirs even with an
-	// explicit agent dir, so they are pointed into Kopi home process-wide.
-	set, unset := pigruntime.IsolationEnv(paths.Home, paths.AgentDir)
-	for k, v := range set {
-		if err := os.Setenv(k, v); err != nil {
-			return nil, fmt.Errorf("failed to set %s: %w", k, err)
-		}
-	}
-	for _, k := range unset {
-		if err := os.Unsetenv(k); err != nil {
-			return nil, fmt.Errorf("failed to unset %s: %w", k, err)
-		}
-	}
-	if err := os.MkdirAll(paths.AgentDir, 0o700); err != nil {
-		return nil, fmt.Errorf("failed to create agent dir: %w", err)
-	}
-	return pigruntime.New(ctx, pigruntime.Options{AgentDir: paths.AgentDir, CWD: cwd})
+	return pigruntime.New(ctx, pigruntime.Options{Home: paths.Home, AgentDir: paths.AgentDir, CWD: cwd})
 }
 
-func runInteractive(cmd *cobra.Command, req app.OpenRequest) (err error) {
+// readPrompt joins piped stdin and the argument, in that order.
+func readPrompt(in io.Reader, args []string) (string, error) {
+	var parts []string
+	if !isTerminal(in) {
+		b, err := io.ReadAll(in)
+		if err != nil {
+			return "", fmt.Errorf("failed to read stdin: %w", err)
+		}
+		parts = append(parts, string(b))
+	}
+	parts = append(parts, args...)
+	var prompt []string
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			prompt = append(prompt, p)
+		}
+	}
+	if len(prompt) == 0 {
+		return "", errors.New("no prompt: pass one as an argument or pipe it on stdin")
+	}
+	return strings.Join(prompt, "\n\n"), nil
+}
+
+func run(cmd *cobra.Command, args []string, printOnly bool, req app.OpenRequest) (err error) {
 	paths, err := config.ResolvePaths()
 	if err != nil {
 		return err
@@ -136,6 +182,15 @@ func runInteractive(cmd *cobra.Command, req app.OpenRequest) (err error) {
 	if model == "" {
 		return config.ErrNoModel
 	}
+	fullscreen := !printOnly && isTerminal(cmd.InOrStdin()) && isTerminal(cmd.OutOrStdout())
+	var prompt string
+	if fullscreen {
+		if len(args) > 0 {
+			return fmt.Errorf("unexpected argument %q: pass -p to print the response to a prompt", args[0])
+		}
+	} else if prompt, err = readPrompt(cmd.InOrStdin(), args); err != nil {
+		return err
+	}
 	userHome, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("failed to resolve home directory: %w", err)
@@ -147,6 +202,17 @@ func runInteractive(cmd *cobra.Command, req app.OpenRequest) (err error) {
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM)
 	defer stop()
+
+	if fullscreen {
+		if err := os.MkdirAll(paths.Home, 0o700); err != nil {
+			return fmt.Errorf("failed to create kopi home: %w", err)
+		}
+		restore, err := logToFile(cmd, paths.LogFile)
+		if err != nil {
+			return err
+		}
+		defer restore()
+	}
 
 	// workRunning is set when Close leaves work running; see below.
 	var workRunning bool
@@ -169,9 +235,29 @@ func runInteractive(cmd *cobra.Command, req app.OpenRequest) (err error) {
 		}
 	}()
 
-	c := app.NewController(rt, app.Config{Model: model, Workspace: cwd, Tools: []tool.Tool{tool.NewRead(ws)}, JoinTimeout: joinTimeout})
-	// Created before Open so the session line is printed.
-	frontend := line.New(c, cmd.InOrStdin(), cmd.OutOrStdout(), isTerminal(cmd.InOrStdin()))
+	cfg := app.Config{Model: model, Workspace: cwd, Tools: []tool.Tool{tool.NewRead(ws)}, JoinTimeout: joinTimeout}
+	// Only the fullscreen interface records prompts.
+	if fullscreen {
+		store, err := history.Open(paths.HistoryFile, cwd, historyLimit)
+		if err != nil {
+			slog.Warn("failed to open prompt history", "err", err)
+		}
+		cfg.History = store
+	}
+	c := app.NewController(rt, cfg)
+	var f frontend
+	if fullscreen {
+		// Created before Open so the TUI shows the session event.
+		f = tui.New(c, cmd.InOrStdin(), cmd.OutOrStdout(), tui.Options{
+			Version:     kopiVersion(),
+			Keys:        resolved.Config.Keys,
+			StatusLeft:  resolved.Config.StatusLine.Left,
+			StatusRight: resolved.Config.StatusLine.Right,
+			ImageDir:    paths.ImageDir,
+		})
+	} else {
+		f = headless.New(c, prompt, cmd.OutOrStdout())
+	}
 	// Only Open may be cancelled by SIGINT; ctx outlives it as the runtime's
 	// signal.
 	openCtx, stopOpen := signal.NotifyContext(ctx, os.Interrupt)
@@ -187,7 +273,7 @@ func runInteractive(cmd *cobra.Command, req app.OpenRequest) (err error) {
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
 	stopOpen()
-	runErr := frontend.Run(ctx, interrupts)
+	runErr := f.Run(ctx, interrupts)
 
 	// Close must not inherit SIGTERM's cancellation; it bounds itself by
 	// JoinTimeout.

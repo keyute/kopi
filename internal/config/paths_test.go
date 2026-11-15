@@ -17,9 +17,12 @@ func TestResolvePathsPrefersKopiHome(t *testing.T) {
 	p, err := ResolvePaths()
 	require.NoError(t, err)
 	assert.Equal(t, Paths{
-		Home:       kopiHome,
-		ConfigFile: filepath.Join(kopiHome, "config.json"),
-		AgentDir:   filepath.Join(kopiHome, "agent"),
+		Home:        kopiHome,
+		ConfigFile:  filepath.Join(kopiHome, "config.json"),
+		AgentDir:    filepath.Join(kopiHome, "agent"),
+		LogFile:     filepath.Join(kopiHome, "kopi.log"),
+		HistoryFile: filepath.Join(kopiHome, "history.jsonl"),
+		ImageDir:    filepath.Join(kopiHome, "images"),
 	}, p)
 	assert.NoDirExists(t, kopiHome)
 }
@@ -56,9 +59,12 @@ func TestResolvePathsDefaultsUnderUserHome(t *testing.T) {
 			require.NoError(t, err)
 			want := filepath.Join(home, ".kopi")
 			assert.Equal(t, Paths{
-				Home:       want,
-				ConfigFile: filepath.Join(want, "config.json"),
-				AgentDir:   filepath.Join(want, "agent"),
+				Home:        want,
+				ConfigFile:  filepath.Join(want, "config.json"),
+				AgentDir:    filepath.Join(want, "agent"),
+				LogFile:     filepath.Join(want, "kopi.log"),
+				HistoryFile: filepath.Join(want, "history.jsonl"),
+				ImageDir:    filepath.Join(want, "images"),
 			}, p)
 			assert.NoDirExists(t, want)
 		})

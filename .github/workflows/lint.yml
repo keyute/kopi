@@ -1,42 +1,31 @@
 name: Lint
-
 on:
   pull_request:
     branches:
       - main
-  push:
-    branches:
-      - main
-  merge_group:
-
 permissions: {}
-
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.ref }}-${{ github.workflow }}
   cancel-in-progress: true
-
 jobs:
   lint:
-    # Dependabot's gomod bumps only move go.mod and go.sum, and the MegaLinter
-    # image pull is not free; test.yml builds, vets and tests those. Its
-    # github-actions bumps are the opposite case: they rewrite the action pins
-    # in these workflows, including MegaLinter's own, so actionlint and zizmor
-    # have to see them.
-    if: >-
-      github.actor != 'dependabot[bot]'
-      || startsWith(github.head_ref, 'dependabot/github_actions/')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: write
+    # triggering_actor, not github.actor or the PR author: both of those stay
+    # dependabot[bot] through a re-run (a re-run keeps the original actor's
+    # privileges), so neither ever lints a Dependabot PR. triggering_actor is whoever
+    # pressed re-run, so Dependabot's own run skips and a maintainer can re-run to
+    # verify the bump. The re-run still carries the original Dependabot-restricted
+    # token, so findings reach the job summary but the PR comment may not post.
+    if: github.triggering_actor != 'dependabot[bot]'
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-
       - name: Run MegaLinter
         uses: oxsecurity/megalinter/flavors/go@f2fe8c1cba37091848df3e524066c8c23ef353ed # v10.2.0
         env:
@@ -56,9 +45,7 @@ jobs:
           # One failed online audit aborts the whole zizmor run; --offline
           # forces offline despite GITHUB_TOKEN being set, keeping the static audits.
           ACTION_ZIZMOR_ARGUMENTS: --offline
-          # Diff mode resolves the base as origin/$DEFAULT_BRANCH, which only
-          # exists on a pull request; push and merge_group sweep everything.
-          VALIDATE_ALL_CODEBASE: ${{ github.event_name != 'pull_request' }}
+          VALIDATE_ALL_CODEBASE: false
           DEFAULT_BRANCH: ${{ github.base_ref }}
           # go.mod pins a toolchain newer than the image's go; auto lets go download it.
           GOTOOLCHAIN: auto

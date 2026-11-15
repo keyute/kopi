@@ -12,8 +12,12 @@ type Status struct {
 	Mode             policy.Mode
 	Model, Workspace string
 	MessageCount     int
-	Busy             bool
-	Tools            []ToolStatus
+	// ContextTokens and ContextWindow are zero while the usage is unknown.
+	ContextTokens, ContextWindow int
+	// Branch is empty when Workspace is not in a git repository.
+	Branch string
+	Busy   bool
+	Tools  []ToolStatus
 }
 
 type ToolStatus struct {

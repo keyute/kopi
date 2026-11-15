@@ -20,10 +20,11 @@ import (
 
 // pigSettings is unmarshalled rather than built because the nested settings
 // types live in a PiG internal package and cannot be named here.
-const pigSettings = `{"retry":{"enabled":true},"compaction":{"enabled":true},"cacheWarming":"off"}`
+const pigSettings = `{"retry":{"enabled":true},"compaction":{"enabled":true},"cacheWarming":"off","steeringMode":"all"}`
 
 type Options struct {
-	AgentDir, CWD string
+	// Home is Kopi's home; PiG's own home is pinned beneath it.
+	Home, AgentDir, CWD string
 }
 
 type Runtime struct {
@@ -34,7 +35,12 @@ type Runtime struct {
 // New builds a PiG runtime whose every input is explicit: in-memory settings,
 // untrusted project, and (in Open) no resources, no built-in tools. Leaving
 // any of these nil makes PiG read ~/.pig, project settings or AGENTS.md.
+// New also pins PiG's environment process-wide (see isolate) and creates the
+// agent dir; Home and AgentDir must be absolute.
 func New(ctx context.Context, opts Options) (*Runtime, error) {
+	if err := isolate(opts.Home, opts.AgentDir); err != nil {
+		return nil, err
+	}
 	var s coding.Settings
 	if err := json.Unmarshal([]byte(pigSettings), &s); err != nil {
 		return nil, fmt.Errorf("failed to decode pig settings: %w", err)

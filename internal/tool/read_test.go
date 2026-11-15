@@ -155,6 +155,49 @@ func TestReadReturnsNoticeForEmptyFile(t *testing.T) {
 	assert.Equal(t, "(empty file)", out)
 }
 
+func TestReadDisplayTitle(t *testing.T) {
+	tool, _ := newReadTool(t)
+
+	assert.Equal(t, Action{Verb: "Read", One: "file", Many: "files"}, tool.Display.Action)
+	for _, tc := range []struct {
+		name, args, want string
+	}{
+		{"relative path", `{"file_path":"cmd/root.go"}`, "Read cmd/root.go"},
+		{"absolute path", `{"file_path":"/w/a.txt","offset":3}`, "Read /w/a.txt"},
+		{"missing path", `{}`, "Read"},
+		{"bad json", `{"file_path":`, "Read"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tool.Display.Title(json.RawMessage(tc.args)))
+		})
+	}
+}
+
+func TestReadDisplaySummary(t *testing.T) {
+	tool, dir := newReadTool(t)
+	writeFile(t, filepath.Join(dir, "a.txt"), numberedLines(10))
+	writeFile(t, filepath.Join(dir, "one.txt"), "only")
+	writeFile(t, filepath.Join(dir, "empty.txt"), "")
+	writeFile(t, filepath.Join(dir, "big.txt"), numberedLines(maxReadLines+5))
+
+	for _, tc := range []struct {
+		name, args, want string
+	}{
+		{"whole file", `{"file_path":"a.txt"}`, "10 lines"},
+		{"single line", `{"file_path":"one.txt"}`, "1 line"},
+		{"range with more remaining", `{"file_path":"a.txt","offset":3,"limit":2}`, "2 lines"},
+		{"line cap with notice", `{"file_path":"big.txt"}`, "2000 lines"},
+		{"empty file", `{"file_path":"empty.txt"}`, "empty file"},
+		{"offset past end", `{"file_path":"a.txt","offset":11}`, "past end of file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := runRead(t, tool, tc.args)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, tool.Display.Summary(out))
+		})
+	}
+}
+
 func TestReadRefusesUnreadableTargets(t *testing.T) {
 	tool, dir := newReadTool(t)
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o755))

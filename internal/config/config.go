@@ -1,6 +1,7 @@
 package config
 
 import (
+	encjson "encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -26,6 +27,9 @@ const delim = "."
 type Config struct {
 	Version int    `koanf:"version"`
 	Model   string `koanf:"model"` // "provider/id"; empty means not configured (there is no default model)
+	// Keys maps an action from KeyActions to the keys bound to it.
+	Keys       map[string][]string `koanf:"keys"`
+	StatusLine StatusLine          `koanf:"statusline"`
 }
 
 type Layer struct {
@@ -35,7 +39,9 @@ type Layer struct {
 }
 
 func Defaults() Layer {
-	return Map("default", map[string]any{"version": Version})
+	values := uiDefaults()
+	values["version"] = Version
+	return Map("default", values)
 }
 
 // GlobalFile returns the layer for the config file at path; a missing file is
@@ -83,6 +89,9 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 				return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 			}
 		}
+		if err := validateUI(c); err != nil {
+			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
+		}
 		for _, key := range k.Keys() {
 			origins[key] = l.Name
 		}
@@ -104,7 +113,11 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 // decode rejects unknown keys and refuses weak typing ("version": "1").
 func decode(k *koanf.Koanf, c *Config) error {
 	err := k.UnmarshalWithConf("", c, koanf.UnmarshalConf{
-		DecoderConfig: &mapstructure.DecoderConfig{ErrorUnused: true, DecodeHook: rejectFractionalInt},
+		DecoderConfig: &mapstructure.DecoderConfig{
+			ErrorUnused: true,
+			DecodeNil:   true,
+			DecodeHook:  mapstructure.ComposeDecodeHookFunc(rejectWrongShape, rejectFractionalInt),
+		},
 	})
 	if err == nil {
 		return nil
@@ -120,6 +133,24 @@ func decode(k *koanf.Koanf, c *Config) error {
 		return fmt.Errorf("%w: %w", ErrInvalidValue, err)
 	}
 	return fmt.Errorf("%w: %w", ErrUnknownKey, err)
+}
+
+// rejectWrongShape exists because mapstructure reports a scalar where a list or
+// object belongs as an untyped error, which decode would misfile as an unknown
+// key. DecodeNil routes JSON null here too, so null cannot wipe a block.
+func rejectWrongShape(from, to reflect.Type, data any) (any, error) {
+	v := reflect.ValueOf(data)
+	switch to.Kind() {
+	case reflect.Slice:
+		if from.Kind() != reflect.Slice || v.IsNil() {
+			return nil, fmt.Errorf("%w: %v is not a list", ErrInvalidValue, data)
+		}
+	case reflect.Map, reflect.Struct:
+		if from.Kind() != reflect.Map || v.IsNil() {
+			return nil, fmt.Errorf("%w: %v is not an object", ErrInvalidValue, data)
+		}
+	}
+	return data, nil
 }
 
 // rejectFractionalInt exists because the JSON parser yields float64 and
@@ -141,20 +172,36 @@ func originOf(origins map[string]string, key string) string {
 type Entry struct{ Key, Value, Origin string }
 
 // Entries returns every schema key sorted by key, including unset ones (empty
-// Value, Origin "unset").
+// Value, Origin "unset"). Lists are shown as compact JSON.
 func (r *Resolved) Entries() []Entry {
-	v := reflect.ValueOf(r.Config)
-	entries := make([]Entry, 0, v.NumField())
-	for i := range v.NumField() {
-		key := v.Type().Field(i).Tag.Get("koanf")
+	c := r.Config
+	values := map[string]any{
+		"model":            c.Model,
+		"version":          c.Version,
+		"statusline.left":  c.StatusLine.Left,
+		"statusline.right": c.StatusLine.Right,
+	}
+	for _, action := range KeyActions {
+		values["keys."+action] = c.Keys[action]
+	}
+	entries := make([]Entry, 0, len(values))
+	for key, v := range values {
 		e := Entry{Key: key, Origin: originOf(r.Origins, key)}
 		if _, ok := r.Origins[key]; ok {
-			e.Value = fmt.Sprint(v.Field(i).Interface())
+			e.Value = formatValue(v)
 		}
 		entries = append(entries, e)
 	}
 	slices.SortFunc(entries, func(a, b Entry) int { return strings.Compare(a.Key, b.Key) })
 	return entries
+}
+
+func formatValue(v any) string {
+	if list, ok := v.([]string); ok {
+		b, _ := encjson.Marshal(list) // a []string always marshals
+		return string(b)
+	}
+	return fmt.Sprint(v)
 }
 
 // ParseModelRef splits "provider/id" on the first slash; ids may contain

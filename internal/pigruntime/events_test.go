@@ -57,6 +57,9 @@ func TestTranslate(t *testing.T) {
 			in:   agent.CompactionEndEvent{ErrorMessage: "too big"},
 			want: event.Notice{Text: "compaction failed: too big"},
 		},
+		{name: "queue update dropped", in: agent.QueueUpdateEvent{Steering: []string{"a", "b"}, FollowUp: []string{"c"}}},
+		{name: "user message start dropped", in: agent.MessageStartEvent{Message: agent.AgentMessage{User: &agent.UserMessage{Content: ai.UserContentBlocks{ai.TextContent{Text: "steer"}}}}}},
+		{name: "assistant message start dropped", in: agent.MessageStartEvent{Message: agent.AgentMessage{Assistant: &agent.AssistantMessage{}}}},
 		{name: "message update without delta dropped", in: agent.MessageUpdateEvent{AssistantMessageEvent: ai.TextStartEvent{}}},
 		{name: "agent end dropped", in: agent.AgentEndEvent{}},
 	} {
@@ -66,4 +69,76 @@ func TestTranslate(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func TestTextJoinerSeparatesAdjacentTextBlocks(t *testing.T) {
+	update := func(e ai.AssistantMessageEvent) agent.AgentEvent {
+		return agent.MessageUpdateEvent{AssistantMessageEvent: e}
+	}
+	textStart := update(ai.TextStartEvent{})
+	text := func(s string) agent.AgentEvent { return update(ai.TextDeltaEvent{Delta: s}) }
+	for _, tc := range []struct {
+		name string
+		in   []agent.AgentEvent
+		want []event.Event
+	}{
+		{
+			name: "second block after thinking",
+			in:   []agent.AgentEvent{textStart, text("one"), text(" more"), update(ai.ThinkingDeltaEvent{Delta: "hmm"}), textStart, text("two")},
+			want: []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: " more"}, event.ThinkingDelta{Text: "hmm"}, event.TextDelta{Text: "\n\ntwo"}},
+		},
+		{
+			name: "queue update between",
+			in:   []agent.AgentEvent{textStart, text("one"), agent.QueueUpdateEvent{}, textStart, text("two")},
+			want: []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: "\n\ntwo"}},
+		},
+		{
+			name: "tool call block between",
+			in:   []agent.AgentEvent{textStart, text("one"), update(ai.ToolCallStartEvent{}), textStart, text("two")},
+			want: []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: "two"}},
+		},
+		{
+			name: "new run",
+			in:   []agent.AgentEvent{textStart, text("one"), agent.AgentStartEvent{}, textStart, text("two")},
+			want: []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: "two"}},
+		},
+		{
+			name: "notice between",
+			in:   []agent.AgentEvent{textStart, text("one"), agent.AutoRetryStartEvent{Attempt: 1, MaxAttempts: 2}, textStart, text("two")},
+			want: []event.Event{event.TextDelta{Text: "one"}, event.Notice{Text: "retrying (attempt 1/2) in 0s: "}, event.TextDelta{Text: "two"}},
+		},
+		{
+			name: "empty delta waits for text",
+			in:   []agent.AgentEvent{textStart, text("one"), textStart, text(""), text("two")},
+			want: []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: ""}, event.TextDelta{Text: "\n\ntwo"}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var j textJoiner
+			var got []event.Event
+			for _, ev := range tc.in {
+				if e, ok := j.translate(ev); ok {
+					got = append(got, e)
+				}
+			}
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// Send emits UserMessage; the joiner only takes a user message as a separator.
+func TestTextJoinerDropsUserMessageAsSeparator(t *testing.T) {
+	textStart := agent.MessageUpdateEvent{AssistantMessageEvent: ai.TextStartEvent{}}
+	text := func(s string) agent.AgentEvent {
+		return agent.MessageUpdateEvent{AssistantMessageEvent: ai.TextDeltaEvent{Delta: s}}
+	}
+	user := agent.MessageStartEvent{Message: agent.AgentMessage{User: &agent.UserMessage{Content: ai.UserContentBlocks{ai.TextContent{Text: "steered"}}}}}
+	var j textJoiner
+	var got []event.Event
+	for _, ev := range []agent.AgentEvent{textStart, text("one"), user, textStart, text("two")} {
+		if e, ok := j.translate(ev); ok {
+			got = append(got, e)
+		}
+	}
+	assert.Equal(t, []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: "two"}}, got)
 }

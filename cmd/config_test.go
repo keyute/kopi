@@ -24,6 +24,7 @@ func TestConfigShowsOrigins(t *testing.T) {
 	assert.Contains(t, stdout, e.kopiHome)
 	assert.Contains(t, stdout, configFile)
 	assert.Regexp(t, `version\s+= 1\s+\(default\)`, stdout)
+	assert.Regexp(t, `keys\.submit\s+= `+regexp.QuoteMeta(`["enter"]`)+`\s+\(default\)`, stdout)
 	assert.Regexp(t, `model\s+= global/model-1\s+`+regexp.QuoteMeta("(global ("+configFile+"))"), stdout)
 
 	stdout, _, err = execute(t, "", "config", "--model", "flag/model-2")

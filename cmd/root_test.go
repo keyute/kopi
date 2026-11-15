@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/config"
-	"github.com/keyute/kopi/internal/pigruntime"
+	"github.com/keyute/kopi/internal/headless"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/tool"
 )
@@ -53,14 +53,7 @@ func newTestEnv(t *testing.T) testEnv {
 	t.Setenv("HOME", e.home)
 	t.Setenv("KOPI_HOME", e.kopiHome)
 	t.Setenv("PATH", "")
-	set, unset := pigruntime.IsolationEnv(e.kopiHome, e.agentDir)
-	for k := range set {
-		t.Setenv(k, os.Getenv(k))
-	}
-	for _, k := range unset {
-		t.Setenv(k, "")
-		require.NoError(t, os.Unsetenv(k))
-	}
+	pigruntimetest.RestoreEnv(t)
 	t.Chdir(e.workspace)
 	return e
 }
@@ -141,7 +134,7 @@ func builtinModel(t *testing.T, provider string) string {
 func TestRootWithoutCredentialSuggestsLogin(t *testing.T) {
 	newTestEnv(t)
 
-	_, _, err := execute(t, "", "--model", builtinModel(t, "openai-codex"))
+	_, _, err := execute(t, "", "--model", builtinModel(t, "openai-codex"), "-p", "hi")
 
 	require.Error(t, err)
 	assert.Equal(t, `no credential for provider "openai-codex": run "kopi login openai-codex"`, err.Error())
@@ -153,7 +146,7 @@ func TestRootWithoutCredentialForProviderWithoutLogin(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 
 	for _, provider := range []string{"mistral", "openai"} {
-		_, _, err := execute(t, "", "--model", builtinModel(t, provider))
+		_, _, err := execute(t, "", "--model", builtinModel(t, provider), "-p", "hi")
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), fmt.Sprintf("no credential for provider %q", provider))
@@ -165,12 +158,12 @@ func TestRootWithoutCredentialForProviderWithoutLogin(t *testing.T) {
 func TestRootUnknownModelNamesWhereItIsSet(t *testing.T) {
 	e := newTestEnv(t)
 
-	_, _, err := execute(t, "", "--model", "nosuch/model-1")
+	_, _, err := execute(t, "", "--model", "nosuch/model-1", "-p", "hi")
 	require.Error(t, err)
 	assert.Equal(t, `unknown model "nosuch/model-1": check --model`, err.Error())
 
 	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"model":"nosuch/model-1"}`)
-	_, _, err = execute(t, "")
+	_, _, err = execute(t, "", "-p", "hi")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), filepath.Join(e.kopiHome, "config.json"))
 }
@@ -180,11 +173,11 @@ func TestRootReportsMissingSession(t *testing.T) {
 	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
 	e.writeMockModels(t, server.URL)
 
-	_, _, err := execute(t, "", "--model", mockModel, "--resume", "no-such-id")
+	_, _, err := execute(t, "", "--model", mockModel, "--resume", "no-such-id", "-p", "hi")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `no session "no-such-id"`)
 
-	_, _, err = execute(t, "", "--model", mockModel, "--continue")
+	_, _, err = execute(t, "", "--model", mockModel, "--continue", "-p", "hi")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no session to continue")
 }
@@ -285,11 +278,10 @@ func TestRootStreamsTurnFromMockServer(t *testing.T) {
 	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "Hello from ", "the mock server.") })
 	e.writeMockModels(t, server.URL)
 
-	stdout, stderr, err := execute(t, "say hello\n/quit\n", "--model", mockModel)
+	stdout, stderr, err := execute(t, "", "--model", mockModel, "-p", "say hello")
 
 	require.NoError(t, err)
-	assert.Contains(t, stdout, "[session] ")
-	assert.Contains(t, stdout, "Hello from the mock server.\n")
+	assert.Equal(t, "Hello from the mock server.\n", stdout)
 	req := server.next(t)
 	assert.Equal(t, "/v1/chat/completions", req.path)
 	assert.Equal(t, "Bearer "+syntheticKey, req.authorization)
@@ -303,9 +295,10 @@ func TestRootStreamsTurnFromMockServer(t *testing.T) {
 	assert.Contains(t, []string{"system", "developer"}, first["role"])
 	assert.Contains(t, first["content"], "You are Kopi, a coding agent working in")
 	assert.NotContains(t, stdout+stderr, syntheticKey)
+	assert.NoFileExists(t, filepath.Join(e.kopiHome, "history.jsonl"), "headless runs record no prompt history")
 }
 
-func TestRootRendersProviderFailure(t *testing.T) {
+func TestRootReportsProviderFailure(t *testing.T) {
 	e := newTestEnv(t)
 	server := newMockProvider(t, func(w http.ResponseWriter) {
 		w.Header().Set("Content-Type", "application/json")
@@ -314,14 +307,13 @@ func TestRootRendersProviderFailure(t *testing.T) {
 	})
 	e.writeMockModels(t, server.URL)
 
-	stdout, stderr, err := execute(t, "say hello\n/status\n/quit\n", "--model", mockModel)
+	stdout, stderr, err := execute(t, "", "--model", mockModel, "-p", "say hello")
 
-	require.NoError(t, err)
+	require.ErrorIs(t, err, headless.ErrFailed)
+	assert.Contains(t, err.Error(), "mock rejected the request")
 	server.next(t)
-	assert.Contains(t, stdout, "[error] ")
-	assert.Contains(t, stdout, "mock rejected the request")
-	assert.Contains(t, stdout, "turn: idle", "the session carries on after the failure")
-	assert.NotContains(t, stdout+stderr, syntheticKey)
+	assert.Empty(t, stdout)
+	assert.NotContains(t, stdout+stderr+err.Error(), syntheticKey)
 }
 
 // The workspace spans HOME and KOPI_HOME, so only the protected list, not the
@@ -343,7 +335,7 @@ func TestRootReadRefusesProtectedPaths(t *testing.T) {
 	})
 	e.writeMockModels(t, server.URL)
 
-	_, _, err := execute(t, "read them\n/quit\n", "--model", mockModel)
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "read them")
 
 	require.NoError(t, err)
 	server.next(t)
@@ -357,5 +349,61 @@ func TestRootReadRefusesProtectedPaths(t *testing.T) {
 	for _, r := range results {
 		assert.Contains(t, r, tool.ErrProtected.Error())
 		assert.NotContains(t, r, "synthetic")
+	}
+}
+
+// lastUserText is the text of the last user message in a chat-completions
+// request body, whose content is a list of parts.
+func lastUserText(body map[string]any) string {
+	var text string
+	for _, m := range body["messages"].([]any) {
+		if msg := m.(map[string]any); msg["role"] == "user" {
+			text = ""
+			for _, part := range msg["content"].([]any) {
+				text += fmt.Sprint(part.(map[string]any)["text"])
+			}
+		}
+	}
+	return text
+}
+
+func TestRootPromptFromStdinAndArgument(t *testing.T) {
+	for _, tc := range []struct {
+		name, stdin string
+		args        []string
+		want        string
+	}{
+		{"stdin", "  piped document\n", nil, "piped document"},
+		{"stdin and argument", "piped document\n", []string{"-p", "summarise it"}, "piped document\n\nsummarise it"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+			e.writeMockModels(t, server.URL)
+
+			stdout, _, err := execute(t, tc.stdin, append([]string{"--model", mockModel}, tc.args...)...)
+
+			require.NoError(t, err)
+			assert.Equal(t, "ok\n", stdout)
+			assert.Equal(t, tc.want, lastUserText(server.next(t).body))
+		})
+	}
+}
+
+func TestRootWithoutPromptFails(t *testing.T) {
+	for _, stdin := range []string{"", " \n"} {
+		for _, args := range [][]string{nil, {"-p"}} {
+			t.Run(fmt.Sprintf("%q %v", stdin, args), func(t *testing.T) {
+				e := newTestEnv(t)
+				before := pigruntimetest.Snapshot(t, e.root)
+
+				_, _, err := execute(t, stdin, append([]string{"--model", mockModel}, args...)...)
+
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "no prompt")
+				assert.Equal(t, before, pigruntimetest.Snapshot(t, e.root))
+				assert.NoDirExists(t, e.agentDir)
+			})
+		}
 	}
 }
