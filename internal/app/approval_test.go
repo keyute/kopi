@@ -1,10 +1,12 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
+	"testing/synctest"
 
 	"github.com/MichaelKinsy/PiG/ai"
 	"github.com/stretchr/testify/assert"
@@ -123,6 +125,49 @@ func TestApprovalNoInterruptsTurnAndModelSeesRejection(t *testing.T) {
 	results := receive(t, requests).ToolResults
 	require.Len(t, results, 1)
 	assert.Contains(t, results[0], policy.ErrRejected.Error())
+}
+
+func TestApprovalClaimedAnswerSurvivesCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		rec := &recorder{}
+		c := &Controller{turn: &Work{cancel: cancel}, emit: rec.add}
+		approve := c.approver(newDisplay(nil))
+		done := make(chan struct{})
+		var answer policy.Answer
+		var err error
+		go func() {
+			answer, err = approve(ctx, policy.Request{CallID: "call-1", Tool: "Edit"})
+			close(done)
+		}()
+
+		synctest.Wait()
+		requests := ofType[event.ApprovalRequested](rec.all())
+		require.Len(t, requests, 1)
+		c.mu.Lock()
+		p := c.approval
+		c.approval = nil
+		c.mu.Unlock()
+		require.NotNil(t, p)
+		// Hold delivery after Answer claims the slot, forcing cancellation to
+		// reach the approver before the buffered answer is available.
+		defer close(p.answer)
+		p.work.cancel()
+		synctest.Wait()
+		select {
+		case <-done:
+			assert.Fail(t, "approver returned before the claimed answer was delivered")
+		default:
+		}
+
+		p.answer <- policy.Reject
+		synctest.Wait()
+		<-done
+		require.NoError(t, err)
+		require.Equal(t, policy.Reject, answer)
+		assert.Equal(t, []event.ApprovalEnded{{Token: requests[0].Token}}, ofType[event.ApprovalEnded](rec.all()))
+	})
 }
 
 func TestApprovalCancelledByInterruptEnds(t *testing.T) {
