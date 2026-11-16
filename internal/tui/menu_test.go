@@ -79,12 +79,13 @@ func TestSlashListsCommandsFiltersAndWraps(t *testing.T) {
 		"  /status     show status",
 		"  /new        start a new session",
 		"  /resume     resume a session",
-		"  … 2 more",
+		"  1 of 7",
 	}, menuText(m))
 	assert.Equal(t, "❯ /", screen(m)[len(screen(m))-9], "the menu is below the composer")
 
 	press(m, down)
 	assert.Equal(t, "❭ /execute    switch to execute mode", menuText(m)[1])
+	assert.Equal(t, "  2 of 7", menuText(m)[5], "the footer follows the selection")
 	press(m, up)
 	press(m, up)
 	assert.Equal(t, []string{
@@ -93,7 +94,7 @@ func TestSlashListsCommandsFiltersAndWraps(t *testing.T) {
 		"  /resume     resume a session",
 		"  /help       list commands",
 		"❭ /quit       exit kopi",
-		"  … 2 more",
+		"  7 of 7",
 	}, menuText(m), "up from the first wraps to the last")
 	press(m, down)
 	assert.Equal(t, "❭ /plan       switch to plan mode", menuText(m)[0], "down from the last wraps to the first")
@@ -109,7 +110,7 @@ func TestMenuTruncatesAndDropsDescriptionsWhenNarrow(t *testing.T) {
 	assert.Equal(t, "❭ /plan       switch to…", menuText(m)[0])
 
 	m.Update(tea.WindowSizeMsg{Width: 20, Height: 30})
-	assert.Equal(t, []string{"❭ /plan", "  /execute", "  /status", "  /new", "  /resume", "  … 2 more"}, menuText(m))
+	assert.Equal(t, []string{"❭ /plan", "  /execute", "  /status", "  /new", "  /resume", "  1 of 7"}, menuText(m))
 }
 
 func TestTabFillsCommandThenListsItsArguments(t *testing.T) {
@@ -275,5 +276,5 @@ func TestShortTerminalKeepsComposerAndStatusLine(t *testing.T) {
 	assert.Equal(t, statusText(m), s[9])
 	assert.Contains(t, s[9], "plan")
 	assert.Contains(t, s, "❯ /")
-	assert.Equal(t, []string{"❭ /plan       switch to plan mode", "  /execute    switch to execute mode", "  … 5 more"}, menuText(m))
+	assert.Equal(t, []string{"❭ /plan       switch to plan mode", "  /execute    switch to execute mode", "  1 of 7"}, menuText(m))
 }

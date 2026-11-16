@@ -21,8 +21,6 @@ type command struct {
 	args func(c *Controller) ([]Candidate, error)
 }
 
-// commandTable is a function rather than a package variable because /help
-// reads the table back, which would be an initialization cycle.
 func commandTable() []command {
 	return []command{
 		{Command: Command{"plan", "/plan", "switch to plan mode (read-only tools)"}, run: func(c *Controller, _ context.Context, _ string) error {
@@ -33,18 +31,10 @@ func commandTable() []command {
 			c.EnterExecute()
 			return nil
 		}},
-		{Command: Command{"status", "/status", "show mode, model, session, running work and tools"}, run: func(c *Controller, _ context.Context, _ string) error {
-			c.notice(renderStatus(c.Status()))
-			return nil
-		}},
 		{Command: Command{"new", "/new", "start a new session"}, run: func(c *Controller, ctx context.Context, _ string) error {
 			return c.switchTo(ctx, OpenRequest{})
 		}},
 		{Command: Command{"resume", "/resume [id]", "resume a session, or list sessions without an id"}, run: (*Controller).resumeCommand, args: (*Controller).sessionCandidates},
-		{Command: Command{"help", "/help", "list commands"}, run: func(c *Controller, _ context.Context, _ string) error {
-			c.notice(renderHelp(c.Commands()))
-			return nil
-		}},
 		{Command: Command{"quit", "/quit", "exit kopi"}, run: func(*Controller, context.Context, string) error {
 			return ErrQuit
 		}},
@@ -137,14 +127,4 @@ func (c *Controller) sessionCandidates() ([]Candidate, error) {
 func describeSession(s pigruntime.SessionInfo) string {
 	first, _, _ := strings.Cut(s.FirstMessage, "\n")
 	return s.Modified.Local().Format(time.DateTime) + "  " + first
-}
-
-func renderHelp(cmds []Command) string {
-	var b strings.Builder
-	b.WriteString("commands:")
-	for _, cmd := range cmds {
-		fmt.Fprintf(&b, "\n  %-13s %s", cmd.Usage, cmd.Summary)
-	}
-	b.WriteString("\n  //text        send a prompt that starts with /")
-	return b.String()
 }

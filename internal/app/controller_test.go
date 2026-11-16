@@ -75,13 +75,6 @@ func untimed(evs []event.Event) []event.Event {
 	return evs
 }
 
-func lastNotice(t *testing.T, rec *recorder) string {
-	t.Helper()
-	notices := ofType[event.Notice](rec.all())
-	require.NotEmpty(t, notices)
-	return notices[len(notices)-1].Text
-}
-
 type harness struct {
 	c    *Controller
 	faux *ai.FauxProviderHandle
@@ -565,10 +558,9 @@ func TestPromptWhileBusyIsQueuedAndStatusWorks(t *testing.T) {
 	got, err := h.c.Submit(t.Context(), "another prompt")
 	require.NoError(t, err)
 	assert.Nil(t, got)
-	got, err = h.c.Submit(t.Context(), "/status")
+	got, err = h.c.Submit(t.Context(), "/plan")
 	require.NoError(t, err)
 	assert.Nil(t, got)
-	assert.Contains(t, lastNotice(t, h.rec), "turn: running")
 	assert.True(t, h.c.Status().Busy)
 
 	close(release)
@@ -1340,7 +1332,7 @@ func TestInputIsRecordedInHistory(t *testing.T) {
 	w, err := h.c.Submit(t.Context(), "hold")
 	require.NoError(t, err)
 	wait(t, started)
-	for _, input := range []string{"queued", "/status", "/status", "  "} {
+	for _, input := range []string{"queued", "/plan", "/plan", "  "} {
 		_, err := h.c.Submit(t.Context(), input)
 		require.NoError(t, err, input)
 	}
@@ -1351,7 +1343,7 @@ func TestInputIsRecordedInHistory(t *testing.T) {
 	close(release)
 	wait(t, w.Done())
 
-	assert.Equal(t, []string{"hold", "queued", "/status", "/nope"}, h.c.History())
+	assert.Equal(t, []string{"hold", "queued", "/plan", "/nope"}, h.c.History())
 }
 
 func TestUnwritableHistoryNeverFailsSubmit(t *testing.T) {
@@ -1368,7 +1360,7 @@ func TestUnwritableHistoryNeverFailsSubmit(t *testing.T) {
 
 func TestHistoryIsNilWithoutStore(t *testing.T) {
 	h, _ := openHarness(t, Config{})
-	_, err := h.c.Submit(t.Context(), "/status")
+	_, err := h.c.Submit(t.Context(), "/plan")
 	require.NoError(t, err)
 	assert.Nil(t, h.c.History())
 }
@@ -1692,31 +1684,6 @@ func TestOpenErrorsPassThrough(t *testing.T) {
 	}
 }
 
-func TestStatusReportsToolsHonestly(t *testing.T) {
-	var ran atomic.Int32
-	sb := pigruntimetest.NewSandbox(t)
-	h := newHarness(t, sb, Config{Tools: []tool.Tool{readTool(t, sb), execTool(&ran)}})
-	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
-
-	status := h.c.Status()
-	assert.Equal(t, []ToolStatus{{"Read", policy.Read, true}, {"Exec", policy.Exec, false}}, status.Tools)
-	assert.Equal(t, sb.Workspace, status.Workspace)
-	assert.Equal(t, fauxProvider+"/faux-1", status.Model)
-
-	_, err := h.c.Submit(t.Context(), "/status")
-	require.NoError(t, err)
-	notice := lastNotice(t, h.rec)
-	for _, want := range []string{
-		"mode: plan", "model: " + status.Model, "workspace: " + sb.Workspace, "session: " + status.SessionID + " (0 messages)",
-		"turn: idle", "Read (read): allowed", "Exec (exec): not allowed in plan mode", noMutatingTools,
-	} {
-		assert.Contains(t, notice, want)
-	}
-
-	h.c.EnterExecute()
-	assert.Equal(t, []ToolStatus{{"Read", policy.Read, true}, {"Exec", policy.Exec, true}}, h.c.Status().Tools)
-}
-
 func TestStatusReportsContextUsageAndBranch(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	h := newHarness(t, sb, Config{})
@@ -1740,15 +1707,9 @@ func TestStatusReportsContextUsageAndBranch(t *testing.T) {
 	assert.Equal(t, "feature/status", status.Branch)
 }
 
-func TestHelpListsCommands(t *testing.T) {
+func TestQuitReturnsErrQuit(t *testing.T) {
 	h, _ := openHarness(t, Config{})
-	_, err := h.c.Submit(t.Context(), "/help")
-	require.NoError(t, err)
-	notice := lastNotice(t, h.rec)
-	for _, cmd := range h.c.Commands() {
-		assert.Contains(t, notice, cmd.Usage)
-	}
-	_, err = h.c.Submit(t.Context(), "/quit")
+	_, err := h.c.Submit(t.Context(), "/quit")
 	assert.ErrorIs(t, err, ErrQuit)
 }
 
@@ -1873,7 +1834,7 @@ func assertInertAfterClose(t *testing.T, h *harness) {
 	t.Helper()
 	delivered := len(h.rec.all())
 	mode, gen := h.c.authority.Snapshot()
-	for _, cmd := range []string{"/execute", "/status", "/help", "/plan", "/new", "/resume", "/resume no-such-session"} {
+	for _, cmd := range []string{"/execute", "/plan", "/new", "/resume", "/resume no-such-session"} {
 		_, err := h.c.Submit(t.Context(), cmd)
 		assert.ErrorIs(t, err, ErrNoSession, cmd)
 	}

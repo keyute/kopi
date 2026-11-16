@@ -23,10 +23,8 @@ Commands in the fullscreen interface:
 | --- | --- |
 | `/plan` | Switch to plan mode |
 | `/execute` | Switch to execute mode |
-| `/status` | Show mode, model, session, running work and tools |
 | `/new` | Start a new session |
 | `/resume [id]` | Resume a session, or list this directory's sessions |
-| `/help` | List commands |
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
 
@@ -144,7 +142,7 @@ task fmt
 
 Tests are mock-backed (PiG's faux provider and a local HTTP mock server); none use a live provider.
 
-Manual live check: `kopi login openai-codex`, run with a model, ask it to read a file, then try `/execute`, `/plan`, `/status`, Ctrl+C and `--continue`; then `kopi -p` with an argument and with piped input.
+Manual live check: `kopi login openai-codex`, run with a model, ask it to read a file, then try `/execute`, `/plan`, Ctrl+C and `--continue`; then `kopi -p` with an argument and with piped input.
 
 ## Not implemented
 

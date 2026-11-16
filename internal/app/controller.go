@@ -367,16 +367,12 @@ func (c *Controller) Status() Status {
 	c.mu.Unlock()
 
 	mode, _ := c.authority.Snapshot()
-	s := Status{SessionID: sessID, Mode: mode, Model: c.cfg.Model, Workspace: c.cfg.Workspace, Busy: busy, Branch: gitBranch(c.cfg.Workspace)}
+	s := Status{SessionID: sessID, Mode: mode, Model: c.cfg.Model, Busy: busy, Branch: gitBranch(c.cfg.Workspace)}
 	if sess != nil {
 		s.MessageCount = sess.MessageCount()
 		if tokens, window, ok := sess.ContextUsage(); ok {
 			s.ContextTokens, s.ContextWindow = tokens, window
 		}
-	}
-	for _, t := range c.cfg.Tools {
-		allowed := !t.Capability.NeedsExecute() || mode == policy.Execute
-		s.Tools = append(s.Tools, ToolStatus{Name: t.Name, Capability: t.Capability, Allowed: allowed})
 	}
 	return s
 }

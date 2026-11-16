@@ -128,8 +128,8 @@ func (m *model) menuHeight() int {
 	return max(0, min(h, avail))
 }
 
-// menuRows draws the menu: a window of candidates around the selection, then
-// a row counting those left out.
+// menuRows draws the menu: a window of candidates around the selection, then,
+// when some are left out, a row giving the selection's position.
 func (m *model) menuRows() []string {
 	h := m.menuHeight()
 	if h == 0 {
@@ -138,7 +138,7 @@ func (m *model) menuRows() []string {
 	mn, th := &m.menu, m.th
 	n := min(h, len(mn.shown), menuMax)
 	if n == h && n < len(mn.shown) && n > 1 {
-		// Clipped: keep the last row for the count.
+		// Clipped: keep the last row for the position.
 		n--
 	}
 	start := min(max(0, mn.sel-n/2), len(mn.shown)-n)
@@ -183,8 +183,8 @@ func (m *model) menuRows() []string {
 		}
 		rows = append(rows, ansi.Truncate(marker+ls.Render(label)+ds.Render(desc), m.width, ""))
 	}
-	if more := len(mn.shown) - n; more > 0 && n < h {
-		rows = append(rows, fg(th.dim).Render(ansi.Truncate(fmt.Sprintf("  … %d more", more), m.width, "")))
+	if len(mn.shown) > n && n < h {
+		rows = append(rows, fg(th.dim).Render(ansi.Truncate(fmt.Sprintf("  %d of %d", mn.sel+1, len(mn.shown)), m.width, "")))
 	}
 	return rows
 }

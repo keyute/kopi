@@ -48,7 +48,7 @@ func TestSpans(t *testing.T) {
 		want []Span
 	}{
 		{text: "/plan x", want: []Span{{Start: 0, End: 5, Kind: KindCommand}}},
-		{text: "  /status", want: []Span{{Start: 2, End: 9, Kind: KindCommand}}},
+		{text: "  /plan", want: []Span{{Start: 2, End: 7, Kind: KindCommand}}},
 		{text: "/nope"},
 		{text: "x /plan"},
 		{text: "/plan\nx"},
