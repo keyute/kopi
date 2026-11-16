@@ -129,6 +129,8 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.clearSelection()
+		m.drag = drag{}
+		m.composer.ta.ClearSelection()
 		m.composer.resize(m.width, m.height)
 		m.relayout()
 	case tea.BackgroundColorMsg:
@@ -205,7 +207,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		m.approvalKey(msg)
 		return nil
 	}
-	if m.menuHeight() > 0 {
+	if m.menu.open && len(m.menu.shown) > 0 && m.menuHeight() > 0 {
 		if cmd, ok := m.menuKey(msg); ok {
 			return cmd
 		}

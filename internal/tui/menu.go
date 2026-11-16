@@ -114,8 +114,12 @@ func (m *model) menuHeight() int {
 	if m.approval != nil {
 		return 0
 	}
+	avail := m.height - m.composer.height() - chromeRows
+	if m.busy {
+		avail -= busyRows
+	}
 	if m.drag.region == regionComposer && m.drag.moved {
-		return m.drag.menuHeight
+		return max(0, min(m.drag.menuHeight, avail))
 	}
 	mn := &m.menu
 	if !mn.open || len(mn.shown) == 0 {
@@ -124,10 +128,6 @@ func (m *model) menuHeight() int {
 	h := min(len(mn.shown), menuMax)
 	if len(mn.shown) > h {
 		h++
-	}
-	avail := m.height - m.composer.height() - chromeRows
-	if m.busy {
-		avail -= busyRows
 	}
 	return max(0, min(h, avail))
 }

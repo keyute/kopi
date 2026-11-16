@@ -428,6 +428,72 @@ func TestComposerDragReservesAlreadyOpenMenu(t *testing.T) {
 	})
 }
 
+func TestComposerDragReservationDoesNotDispatchEmptyMenu(t *testing.T) {
+	for _, k := range []tea.KeyPressMsg{up, down, enter, tab} {
+		t.Run(k.String(), func(t *testing.T) {
+			m, c := newMenuModel(t, 60, 30)
+			keys(m, "/")
+			top := m.composerTop()
+			pressAt(m, 3, top)
+			moveTo(m, 2, top)
+			require.Positive(t, m.menuHeight())
+			require.False(t, m.menu.open)
+			require.Empty(t, m.menu.shown)
+
+			assert.NotPanics(t, func() { press(m, k) })
+
+			if k.Code == tea.KeyEnter {
+				assert.Equal(t, []string{"/"}, c.submitted, "enter submits the draft without completing it")
+			} else {
+				assert.Empty(t, c.submitted)
+				assert.Equal(t, "/", m.composer.value())
+			}
+		})
+	}
+}
+
+func TestResizeCancelsComposerDragReservation(t *testing.T) {
+	m, _ := newMenuModel(t, 60, 30)
+	keys(m, "/")
+	top := m.composerTop()
+	pressAt(m, 3, top)
+	moveTo(m, 2, top)
+	require.Equal(t, 6, m.drag.menuHeight)
+	require.True(t, m.composer.ta.HasSelection())
+
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 10})
+
+	assert.Equal(t, drag{}, m.drag)
+	assert.False(t, m.composer.ta.HasSelection())
+	assert.True(t, m.sel.empty())
+	s := screen(m)
+	require.Len(t, s, 10)
+	assert.Equal(t, statusText(m), s[9])
+	assert.Nil(t, moveTo(m, 3, m.composerTop()))
+	assert.Nil(t, releaseAt(m, 3, m.composerTop()))
+	assert.False(t, m.composer.ta.HasSelection())
+	assert.Empty(t, m.clip.(*fakeClipboard).written)
+	assert.NotContains(t, statusText(m), "Copied")
+}
+
+func TestComposerDragReservationClampsWhenBusyBudgetShrinks(t *testing.T) {
+	m, _ := newMenuModel(t, 60, 11)
+	keys(m, "/")
+	top := m.composerTop()
+	pressAt(m, 3, top)
+	moveTo(m, 2, top)
+	require.Equal(t, 6, m.menuHeight())
+
+	send(m, event.TurnStart{Prompt: "go"})
+
+	assert.Equal(t, 6, m.drag.menuHeight, "the captured reservation remains unchanged")
+	assert.Equal(t, 4, m.menuHeight(), "only the current budget is reserved")
+	assert.Equal(t, make([]string, 4), m.menuRows())
+	s := screen(m)
+	require.Len(t, s, 11)
+	assert.Equal(t, statusText(m), s[10])
+}
+
 func TestLoadedMenuShrinksExhaustedPendingBudget(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, _ := newMenuModel(t, 80, 14)
