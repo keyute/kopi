@@ -172,7 +172,7 @@ func (m *model) menuRows() []string {
 		}
 		marker, ls, ds := "  ", fg(th.text), fg(th.muted)
 		if start+i == mn.sel {
-			marker, ls, ds = "❭ ", fg(th.accent), fg(th.accent)
+			marker, ls, ds = cursorMark, fg(th.accent), fg(th.accent)
 			marker = ls.Render(marker)
 		}
 		rows = append(rows, ansi.Truncate(marker+ls.Render(label)+ds.Render(desc), m.width, ""))

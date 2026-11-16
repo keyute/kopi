@@ -25,7 +25,7 @@ type Controller interface {
 	TakeQueued() []event.Input
 	Interrupt() bool
 	// Answer answers the pending approval for token; false when it is stale.
-	Answer(token uint64, a policy.Answer) bool
+	Answer(token uint64, d policy.Decision) bool
 	ToggleMode()
 	History() []string
 	Status() app.Status
