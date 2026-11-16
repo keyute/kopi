@@ -62,7 +62,7 @@ func mcpListCmd() *cobra.Command {
 				slog.Warn(printable(n, "    "))
 			}
 			out := cmd.OutOrStdout()
-			if len(set.servers) == 0 && len(set.untrusted) == 0 {
+			if len(set.servers) == 0 && len(set.untrusted) == 0 && len(set.invalid) == 0 {
 				_, err := fmt.Fprintf(out, "No MCP servers configured: declare them under mcpServers in %s or in %s in this folder.\n", paths.ConfigFile, projectMCPFile)
 				return err
 			}
@@ -82,6 +82,9 @@ func mcpListCmd() *cobra.Command {
 					where = "project (" + projectFile + ")"
 				}
 				blocks[st.Name] = append(blocks[st.Name], serverBlock(st, where))
+			}
+			for name, err := range set.invalid {
+				blocks[name] = append(blocks[name], serverBlock(pigruntime.ServerStatus{Name: name, Err: err}, "project ("+projectFile+")"))
 			}
 			for _, name := range slices.Sorted(maps.Keys(set.untrusted)) {
 				blocks[name] = append(blocks[name], fmt.Sprintf("%s  project (%s)\n  not trusted, not started\n", printable(name, ""), projectFile))

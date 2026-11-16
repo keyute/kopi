@@ -17,8 +17,9 @@ func projectFile(t *testing.T, content string) string {
 }
 
 func TestProjectServersMissingFile(t *testing.T) {
-	servers, err := ProjectServers(filepath.Join(t.TempDir(), ".mcp.json"))
+	servers, invalid, err := ProjectServers(filepath.Join(t.TempDir(), ".mcp.json"))
 	require.NoError(t, err)
+	assert.Empty(t, invalid)
 	assert.Nil(t, servers)
 }
 
@@ -32,8 +33,9 @@ func TestProjectServersReadsEntriesLeniently(t *testing.T) {
 		},
 		"other": true
 	}`)
-	servers, err := ProjectServers(path)
+	servers, invalid, err := ProjectServers(path)
 	require.NoError(t, err)
+	assert.Empty(t, invalid)
 	assert.Equal(t, map[string]MCPServer{
 		"local":  {Command: "npx", Args: []string{"-y", "pkg"}, Env: map[string]string{"A": "b"}},
 		"remote": {Type: "http", URL: "https://example.test/mcp", Headers: map[string]string{"X": "y"}},
@@ -51,12 +53,29 @@ func TestProjectServersRejectsMalformedFile(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := projectFile(t, tc.content)
-			_, err := ProjectServers(path)
+			_, invalid, err := ProjectServers(path)
+			assert.Empty(t, invalid)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "failed to parse")
 			assert.Contains(t, err.Error(), path)
 		})
 	}
+}
+
+func TestProjectServersDecodesEntriesIndependently(t *testing.T) {
+	path := projectFile(t, `{"mcpServers":{
+		"healthy":{"command":"srv"},
+		"bad-command":{"command":42},
+		"bad-args":{"args":"not-an-array"}
+	}}`)
+
+	servers, invalid, err := ProjectServers(path)
+
+	require.NoError(t, err)
+	assert.Equal(t, map[string]MCPServer{"healthy": {Command: "srv"}}, servers)
+	require.Len(t, invalid, 2)
+	assert.ErrorContains(t, invalid["bad-command"], "failed to decode MCP server")
+	assert.ErrorContains(t, invalid["bad-args"], "failed to decode MCP server")
 }
 
 func lookupIn(env map[string]string) func(string) (string, bool) {

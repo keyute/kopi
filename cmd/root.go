@@ -433,6 +433,7 @@ type mcpServers struct {
 	untrusted map[string]config.MCPServer
 	// undecided means no trust decision applies and none was asked for.
 	undecided bool
+	invalid   map[string]error
 	notices   []string
 }
 
@@ -449,10 +450,14 @@ func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome
 	if s.servers == nil {
 		s.servers = map[string]config.MCPServer{}
 	}
-	project, err := config.ProjectServers(filepath.Join(cwd, projectMCPFile))
+	project, invalid, err := config.ProjectServers(filepath.Join(cwd, projectMCPFile))
 	if err != nil {
 		s.notices = append(s.notices, fmt.Sprintf("Skipped this folder's MCP servers: %v", err))
 		return s, nil
+	}
+	for _, name := range slices.Sorted(maps.Keys(invalid)) {
+		s.notices = append(s.notices, fmt.Sprintf("MCP server %s: %v", name, invalid[name]))
+		project[name] = config.MCPServer{}
 	}
 	if len(project) == 0 {
 		return s, nil
@@ -478,9 +483,14 @@ func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome
 		s.untrusted = project
 		return s, nil
 	}
+	s.invalid = invalid
 	for name, p := range project {
-		s.servers[name] = p
 		s.project[name] = true
+		if invalid[name] != nil {
+			delete(s.servers, name)
+			continue
+		}
+		s.servers[name] = p
 	}
 	return s, nil
 }

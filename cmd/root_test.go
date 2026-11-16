@@ -1190,9 +1190,48 @@ func TestRootPrintStripsControlsFromNotices(t *testing.T) {
 	_, stderr, err := execute(t, "", "--model", mockModel, "-p", "hi")
 
 	require.NoError(t, err)
-	assert.Contains(t, stderr, "Skipped this folder's MCP servers")
+	assert.Contains(t, stderr, "failed to decode MCP server")
 	assert.Contains(t, stderr, "evil[31mRED[0m")
 	assert.NotContains(t, stderr, "\x1b")
+}
+
+func TestResolveServersInvalidDeclarations(t *testing.T) {
+	for _, decision := range []string{"trusted", "untrusted", "undecided", "ask"} {
+		t.Run(decision, func(t *testing.T) {
+			e := newTestEnv(t)
+			trustFile := filepath.Join(e.kopiHome, "trust.json")
+			e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), `{"mcpServers":{"shared":{"command":42},"bad":{"args":false},"healthy":{"command":"healthy-mcp"}}}`)
+			if decision == "trusted" || decision == "untrusted" {
+				b, err := json.Marshal(map[string]any{"version": 1, "folders": map[string]string{canonical(t, e.workspace): decision}})
+				require.NoError(t, err)
+				e.writeFile(t, trustFile, string(b))
+			}
+			var ask askTrust
+			if decision == "ask" {
+				ask = func(req tui.TrustRequest) (tui.TrustChoice, error) {
+					assert.Equal(t, []string{"bad: ", "healthy: healthy-mcp", "shared: "}, req.Servers)
+					return tui.TrustCancelled, nil
+				}
+			}
+
+			set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, ask)
+
+			require.NoError(t, err)
+			require.Len(t, set.notices, 2)
+			assert.Contains(t, set.notices[0], "MCP server bad: failed to decode")
+			assert.Contains(t, set.notices[1], "MCP server shared: failed to decode")
+			if decision == "trusted" {
+				assert.Equal(t, map[string]config.MCPServer{"solo": {Command: "solo-mcp"}, "healthy": {Command: "healthy-mcp"}}, set.servers)
+				assert.Len(t, set.invalid, 2)
+				assert.True(t, set.project["shared"])
+			} else {
+				assert.Equal(t, globalServers, set.servers)
+				assert.Len(t, set.untrusted, 3)
+				assert.Empty(t, set.invalid)
+				assert.Equal(t, decision == "undecided", set.undecided)
+			}
+		})
+	}
 }
 
 func TestResolveServersMalformedProjectFileIsANotice(t *testing.T) {

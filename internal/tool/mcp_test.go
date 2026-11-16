@@ -83,19 +83,34 @@ func TestMCPResult(t *testing.T) {
 	result := func(text string, err error) Tool {
 		return NewMCP(MCPTool{Server: "s", Tool: "t"}, func(context.Context, json.RawMessage) (string, error) { return text, err })
 	}
-	failed := errors.New("failed")
-	_, err := result("", failed).Run(t.Context(), nil, allowTarget)
+	failed := errors.New("failed: " + strings.Repeat("e", 3*maxOutputPart))
+	out, err := result("", failed).Run(t.Context(), nil, allowTarget)
 	require.ErrorIs(t, err, failed)
+	assert.Same(t, failed, err)
+	assert.Empty(t, out)
 
-	out, err := result("", nil).Run(t.Context(), nil, allowTarget)
+	out, err = result("short error", failed).Run(t.Context(), nil, allowTarget)
+	require.ErrorIs(t, err, failed)
+	assert.Equal(t, failed.Error()+": short error", err.Error())
+	assert.Empty(t, out)
+
+	out, err = result("", nil).Run(t.Context(), nil, allowTarget)
 	require.NoError(t, err)
 	assert.Equal(t, "no output", result("", nil).Display.Summary(out))
 
-	long := strings.Repeat("x", 3*maxOutputPart)
+	long := "head" + strings.Repeat("x", 3*maxOutputPart) + "tail"
 	out, err = result(long, nil).Run(t.Context(), nil, allowTarget)
 	require.NoError(t, err)
 	assert.Less(t, len(out), len(long))
+	assert.True(t, strings.HasPrefix(out, "head"))
+	assert.True(t, strings.HasSuffix(out, "tail"))
 	assert.Contains(t, out, "bytes cut")
+
+	failed = errors.New("failed")
+	errorOut, err := result(long, failed).Run(t.Context(), nil, allowTarget)
+	require.ErrorIs(t, err, failed)
+	assert.Empty(t, errorOut)
+	assert.Equal(t, failed.Error()+": "+out, err.Error())
 }
 
 func TestMCPDisplay(t *testing.T) {

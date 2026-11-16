@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/keyute/kopi/internal/policy"
@@ -37,7 +38,8 @@ type MCPTool struct {
 }
 
 // NewMCP returns t as a tool whose calls go to call. The caller checks the
-// name against MCPNameLimit and other tools' names.
+// name against MCPNameLimit and other tools' names. Text returned with an error
+// is supplemental error output and is bounded before being added to the error.
 func NewMCP(t MCPTool, call func(ctx context.Context, args json.RawMessage) (string, error)) Tool {
 	label := t.Server + "/" + t.Tool
 	description := t.Description
@@ -60,11 +62,14 @@ func NewMCP(t MCPTool, call func(ctx context.Context, args json.RawMessage) (str
 				return "", err
 			}
 			text, err := call(ctx, args)
-			if err != nil {
+			if err != nil && text == "" {
 				return "", err
 			}
 			out := &outputBuffer{}
 			_, _ = out.Write([]byte(text))
+			if err != nil {
+				return "", fmt.Errorf("%w: %s", err, out.String())
+			}
 			return out.String(), nil
 		},
 		Display: Display{

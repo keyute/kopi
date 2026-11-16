@@ -139,6 +139,47 @@ func TestMCPListStripsControlsFromUntrustedText(t *testing.T) {
 	assert.Equal(t, "evil]52;c;c2VjcmV0 fake  project ("+projectFile+")\n  not trusted, not started\n", blocks[1])
 }
 
+func TestMCPListInvalidProjectDeclarations(t *testing.T) {
+	for _, trusted := range []bool{false, true} {
+		t.Run(fmt.Sprint(trusted), func(t *testing.T) {
+			e := newTestEnv(t)
+			e.writeServers(t, filepath.Join(e.kopiHome, "config.json"), map[string]any{"shared": map[string]any{"command": "global-must-not-start"}})
+			projectFile := filepath.Join(e.workspace, ".mcp.json")
+			e.writeServers(t, projectFile, map[string]any{
+				"shared":         map[string]any{"command": 42},
+				"evil\x1b[31m\a": map[string]any{"args": false},
+				"healthy": map[string]any{
+					"command": os.Args[0],
+					"args":    []string{"-test.run=^TestMCPStdioHelper$"},
+					"env":     map[string]string{stdioHelperEnv: "serve"},
+				},
+			})
+			if trusted {
+				b, err := json.Marshal(map[string]any{"version": 1, "folders": map[string]string{canonical(t, e.workspace): "trusted"}})
+				require.NoError(t, err)
+				e.writeFile(t, filepath.Join(e.kopiHome, "trust.json"), string(b))
+			}
+
+			stdout, stderr, err := execute(t, "", "mcp", "list")
+
+			require.NoError(t, err)
+			assert.NotContains(t, stdout+stderr, "\x1b")
+			assert.NotContains(t, stdout+stderr, "\a")
+			assert.Equal(t, 2, strings.Count(stderr, "failed to decode MCP server"))
+			assert.Contains(t, stdout, "evil[31m  project ("+projectFile+")")
+			if trusted {
+				assert.NotContains(t, stdout+stderr, "global-must-not-start")
+				assert.Equal(t, 2, strings.Count(stdout, "failed: failed to decode MCP server"))
+				assert.Contains(t, stdout, "connected, 2 tools")
+				assert.Equal(t, 1, strings.Count(stdout, "shared  "))
+			} else {
+				assert.Equal(t, 3, strings.Count(stdout, "not trusted, not started"))
+				assert.NotContains(t, stdout, "connected")
+			}
+		})
+	}
+}
+
 func TestPrintable(t *testing.T) {
 	assert.Equal(t, "a b c", printable("a\nb\r\nc", ""))
 	assert.Equal(t, "a\n    b\n    [31mc", printable("a\nb\r\n\x1b[31mc", "    "))
@@ -152,7 +193,7 @@ func TestMCPListStripsControlsFromNotices(t *testing.T) {
 	_, stderr, err := execute(t, "", "mcp", "list")
 
 	require.NoError(t, err)
-	assert.Contains(t, stderr, "Skipped this folder's MCP servers")
+	assert.Contains(t, stderr, "failed to decode MCP server")
 	assert.Contains(t, stderr, "evil[31mRED[0m")
 	assert.NotContains(t, stderr, "\x1b")
 }

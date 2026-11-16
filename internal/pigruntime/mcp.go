@@ -305,10 +305,7 @@ func (s *server) call(name string) func(context.Context, json.RawMessage) (strin
 		}
 		text := resultText(result)
 		if result.IsError != nil && *result.IsError {
-			if text == "" {
-				return "", ErrToolError
-			}
-			return "", fmt.Errorf("%w: %s", ErrToolError, text)
+			return text, ErrToolError
 		}
 		return text, nil
 	}

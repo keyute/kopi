@@ -132,17 +132,36 @@ func TestServersSkipLongAndDuplicateNames(t *testing.T) {
 }
 
 func TestServersErrorResult(t *testing.T) {
-	fake := &mcpfake.Server{
-		Tools: []map[string]any{echoTool("fail")},
-		Reply: func(string, json.RawMessage) map[string]any {
-			return map[string]any{"isError": true, "content": []any{map[string]any{"type": "text", "text": "no such page"}}}
-		},
-	}
-	s, _ := startFakes(t, map[string]*mcpfake.Server{"srv": fake})
+	for _, tc := range []struct{ name, text string }{
+		{"short", "no such page"},
+		{"empty", ""},
+		{"oversized", "head" + strings.Repeat("x", 100000) + "tail"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &mcpfake.Server{
+				Tools: []map[string]any{echoTool("fail")},
+				Reply: func(string, json.RawMessage) map[string]any {
+					return map[string]any{"isError": true, "content": []any{map[string]any{"type": "text", "text": tc.text}}}
+				},
+			}
+			s, _ := startFakes(t, map[string]*mcpfake.Server{"srv": fake})
 
-	_, err := call(t, s.Wait(t.Context())[0].Tools[0], `{}`)
-	require.ErrorIs(t, err, ErrToolError)
-	assert.Contains(t, err.Error(), "no such page")
+			out, err := call(t, s.Wait(t.Context())[0].Tools[0], `{}`)
+			require.ErrorIs(t, err, ErrToolError)
+			assert.Empty(t, out)
+			switch tc.name {
+			case "empty":
+				assert.Equal(t, ErrToolError.Error(), err.Error())
+			case "short":
+				assert.Equal(t, ErrToolError.Error()+": "+tc.text, err.Error())
+			case "oversized":
+				assert.True(t, strings.HasPrefix(err.Error(), ErrToolError.Error()+": head"))
+				assert.True(t, strings.HasSuffix(err.Error(), "tail"))
+				assert.Contains(t, err.Error(), "bytes cut")
+				assert.Less(t, len(err.Error()), len(tc.text))
+			}
+		})
+	}
 }
 
 func TestServersNonTextResult(t *testing.T) {

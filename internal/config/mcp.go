@@ -13,22 +13,39 @@ import (
 
 // ProjectServers reads the mcpServers of a standard .mcp.json; a missing file
 // is no servers. Unknown keys are ignored, since other clients add their own,
-// and entries are not validated so one bad server does not hide the rest.
-func ProjectServers(path string) (map[string]MCPServer, error) {
+// and entries are decoded independently so one bad server does not hide the rest.
+// Entry decode errors are returned by name, separately from file errors.
+func ProjectServers(path string) (map[string]MCPServer, map[string]error, error) {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to read MCP config %s: %w", path, err)
+		return nil, nil, fmt.Errorf("failed to read MCP config %s: %w", path, err)
 	}
 	var f struct {
-		MCPServers map[string]MCPServer `json:"mcpServers"`
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
 	}
 	if err := json.Unmarshal(b, &f); err != nil {
-		return nil, fmt.Errorf("failed to parse MCP config %s: %w", path, err)
+		return nil, nil, fmt.Errorf("failed to parse MCP config %s: %w", path, err)
 	}
-	return f.MCPServers, nil
+	var servers map[string]MCPServer
+	var invalid map[string]error
+	if f.MCPServers != nil {
+		servers = make(map[string]MCPServer, len(f.MCPServers))
+	}
+	for name, raw := range f.MCPServers {
+		var server MCPServer
+		if err := json.Unmarshal(raw, &server); err != nil {
+			if invalid == nil {
+				invalid = map[string]error{}
+			}
+			invalid[name] = fmt.Errorf("failed to decode MCP server: %w", err)
+			continue
+		}
+		servers[name] = server
+	}
+	return servers, invalid, nil
 }
 
 var variable = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}`)
