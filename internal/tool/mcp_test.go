@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,18 +86,42 @@ func TestMCPResult(t *testing.T) {
 	result := func(text string, err error) Tool {
 		return NewMCP(MCPTool{Server: "s", Tool: "t"}, func(context.Context, json.RawMessage) (string, error) { return text, err })
 	}
-	failed := errors.New("failed: " + strings.Repeat("e", 3*maxOutputPart))
-	out, err := result("", failed).Run(t.Context(), nil, allowTarget)
-	require.ErrorIs(t, err, failed)
-	assert.Same(t, failed, err)
-	assert.Empty(t, out)
+	failed := errors.New("failed")
+	for _, text := range []string{"", "short error"} {
+		out, err := result(text, failed).Run(t.Context(), nil, allowTarget)
+		require.ErrorIs(t, err, failed)
+		want := failed.Error()
+		if text != "" {
+			want += ": " + text
+		}
+		assert.Equal(t, want, err.Error())
+		assert.Empty(t, out)
+	}
 
-	out, err = result("short error", failed).Run(t.Context(), nil, allowTarget)
-	require.ErrorIs(t, err, failed)
-	assert.Equal(t, failed.Error()+": short error", err.Error())
-	assert.Empty(t, out)
+	for _, text := range []string{"", "short supplemental", strings.Repeat("界", 3*maxOutputPart) + "tail"} {
+		t.Run(fmt.Sprintf("huge error supplemental bytes %d", len(text)), func(t *testing.T) {
+			cause := errors.New("head" + strings.Repeat("界", 3*maxOutputPart) + "end")
+			failed := &url.Error{Op: "call", URL: "synthetic", Err: cause}
+			out, err := result(text, failed).Run(t.Context(), nil, allowTarget)
+			require.ErrorIs(t, err, failed)
+			require.ErrorIs(t, err, cause)
+			var original *url.Error
+			require.ErrorAs(t, err, &original)
+			assert.Same(t, failed, original)
+			assert.Empty(t, out)
+			complete := failed.Error()
+			if text != "" {
+				complete += ": " + text
+			}
+			assert.Contains(t, err.Error(), fmt.Sprintf("%d bytes cut", len(complete)-2*maxOutputPart))
+			assert.LessOrEqual(t, len(err.Error()), 2*maxOutputPart+100)
+			assert.True(t, utf8.ValidString(err.Error()))
+			assert.True(t, strings.HasPrefix(err.Error(), "call \"synthetic\": head"))
+			assert.True(t, strings.HasSuffix(err.Error(), complete[len(complete)-3:]))
+		})
+	}
 
-	out, err = result("", nil).Run(t.Context(), nil, allowTarget)
+	out, err := result("", nil).Run(t.Context(), nil, allowTarget)
 	require.NoError(t, err)
 	assert.Equal(t, "no output", result("", nil).Display.Summary(out))
 
@@ -110,7 +137,10 @@ func TestMCPResult(t *testing.T) {
 	errorOut, err := result(long, failed).Run(t.Context(), nil, allowTarget)
 	require.ErrorIs(t, err, failed)
 	assert.Empty(t, errorOut)
-	assert.Equal(t, failed.Error()+": "+out, err.Error())
+	assert.True(t, strings.HasPrefix(err.Error(), "failed: head"))
+	assert.True(t, strings.HasSuffix(err.Error(), "tail"))
+	assert.Contains(t, err.Error(), fmt.Sprintf("%d bytes cut", len(failed.Error()+": "+long)-2*maxOutputPart))
+	assert.LessOrEqual(t, len(err.Error()), 2*maxOutputPart+100)
 }
 
 func TestMCPDisplay(t *testing.T) {

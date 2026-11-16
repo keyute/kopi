@@ -42,6 +42,14 @@ func mcpNamePart(s string) string {
 	}, s)
 }
 
+type mcpError struct {
+	text string
+	err  error
+}
+
+func (e *mcpError) Error() string { return e.text }
+func (e *mcpError) Unwrap() error { return e.err }
+
 type MCPTool struct {
 	// Tool is the server's own name for the tool.
 	Server, Tool, Description string
@@ -51,8 +59,8 @@ type MCPTool struct {
 }
 
 // NewMCP returns t as a tool whose calls go to call. The caller checks the
-// name against MCPNameLimit and other tools' names. Text returned with an error
-// is supplemental error output and is bounded before being added to the error.
+// name against MCPNameLimit and other tools' names. Errors and supplemental
+// text share the same output bound.
 func NewMCP(t MCPTool, call func(ctx context.Context, args json.RawMessage) (string, error)) Tool {
 	label := t.Server + "/" + t.Tool
 	description := t.Description
@@ -75,14 +83,16 @@ func NewMCP(t MCPTool, call func(ctx context.Context, args json.RawMessage) (str
 				return "", err
 			}
 			text, err := call(ctx, args)
-			if err != nil && text == "" {
-				return "", err
-			}
 			out := &outputBuffer{}
-			_, _ = out.Write([]byte(text))
 			if err != nil {
-				return "", fmt.Errorf("%w: %s", err, out.String())
+				_, _ = out.Write([]byte(err.Error()))
+				if text != "" {
+					_, _ = out.Write([]byte(": "))
+					_, _ = out.Write([]byte(text))
+				}
+				return "", &mcpError{text: out.String(), err: err}
 			}
+			_, _ = out.Write([]byte(text))
 			return out.String(), nil
 		},
 		Display: Display{

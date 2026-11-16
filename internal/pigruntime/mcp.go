@@ -69,8 +69,6 @@ type server struct {
 
 	done   chan struct{} // closed once status is final
 	status ServerStatus
-	// toolNames maps each of status.Tools' names to the server's own name for it.
-	toolNames map[string]string
 
 	mu     sync.Mutex
 	client *mcp.Client
@@ -122,7 +120,7 @@ func dialTransport(cwd string) dialFunc {
 	return func(_ string, c config.MCPServer) (mcp.Transport, error) {
 		if c.URL == "" {
 			// Env is added on top of Kopi's own environment.
-			return mcp.NewStdioTransport(mcp.StdioTransportOptions{Command: c.Command, Args: c.Args, Cwd: cwd, Env: c.Env}), nil
+			return &stdioTransport{StdioTransport: mcp.NewStdioTransport(mcp.StdioTransportOptions{Command: c.Command, Args: c.Args, Cwd: cwd, Env: c.Env})}, nil
 		}
 		t, err := mcp.NewStreamableHTTPTransport(mcp.StreamableHTTPTransportOptions{URL: c.URL, Headers: c.Headers})
 		if err != nil {
@@ -130,6 +128,25 @@ func dialTransport(cwd string) dialFunc {
 		}
 		return t, nil
 	}
+}
+
+// stdioTransport serializes Close with Start, which publishes the child only
+// after spawning it. Otherwise cancellation can close before the child is owned.
+type stdioTransport struct {
+	*mcp.StdioTransport
+	mu sync.Mutex
+}
+
+func (t *stdioTransport) Start() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.StdioTransport.Start()
+}
+
+func (t *stdioTransport) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.StdioTransport.Close()
 }
 
 // Wait returns every server's status, sorted by name, once all have settled,
@@ -159,30 +176,9 @@ func (s *Servers) Wait(ctx context.Context) []ServerStatus {
 			}
 		}
 		s.cancel()
-		s.result = s.dropClashes(out)
+		s.result = out
 	})
 	return s.result
-}
-
-// dropClashes leaves out a tool whose name an earlier server's tool already
-// has, since the gate tells tools apart by name only.
-func (s *Servers) dropClashes(out []ServerStatus) []ServerStatus {
-	owners := map[string]string{}
-	for i, srv := range s.servers {
-		var kept []tool.Tool
-		skipped := slices.Clone(out[i].Skipped)
-		for _, tl := range out[i].Tools {
-			name := srv.toolNames[tl.Name]
-			if owner, ok := owners[tl.Name]; ok {
-				skipped = append(skipped, fmt.Sprintf("%s: same name as %s", name, owner))
-				continue
-			}
-			owners[tl.Name] = fmt.Sprintf("%s of server %s", name, srv.name)
-			kept = append(kept, tl)
-		}
-		out[i].Tools, out[i].Skipped = kept, skipped
-	}
-	return out
 }
 
 // Close stops every server; it is safe to call more than once and before Wait.
@@ -257,7 +253,7 @@ func (s *server) connect(ctx context.Context) (*mcp.Client, *mcp.InitializeResul
 	if err != nil {
 		err = fmt.Errorf("failed to connect: %w", err)
 		// Connect has closed the transport, so its stderr is complete.
-		if stdio, ok := t.(*mcp.StdioTransport); ok {
+		if stdio, ok := t.(interface{ Stderr() string }); ok {
 			if tail := lastLines(stdio.Stderr(), stderrLines); tail != "" {
 				err = fmt.Errorf("%w; stderr:\n%s", err, tail)
 			}
@@ -280,7 +276,6 @@ func (s *server) tools(listed []mcp.Tool) ([]tool.Tool, []string) {
 	var tools []tool.Tool
 	var skipped []string
 	seen := map[string]string{}
-	s.toolNames = seen
 	for _, mt := range listed {
 		name := tool.MCPName(s.name, mt.Name)
 		if len(name) > tool.MCPNameLimit {

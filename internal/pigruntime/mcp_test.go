@@ -347,6 +347,54 @@ func stdioHelper(mode string) config.MCPServer {
 	return config.MCPServer{Command: os.Args[0], Args: []string{"-test.run=^TestMCPStdioHelper$"}, Env: map[string]string{stdioHelperEnv: mode}}
 }
 
+func TestStdioTransportLifecycle(t *testing.T) {
+	for _, order := range []string{"close before start", "start before close", "concurrent"} {
+		t.Run(order, func(t *testing.T) {
+			transport, err := dialTransport(t.TempDir())("srv", stdioHelper("serve"))
+			require.NoError(t, err)
+			stdio, ok := transport.(*stdioTransport)
+			require.True(t, ok)
+			t.Cleanup(func() { assert.NoError(t, stdio.Close()) })
+			_, ordered := transport.(interface {
+				SendOrdered(context.Context, mcp.JSONRPCMessage, func()) error
+			})
+			require.True(t, ordered)
+
+			switch order {
+			case "close before start":
+				require.NoError(t, stdio.Close())
+				require.Error(t, stdio.Start())
+			case "start before close":
+				require.NoError(t, stdio.Start())
+				require.Positive(t, stdio.PID())
+				require.NoError(t, stdio.Close())
+			case "concurrent":
+				// Exercise the lifecycle boundary, not PiG's internal spawn interleaving.
+				begin := make(chan struct{})
+				started := make(chan error, 1)
+				closed := make(chan error, 1)
+				go func() {
+					<-begin
+					started <- stdio.Start()
+				}()
+				go func() {
+					<-begin
+					closed <- stdio.Close()
+				}()
+				close(begin)
+				require.NoError(t, <-closed)
+				if err := <-started; err != nil {
+					var connectionClosed *mcp.McpConnectionClosedError
+					require.ErrorAs(t, err, &connectionClosed)
+				}
+			}
+			assert.Zero(t, stdio.PID())
+			require.NoError(t, stdio.Close())
+			require.Error(t, stdio.Start())
+		})
+	}
+}
+
 func TestServersStdio(t *testing.T) {
 	missing := "kopi-no-such-command-7f3a"
 	s := StartServers(ServerOptions{
