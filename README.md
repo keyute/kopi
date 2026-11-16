@@ -1,7 +1,7 @@
 # Kopi
 
 Kopi is a coding-agent CLI built on [PiG](https://github.com/MichaelKinsy/PiG).
-It is early: one read-only tool, a fullscreen terminal interface, and a print mode that answers one prompt.
+It is early: tools to read, write and edit files, a fullscreen terminal interface, and a print mode that answers one prompt.
 
 ## Build and run
 
@@ -14,6 +14,7 @@ bin/kopi --model provider/id
 bin/kopi --model provider/id -c    # continue the latest session in this directory
 bin/kopi --model provider/id -r <id>
 bin/kopi --model provider/id -p "explain main.go"
+bin/kopi --model provider/id --mode execute --allowed-tools "Edit(docs/**)" -p "fix the typos in docs"
 git diff | bin/kopi --model provider/id -p "review this"
 ```
 
@@ -111,15 +112,40 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 ## Modes and tools
 
-- Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab.
-- Every session starts in plan, including a resumed one.
+- Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab. Plan mode allows only `Read`.
+- A session starts in plan, including a resumed one, unless `--mode execute` is given; that applies to the session the process opens, and `/new` and `/resume` still start in plan.
 - `Read` reads text files inside the start directory: up to 2000 lines, 2000 characters per line and 100 KiB per call; binary files and directories are refused.
-- `Read` refuses Kopi's home and `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.config/gh`, `~/.netrc`, `~/.git-credentials`, `~/.npmrc`, `~/.docker`, `~/.kube`, `~/.azure`, `~/.pi`, `~/.pig`, `~/.claude`, `~/.claude.json` and `~/.codex`.
-- Execute mode unlocks nothing yet: there is no shell or file-modifying tool.
+- `Write` creates a file or replaces its whole content; `Edit` replaces a string that must match exactly once unless `replace_all` is set, in a text file of up to 10 MiB. Both work inside the start directory, replace the file atomically and keep its mode.
+- All three refuse Kopi's home and `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.config/gh`, `~/.netrc`, `~/.git-credentials`, `~/.npmrc`, `~/.docker`, `~/.kube`, `~/.azure`, `~/.pi`, `~/.pig`, `~/.claude`, `~/.claude.json` and `~/.codex`, including paths there that do not exist yet.
+
+Permission rules in `config.json` allow, ask about or deny calls:
+
+```json
+{
+  "permissions": {
+    "allow": ["Edit(docs/**)"],
+    "ask": ["Edit(**/*.sql)"],
+    "deny": ["*(.env*)", "Read(!.env.example)", "*(~/.ssh)", "Write(/etc/**)"]
+  }
+}
+```
+
+- A rule is `Name` or `Name(path)`. The name is a tool name (`Read`, `Write`, `Edit`) or `*` for every tool; an unknown name or a malformed rule is rejected at start.
+- `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory. `*` and `**` glob. A name with no slash (`.env`) matches at any depth, and a directory covers everything in it. Paths match case-insensitively on macOS and Windows.
+- `Name(!path)` exempts the calls it matches from the other rules in its own list, from the same config layer or flag; it never reaches rules from anywhere else.
+- A bare `Name` in `deny` removes the tool from the model.
+- Deny beats ask, and ask beats allow. With no rule matching, `Read` is allowed and any other call asks.
+- Built in: `Edit` and `Write` under any `.git` directory always ask.
+- `--allowed-tools` and `--disallowed-tools` add allow and deny rules to the config's; each is repeatable and takes comma-separated rules (commas inside `()` or `{}` do not split).
+- A rule's path counts as a match on either the path as written or its resolved target when it denies, asks or exempts from an allow, and only on both when it allows or exempts from a deny or ask.
+
+The fullscreen interface asks before a call that needs approval, showing the change: `Yes`, `Yes, allow all edits this session` (for `Write` and `Edit` when no rule asked), or `No`, which stops the turn. Allowing all edits never overrides a deny or ask rule and lasts until the session ends. Print mode cannot ask, so it denies those calls, and the refusal says to add an allow rule.
 
 ## Limitations
 
-- Kopi is not an OS sandbox.
+- Kopi is not an OS sandbox, and permission rules are not an OS boundary: they match the path a call names.
+- Symlinks in rule paths, the start directory and the home directory are resolved once, at start.
+- `Write` and `Edit` check the target before renaming the new file over it, so another process that swaps a directory for a symlink in between can redirect the write, within the start directory only.
 - `Read` protection is by file identity, re-checked on every read: a hard link into a protected store or a credential copied elsewhere is readable, whether a store exists is observable, and if a protected location cannot be inspected all reads are refused.
 - `Read` detects binary files from their first 8 KiB and refuses absolute symlinks, even ones pointing inside the start directory.
 - PiG's built-in providers still use ambient credentials: API keys in the environment, Google application-default credentials and the AWS profile and credential chain.
@@ -141,7 +167,7 @@ Manual live check: `kopi login openai-codex`, run with a model, ask it to read a
 
 ## Not implemented
 
-Project-level config and trust, loading project instruction files, sandboxed shell and file-modifying tools, approval classification, delegation and workflows, background jobs, MCP, a Kopi provider identity, release packaging and self-update, and login for providers that need an installation device ID (`openai`).
+Project-level config and trust, loading project instruction files, a sandboxed shell, saved approvals, a `/permissions` command, approval classification, delegation and workflows, background jobs, MCP, a Kopi provider identity, release packaging and self-update, and login for providers that need an installation device ID (`openai`).
 
 The fullscreen interface has no slash-command completion menu. Recalled history and re-edited queued messages show their full text rather than paste blocks.
 

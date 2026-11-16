@@ -45,9 +45,12 @@ func (a agentTool) ExecutionMode() agent.ToolExecutionMode {
 }
 
 func beforeToolCall(gate *policy.Gate) agent.BeforeToolCallHook {
-	return func(_ context.Context, toolCallID, toolName string, _ json.RawMessage) agent.ToolCallHookResult {
-		if err := gate.Before(toolCallID, toolName); err != nil {
-			return agent.ToolCallHookResult{Block: true, Reason: err.Error()}
+	return func(ctx context.Context, toolCallID, toolName string, args json.RawMessage) agent.ToolCallHookResult {
+		if err := gate.Before(ctx, toolCallID, toolName, args); err != nil {
+			// PiG checks Err before ctx, but replaces a Block's Reason with
+			// "Operation aborted" when ctx is done, so only Err keeps the
+			// refusal's text when an abort lands at the same moment.
+			return agent.ToolCallHookResult{Err: err}
 		}
 		return agent.ToolCallHookResult{}
 	}

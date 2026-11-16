@@ -121,6 +121,50 @@ func TestRootRejectsInvalidLogLevel(t *testing.T) {
 	assert.Contains(t, err.Error(), "--log-level")
 }
 
+func TestRootRejectsInvalidMode(t *testing.T) {
+	e := newTestEnv(t)
+
+	_, _, err := execute(t, "", "--model", mockModel, "--mode", "auto", "-p", "hi")
+
+	require.Error(t, err)
+	assert.Equal(t, `invalid --mode "auto": want plan or execute`, err.Error())
+	assert.NoDirExists(t, e.agentDir)
+}
+
+func TestSplitRules(t *testing.T) {
+	got := splitRules([]string{"Read, Edit(src/{a,b}/**)", "Write(x,y)", "*(.env*)"})
+
+	assert.Equal(t, []string{"Read", "Edit(src/{a,b}/**)", "Write(x,y)", "*(.env*)"}, got)
+}
+
+func TestRootRejectsInvalidRuleInFlag(t *testing.T) {
+	for _, flag := range []string{"--allowed-tools", "--disallowed-tools"} {
+		t.Run(flag, func(t *testing.T) {
+			e := newTestEnv(t)
+
+			_, _, err := execute(t, "", "--model", mockModel, flag, "Read,Bash(ls)", "-p", "hi")
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), flag+": ")
+			assert.Contains(t, err.Error(), `unknown tool "Bash"`)
+			assert.NoDirExists(t, e.agentDir)
+		})
+	}
+}
+
+func TestRootRejectsInvalidRuleInConfig(t *testing.T) {
+	e := newTestEnv(t)
+	configFile := filepath.Join(e.kopiHome, "config.json")
+	e.writeFile(t, configFile, `{"permissions":{"deny":["Bash"]}}`)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), configFile)
+	assert.Contains(t, err.Error(), `unknown tool "Bash"`)
+	assert.NoDirExists(t, e.agentDir)
+}
+
 // builtinModel names one of PiG's builtin models for provider.
 func builtinModel(t *testing.T, provider string) string {
 	t.Helper()
@@ -289,7 +333,7 @@ func TestRootStreamsTurnFromMockServer(t *testing.T) {
 	for _, tl := range req.body["tools"].([]any) {
 		tools = append(tools, tl.(map[string]any)["function"].(map[string]any)["name"].(string))
 	}
-	assert.Equal(t, []string{"Read"}, tools)
+	assert.Equal(t, []string{"Read", "Write", "Edit"}, tools)
 	messages := req.body["messages"].([]any)
 	first := messages[0].(map[string]any)
 	assert.Contains(t, []string{"system", "developer"}, first["role"])
@@ -406,4 +450,88 @@ func TestRootWithoutPromptFails(t *testing.T) {
 			})
 		}
 	}
+}
+
+// streamEdit answers with one Edit call replacing "alpha" with "beta" in path.
+func streamEdit(w http.ResponseWriter, path string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	writeChunk(w, map[string]any{"role": "assistant", "content": ""}, nil)
+	args, _ := json.Marshal(map[string]any{"file_path": path, "old_string": "alpha", "new_string": "beta"})
+	writeChunk(w, map[string]any{"tool_calls": []any{map[string]any{
+		"index": 0, "id": "call_0", "type": "function",
+		"function": map[string]any{"name": "Edit", "arguments": string(args)},
+	}}}, nil)
+	writeChunk(w, map[string]any{}, "tool_calls")
+	fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
+// printEdit runs kopi -p with flags while the model edits path, a file under
+// the workspace holding "alpha\n", and returns the tool result the model got
+// back and the file's content afterwards.
+func printEdit(t *testing.T, path string, flags ...string) (result, content string) {
+	t.Helper()
+	e := newTestEnv(t)
+	file := filepath.Join(e.workspace, path)
+	e.writeFile(t, file, "alpha\n")
+	var calls atomic.Int32
+	server := newMockProvider(t, func(w http.ResponseWriter) {
+		if calls.Add(1) == 1 {
+			streamEdit(w, path)
+			return
+		}
+		streamText(w, "done")
+	})
+	e.writeMockModels(t, server.URL)
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := execute(t, "", append([]string{"--model", mockModel, "-p", "edit it"}, flags...)...)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for the print run to finish")
+	}
+
+	server.next(t)
+	var results []string
+	for _, m := range server.next(t).body["messages"].([]any) {
+		if msg := m.(map[string]any); msg["role"] == "tool" {
+			results = append(results, fmt.Sprint(msg["content"]))
+		}
+	}
+	require.Len(t, results, 1)
+	b, err := os.ReadFile(file)
+	require.NoError(t, err)
+	return results[0], string(b)
+}
+
+func TestRootPrintExecuteWithAllowRuleEdits(t *testing.T) {
+	_, content := printEdit(t, "docs/a.md", "--mode", "execute", "--allowed-tools", "Edit(docs/**)")
+
+	assert.Equal(t, "beta\n", content)
+}
+
+func TestRootPrintExecuteWithoutAllowRuleDenies(t *testing.T) {
+	result, content := printEdit(t, "docs/a.md", "--mode", "execute")
+
+	assert.Contains(t, result, "needs approval")
+	assert.Contains(t, result, "--allowed-tools")
+	assert.Equal(t, "alpha\n", content)
+}
+
+func TestRootPrintStartsInPlan(t *testing.T) {
+	result, content := printEdit(t, "docs/a.md", "--allowed-tools", "Edit(docs/**)")
+
+	assert.Contains(t, result, `tool "Edit" needs execute mode`)
+	assert.Equal(t, "alpha\n", content)
+}
+
+func TestRootDisallowedToolsBeatsAllowedTools(t *testing.T) {
+	result, content := printEdit(t, "docs/secret.md", "--mode", "execute", "--allowed-tools", "Edit(docs/**)", "--disallowed-tools", "Edit(docs/secret.md)")
+
+	assert.Contains(t, result, "--disallowed-tools")
+	assert.Equal(t, "alpha\n", content)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 
 	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/transcript"
 )
 
@@ -82,6 +84,11 @@ type model struct {
 	pickVerb  func() verb
 	// verb is the running or last turn's.
 	verb verb
+	// approval is the call awaiting an answer, nil when none; choice is the
+	// selected option and prompt its rows, drawn in place of the composer.
+	approval *event.ApprovalRequested
+	choice   int
+	prompt   []string
 }
 
 func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model {
@@ -145,6 +152,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		defer m.refreshPending()
 		return m, m.key(msg)
 	case tea.PasteMsg:
+		if m.approval != nil {
+			return m, nil
+		}
 		defer m.refreshPending()
 		return m, m.paste(msg.Content)
 	case imagePastedMsg:
@@ -164,6 +174,10 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	if m.exitArmed {
 		m.exitArmed, m.flashText = false, ""
+	}
+	if m.approval != nil {
+		m.approvalKey(msg)
+		return nil
 	}
 	switch {
 	case key.Matches(msg, km.interrupt):
@@ -198,6 +212,27 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		return readClipboard(m.ctx, m.clip, m.imageDir)
 	}
 	return m.composer.update(msg)
+}
+
+// approvalKey moves the prompt's cursor or answers it; every other key is
+// swallowed. The prompt stays until its ApprovalEnded arrives.
+func (m *model) approvalKey(msg tea.KeyPressMsg) {
+	opts := approvalOptions(m.approval, &m.keys)
+	id := m.approval.CallID
+	switch s := msg.String(); {
+	case key.Matches(msg, m.keys.interrupt):
+		m.c.Answer(id, policy.Reject)
+	case s == "up":
+		m.choice = max(0, m.choice-1)
+	case s == "down":
+		m.choice = min(len(opts)-1, m.choice+1)
+	case s == "enter":
+		m.c.Answer(id, opts[m.choice].answer)
+	default:
+		if n, err := strconv.Atoi(s); err == nil && n >= 1 && n <= len(opts) {
+			m.c.Answer(id, opts[n-1].answer)
+		}
+	}
 }
 
 // cancel is the cancel key and SIGINT: it interrupts a running turn, else
@@ -310,9 +345,18 @@ func (m *model) apply(ev event.Event) {
 		m.clearSelection()
 		m.follow = true
 		m.queued = nil
+		m.approval = nil
 		return
 	case event.QueueChanged:
 		m.queued = ev.Pending
+		return
+	case event.ApprovalRequested:
+		m.approval, m.choice = &ev, 0
+		return
+	case event.ApprovalEnded:
+		if m.approval != nil && m.approval.CallID == ev.CallID {
+			m.approval = nil
+		}
 		return
 	case event.TurnStart:
 		m.busy = true
@@ -326,6 +370,7 @@ func (m *model) apply(ev event.Event) {
 			m.folds.verbs[blocks[len(blocks)-1].Key()] = m.verb
 		}
 		m.busy = false
+		m.approval = nil
 		m.composer.restore(ev.Unsent)
 		return
 	}
@@ -374,13 +419,23 @@ func (m *model) relayout() {
 	}
 }
 
-// refreshPending updates queue geometry without rebuilding transcript lines.
+// refreshPending updates the approval prompt and queue geometry without
+// rebuilding transcript lines.
 func (m *model) refreshPending() {
 	if m.width <= 0 {
-		m.pending = nil
+		m.pending, m.prompt = nil, nil
 		return
 	}
-	budget := m.height - m.composer.height() - chromeRows
+	m.prompt = nil
+	if m.approval != nil {
+		// The prompt takes the composer's frame rows too.
+		maxRows := m.height - chromeRows + 2
+		if m.busy {
+			maxRows -= busyRows
+		}
+		m.prompt = approvalRows(m.approval, m.choice, &m.keys, m.width, max(2, m.height/3), maxRows, m.th)
+	}
+	budget := m.height - m.inputHeight() - chromeRows
 	if m.busy {
 		budget -= busyRows
 	}
@@ -388,11 +443,20 @@ func (m *model) refreshPending() {
 }
 
 func (m *model) transcriptHeight() int {
-	h := m.height - m.composer.height() - chromeRows - len(m.pending)
+	h := m.height - m.inputHeight() - chromeRows - len(m.pending)
 	if m.busy {
 		h -= busyRows
 	}
 	return max(0, h)
+}
+
+// inputHeight is the composer's text lines or, while an approval is pending,
+// the prompt's rows less the composer's two frame rows that chromeRows counts.
+func (m *model) inputHeight() int {
+	if m.approval != nil {
+		return len(m.prompt) - 2
+	}
+	return m.composer.height()
 }
 
 // composerTop is the screen row of the composer's first text line, below
@@ -453,7 +517,11 @@ func (m *model) View() tea.View {
 	if m.busy {
 		rows = append(rows, workingRow(&m.spinner, m.verb, formatDuration(time.Since(m.turnStart)), m.th), "")
 	}
-	rows = append(rows, m.composer.view(m.width, m.th)...)
+	if m.approval != nil {
+		rows = append(rows, m.prompt...)
+	} else {
+		rows = append(rows, m.composer.view(m.width, m.th)...)
+	}
 	rows = append(rows, statusLine(m.status, m.layout, m.flashText, m.width, m.th))
 	v.SetContent(strings.Join(rows, "\n"))
 	return v

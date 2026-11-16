@@ -305,29 +305,37 @@ func TestResumeDeliversDisplayedHistory(t *testing.T) {
 	assert.Equal(t, "1 line", ends[0].Summary)
 }
 
+// In execute mode a non-Read call with no rule deciding it asks first.
 func TestExecToolFollowsMode(t *testing.T) {
 	var ran atomic.Int32
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{execTool(&ran)}})
+	approvals := subscribeTo[event.ApprovalRequested](h.c)
 	requests := make(chan pigruntimetest.Request, 1)
-	turn := func() string {
+	turn := func(asks bool) string {
 		h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Exec", "call-1")), pigruntimetest.Capture(t, requests, "ok")})
-		h.turn(t, "run it")
+		w, err := h.c.Submit(t.Context(), "run it")
+		require.NoError(t, err)
+		if asks {
+			assert.True(t, h.c.Answer(receiveEvent(t, approvals).CallID, policy.Allow))
+		}
+		wait(t, w.Done())
 		req := receive(t, requests)
 		require.NotEmpty(t, req.ToolResults)
 		return req.ToolResults[len(req.ToolResults)-1]
 	}
 
-	denied := turn()
+	denied := turn(false)
 	assert.Contains(t, denied, `tool "Exec" needs execute mode; the session is in plan mode`)
 	assert.Zero(t, ran.Load())
 
 	h.c.EnterExecute()
-	assert.Equal(t, execOutput, turn())
+	assert.Equal(t, execOutput, turn(true))
 	assert.Equal(t, int32(1), ran.Load())
 
 	h.c.EnterPlan()
-	assert.Contains(t, turn(), policy.ErrDenied.Error())
+	assert.Contains(t, turn(false), policy.ErrDenied.Error())
 	assert.Equal(t, int32(1), ran.Load())
+	assert.Len(t, ofType[event.ApprovalRequested](h.rec.all()), 1, "plan mode refuses before asking")
 
 	assert.Equal(t, []event.ModeChanged{{Mode: policy.Execute}, {Mode: policy.Plan}}, ofType[event.ModeChanged](h.rec.all()))
 }
@@ -1634,6 +1642,58 @@ func TestResumeEntersPlan(t *testing.T) {
 	assert.Positive(t, status.MessageCount)
 }
 
+func TestOpenRequestModeIsHonouredAndNewReturnsToPlan(t *testing.T) {
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{Mode: policy.Execute}))
+	assert.Equal(t, policy.Execute, h.c.Status().Mode)
+	oldID := h.c.Status().SessionID
+	changes := subscribeTo[event.SessionChanged](h.c)
+
+	_, err := h.c.Submit(t.Context(), "/new")
+	require.NoError(t, err)
+	assert.NotEqual(t, oldID, receiveEvent(t, changes).SessionID)
+	assertSwitchDone(t, h)
+
+	assert.Equal(t, policy.Plan, h.c.Status().Mode)
+	assert.Equal(t, []event.ModeChanged{{Mode: policy.Execute}, {Mode: policy.Plan}}, ofType[event.ModeChanged](h.rec.all()))
+}
+
+func TestBareDenyRemovesTool(t *testing.T) {
+	var ran atomic.Int32
+	sb := pigruntimetest.NewSandbox(t)
+	read := readTool(t, sb)
+	rules, err := policy.NewRules(sb.Workspace, sb.Home, []string{"Read", "Exec"}, policy.Source{Name: "test", Deny: []string{"Exec"}})
+	require.NoError(t, err)
+	h := newHarness(t, sb, Config{Tools: []tool.Tool{read, execTool(&ran)}, Rules: rules})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "done")})
+
+	h.turn(t, "what can you use?")
+
+	req := receive(t, requests)
+	assert.Equal(t, []string{"Read"}, req.ToolNames)
+	assert.Equal(t, systemPrompt(sb.Workspace, []tool.Tool{read}), req.SystemPrompt)
+	assert.NotContains(t, req.SystemPrompt, "Exec")
+	assert.Equal(t, []ToolStatus{{"Read", policy.Read, true}}, h.c.Status().Tools)
+}
+
+func TestPromptMentionsWriteAndEditOnlyWhenAvailable(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	ws, err := tool.NewWorkspace(sb.Workspace, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
+	read, write, edit := tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws)
+	const sentence = "Write and Edit work only in execute mode"
+
+	assert.Contains(t, systemPrompt(sb.Workspace, []tool.Tool{read, edit}), sentence)
+	rules, err := policy.NewRules(sb.Workspace, sb.Home, []string{"Read", "Write", "Edit"}, policy.Source{Name: "test", Deny: []string{"Write", "Edit"}})
+	require.NoError(t, err)
+	h := newHarness(t, sb, Config{Tools: []tool.Tool{read, write, edit}, Rules: rules})
+	assert.NotContains(t, h.c.prompt, sentence)
+	assert.Contains(t, h.c.prompt, "Tools available: Read.\n")
+}
+
 func TestResumeWithoutIDListsSessions(t *testing.T) {
 	h, _ := openHarness(t, Config{})
 	notices := subscribeTo[event.Notice](h.c)
@@ -1689,7 +1749,7 @@ func TestStatusReportsToolsHonestly(t *testing.T) {
 	notice := lastNotice(t, h.rec)
 	for _, want := range []string{
 		"mode: plan", "model: " + status.Model, "workspace: " + sb.Workspace, "session: " + status.SessionID + " (0 messages)",
-		"turn: idle", "Read (read): allowed", "Exec (exec): not allowed in plan mode", noMutatingTools,
+		"turn: idle", "Read (read): allowed", "Exec (exec): not allowed in plan mode", approvalNote,
 	} {
 		assert.Contains(t, notice, want)
 	}

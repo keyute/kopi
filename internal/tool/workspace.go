@@ -1,14 +1,18 @@
 package tool
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
+
+	"github.com/keyute/kopi/internal/policy"
 )
 
 // rootEscapeMessage is the text of os.Root's unexported errPathEscapes. Go
@@ -100,16 +104,164 @@ func (w *Workspace) Open(path string) (*os.File, error) {
 
 func (w *Workspace) Close() error { return w.root.Close() }
 
+// Target applies no confinement: the permission rules and the tool's own Run
+// decide what may be touched. Real is walked as Open and WriteFile walk it, so
+// the rules judge the file the tool acts on.
+func (w *Workspace) Target(path string) (policy.Target, error) {
+	abs := path
+	if !filepath.IsAbs(path) {
+		abs = filepath.Join(w.given, path)
+	}
+	// A path inside the workspace is walked from realDir, as Open and WriteFile
+	// walk it, so a repointed workspace symlink cannot split the two.
+	start, rest := string(filepath.Separator), path
+	if rel, err := w.relative(path); err == nil {
+		start, rest = w.realDir, rel
+	}
+	resolved, _, err := walk(start, rest, nil)
+	if err != nil {
+		return policy.Target{}, err
+	}
+	return policy.Target{Path: filepath.Clean(abs), Real: resolved}, nil
+}
+
+// WriteFile creates path, or replaces it atomically, with data. A symlink is
+// written through: its target is replaced, not the link.
+//
+// The checks run before the temp file is renamed over the target, so a
+// directory swapped for a symlink in between can still redirect the rename,
+// within the workspace only (os.Root confines it). Kopi runs write calls one
+// at a time, so only another process could race them.
+func (w *Workspace) WriteFile(path string, data []byte) error {
+	rel, err := w.relative(path)
+	if err != nil {
+		return err
+	}
+	target, protected, err := w.resolve(rel)
+	if err != nil {
+		return err
+	}
+	if protected {
+		return fmt.Errorf("%w: %s", ErrProtected, path)
+	}
+	// resolve compares identities, so it cannot see a store that does not
+	// exist yet and that this write would create.
+	inStore, err := w.inProtectedPath(target)
+	if err != nil {
+		return err
+	}
+	if inStore {
+		return fmt.Errorf("%w: %s", ErrProtected, path)
+	}
+	// Every root call uses the resolved path, so what was checked is what is
+	// written.
+	rel, err = filepath.Rel(w.realDir, target)
+	if err != nil || !filepath.IsLocal(rel) {
+		return fmt.Errorf("%w: %s", ErrOutsideWorkspace, path)
+	}
+	// A nil mode leaves a new file with the umask applied to 0o666.
+	var mode *fs.FileMode
+	info, err := w.root.Lstat(rel)
+	switch {
+	case err == nil && info.IsDir():
+		return fmt.Errorf("%w: %s", ErrIsDirectory, path)
+	case err == nil && !info.Mode().IsRegular():
+		return fmt.Errorf("%w: %s", ErrNotRegular, path)
+	case err == nil:
+		perm := info.Mode().Perm()
+		mode = &perm
+	case !errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("failed to stat %s: %w", path, err)
+	}
+	if err := w.root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
+		return fmt.Errorf("failed to create parent of %s: %w", path, err)
+	}
+	tmp := filepath.Join(filepath.Dir(rel), "."+filepath.Base(rel)+"."+rand.Text()+".tmp")
+	f, err := w.root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
+	if err != nil {
+		return fmt.Errorf("failed to create temp file for %s: %w", path, err)
+	}
+	if err := w.fillTemp(f, tmp, path, data, mode); err != nil {
+		_ = w.root.Remove(tmp)
+		return err
+	}
+	if err := w.root.Rename(tmp, rel); err != nil {
+		_ = w.root.Remove(tmp)
+		return fmt.Errorf("failed to replace %s: %w", path, err)
+	}
+	return nil
+}
+
+// fillTemp writes data to the temp file f and closes it. check binds the temp
+// file's identity to its resolved path, as it does for a read.
+func (w *Workspace) fillTemp(f *os.File, tmp, path string, data []byte, mode *fs.FileMode) error {
+	err := w.check(f, tmp, path)
+	if err == nil {
+		if _, werr := f.Write(data); werr != nil {
+			err = fmt.Errorf("failed to write %s: %w", path, werr)
+		}
+	}
+	if err == nil {
+		if serr := f.Sync(); serr != nil {
+			err = fmt.Errorf("failed to sync %s: %w", path, serr)
+		}
+	}
+	if err == nil && mode != nil {
+		if cerr := f.Chmod(*mode); cerr != nil {
+			err = fmt.Errorf("failed to set mode of %s: %w", path, cerr)
+		}
+	}
+	if cerr := f.Close(); cerr != nil && err == nil {
+		err = fmt.Errorf("failed to close %s: %w", path, cerr)
+	}
+	return err
+}
+
+// inProtectedPath reports whether target lies lexically in a protected path,
+// itself walked to its real path. APFS is case-insensitive, so darwin compares
+// case-folded.
+func (w *Workspace) inProtectedPath(target string) (bool, error) {
+	for _, p := range w.protected {
+		store, _, err := walk(string(filepath.Separator), p, nil)
+		if err != nil {
+			return false, err
+		}
+		if runtime.GOOS == "darwin" {
+			store, target = strings.ToLower(store), strings.ToLower(target)
+		}
+		if rel, err := filepath.Rel(store, target); err == nil && filepath.IsLocal(rel) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (w *Workspace) relative(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return path, nil
 	}
+	// filepath.Rel would clean the path, applying a ".." before the symlink it
+	// follows has been expanded; only no-op components are dropped here, and
+	// os.Root walks the rest.
+	parts := components(path)
 	for _, base := range []string{w.given, w.realDir} {
-		if rel, err := filepath.Rel(base, path); err == nil && filepath.IsLocal(rel) {
-			return rel, nil
+		prefix := components(base)
+		if len(parts) >= len(prefix) && slices.Equal(parts[:len(prefix)], prefix) {
+			if rest := parts[len(prefix):]; len(rest) > 0 {
+				return strings.Join(rest, string(filepath.Separator)), nil
+			}
+			return ".", nil
 		}
 	}
 	return "", fmt.Errorf("%w: %s", ErrOutsideWorkspace, path)
+}
+
+// components splits path into its names, dropping the empty and "." ones and
+// keeping "..".
+func components(path string) []string {
+	return slices.DeleteFunc(strings.Split(path, string(filepath.Separator)), func(name string) bool {
+		return name == "" || name == "."
+	})
 }
 
 // check runs after f was opened through os.Root. It refuses f if resolving
@@ -143,13 +295,11 @@ func (w *Workspace) check(f *os.File, rel, path string) error {
 	return nil
 }
 
-// resolve follows rel from the workspace one component at a time, expanding
-// symlinks and ".." as os.Root does, and returns the real path reached and
-// whether any step lies in a protected entry. It stops at the first component
-// that cannot be resolved, so a missing path ends at its deepest existing
-// ancestor. Every step is checked, not only the end, so a path that fails or
-// leaves again inside a store (a dangling or outward symlink there) is refused
-// too, and a store's contents cannot be probed through error kinds.
+// resolve walks rel from the workspace and returns the real path reached and
+// whether any step lies in a protected entry. Every step is checked, not only
+// the end, so a path that fails or leaves again inside a store (a dangling or
+// outward symlink there) is refused too, and a store's contents cannot be
+// probed through error kinds.
 //
 // The workspace may be the user's home, so stores can lie inside it. Identity
 // is compared with os.SameFile rather than path prefixes because APFS is
@@ -177,9 +327,20 @@ func (w *Workspace) resolve(rel string) (string, bool, error) {
 			break
 		}
 	}
+	return walk(w.realDir, rel, isProtected)
+}
+
+// walk follows path from dir, a real directory, one component at a time as
+// os.Root does: each symlink is expanded before a later ".." is applied, so
+// path must not be cleaned first. A missing component is taken as the
+// directory WriteFile would create, and the walk goes on past it. stop, if not
+// nil, sees every existing step that is not a symlink; walk returns that step
+// and true as soon as stop reports true. Failures other than a missing
+// component are returned, so callers fail closed.
+func walk(dir, path string, stop func(os.FileInfo) bool) (string, bool, error) {
 	sep := string(filepath.Separator)
-	dest := w.realDir
-	parts := strings.Split(rel, sep)
+	dest := dir
+	parts := strings.Split(path, sep)
 	for links := 0; len(parts) > 0; {
 		name := parts[0]
 		parts = parts[1:]
@@ -192,14 +353,21 @@ func (w *Workspace) resolve(rel string) (string, bool, error) {
 		}
 		next := filepath.Join(dest, name)
 		info, err := os.Lstat(next)
-		if err != nil {
-			return dest, false, nil
+		switch {
+		case errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR):
+			dest = next
+			continue
+		case err != nil:
+			return "", false, fmt.Errorf("failed to resolve %s: %w", path, err)
 		}
 		if info.Mode()&fs.ModeSymlink != 0 {
 			links++
+			if links > maxSymlinks {
+				return "", false, fmt.Errorf("failed to resolve %s: %w", path, syscall.ELOOP)
+			}
 			link, err := os.Readlink(next)
-			if err != nil || links > maxSymlinks {
-				return dest, false, nil
+			if err != nil {
+				return "", false, fmt.Errorf("failed to resolve %s: %w", path, err)
 			}
 			if filepath.IsAbs(link) {
 				dest = sep
@@ -208,7 +376,7 @@ func (w *Workspace) resolve(rel string) (string, bool, error) {
 			continue
 		}
 		dest = next
-		if isProtected(info) {
+		if stop != nil && stop(info) {
 			return dest, true, nil
 		}
 	}

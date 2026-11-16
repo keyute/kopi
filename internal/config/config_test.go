@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/keyute/kopi/internal/policy"
 )
 
 func globalLayer(t *testing.T, content string) Layer {
@@ -22,6 +24,7 @@ func globalLayer(t *testing.T, content string) Layer {
 func withDefaults(c Config) Config {
 	c.Keys = DefaultKeys()
 	c.StatusLine = DefaultStatusLine()
+	c.Permissions = Permissions{Allow: []string{}, Ask: []string{}, Deny: []string{}}
 	return c
 }
 
@@ -157,6 +160,14 @@ func TestResolveRejectsUnknownActionNamingLayer(t *testing.T) {
 	assert.Contains(t, err.Error(), "sumbit")
 }
 
+func TestResolveRejectsUnknownPermissionsKey(t *testing.T) {
+	global := globalLayer(t, `{"permissions": {"defaultMode": "plan"}}`)
+	_, err := Resolve(Defaults(), global)
+	require.ErrorIs(t, err, ErrUnknownKey)
+	assert.Contains(t, err.Error(), global.Name)
+	assert.Contains(t, err.Error(), "defaultMode")
+}
+
 func TestResolveRejectsUnknownStatusLineKey(t *testing.T) {
 	global := globalLayer(t, `{"statusline": {"middle": []}}`)
 	_, err := Resolve(Defaults(), global)
@@ -181,6 +192,11 @@ func TestResolveRejectsInvalidUIValueNamingLayer(t *testing.T) {
 		{"side not a list", `{"statusline": {"left": "model"}}`},
 		{"statusline not an object", `{"statusline": ["model"]}`},
 		{"unknown segment", `{"statusline": {"right": ["mode", "weather"]}}`},
+		{"rule list not a list", `{"permissions": {"allow": "Read"}}`},
+		{"null rule list", `{"permissions": {"deny": null}}`},
+		{"non-string rule", `{"permissions": {"ask": [5]}}`},
+		{"permissions not an object", `{"permissions": ["Read"]}`},
+		{"null permissions", `{"permissions": null}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			global := globalLayer(t, tc.content)
@@ -192,11 +208,42 @@ func TestResolveRejectsInvalidUIValueNamingLayer(t *testing.T) {
 	}
 }
 
+func TestResolveAcceptsPermissionRules(t *testing.T) {
+	global := globalLayer(t, `{"permissions": {"allow": ["Read", "Edit(docs/**)"], "ask": ["Write(!docs/x)"], "deny": ["Read(.env)", "*(~/.ssh)"]}}`)
+	r, err := Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Equal(t, Permissions{
+		Allow: []string{"Read", "Edit(docs/**)"},
+		Ask:   []string{"Write(!docs/x)"},
+		Deny:  []string{"Read(.env)", "*(~/.ssh)"},
+	}, r.Config.Permissions)
+	assert.Equal(t, global.Name, r.Origins["permissions.deny"])
+}
+
+func TestResolveRejectsInvalidRuleNamingLayerAndIndex(t *testing.T) {
+	global := globalLayer(t, `{"permissions": {"deny": ["Read(.env)", "Edit", "Read(x"]}}`)
+	_, err := Resolve(Defaults(), global)
+	require.ErrorIs(t, err, ErrInvalidValue)
+	require.ErrorIs(t, err, policy.ErrInvalidRule)
+	assert.Contains(t, err.Error(), global.Name)
+	assert.Contains(t, err.Error(), "permissions.deny[2]")
+}
+
+func TestPermissionListsReplaceAcrossLayers(t *testing.T) {
+	global := globalLayer(t, `{"permissions": {"allow": ["Read", "Edit"], "deny": ["Read(.env)"]}}`)
+	r, err := Resolve(Defaults(), global, Map("flags", map[string]any{"permissions": map[string]any{"allow": []any{"Write"}}}))
+	require.NoError(t, err)
+	assert.Equal(t, Permissions{Allow: []string{"Write"}, Ask: []string{}, Deny: []string{"Read(.env)"}}, r.Config.Permissions)
+	assert.Equal(t, "flags", r.Origins["permissions.allow"])
+	assert.Equal(t, global.Name, r.Origins["permissions.deny"])
+	assert.Equal(t, "default", r.Origins["permissions.ask"])
+}
+
 func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	r, err := Resolve(Defaults())
 	require.NoError(t, err)
 	entries := r.Entries()
-	assert.Len(t, entries, 4+len(KeyActions))
+	assert.Len(t, entries, 7+len(KeyActions))
 	assert.IsIncreasing(t, entryKeys(entries))
 	assert.Contains(t, entries, Entry{Key: "model", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "version", Value: "1", Origin: "default"})
@@ -204,12 +251,21 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "keys.newline", Value: `["shift+enter","alt+enter","ctrl+j"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "statusline.left", Value: `["model","context","branch"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "statusline.right", Value: `["notice","mode"]`, Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "permissions.allow", Value: "[]", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "permissions.ask", Value: "[]", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "permissions.deny", Value: "[]", Origin: "default"})
 
-	r, err = Resolve(Defaults(), Map("flags", map[string]any{"model": "a/b", "statusline": map[string]any{"right": []any{}}}))
+	r, err = Resolve(Defaults(), Map("flags", map[string]any{
+		"model":       "a/b",
+		"statusline":  map[string]any{"right": []any{}},
+		"permissions": map[string]any{"deny": []any{"Read(.env)", "*(~/.ssh)"}},
+	}))
 	require.NoError(t, err)
 	entries = r.Entries()
 	assert.Contains(t, entries, Entry{Key: "model", Value: "a/b", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "statusline.right", Value: "[]", Origin: "flags"})
+	assert.Contains(t, entries, Entry{Key: "permissions.deny", Value: `["Read(.env)","*(~/.ssh)"]`, Origin: "flags"})
+	assert.Contains(t, entries, Entry{Key: "permissions.allow", Value: "[]", Origin: "default"})
 }
 
 func entryKeys(entries []Entry) []string {

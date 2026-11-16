@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -28,17 +29,8 @@ func newDisplay(tools []tool.Tool) *display {
 func (d *display) apply(ev event.Event) event.Event {
 	switch e := ev.(type) {
 	case event.ToolStart:
-		args := json.RawMessage(e.Args)
-		t := d.tools[e.Name]
-		switch {
-		case t.Display.Title != nil:
-			e.Title = t.Display.Title(args)
-		case t.Label != "":
-			e.Title = t.Label
-		default:
-			e.Title = e.Name
-		}
-		e.Action = t.Display.Action
+		e.Title = d.title(e.Name, json.RawMessage(e.Args))
+		e.Action = d.tools[e.Name].Display.Action
 		if e.Action == (tool.Action{}) {
 			e.Action = fallbackAction
 		}
@@ -53,6 +45,25 @@ func (d *display) apply(ev event.Event) event.Event {
 			e.Summary = lineCount(e.Output)
 		}
 		return e
+	}
+	return ev
+}
+
+func (d *display) title(name string, args json.RawMessage) string {
+	t := d.tools[name]
+	switch {
+	case t.Display.Title != nil:
+		return t.Display.Title(args)
+	case t.Label != "":
+		return t.Label
+	}
+	return name
+}
+
+func (d *display) approval(r policy.Request) event.ApprovalRequested {
+	ev := event.ApprovalRequested{CallID: r.CallID, Title: d.title(r.Tool, r.Args), Rule: r.Rule, Edits: r.Edits}
+	if preview := d.tools[r.Tool].Display.Preview; preview != nil {
+		ev.Preview = preview(r.Args)
 	}
 	return ev
 }

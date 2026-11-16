@@ -12,8 +12,10 @@ type Tool struct {
 	// Parameters is the JSON schema object for the arguments.
 	Parameters map[string]any
 	Capability policy.Capability
-	Run        func(ctx context.Context, args json.RawMessage) (string, error)
-	Display    Display
+	// Target is nil for a tool that acts on no path.
+	Target  func(args json.RawMessage) (policy.Target, error)
+	Run     func(ctx context.Context, args json.RawMessage) (string, error)
+	Display Display
 }
 
 // Display is how a call reads in a transcript.
@@ -22,8 +24,23 @@ type Display struct {
 	Title func(args json.RawMessage) string
 	// Summary is the line under a successfully finished call: "212 lines".
 	Summary func(output string) string
+	// Preview is what an approval prompt shows of the change a call would make.
+	Preview func(args json.RawMessage) []PreviewLine
 	// Action is how a group counts calls: "Read 3 files".
 	Action Action
 }
 
 type Action struct{ Verb, One, Many string }
+
+type PreviewKind int
+
+const (
+	Context PreviewKind = iota
+	Removed
+	Added
+)
+
+type PreviewLine struct {
+	Kind PreviewKind
+	Text string
+}

@@ -34,12 +34,20 @@ type harness struct {
 // prompt. out is read only after Run has returned.
 func start(t *testing.T, sb pigruntimetest.Sandbox, prompt string, steps []ai.FauxResponseStep, tools ...tool.Tool) *harness {
 	t.Helper()
+	return startRun(t, sb, app.Config{Tools: tools}, policy.Plan, prompt, steps)
+}
+
+// startRun is start with cfg's tools and rules, unattended as a print run is,
+// in mode.
+func startRun(t *testing.T, sb pigruntimetest.Sandbox, cfg app.Config, mode policy.Mode, prompt string, steps []ai.FauxResponseStep) *harness {
+	t.Helper()
 	rt := pigruntimetest.NewRuntime(t, sb)
 	faux, model := pigruntimetest.RegisterFaux(t, rt, "kopi-faux")
 	faux.SetResponses(steps)
-	c := app.NewController(rt, app.Config{Model: model, Workspace: sb.Workspace, Tools: tools, JoinTimeout: waitLimit})
+	cfg.Model, cfg.Workspace, cfg.JoinTimeout, cfg.Unattended = model, sb.Workspace, waitLimit, true
+	c := app.NewController(rt, cfg)
 	t.Cleanup(func() { assert.NoError(t, c.Close(context.Background())) })
-	require.NoError(t, c.Open(t.Context(), app.OpenRequest{}))
+	require.NoError(t, c.Open(t.Context(), app.OpenRequest{Mode: mode}))
 	ctx, cancel := context.WithCancel(t.Context())
 	h := &harness{c: c, out: &bytes.Buffer{}, interrupts: make(chan os.Signal), cancel: cancel, result: make(chan error, 1)}
 	f := New(c, prompt, h.out)
@@ -178,4 +186,63 @@ func TestCommandTextIsSentAsPrompt(t *testing.T) {
 	}
 	assert.Equal(t, policy.Plan, h.c.Status().Mode)
 	assert.Equal(t, "not a command\n", h.out.String())
+}
+
+// editRun runs a print run in mode that edits docs/a.md with rules, and
+// returns the tool result the model saw and the file's content afterwards.
+func editRun(t *testing.T, mode policy.Mode, rules ...policy.Source) (result, content string) {
+	t.Helper()
+	sb := pigruntimetest.NewSandbox(t)
+	path := filepath.Join(sb.Workspace, "docs", "a.md")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte("alpha\n"), 0o600))
+	ws, err := tool.NewWorkspace(sb.Workspace, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
+	edit := tool.NewEdit(ws)
+	r, err := policy.NewRules(sb.Workspace, sb.Home, []string{edit.Name}, rules...)
+	require.NoError(t, err)
+	requests := make(chan pigruntimetest.Request, 1)
+	steps := []ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(pigruntimetest.Call{Name: "Edit", ID: "call-1", Args: map[string]any{"file_path": "docs/a.md", "old_string": "alpha", "new_string": "beta"}}),
+		pigruntimetest.Capture(t, requests, "done"),
+	}
+
+	h := startRun(t, sb, app.Config{Tools: []tool.Tool{edit}, Rules: r}, mode, "edit docs/a.md", steps)
+
+	require.NoError(t, h.wait(t))
+	assert.Equal(t, "done\n", h.out.String())
+	var req pigruntimetest.Request
+	select {
+	case req = <-requests:
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for a provider request")
+	}
+	require.Len(t, req.ToolResults, 1)
+	b, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return req.ToolResults[0], string(b)
+}
+
+func TestPlanRunRefusesEdit(t *testing.T) {
+	result, content := editRun(t, policy.Plan)
+
+	assert.Contains(t, result, `tool "Edit" needs execute mode`)
+	assert.Equal(t, "alpha\n", content)
+}
+
+func TestExecuteRunWithoutAllowRuleDeniesWithHint(t *testing.T) {
+	result, content := editRun(t, policy.Execute)
+
+	assert.Contains(t, result, "needs approval")
+	assert.Contains(t, result, "--allowed-tools")
+	assert.Contains(t, result, policy.ErrDenied.Error())
+	assert.Equal(t, "alpha\n", content)
+}
+
+func TestExecuteRunWithAllowRuleEdits(t *testing.T) {
+	result, content := editRun(t, policy.Execute, policy.Source{Name: "--allowed-tools", Allow: []string{"Edit(docs/**)"}})
+
+	assert.NotContains(t, result, policy.ErrDenied.Error())
+	assert.Equal(t, "beta\n", content)
 }

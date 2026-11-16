@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/keyute/kopi/internal/policy"
 )
 
 func writeFile(t *testing.T, path, content string) {
@@ -272,4 +274,310 @@ func TestOpenRefusesEverythingInWorkspaceInsideProtectedStore(t *testing.T) {
 		_, err := ws.Open(path)
 		require.ErrorIs(t, err, ErrProtected, path)
 	}
+}
+
+// listDir returns the names in dir, so a test can assert nothing extra, such
+// as a temp file, was left behind.
+func listDir(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+func TestWriteFileCreatesFileAndParents(t *testing.T) {
+	dir := t.TempDir()
+	ws := newWorkspace(t, dir, nil)
+
+	require.NoError(t, ws.WriteFile("a/b/c.txt", []byte("hello")))
+	require.NoError(t, ws.WriteFile(filepath.Join(dir, "d.txt"), []byte("")))
+	// A file created the usual way shows what the umask allows.
+	reference := filepath.Join(t.TempDir(), "ref")
+	require.NoError(t, os.WriteFile(reference, nil, 0o666))
+
+	got, err := os.ReadFile(filepath.Join(dir, "a", "b", "c.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "hello", string(got))
+	info, err := os.Stat(filepath.Join(dir, "a", "b", "c.txt"))
+	require.NoError(t, err)
+	want, err := os.Stat(reference)
+	require.NoError(t, err)
+	assert.Equal(t, want.Mode().Perm(), info.Mode().Perm())
+	assert.Equal(t, []string{"c.txt"}, listDir(t, filepath.Join(dir, "a", "b")))
+	assert.Equal(t, []string{"a", "d.txt"}, listDir(t, dir))
+}
+
+func TestWriteFileReplacesKeepingMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "run.sh")
+	writeFile(t, path, "old")
+	require.NoError(t, os.Chmod(path, 0o750))
+	ws := newWorkspace(t, dir, nil)
+
+	require.NoError(t, ws.WriteFile("run.sh", []byte("new")))
+
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "new", string(got))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, fs.FileMode(0o750), info.Mode().Perm())
+	assert.Equal(t, []string{"run.sh"}, listDir(t, dir))
+}
+
+func TestWriteFileRefusesPathsOutsideWorkspace(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "ws")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	writeFile(t, filepath.Join(parent, "out.txt"), "secret")
+	require.NoError(t, os.Symlink(filepath.Join(parent, "out.txt"), filepath.Join(dir, "file-link")))
+	require.NoError(t, os.Symlink(parent, filepath.Join(dir, "dir-link")))
+	ws := newWorkspace(t, dir, nil)
+
+	for _, path := range []string{
+		"../out.txt",
+		"../new.txt",
+		filepath.Join(parent, "new.txt"),
+		"file-link",
+		"dir-link/new.txt",
+	} {
+		t.Run(path, func(t *testing.T) {
+			err := ws.WriteFile(path, []byte("x"))
+			require.ErrorIs(t, err, ErrOutsideWorkspace)
+		})
+	}
+	got, err := os.ReadFile(filepath.Join(parent, "out.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "secret", string(got))
+	assert.ElementsMatch(t, []string{"out.txt", "ws"}, listDir(t, parent))
+}
+
+func TestWriteFileRefusesProtectedStores(t *testing.T) {
+	home, kopiHome := syntheticHome(t)
+	require.NoError(t, os.Symlink(".ssh", filepath.Join(home, "link")))
+	require.NoError(t, os.Symlink(filepath.Join(home, ".config", "gh", "hosts.yml"), filepath.Join(home, "gh-link")))
+	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	before := listDir(t, home)
+
+	for _, path := range []string{
+		".ssh/id_x",
+		".ssh/new",
+		".ssh",
+		"link/new",
+		".claude.json",
+		"kopi-home/config.json",
+		// Stores that do not exist yet: the write would create them.
+		".config/gh/hosts.yml",
+		".codex/auth.json",
+		".netrc",
+		"gh-link",
+		filepath.Join(home, ".docker", "config.json"),
+	} {
+		t.Run(path, func(t *testing.T) {
+			err := ws.WriteFile(path, []byte("x"))
+			require.ErrorIs(t, err, ErrProtected)
+		})
+	}
+	assert.Equal(t, before, listDir(t, home))
+	assert.Equal(t, []string{"id_x"}, listDir(t, filepath.Join(home, ".ssh")))
+	got, err := os.ReadFile(filepath.Join(home, ".claude.json"))
+	require.NoError(t, err)
+	assert.Equal(t, "{}", string(got))
+}
+
+func TestWriteFileRefusesCaseVariantOfMissingStore(t *testing.T) {
+	home, kopiHome := syntheticHome(t)
+	if _, err := os.Stat(filepath.Join(home, ".SSH")); err != nil {
+		t.Skip("filesystem is case-sensitive")
+	}
+	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	before := listDir(t, home)
+
+	err := ws.WriteFile(".Config/GH/hosts.yml", []byte("x"))
+	require.ErrorIs(t, err, ErrProtected)
+	assert.Equal(t, before, listDir(t, home))
+}
+
+func TestWriteFileWritesOutsideStores(t *testing.T) {
+	home, kopiHome := syntheticHome(t)
+	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+
+	require.NoError(t, ws.WriteFile(".config/other/settings.json", []byte("{}")))
+	require.NoError(t, ws.WriteFile(".ssh-notes.txt", []byte("hi")))
+}
+
+func TestWriteFileRefusesDirectory(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o755))
+	ws := newWorkspace(t, dir, nil)
+
+	for _, path := range []string{"sub", "."} {
+		err := ws.WriteFile(path, []byte("x"))
+		require.ErrorIs(t, err, ErrIsDirectory, path)
+	}
+	assert.Equal(t, []string{"sub"}, listDir(t, dir))
+	assert.Empty(t, listDir(t, filepath.Join(dir, "sub")))
+}
+
+func TestWriteFileWritesThroughSymlink(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "sub", "a.txt"), "old")
+	require.NoError(t, os.Symlink("sub/a.txt", filepath.Join(dir, "link")))
+	require.NoError(t, os.Symlink("sub/new.txt", filepath.Join(dir, "dangling")))
+	ws := newWorkspace(t, dir, nil)
+
+	require.NoError(t, ws.WriteFile("link", []byte("new")))
+	require.NoError(t, ws.WriteFile("dangling", []byte("created")))
+
+	got, err := os.ReadFile(filepath.Join(dir, "sub", "a.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "new", string(got))
+	got, err = os.ReadFile(filepath.Join(dir, "sub", "new.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "created", string(got))
+	for _, link := range []string{"link", "dangling"} {
+		info, err := os.Lstat(filepath.Join(dir, link))
+		require.NoError(t, err)
+		assert.NotZero(t, info.Mode()&fs.ModeSymlink, link)
+	}
+	assert.ElementsMatch(t, []string{"a.txt", "new.txt"}, listDir(t, filepath.Join(dir, "sub")))
+}
+
+func TestTargetResolvesPaths(t *testing.T) {
+	parent := t.TempDir()
+	realParent, err := filepath.EvalSymlinks(parent)
+	require.NoError(t, err)
+	dir := filepath.Join(parent, "ws")
+	writeFile(t, filepath.Join(dir, "sub", "a.txt"), "x")
+	require.NoError(t, os.Symlink("sub", filepath.Join(dir, "dir-link")))
+	require.NoError(t, os.Symlink("sub/a.txt", filepath.Join(dir, "file-link")))
+	require.NoError(t, os.Symlink("../missing/x", filepath.Join(dir, "sub", "dangling")))
+	ws := newWorkspace(t, dir, nil)
+	realDir := filepath.Join(realParent, "ws")
+
+	for _, tc := range []struct {
+		name, path, wantPath, wantReal string
+	}{
+		{"relative", "sub/a.txt", filepath.Join(dir, "sub", "a.txt"), filepath.Join(realDir, "sub", "a.txt")},
+		{"cleaned", "./sub//../sub/a.txt", filepath.Join(dir, "sub", "a.txt"), filepath.Join(realDir, "sub", "a.txt")},
+		{"file symlink", "file-link", filepath.Join(dir, "file-link"), filepath.Join(realDir, "sub", "a.txt")},
+		{"missing tail under symlink", "dir-link/new/b.txt", filepath.Join(dir, "dir-link", "new", "b.txt"), filepath.Join(realDir, "sub", "new", "b.txt")},
+		{"dangling symlink", "sub/dangling", filepath.Join(dir, "sub", "dangling"), filepath.Join(realDir, "missing", "x")},
+		{"outside", filepath.Join(parent, "other"), filepath.Join(parent, "other"), filepath.Join(realParent, "other")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ws.Target(tc.path)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantPath, got.Path)
+			assert.Equal(t, tc.wantReal, got.Real)
+		})
+	}
+}
+
+// symlinkDotDotLayout builds ws/docs/link -> ../secrets/sub, so "docs/link/.."
+// is ws/secrets physically but ws/docs lexically, with a decoy at each.
+func symlinkDotDotLayout(t *testing.T) (dir, realDir string) {
+	t.Helper()
+	dir = t.TempDir()
+	realDir, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	writeFile(t, filepath.Join(dir, "secrets", "key"), "secret")
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "secrets", "sub"), 0o755))
+	writeFile(t, filepath.Join(dir, "docs", "key"), "decoy")
+	require.NoError(t, os.Symlink("../secrets/sub", filepath.Join(dir, "docs", "link")))
+	return dir, realDir
+}
+
+func TestTargetIsTheFileOpenReads(t *testing.T) {
+	dir, realDir := symlinkDotDotLayout(t)
+	ws := newWorkspace(t, dir, nil)
+
+	for _, path := range []string{
+		"docs/link/../key",
+		filepath.Join(dir, "docs", "link") + "/../key",
+	} {
+		t.Run(path, func(t *testing.T) {
+			got, err := ws.Target(path)
+			require.NoError(t, err)
+			assert.Equal(t, filepath.Join(realDir, "secrets", "key"), got.Real)
+			assert.Equal(t, "secret", readAll(t, ws, path))
+		})
+	}
+	got, err := ws.Target("docs/link/../key")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(dir, "docs", "key"), got.Path)
+}
+
+func TestTargetIsTheFileWriteFileCreates(t *testing.T) {
+	dir, realDir := symlinkDotDotLayout(t)
+	ws := newWorkspace(t, dir, nil)
+
+	for _, tc := range []struct{ path, want string }{
+		{"docs/link/../new", "secrets/new"},
+		{filepath.Join(dir, "docs", "link") + "/../abs", "secrets/abs"},
+		// os.Root cannot open through a missing component, but WriteFile
+		// creates it, so the walk goes on past it physically.
+		{"missing/../docs/link/../deep/x", "secrets/deep/x"},
+		{"docs/link/../key", "secrets/key"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			got, err := ws.Target(tc.path)
+			require.NoError(t, err)
+			assert.Equal(t, filepath.Join(realDir, tc.want), got.Real)
+			require.NoError(t, ws.WriteFile(tc.path, []byte("written")))
+			assert.Equal(t, "written", readContent(t, got.Real))
+		})
+	}
+	assert.Equal(t, "decoy", readContent(t, filepath.Join(dir, "docs", "key")))
+	assert.ElementsMatch(t, []string{"key", "link"}, listDir(t, filepath.Join(dir, "docs")))
+	assert.ElementsMatch(t, []string{"docs", "secrets"}, listDir(t, dir))
+}
+
+func TestTargetFollowsSymlinkBeforeDotDotIntoGit(t *testing.T) {
+	dir := t.TempDir()
+	realDir, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
+	require.NoError(t, os.Symlink(".git/hooks", filepath.Join(dir, "x")))
+	ws := newWorkspace(t, dir, nil)
+
+	got, err := ws.Target("x/../config")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(dir, "config"), got.Path)
+	assert.Equal(t, filepath.Join(realDir, ".git", "config"), got.Real)
+}
+
+func TestTargetAppliesPlainDotDot(t *testing.T) {
+	dir, realDir := symlinkDotDotLayout(t)
+	ws := newWorkspace(t, dir, nil)
+
+	got, err := ws.Target("docs/../secrets/key")
+	require.NoError(t, err)
+	assert.Equal(t, policy.Target{Path: filepath.Join(dir, "secrets", "key"), Real: filepath.Join(realDir, "secrets", "key")}, got)
+}
+
+func TestTargetFollowsWorkspaceAfterItsSymlinkIsRepointed(t *testing.T) {
+	parent := t.TempDir()
+	realParent, err := filepath.EvalSymlinks(parent)
+	require.NoError(t, err)
+	require.NoError(t, os.Mkdir(filepath.Join(parent, "data"), 0o755))
+	require.NoError(t, os.Mkdir(filepath.Join(parent, "other"), 0o755))
+	link := filepath.Join(parent, "proj")
+	require.NoError(t, os.Symlink("data", link))
+	ws := newWorkspace(t, link, nil)
+	require.NoError(t, os.Remove(link))
+	require.NoError(t, os.Symlink("other", link))
+
+	path := filepath.Join(link, "secrets", "x")
+	got, err := ws.Target(path)
+	require.NoError(t, err)
+	assert.Equal(t, path, got.Path)
+	assert.Equal(t, filepath.Join(realParent, "data", "secrets", "x"), got.Real)
+	require.NoError(t, ws.WriteFile(path, []byte("written")))
+	assert.Equal(t, "written", readContent(t, got.Real))
+	assert.Empty(t, listDir(t, filepath.Join(parent, "other")))
 }

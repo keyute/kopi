@@ -42,6 +42,17 @@ type fakeController struct {
 	history    []string
 	histories  int
 	subscriber func(event.Event)
+	answers    []answer
+}
+
+type answer struct {
+	callID string
+	a      policy.Answer
+}
+
+func (f *fakeController) Answer(callID string, a policy.Answer) bool {
+	f.answers = append(f.answers, answer{callID, a})
+	return true
 }
 
 func (f *fakeController) Subscribe(fn func(event.Event)) func() {
@@ -859,4 +870,116 @@ func TestToggleModeKey(t *testing.T) {
 	press(m, shiftTab)
 	press(m, tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
 	assert.Equal(t, 1, c.toggles)
+}
+
+func editApproval() event.ApprovalRequested {
+	return event.ApprovalRequested{
+		CallID: "c1", Title: "Edit a.go",
+		Preview: []tool.PreviewLine{{Kind: tool.Removed, Text: "old"}, {Kind: tool.Added, Text: "new"}},
+		Edits:   true,
+	}
+}
+
+func digit(r rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: r, Text: string(r)} }
+
+func TestApprovalCapturesKeys(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	send(m, editApproval())
+
+	press(m, digit('x'))
+	pasteText(m, "pasted")
+	press(m, shiftTab)
+
+	assert.Empty(t, m.composer.value())
+	assert.Zero(t, c.toggles)
+	assert.Empty(t, c.answers)
+	assert.Contains(t, screen(m), "❯ 1. Yes")
+}
+
+func TestApprovalEnterAnswersTheSelectedOption(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	send(m, editApproval())
+
+	press(m, up)
+	press(m, down)
+	press(m, down)
+	press(m, down)
+	press(m, up)
+	press(m, enter)
+
+	assert.Equal(t, []answer{{"c1", policy.AllowEdits}}, c.answers)
+	assert.Contains(t, screen(m), "❯ 2. Yes, allow all edits this session", "the prompt stays until it ends")
+}
+
+func TestApprovalDigitAnswersDirectly(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	send(m, editApproval())
+
+	press(m, digit('4'))
+	press(m, digit('3'))
+	press(m, digit('1'))
+
+	assert.Equal(t, []answer{{"c1", policy.Reject}, {"c1", policy.Allow}}, c.answers)
+}
+
+func TestApprovalEscRejects(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	send(m, editApproval())
+
+	press(m, escape)
+
+	assert.Equal(t, []answer{{"c1", policy.Reject}}, c.answers)
+	assert.Zero(t, c.interrupts, "the controller interrupts on a rejection")
+}
+
+func TestApprovalEndedRestoresTheComposerWithItsDraft(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	typeText(m, "draft")
+	send(m, editApproval())
+	assert.NotContains(t, screen(m), "❯ draft")
+
+	send(m, event.ApprovalEnded{CallID: "other"})
+	assert.Contains(t, screen(m), "❯ 1. Yes", "another call's end leaves the prompt")
+
+	send(m, event.ApprovalEnded{CallID: "c1"})
+	assert.Contains(t, screen(m), "❯ draft")
+	assert.NotContains(t, screen(m), "❯ 1. Yes")
+	assert.Len(t, screen(m), 30)
+}
+
+func TestTurnEndAndSessionChangedClearTheApproval(t *testing.T) {
+	for _, ev := range []event.Event{event.TurnEnd{}, event.SessionChanged{SessionID: "s2"}} {
+		m, _ := newTestModel(t, 60, 30)
+		send(m, editApproval())
+		send(m, ev)
+		assert.Nil(t, m.approval)
+		assert.Contains(t, screen(m), "❯")
+		assert.NotContains(t, screen(m), "❯ 1. Yes")
+	}
+}
+
+func TestCancelInterruptsDuringApproval(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	c.running = true
+	send(m, event.TurnStart{}, editApproval())
+
+	assert.Nil(t, press(m, ctrlC))
+
+	assert.Equal(t, 1, c.interrupts)
+	assert.Empty(t, c.answers)
+}
+
+func TestApprovalWithLongPreviewFitsTheTerminal(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	ev := editApproval()
+	for i := range 50 {
+		ev.Preview = append(ev.Preview, tool.PreviewLine{Kind: tool.Added, Text: fmt.Sprintf("line %d", i)})
+	}
+	send(m, event.TurnStart{}, ev)
+
+	s := screen(m)
+	assert.Len(t, s, 20)
+	assert.Equal(t, []string{"❯ 1. Yes", "  2. Yes, allow all edits this session", "  3. No (esc)", ""}, s[len(s)-5:len(s)-1])
+	assert.Contains(t, s, "  … 47 more lines")
+	assert.Contains(t, s, "Edit a.go")
 }

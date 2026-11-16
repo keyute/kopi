@@ -265,3 +265,19 @@ func TestReadLineStopsDiscardingWhenCancelled(t *testing.T) {
 	_, _, err := readLine(ctx, r)
 	require.ErrorIs(t, err, context.Canceled)
 }
+
+func TestReadTarget(t *testing.T) {
+	tool, dir := newReadTool(t)
+	realDir, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+
+	got, err := tool.Target(json.RawMessage(`{"file_path":"sub/a.txt","limit":3}`))
+	require.NoError(t, err)
+	assert.Equal(t, policy.Target{Path: filepath.Join(dir, "sub", "a.txt"), Real: filepath.Join(realDir, "sub", "a.txt")}, got)
+	other := t.TempDir()
+	got, err = tool.Target(json.RawMessage(fmt.Sprintf(`{"file_path":%q}`, other+"/sub/../b.txt")))
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(other, "b.txt"), got.Path)
+	_, err = tool.Target(json.RawMessage(`{}`))
+	require.ErrorIs(t, err, ErrInvalidArgs)
+}

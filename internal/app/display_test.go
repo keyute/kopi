@@ -80,3 +80,24 @@ func TestDisplayPassesOtherEventsThrough(t *testing.T) {
 		assert.Equal(t, ev, d.apply(ev))
 	}
 }
+
+func TestDisplayApprovalCarriesTitleAndPreview(t *testing.T) {
+	changed := testTool("Change", policy.Write, nil)
+	changed.Display = tool.Display{
+		Title: func(args json.RawMessage) string { return "Change " + string(args) },
+		Preview: func(args json.RawMessage) []tool.PreviewLine {
+			return []tool.PreviewLine{{Kind: tool.Removed, Text: "old"}, {Kind: tool.Added, Text: string(args)}}
+		},
+	}
+	d := newDisplay([]tool.Tool{changed, testTool("Plain", policy.Exec, nil)})
+
+	got := d.approval(policy.Request{CallID: "c1", Tool: "Change", Args: json.RawMessage(`{"x":1}`), Rule: "Change(x) (test)", Edits: true})
+	plain := d.approval(policy.Request{CallID: "c2", Tool: "Plain"})
+
+	assert.Equal(t, event.ApprovalRequested{
+		CallID: "c1", Title: `Change {"x":1}`,
+		Preview: []tool.PreviewLine{{Kind: tool.Removed, Text: "old"}, {Kind: tool.Added, Text: `{"x":1}`}},
+		Rule:    "Change(x) (test)", Edits: true,
+	}, got)
+	assert.Equal(t, event.ApprovalRequested{CallID: "c2", Title: "Plain"}, plain)
+}

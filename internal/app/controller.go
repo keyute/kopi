@@ -25,6 +25,11 @@ type Config struct {
 	JoinTimeout time.Duration
 	// History records human input; nil disables it.
 	History *history.Store
+	// Rules nil means no rules.
+	Rules *policy.Rules
+	// Unattended means no human can answer, so every call that would ask for
+	// approval is denied.
+	Unattended bool
 }
 
 // Controller holds all frontend-neutral behaviour: frontends pass input in
@@ -67,6 +72,8 @@ type Controller struct {
 	closed  bool
 	turn    *Work
 	turnSeq int
+	// approval is the call waiting for Answer; nil when none is.
+	approval *pendingApproval
 }
 
 // sessionSwitch retains work even after it deregisters while start waits for life.
@@ -76,6 +83,7 @@ type sessionSwitch struct {
 }
 
 func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
+	cfg.Tools = slices.DeleteFunc(slices.Clone(cfg.Tools), func(t tool.Tool) bool { return cfg.Rules.Removes(t.Name) })
 	return &Controller{
 		rt:        rt,
 		cfg:       cfg,
@@ -94,6 +102,8 @@ func (c *Controller) Subscribe(fn func(event.Event)) func() {
 type OpenRequest struct {
 	ResumeID string
 	Continue bool
+	// Mode is the mode the session starts in; the zero value is plan.
+	Mode policy.Mode
 }
 
 func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
@@ -614,6 +624,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 	}
 
+	d := newDisplay(c.cfg.Tools)
 	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
 		Model:        c.cfg.Model,
 		ResumeID:     req.ResumeID,
@@ -621,6 +632,8 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		SystemPrompt: c.prompt,
 		Tools:        c.cfg.Tools,
 		Authority:    c.authority,
+		Rules:        c.cfg.Rules,
+		Approve:      c.approver(d),
 	})
 	if err != nil {
 		return err
@@ -640,10 +653,15 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 		cancel()
 	}
-	// Execute mode is never carried into a session start.
-	c.EnterPlan()
+	// A session starts in the mode its request names, never in the mode the
+	// previous session was left in.
+	if req.Mode == policy.Execute {
+		c.EnterExecute()
+	} else {
+		c.EnterPlan()
+	}
 
-	bound, d := c.relay.bind(), newDisplay(c.cfg.Tools)
+	bound := c.relay.bind()
 	emit := func(ev event.Event) { bound(d.apply(ev)) }
 	unsubscribe := sess.Subscribe(emit)
 	id := sess.ID()

@@ -16,6 +16,8 @@ import (
 	"github.com/knadh/koanf/providers/confmap"
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/knadh/koanf/v2"
+
+	"github.com/keyute/kopi/internal/policy"
 )
 
 const Version = 1
@@ -28,8 +30,17 @@ type Config struct {
 	Version int    `koanf:"version"`
 	Model   string `koanf:"model"` // "provider/id"; empty means not configured (there is no default model)
 	// Keys maps an action from KeyActions to the keys bound to it.
-	Keys       map[string][]string `koanf:"keys"`
-	StatusLine StatusLine          `koanf:"statusline"`
+	Keys        map[string][]string `koanf:"keys"`
+	StatusLine  StatusLine          `koanf:"statusline"`
+	Permissions Permissions         `koanf:"permissions"`
+}
+
+// Permissions holds rule strings checked only for syntax here; a later layer's
+// list replaces an earlier one's whole.
+type Permissions struct {
+	Allow []string `koanf:"allow"`
+	Ask   []string `koanf:"ask"`
+	Deny  []string `koanf:"deny"`
 }
 
 type Layer struct {
@@ -41,6 +52,7 @@ type Layer struct {
 func Defaults() Layer {
 	values := uiDefaults()
 	values["version"] = Version
+	values["permissions"] = map[string]any{"allow": []string{}, "ask": []string{}, "deny": []string{}}
 	return Map("default", values)
 }
 
@@ -90,6 +102,9 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 			}
 		}
 		if err := validateUI(c); err != nil {
+			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
+		}
+		if err := validatePermissions(c.Permissions); err != nil {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
 		for _, key := range k.Keys() {
@@ -162,6 +177,20 @@ func rejectFractionalInt(_, to reflect.Type, data any) (any, error) {
 	return data, nil
 }
 
+func validatePermissions(p Permissions) error {
+	for _, list := range []struct {
+		key   string
+		rules []string
+	}{{"allow", p.Allow}, {"ask", p.Ask}, {"deny", p.Deny}} {
+		for i, r := range list.rules {
+			if err := policy.ValidateRule(r); err != nil {
+				return fmt.Errorf("%w: permissions.%s[%d]: %w", ErrInvalidValue, list.key, i, err)
+			}
+		}
+	}
+	return nil
+}
+
 func originOf(origins map[string]string, key string) string {
 	if o, ok := origins[key]; ok {
 		return o
@@ -176,10 +205,13 @@ type Entry struct{ Key, Value, Origin string }
 func (r *Resolved) Entries() []Entry {
 	c := r.Config
 	values := map[string]any{
-		"model":            c.Model,
-		"version":          c.Version,
-		"statusline.left":  c.StatusLine.Left,
-		"statusline.right": c.StatusLine.Right,
+		"model":             c.Model,
+		"version":           c.Version,
+		"statusline.left":   c.StatusLine.Left,
+		"statusline.right":  c.StatusLine.Right,
+		"permissions.allow": c.Permissions.Allow,
+		"permissions.ask":   c.Permissions.Ask,
+		"permissions.deny":  c.Permissions.Deny,
 	}
 	for _, action := range KeyActions {
 		values["keys."+action] = c.Keys[action]

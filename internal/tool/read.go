@@ -61,6 +61,7 @@ func NewRead(ws *Workspace) Tool {
 			"additionalProperties": false,
 		},
 		Capability: policy.Read,
+		Target:     pathTarget(ws),
 		Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
 			args, err := decodeReadArgs(raw)
 			if err != nil {
@@ -106,8 +107,10 @@ func readSummary(output string) string {
 	return fmt.Sprintf("%d lines", n)
 }
 
-func decodeReadArgs(raw json.RawMessage) (readArgs, error) {
-	var args readArgs
+// decodeArgs decodes one JSON object strictly: unknown fields and trailing
+// data are refused.
+func decodeArgs[T any](raw json.RawMessage) (T, error) {
+	var args T
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&args); err != nil {
@@ -115,6 +118,30 @@ func decodeReadArgs(raw json.RawMessage) (readArgs, error) {
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return args, fmt.Errorf("%w: trailing data after arguments", ErrInvalidArgs)
+	}
+	return args, nil
+}
+
+// pathTarget returns a Tool.Target for a tool whose file_path argument names
+// the file it acts on. It runs before the arguments are validated, so it
+// decodes leniently.
+func pathTarget(ws *Workspace) func(json.RawMessage) (policy.Target, error) {
+	return func(raw json.RawMessage) (policy.Target, error) {
+		var args struct {
+			FilePath string `json:"file_path"`
+		}
+		_ = json.Unmarshal(raw, &args)
+		if args.FilePath == "" {
+			return policy.Target{}, fmt.Errorf("%w: file_path is required", ErrInvalidArgs)
+		}
+		return ws.Target(args.FilePath)
+	}
+}
+
+func decodeReadArgs(raw json.RawMessage) (readArgs, error) {
+	args, err := decodeArgs[readArgs](raw)
+	if err != nil {
+		return args, err
 	}
 	if args.FilePath == "" {
 		return args, fmt.Errorf("%w: file_path is required", ErrInvalidArgs)

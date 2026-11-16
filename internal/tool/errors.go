@@ -9,4 +9,7 @@ var (
 	ErrIsDirectory      = errors.New("path is a directory")
 	ErrNotRegular       = errors.New("path is not a regular file")
 	ErrInvalidArgs      = errors.New("invalid arguments")
+	ErrTooLarge         = errors.New("file is too large")
+	ErrNoMatch          = errors.New("old_string was not found")
+	ErrAmbiguousMatch   = errors.New("old_string matches more than once")
 )

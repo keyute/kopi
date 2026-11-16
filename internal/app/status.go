@@ -26,7 +26,7 @@ type ToolStatus struct {
 	Allowed    bool
 }
 
-const noMutatingTools = "This version has no shell or file-modifying tools, so execute mode currently unlocks nothing further."
+const approvalNote = "A call needs approval when a permission rule asks, or when no rule decides a call by a tool other than Read."
 
 func renderStatus(s Status) string {
 	var b strings.Builder
@@ -51,6 +51,6 @@ func renderStatus(s Status) string {
 		}
 		fmt.Fprintf(&b, "  %s (%s): %s\n", t.Name, t.Capability, allowed)
 	}
-	b.WriteString(noMutatingTools)
+	b.WriteString(approvalNote)
 	return b.String()
 }
