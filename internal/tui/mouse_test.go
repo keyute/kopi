@@ -619,6 +619,59 @@ func TestActiveTranscriptDragClearsWhenCoordinatesChange(t *testing.T) {
 	}
 }
 
+func TestTranscriptDragWhenCandidatesConsumeViewport(t *testing.T) {
+	for _, height := range []int{10, 12} {
+		for _, clicks := range []int{2, 3} {
+			t.Run(fmt.Sprintf("height%d/clicks%d", height, clicks), func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					m, c := newMenuModel(t, 40, height)
+					c.files = append(c.files, c.files[0])
+					notices(m, 30)
+					load := keys(m, "@")
+					require.True(t, m.menu.open)
+					require.Zero(t, m.menuHeight())
+					m.scroll(-len(m.lines))
+					require.Zero(t, m.top())
+					for range clicks {
+						pressAt(m, 8, 2)
+					}
+					require.Equal(t, clicks, m.drag.count)
+					tick := moveTo(m, 10, m.transcriptHeight()-1)
+					require.NotNil(t, tick)
+					require.True(t, m.ticking)
+					require.False(t, m.sel.empty())
+
+					settle(m, load)
+
+					require.Equal(t, 5, m.menuHeight())
+					require.Zero(t, m.top())
+					if height == 10 {
+						require.Zero(t, m.transcriptHeight())
+						require.NotPanics(t, func() { assert.Nil(t, moveTo(m, 12, 0)) })
+						assert.Equal(t, drag{}, m.drag)
+						assert.True(t, m.sel.empty())
+						_, cmd := m.Update(tick())
+						assert.Nil(t, cmd, "a pending tick cannot restart the drag")
+						assert.False(t, m.ticking)
+						assert.Zero(t, m.top())
+						assert.Nil(t, releaseAt(m, 12, 0))
+						assert.Empty(t, m.clip.(*fakeClipboard).written)
+					} else {
+						require.Positive(t, m.transcriptHeight())
+						assert.Equal(t, regionTranscript, m.drag.region)
+						assert.Nil(t, moveTo(m, 12, 0))
+						assert.False(t, m.sel.empty())
+						assert.NotNil(t, releaseAt(m, 12, 0))
+						_, cmd := m.Update(tick())
+						assert.Nil(t, cmd)
+						assert.False(t, m.ticking)
+					}
+				})
+			})
+		}
+	}
+}
+
 func TestActiveTranscriptDragClearsWhenLinesAboveChange(t *testing.T) {
 	m, _ := newTestModel(t, 40, 30)
 	send(m, start("a"), okOut("a", "3 lines", "a1\na2\n"), start("b"), ok("b", "1 line"))

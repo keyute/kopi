@@ -492,6 +492,9 @@ func (m *model) relayout() {
 func (m *model) arrange() {
 	old, wasWorking := m.below, m.geo.working
 	m.place()
+	if m.drag.region == regionTranscript && m.transcriptHeight() == 0 {
+		m.clearSelection()
+	}
 	if m.selIn != regionRows {
 		return
 	}
