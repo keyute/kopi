@@ -207,7 +207,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		m.approvalKey(msg)
 		return nil
 	}
-	if m.menu.open && len(m.menu.shown) > 0 && m.menuHeight() > 0 {
+	if m.menu.open && len(m.menu.shown) > 0 && m.menuHeight() > 0 && (m.drag.region != regionComposer || !m.drag.moved) {
 		if cmd, ok := m.menuKey(msg); ok {
 			return cmd
 		}

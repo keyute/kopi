@@ -428,6 +428,93 @@ func TestComposerDragReservesAlreadyOpenMenu(t *testing.T) {
 	})
 }
 
+func TestComposerDragDoesNotDispatchHiddenCandidates(t *testing.T) {
+	for _, k := range []tea.KeyPressMsg{up, down, enter, tab} {
+		t.Run(k.String(), func(t *testing.T) {
+			m, c := newMenuModel(t, 60, 30)
+			draft := "/pl"
+			if k.Code == tea.KeyUp || k.Code == tea.KeyDown {
+				draft = "/"
+			}
+			keys(m, draft)
+			top := m.composerTop()
+			pressAt(m, 2, top)
+			moveTo(m, 2+len(draft), top)
+			require.Equal(t, regionComposer, m.drag.region)
+			require.True(t, m.drag.moved)
+			require.True(t, m.menu.open)
+			require.NotEmpty(t, m.menu.shown)
+			require.Positive(t, m.menuHeight())
+			require.Equal(t, make([]string, m.menuHeight()), m.menuRows())
+			if draft == "/" {
+				require.Greater(t, len(m.menu.shown), 1)
+			}
+			sel := m.menu.sel
+
+			press(m, k)
+
+			if k.Code == tea.KeyEnter {
+				assert.Equal(t, []string{draft}, c.submitted, "enter submits the original draft")
+				return
+			}
+			assert.Empty(t, c.submitted)
+			require.Equal(t, draft, m.composer.value())
+			assert.Equal(t, sel, m.menu.sel, "hidden candidates cannot be navigated")
+			assert.Equal(t, make([]string, m.menuHeight()), m.menuRows())
+
+			releaseAt(m, 2+len(draft), top)
+			require.Equal(t, regionNone, m.drag.region)
+			require.Contains(t, menuText(m)[0], "❭ /plan")
+			press(m, tab)
+			assert.Equal(t, "/plan ", m.composer.value(), "release restores completion")
+		})
+	}
+}
+
+func TestComposerDragLoadsCandidatesWhileHidden(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newMenuModel(t, 60, 30)
+		_, load := m.Update(tea.PasteMsg{Content: "@\n@"})
+		require.True(t, m.menu.open)
+		require.Empty(t, m.menu.shown)
+		require.Zero(t, m.menuHeight())
+		top := m.composerTop()
+
+		pressAt(m, 3, top)
+		settle(m, moveTo(m, 3, top+1))
+		require.Equal(t, regionComposer, m.drag.region)
+		require.True(t, m.drag.moved)
+		require.True(t, m.menu.open)
+		require.Zero(t, m.drag.menuHeight)
+		require.Equal(t, 1, m.composer.ta.Line())
+		require.Equal(t, 1, m.composer.ta.Column())
+
+		settle(m, load)
+
+		require.NotEmpty(t, m.menu.shown, "the delayed load arrives during the drag")
+		assert.Zero(t, m.drag.menuHeight, "the captured reservation does not change")
+		assert.Equal(t, m.drag.menuHeight, m.menuHeight())
+		assert.Empty(t, m.menuRows())
+		assert.Equal(t, top, m.composerTop())
+		assert.Equal(t, top, m.drag.composerTop)
+		assert.Equal(t, 1, m.composer.ta.Line())
+		assert.Equal(t, 1, m.composer.ta.Column())
+		s := screen(m)
+		require.Len(t, s, m.height)
+		assert.Equal(t, "❯ @", s[top])
+		assert.Equal(t, "  @", s[top+1])
+		assert.Equal(t, statusText(m), s[m.height-1])
+		assert.NotContains(t, s, "❭ a.go")
+
+		releaseAt(m, 3, top+1)
+		assert.Equal(t, regionNone, m.drag.region)
+		assert.Equal(t, "❭ a.go", menuText(m)[0])
+		s = screen(m)
+		require.Len(t, s, m.height)
+		assert.Equal(t, statusText(m), s[m.height-1])
+	})
+}
+
 func TestComposerDragReservationDoesNotDispatchEmptyMenu(t *testing.T) {
 	for _, k := range []tea.KeyPressMsg{up, down, enter, tab} {
 		t.Run(k.String(), func(t *testing.T) {
