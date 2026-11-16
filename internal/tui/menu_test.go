@@ -146,6 +146,43 @@ func TestApprovalHidesMenuUntilItEnds(t *testing.T) {
 	assert.Equal(t, "❭ /plan       switch to plan mode", menuText(m)[0])
 }
 
+func TestApprovalSuppressesComposerDragMenuReservation(t *testing.T) {
+	m, _ := newMenuModel(t, 60, 30)
+	keys(m, "/")
+	h := m.menuHeight()
+	require.Positive(t, h)
+	top := m.composerTop()
+	pressAt(m, 2, top)
+	moveTo(m, 3, top)
+	require.Equal(t, regionComposer, m.drag.region)
+	require.True(t, m.drag.moved)
+	require.Equal(t, h, m.drag.menuHeight)
+	require.Equal(t, h, m.menuHeight())
+
+	send(m, editApproval())
+	assert.Zero(t, m.menuHeight())
+	assert.Empty(t, m.menuRows())
+	assert.Equal(t, regionComposer, m.drag.region)
+	assert.True(t, m.drag.moved)
+	s := screen(m)
+	require.Len(t, s, m.height)
+	assert.Contains(t, s, "❯ 1. Yes")
+	assert.Equal(t, statusText(m), s[m.height-1])
+
+	send(m, event.ApprovalEnded{Token: 1})
+	assert.Equal(t, regionComposer, m.drag.region)
+	assert.Equal(t, h, m.menuHeight())
+	assert.Equal(t, make([]string, h), m.menuRows())
+	assert.Equal(t, top, m.composerTop())
+	s = screen(m)
+	require.Len(t, s, m.height)
+	assert.Equal(t, statusText(m), s[m.height-1])
+
+	releaseAt(m, 3, top)
+	assert.Equal(t, regionNone, m.drag.region)
+	assert.Equal(t, "❭ /plan       switch to plan mode", menuText(m)[0])
+}
+
 func TestEnterOnCommandRunsIt(t *testing.T) {
 	m, c := newMenuModel(t, 60, 30)
 	keys(m, "/pl")
@@ -353,6 +390,65 @@ func TestComposerDragHidesMenuUntilRelease(t *testing.T) {
 
 		releaseAt(m, 3, top+1)
 		assert.Equal(t, "❭ a.go", menuText(m)[0], "release shows the menu for the final token")
+	})
+}
+
+func TestComposerDragReservesAlreadyOpenMenu(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newMenuModel(t, 80, 14)
+		_, cmd := m.Update(tea.PasteMsg{Content: "@\n@"})
+		settle(m, cmd)
+		h := m.menuHeight()
+		require.Positive(t, h)
+		top := m.composerTop()
+
+		_, cmd = m.Update(tea.MouseClickMsg{X: 2, Y: top, Button: tea.MouseLeft})
+		settle(m, cmd)
+		assert.Zero(t, m.composer.ta.Line())
+		assert.Zero(t, m.composer.ta.Column())
+
+		settle(m, moveTo(m, 3, top+1))
+		assert.Equal(t, top, m.composerTop())
+		assert.Equal(t, 1, m.composer.ta.Line())
+		assert.Equal(t, 1, m.composer.ta.Column())
+		assert.True(t, m.composer.ta.HasSelection())
+		assert.Equal(t, "@\n@", m.composer.ta.SelectedText())
+		assert.Equal(t, h, m.menuHeight())
+		assert.Equal(t, make([]string, h), m.menuRows(), "candidates stay hidden in reserved blank rows")
+		s := screen(m)
+		require.Len(t, s, 14)
+		assert.Equal(t, "❯ @", s[top])
+		assert.Equal(t, statusText(m), s[13])
+
+		assertCopied(t, m, releaseAt(m, 3, top+1), "@\n@")
+		assert.Equal(t, "❭ a.go", menuText(m)[0])
+		s = screen(m)
+		require.Len(t, s, 14)
+		assert.Equal(t, statusText(m), s[13])
+	})
+}
+
+func TestLoadedMenuShrinksExhaustedPendingBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newMenuModel(t, 80, 14)
+		send(m, event.QueueChanged{Pending: []string{linesOf(8)}})
+		cmd := keys(m, "@")
+		require.False(t, m.busy)
+		require.Zero(t, m.menuHeight(), "the async load has not arrived")
+		pending := len(m.pending)
+		require.Positive(t, pending)
+		require.Equal(t, 14-m.inputHeight()-chromeRows, pending, "the queue exhausts the available budget")
+		s := screen(m)
+		require.Len(t, s, 14)
+		assert.Equal(t, statusText(m), s[13])
+
+		settle(m, cmd)
+
+		require.Positive(t, m.menuHeight())
+		assert.Less(t, len(m.pending), pending)
+		s = screen(m)
+		require.Len(t, s, 14)
+		assert.Equal(t, statusText(m), s[13])
 	})
 }
 

@@ -108,16 +108,17 @@ func (m *model) loaded(msg candidatesMsg) {
 	m.refreshPending()
 }
 
-// menuHeight is the rows the menu takes: none unless it is open with a
-// candidate to show and at least one row fits above the status line.
+// menuHeight includes blank space reserved by a composer drag; otherwise it
+// counts candidates that fit above the status line.
 func (m *model) menuHeight() int {
-	mn := &m.menu
-	if !mn.open || len(mn.shown) == 0 || m.approval != nil {
+	if m.approval != nil {
 		return 0
 	}
-	// Hidden during a composer drag, as in Codex, so the composer stays where
-	// the press found it.
 	if m.drag.region == regionComposer && m.drag.moved {
+		return m.drag.menuHeight
+	}
+	mn := &m.menu
+	if !mn.open || len(mn.shown) == 0 {
 		return 0
 	}
 	h := min(len(mn.shown), menuMax)
@@ -137,6 +138,9 @@ func (m *model) menuRows() []string {
 	h := m.menuHeight()
 	if h == 0 {
 		return nil
+	}
+	if m.drag.region == regionComposer && m.drag.moved {
+		return make([]string, h)
 	}
 	mn, th := &m.menu, m.th
 	n := min(h, len(mn.shown), menuMax)

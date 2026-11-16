@@ -37,6 +37,8 @@ type drag struct {
 	// unit is what the press selected; a drag extends from it.
 	unit  selection
 	moved bool
+	// Composer coordinates and menu space stay fixed for the drag.
+	composerTop, menuHeight int
 	// x is the pointer's last column; edge is -1 or 1 while it is held at the
 	// transcript's top or bottom row, else 0.
 	x, edge int
@@ -90,7 +92,7 @@ func (m *model) press(mo tea.Mouse) {
 		m.drag = drag{region: regionTranscript, at: mo, press: p, count: n, unit: unit, x: mo.X}
 		m.sel = unit
 	case m.approval == nil && mo.Y >= top && mo.Y < top+m.composer.height():
-		m.drag = drag{region: regionComposer}
+		m.drag = drag{region: regionComposer, composerTop: top, menuHeight: m.menuHeight()}
 		m.composer.press(mo.X, mo.Y-top, n)
 	}
 }
@@ -134,7 +136,7 @@ func (m *model) motion(mo tea.Mouse) tea.Cmd {
 			m.drag.moved = true
 			m.refreshPending()
 		}
-		m.composer.drag(mo.X, mo.Y-m.composerTop())
+		m.composer.drag(mo.X, mo.Y-m.drag.composerTop)
 	}
 	return nil
 }
