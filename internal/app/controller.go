@@ -34,6 +34,11 @@ type Config struct {
 	Mode policy.Mode
 	// Files lists the entries that @ references complete to; nil offers none.
 	Files *tool.Workspace
+	// Notices are shown once, after Open succeeds.
+	Notices []string
+	// ServerInstructions maps an MCP server's name to the instructions it
+	// gave, which the system prompt carries.
+	ServerInstructions map[string]string
 }
 
 const maxReferenceEntries = 10000
@@ -94,7 +99,7 @@ func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
 	return &Controller{
 		rt:        rt,
 		cfg:       cfg,
-		prompt:    systemPrompt(cfg.Workspace, cfg.Tools),
+		prompt:    systemPrompt(cfg.Workspace, cfg.Tools, cfg.ServerInstructions),
 		authority: policy.NewAuthority(),
 	}
 }
@@ -111,8 +116,15 @@ type OpenRequest struct {
 	Continue bool
 }
 
+// Open opens the first session, then emits each of Config.Notices.
 func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
-	return c.start(ctx, req)
+	if err := c.start(ctx, req); err != nil {
+		return err
+	}
+	for _, n := range c.cfg.Notices {
+		c.relay.emit(event.Notice{Text: n})
+	}
+	return nil
 }
 
 func (c *Controller) NewSession(ctx context.Context) error {

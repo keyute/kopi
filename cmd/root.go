@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/sandbox"
 	"github.com/keyute/kopi/internal/tool"
+	"github.com/keyute/kopi/internal/trust"
 	"github.com/keyute/kopi/internal/tui"
 )
 
@@ -33,6 +35,9 @@ const (
 	joinTimeout = 5 * time.Second
 	// historyLimit is how many prompts are kept for each workspace.
 	historyLimit = 100
+	// projectMCPFile is the standard file in which a folder declares its MCP
+	// servers.
+	projectMCPFile = ".mcp.json"
 )
 
 func Execute() {
@@ -48,6 +53,7 @@ func newRoot() *cobra.Command {
 	root.AddCommand(versionCmd())
 	root.AddCommand(configCmd())
 	root.AddCommand(loginCmd())
+	root.AddCommand(mcpCmd())
 	return root
 }
 
@@ -261,13 +267,38 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		return fmt.Errorf("failed to resolve working directory: %w", err)
 	}
 
+	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM)
+	defer stop()
+
+	var ask askTrust
+	if fullscreen {
+		ask = func(req tui.TrustRequest) (tui.TrustChoice, error) {
+			askCtx, stopAsk := signal.NotifyContext(ctx, os.Interrupt)
+			defer stopAsk()
+			return tui.AskTrust(askCtx, cmd.InOrStdin(), cmd.OutOrStdout(), tui.Options{Keys: resolved.Config.Keys}, req)
+		}
+	}
+	set, err := resolveServers(resolved.Config.MCPServers, paths.TrustFile, cwd, userHome, ask)
+	if err != nil {
+		return err
+	}
+	if set.undecided {
+		slog.Warn("this folder is not trusted, so the MCP servers in its " + projectMCPFile + " are skipped; run kopi here in a terminal to be asked whether to trust it")
+	}
+	// workRunning is set when Close leaves work running; see below.
+	var workRunning bool
+	servers := pigruntime.StartServers(pigruntime.ServerOptions{Servers: set.servers, CWD: cwd, Version: kopiVersion()})
+	defer func() {
+		if !workRunning {
+			servers.Close()
+		}
+	}()
+
 	sb, unavailable, err := openSandbox(cmd.Context(), resolved.Config.Sandbox, cwd, userHome, paths.Home)
 	if err != nil {
 		return err
 	}
 
-	// workRunning is set when Close leaves work running; see below.
-	var workRunning bool
 	ws, err := tool.NewWorkspace(cwd, []string{paths.Home})
 	if err != nil {
 		return err
@@ -278,13 +309,31 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		}
 	}()
 	tools := []tool.Tool{tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb))}
+	// The terminal's SIGINT does not reach stdio servers, which run in their
+	// own process group, so it must end the wait and let Close run.
+	waitCtx, stopWait := signal.NotifyContext(ctx, os.Interrupt)
+	statuses, err := waitServers(waitCtx, servers)
+	stopWait()
+	if err != nil {
+		return err
+	}
+	notices := set.notices
+	instructions := map[string]string{}
+	for _, st := range statuses {
+		if st.Err != nil {
+			notices = append(notices, fmt.Sprintf("MCP server %s failed to start: %v", st.Name, st.Err))
+			continue
+		}
+		tools = append(tools, st.Tools...)
+		for _, skipped := range st.Skipped {
+			notices = append(notices, fmt.Sprintf("MCP server %s: skipped tool %s", st.Name, skipped))
+		}
+		instructions[st.Name] = st.Instructions
+	}
 	rules, err := permissionRules(cwd, userHome, tools, resolved.Config.Permissions, resolved.Origins, flagRules)
 	if err != nil {
 		return err
 	}
-
-	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM)
-	defer stop()
 
 	if fullscreen {
 		if err := os.MkdirAll(paths.Home, 0o700); err != nil {
@@ -300,6 +349,12 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	if unavailable != nil {
 		slog.Warn("sandbox is unavailable; Bash runs without it and needs approval or an allow rule", "err", unavailable)
 	}
+	// The headless frontend shows no notices.
+	if !fullscreen {
+		for _, n := range notices {
+			slog.Warn(printable(n, "    "))
+		}
+	}
 
 	rt, err := openRuntime(ctx, paths, cwd)
 	if err != nil {
@@ -311,7 +366,10 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		}
 	}()
 	// Only the fullscreen interface has a human to answer approvals.
-	cfg := app.Config{Model: model, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws}
+	cfg := app.Config{
+		Model: model, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
+		Notices: notices, ServerInstructions: instructions,
+	}
 	// Only the fullscreen interface records prompts.
 	if fullscreen {
 		store, err := history.Open(paths.HistoryFile, cwd, historyLimit)
@@ -362,6 +420,141 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		closeErr = fmt.Errorf("running work did not stop before exit: %w", closeErr)
 	}
 	return errors.Join(runErr, closeErr)
+}
+
+// mcpServers is the MCP server set of a run in one folder.
+type mcpServers struct {
+	// servers are the servers to start: the global ones and, in a trusted
+	// folder, the project ones, which replace global ones of the same name.
+	servers map[string]config.MCPServer
+	// project names the servers in servers that the project declares.
+	project map[string]bool
+	// untrusted are the project's servers, skipped as the folder is not trusted.
+	untrusted map[string]config.MCPServer
+	// undecided means no trust decision applies and none was asked for.
+	undecided bool
+	notices   []string
+}
+
+// askTrust asks the human whether to trust a folder; nil means no human can
+// be asked.
+type askTrust func(tui.TrustRequest) (tui.TrustChoice, error)
+
+// resolveServers merges the project's servers over global ones when the
+// folder is trusted. The trust file is opened only when the project declares
+// a server; an undecided folder is asked about through ask and the answer
+// saved, and without ask it is untrusted for this run.
+func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome string, ask askTrust) (mcpServers, error) {
+	s := mcpServers{servers: maps.Clone(global), project: map[string]bool{}}
+	if s.servers == nil {
+		s.servers = map[string]config.MCPServer{}
+	}
+	project, err := config.ProjectServers(filepath.Join(cwd, projectMCPFile))
+	if err != nil {
+		s.notices = append(s.notices, fmt.Sprintf("Skipped this folder's MCP servers: %v", err))
+		return s, nil
+	}
+	if len(project) == 0 {
+		return s, nil
+	}
+	store, err := trust.Open(trustFile)
+	if err != nil {
+		return mcpServers{}, err
+	}
+	d, ok, err := store.Lookup(cwd)
+	if err != nil {
+		return mcpServers{}, err
+	}
+	switch {
+	case ok:
+	case ask == nil:
+		s.undecided = true
+	default:
+		if d, err = decideTrust(store, cwd, userHome, project, ask); err != nil {
+			return mcpServers{}, err
+		}
+	}
+	if d != trust.Trusted {
+		s.untrusted = project
+		return s, nil
+	}
+	for name, p := range project {
+		s.servers[name] = p
+		s.project[name] = true
+	}
+	return s, nil
+}
+
+// waitServers waits for every server to settle; it fails when ctx ends first,
+// so that startup stops rather than going on without the servers.
+func waitServers(ctx context.Context, servers *pigruntime.Servers) ([]pigruntime.ServerStatus, error) {
+	statuses := servers.Wait(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("failed to start MCP servers: startup was interrupted: %w", err)
+	}
+	return statuses, nil
+}
+
+// decideTrust asks about cwd and saves the answer; a cancelled prompt saves
+// nothing and returns no decision. The folder and parent are resolved first,
+// so what is shown is what is saved, and the home check sees through
+// symlinks.
+func decideTrust(store *trust.Store, cwd, userHome string, project map[string]config.MCPServer, ask askTrust) (trust.Decision, error) {
+	cwd, err := resolveDir(cwd)
+	if err != nil {
+		return 0, err
+	}
+	userHome, err = resolveDir(userHome)
+	if err != nil {
+		return 0, err
+	}
+	req := tui.TrustRequest{Folder: cwd}
+	if parent := filepath.Dir(cwd); parent != filepath.Dir(parent) && parent != userHome {
+		req.Parent = parent
+	}
+	for _, name := range slices.Sorted(maps.Keys(project)) {
+		req.Servers = append(req.Servers, name+": "+serverTarget(project[name]))
+	}
+	choice, err := ask(req)
+	if err != nil {
+		return 0, err
+	}
+	dir, d := cwd, trust.Trusted
+	switch choice {
+	case tui.TrustFolder:
+	case tui.TrustParent:
+		dir = req.Parent
+	case tui.TrustDeny:
+		d = trust.Untrusted
+	default:
+		return 0, nil
+	}
+	if err := store.Set(dir, d); err != nil {
+		return 0, fmt.Errorf("failed to save the trust decision: %w", err)
+	}
+	return d, nil
+}
+
+// resolveDir is dir absolute, cleaned and with symlinks resolved.
+func resolveDir(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve %s: %w", dir, err)
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve %s: %w", dir, err)
+	}
+	return resolved, nil
+}
+
+// serverTarget is what a server runs or connects to, as configured: the
+// command and its arguments, or the URL.
+func serverTarget(s config.MCPServer) string {
+	if s.Command != "" {
+		return strings.Join(append([]string{s.Command}, s.Args...), " ")
+	}
+	return s.URL
 }
 
 // openSandbox returns the sandbox Bash runs under, or nil when sandbox.enabled

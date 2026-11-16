@@ -10,4 +10,9 @@ var (
 	ErrNoOAuth         = errors.New("provider does not offer OAuth login")
 	ErrSessionNotFound = errors.New("session not found")
 	ErrSendInProgress  = errors.New("session send already in progress")
+
+	ErrServerStartTimeout = errors.New("MCP server did not start in time")
+	ErrServerNameClash    = errors.New("MCP server names give the same tool names")
+	ErrServerClosed       = errors.New("MCP server is closed")
+	ErrToolError          = errors.New("MCP tool returned an error")
 )

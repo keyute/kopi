@@ -21,6 +21,8 @@ type ToolSpec struct {
 	// Sandboxed reports that the OS confines what a call can do, so a call no
 	// rule matches runs without asking.
 	Sandboxed bool
+	// Ask makes calls ask by default whatever the capability.
+	Ask bool
 }
 
 type Answer int
@@ -112,7 +114,7 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 		}
 	case effectAllow:
 	default:
-		if spec.Capability != Read && !spec.Sandboxed && (spec.Capability != Write || !g.editsGranted()) {
+		if spec.Ask || (spec.Capability != Read && !spec.Sandboxed && (spec.Capability != Write || !g.editsGranted())) {
 			req.Edits = spec.Capability == Write
 			allow := tool
 			if target != nil {

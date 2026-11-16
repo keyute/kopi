@@ -19,6 +19,7 @@ func TestResolvePathsPrefersKopiHome(t *testing.T) {
 	assert.Equal(t, Paths{
 		Home:        kopiHome,
 		ConfigFile:  filepath.Join(kopiHome, "config.json"),
+		TrustFile:   filepath.Join(kopiHome, "trust.json"),
 		AgentDir:    filepath.Join(kopiHome, "agent"),
 		LogFile:     filepath.Join(kopiHome, "kopi.log"),
 		HistoryFile: filepath.Join(kopiHome, "history.jsonl"),
@@ -61,6 +62,7 @@ func TestResolvePathsDefaultsUnderUserHome(t *testing.T) {
 			assert.Equal(t, Paths{
 				Home:        want,
 				ConfigFile:  filepath.Join(want, "config.json"),
+				TrustFile:   filepath.Join(want, "trust.json"),
 				AgentDir:    filepath.Join(want, "agent"),
 				LogFile:     filepath.Join(want, "kopi.log"),
 				HistoryFile: filepath.Join(want, "history.jsonl"),

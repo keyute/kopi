@@ -20,7 +20,11 @@ type Source struct {
 	Allow, Ask, Deny []string
 }
 
-var ruleName = regexp.MustCompile(`^(\*|[A-Za-z_][A-Za-z0-9_]*)$`)
+// MCPPrefix starts the name of every tool from an MCP server.
+const MCPPrefix = "mcp__"
+
+// ruleName also admits a trailing * for parseRule to refuse on non-MCP names.
+var ruleName = regexp.MustCompile(`^(\*|[A-Za-z_][A-Za-z0-9_-]*\*?)$`)
 
 type rule struct {
 	text   string
@@ -63,8 +67,21 @@ func parseRule(s string) (name, spec string, except bool, err error) {
 	if !ruleName.MatchString(name) {
 		return "", "", false, fmt.Errorf("rule %q: the name must be a tool name or *: %w", s, ErrInvalidRule)
 	}
+	mcp := strings.HasPrefix(name, MCPPrefix)
+	if name != "*" && strings.HasSuffix(name, "*") && !mcp {
+		return "", "", false, fmt.Errorf("rule %q: only a name starting with %s may end in *: %w", s, MCPPrefix, ErrInvalidRule)
+	}
+	if mcp && !strings.HasSuffix(name, "*") {
+		server, tool, ok := strings.Cut(strings.TrimPrefix(name, MCPPrefix), "__")
+		if !ok || server == "" || tool == "" {
+			return "", "", false, fmt.Errorf("rule %q: name one MCP tool as mcp__server__tool or all of a server's as mcp__server__*: %w", s, ErrInvalidRule)
+		}
+	}
 	if !hasSpec {
 		return name, "", false, nil
+	}
+	if mcp {
+		return "", "", false, fmt.Errorf("rule %q: an MCP tool takes no path: %w", s, ErrInvalidRule)
 	}
 	spec, ok := strings.CutSuffix(rest, ")")
 	if !ok || !balanced(spec) {
@@ -96,9 +113,10 @@ func balanced(s string) bool {
 	return depth == 0
 }
 
-// NewRules parses every source's rules; a rule name must be * or one of tools,
-// and a rule with a path must name * or a tool that acts on a path. Workspace
-// and home must be absolute.
+// NewRules parses every source's rules; a rule name must be *, one of tools or
+// start with MCPPrefix, whose server may be absent in this run, and a rule with
+// a path must name * or a tool that acts on a path. Workspace and home must be
+// absolute.
 func NewRules(workspace, home string, tools map[string]ToolSpec, sources ...Source) (*Rules, error) {
 	for _, d := range []struct{ name, dir string }{{"workspace", workspace}, {"home", home}} {
 		if _, err := filepath.EvalSymlinks(d.dir); err != nil {
@@ -118,7 +136,7 @@ func NewRules(workspace, home string, tools map[string]ToolSpec, sources ...Sour
 				if err != nil {
 					return nil, fmt.Errorf("%s: %w", src.Name, err)
 				}
-				if name != "*" {
+				if name != "*" && !strings.HasPrefix(name, MCPPrefix) {
 					ts, ok := tools[name]
 					if !ok {
 						return nil, fmt.Errorf("%s: rule %q: unknown tool %q: %w", src.Name, text, name, ErrInvalidRule)
@@ -244,7 +262,7 @@ func (r *Rules) Removes(tool string) bool {
 	for _, s := range r.sources {
 		bare, exempt := false, false
 		for _, ru := range s.deny {
-			if ru.name != "*" && ru.name != tool {
+			if !nameMatches(ru.name, tool) {
 				continue
 			}
 			bare = bare || (!ru.except && ru.patterns == nil)
@@ -297,7 +315,7 @@ func (r *Rules) underGit(p string) bool {
 func (r *Rules) listMatches(rules []rule, tool string, t *Target, tightening bool) (string, bool) {
 	text, found := "", false
 	for _, ru := range rules {
-		if ru.name != "*" && ru.name != tool {
+		if !nameMatches(ru.name, tool) {
 			continue
 		}
 		if ru.except {
@@ -311,6 +329,13 @@ func (r *Rules) listMatches(rules []rule, tool string, t *Target, tightening boo
 		}
 	}
 	return text, found
+}
+
+// nameMatches reports whether a rule's name covers tool: the same name, or a
+// name ending in * as a prefix of tool, which makes a lone * cover every tool.
+func nameMatches(name, tool string) bool {
+	prefix, star := strings.CutSuffix(name, "*")
+	return name == tool || (star && strings.HasPrefix(tool, prefix))
 }
 
 // matches requires either the lexical or the resolved path to match when the

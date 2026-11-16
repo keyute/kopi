@@ -8,13 +8,14 @@
 ## Layout
 
 - Root `main.go` only calls `cmd.Execute()`.
-- `cmd/` holds one file per cobra subcommand, each as `func xCmd() *cobra.Command`. No `init()`.
+- `cmd/` holds one file per cobra subcommand, each as `func xCmd() *cobra.Command`; a nested subcommand lives in its parent's file. No `init()`.
 - Everything else lives under `internal/<noun>`.
 - Behaviour lives in `internal/app`, the frontend-neutral controller. Frontends (`internal/tui`, `internal/headless`) only pass input in and render events.
 
 ## PiG boundary
 
 - Only `internal/pigruntime` (and tests) import `github.com/MichaelKinsy/PiG`; depguard enforces it.
+- `internal/pigruntime` may use PiG's `mcp` client packages; never PiG's MCP extension `coding/mcpext`.
 - Never import PiG `internal/` packages, never use `coding/cli`, never add a `replace` for PiG, and never copy upstream code.
 - Create every PiG session with every input explicit: agent dir, in-memory settings, `coding.NoResources`, `SkipBuiltinTools`, and explicit tool names for both `AllowedTools` and `InitialActiveToolNames`. A nil there turns on ambient discovery or stock tools.
 - Never call PiG's `Session.ListSessions` or `Session.Events`.
@@ -24,11 +25,13 @@
 
 - Every model-facing tool goes through `internal/policy`: `Gate.Before` in the pre-dispatch hook and `Gate.Admit` inside execution.
 - Only human control input changes mode. Sessions start and resume in the configured `mode` (default plan); `--mode` overrides the config file.
+- MCP servers start only from `mcpServers` in `config.json` and from a trusted folder's `.mcp.json`. Every MCP tool call asks unless a rule allows it; a tool is Read only when its server marks it read-only.
 - File-modifying tools act only through `tool.Workspace` (os.Root confinement, Kopi's home refused before any side effect) and the permission rules. `Bash` runs commands only through `tool.Shell`: under the OS sandbox when it is enabled or available, otherwise only after approval or an allow rule.
 
 ## State
 
 - Kopi reads and writes only under its home (`$KOPI_HOME`, default `~/.kopi`). Never read or write `~/.pi`, `~/.pig`, `~/.claude` or any other tool's store, in code or in tests.
+- `trust.json` under Kopi's home holds trust decisions; the binary never writes `config.json`.
 - Tests use `t.TempDir()`, synthetic credentials and no network, and synchronise on channels, never sleeps.
 
 ## Built in or configured

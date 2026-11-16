@@ -34,10 +34,10 @@ func (d dirs) rules(t *testing.T, sources ...Source) *Rules {
 func at(p string) *Target { return &Target{Path: p, Real: p} }
 
 func TestValidateRule(t *testing.T) {
-	for _, s := range []string{"Read", "*", "Read(*.go)", "Edit(docs/**)", "Read(!.env.example)", "*(~/.ssh)", "Write(/etc/**)", "Read(a(1).txt)", "Bash"} {
+	for _, s := range []string{"Read", "*", "Read(*.go)", "Edit(docs/**)", "Read(!.env.example)", "*(~/.ssh)", "Write(/etc/**)", "Read(a(1).txt)", "Bash", "Re-ad", "mcp__context7__resolve-library-id", "mcp__context7__*", "mcp__github__get_*", "mcp__*"} {
 		assert.NoError(t, ValidateRule(s), s)
 	}
-	for _, s := range []string{"", "Read(", "Read()", "Read(!)", "Read([)", "Read({a)", "Re ad", "Read(a))", "Read)", "(x)", "Read(x) "} {
+	for _, s := range []string{"", "Read(", "Read()", "Read(!)", "Read([)", "Read({a)", "Re ad", "Read(a))", "Read)", "(x)", "Read(x) ", "-Read", "Read*", "*Read", "mcp__x*y", "mcp__x__**", "mcp__x__y(src/**)", "mcp__x__*(!a)"} {
 		assert.ErrorIs(t, ValidateRule(s), ErrInvalidRule, s)
 	}
 }
@@ -59,6 +59,42 @@ func TestNewRulesRejectsPathRuleForPathlessTool(t *testing.T) {
 	}
 	_, err := NewRules(d.ws, d.home, tools, Source{Name: "config", Allow: []string{"Exec"}, Deny: []string{"*(x)"}})
 	assert.NoError(t, err)
+}
+
+func TestNewRulesTakesMCPNamesWithoutKnowingTheTool(t *testing.T) {
+	d := newDirs(t)
+	_, err := NewRules(d.ws, d.home, testTools, Source{
+		Name:  "config",
+		Allow: []string{"mcp__context7__resolve-library-id"},
+		Ask:   []string{"mcp__github__get_*"},
+		Deny:  []string{"mcp__*"},
+	})
+	assert.NoError(t, err)
+}
+
+func TestNewRulesRejectsMCPNamesThatNameNoTool(t *testing.T) {
+	d := newDirs(t)
+	for _, text := range []string{"mcp__github", "mcp__", "mcp__github__", "mcp____tool"} {
+		for _, src := range []Source{
+			{Name: "config", Allow: []string{text}},
+			{Name: "config", Ask: []string{text}},
+			{Name: "config", Deny: []string{text}},
+		} {
+			_, err := NewRules(d.ws, d.home, testTools, src)
+			require.ErrorIs(t, err, ErrInvalidRule, text)
+			assert.Contains(t, err.Error(), `config: rule "`+text+`": name one MCP tool as mcp__server__tool or all of a server's as mcp__server__*`)
+		}
+	}
+	for _, text := range []string{"mcp__*", "mcp__github__*", "mcp__github__get_*", "mcp__github__get_issue", "mcp__a__b__c"} {
+		assert.NoError(t, ValidateRule(text), text)
+	}
+}
+
+func TestNewRulesRejectsPathRuleForMCPTool(t *testing.T) {
+	d := newDirs(t)
+	_, err := NewRules(d.ws, d.home, testTools, Source{Name: "config", Allow: []string{"mcp__x__y(src/**)"}})
+	require.ErrorIs(t, err, ErrInvalidRule)
+	assert.Contains(t, err.Error(), `config: rule "mcp__x__y(src/**)": an MCP tool takes no path`)
 }
 
 func TestNewRulesRejectsMalformedRuleNamingSource(t *testing.T) {
@@ -145,6 +181,47 @@ func TestRuleGovernsOnlyItsTool(t *testing.T) {
 		assert.Equal(t, effectDeny, eff, tool)
 		assert.Equal(t, "*(.env)", text)
 	}
+}
+
+func TestMCPRuleNames(t *testing.T) {
+	d := newDirs(t)
+	for _, tc := range []struct {
+		rule        string
+		match, miss []string
+	}{
+		{"mcp__c7__resolve-library-id", []string{"mcp__c7__resolve-library-id"}, []string{"mcp__c7__resolve-library-idx", "mcp__c7__query"}},
+		{"mcp__c7__*", []string{"mcp__c7__resolve-library-id", "mcp__c7__query"}, []string{"mcp__c77__query", "mcp__gh__get_issue", "Read"}},
+		{"mcp__gh__get_*", []string{"mcp__gh__get_issue"}, []string{"mcp__gh__list_issues"}},
+		{"mcp__*", []string{"mcp__c7__query", "mcp__gh__get_issue"}, []string{"Read", "Edit"}},
+		{"*", []string{"mcp__c7__query", "Read"}, nil},
+	} {
+		t.Run(tc.rule, func(t *testing.T) {
+			r := d.rules(t, Source{Name: "config", Deny: []string{tc.rule}})
+			for _, tool := range tc.match {
+				eff, text, _ := r.decide(tool, nil)
+				assert.Equal(t, effectDeny, eff, tool)
+				assert.Equal(t, tc.rule, text, tool)
+				assert.True(t, r.Removes(tool), tool)
+			}
+			for _, tool := range tc.miss {
+				eff, _, _ := r.decide(tool, nil)
+				assert.Equal(t, effectNone, eff, tool)
+				assert.False(t, r.Removes(tool), tool)
+			}
+		})
+	}
+}
+
+func TestMCPPrefixRulesKeepPrecedence(t *testing.T) {
+	d := newDirs(t)
+	r := d.rules(t,
+		Source{Name: "a", Allow: []string{"mcp__gh__get_issue"}},
+		Source{Name: "b", Ask: []string{"mcp__gh__*"}},
+	)
+	eff, text, src := r.decide("mcp__gh__get_issue", nil)
+	assert.Equal(t, effectAsk, eff)
+	assert.Equal(t, "mcp__gh__*", text)
+	assert.Equal(t, "b", src)
 }
 
 func TestExceptionsExemptFromTheirListInAnyOrder(t *testing.T) {

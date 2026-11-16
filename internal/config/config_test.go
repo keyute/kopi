@@ -28,6 +28,7 @@ func withDefaults(c Config) Config {
 	c.StatusLine = DefaultStatusLine()
 	c.Permissions = Permissions{Allow: []string{}, Ask: []string{}, Deny: []string{}}
 	c.Sandbox = Sandbox{AllowWrite: []string{}, DenyRead: []string{}}
+	c.MCPServers = map[string]MCPServer{}
 	return c
 }
 
@@ -304,6 +305,115 @@ func TestSandboxListsReplaceAcrossLayers(t *testing.T) {
 	assert.Equal(t, "flags", r.Origins["sandbox.allowWrite"])
 	assert.Equal(t, global.Name, r.Origins["sandbox.denyRead"])
 	assert.Equal(t, global.Name, r.Origins["sandbox.network"])
+}
+
+func TestResolveMCPServers(t *testing.T) {
+	global := globalLayer(t, `{"mcpServers": {
+		"local": {"command": "npx", "args": ["-y", "pkg"], "env": {"TOKEN": "${TOKEN}"}},
+		"typed": {"type": "stdio", "command": "srv"},
+		"remote": {"type": "http", "url": "https://example.test/mcp", "headers": {"Authorization": "Bearer x"}},
+		"untyped": {"url": "https://example.test/other"}
+	}}`)
+	r, err := Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]MCPServer{
+		"local":   {Command: "npx", Args: []string{"-y", "pkg"}, Env: map[string]string{"TOKEN": "${TOKEN}"}},
+		"typed":   {Type: "stdio", Command: "srv"},
+		"remote":  {Type: "http", URL: "https://example.test/mcp", Headers: map[string]string{"Authorization": "Bearer x"}},
+		"untyped": {URL: "https://example.test/other"},
+	}, r.Config.MCPServers)
+}
+
+func TestResolveRejectsInvalidMCPServerNamingLayerAndServer(t *testing.T) {
+	for _, tc := range []struct {
+		name, entry, want string
+	}{
+		{"neither", `{"args": ["x"]}`, "want command or url"},
+		{"both", `{"command": "srv", "url": "https://example.test"}`, "not both"},
+		{"stdio with url", `{"type": "stdio", "url": "https://example.test"}`, "stdio needs command"},
+		{"http with command", `{"type": "http", "command": "srv"}`, "http needs url"},
+		{"unsupported type", `{"type": "sse", "url": "https://example.test"}`, `unsupported transport type "sse"`},
+		{"args with url", `{"url": "https://example.test", "args": ["x"]}`, "args and env need command"},
+		{"env with url", `{"url": "https://example.test", "env": {"A": "b"}}`, "args and env need command"},
+		{"headers with command", `{"command": "srv", "headers": {"A": "b"}}`, "headers need url"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			global := globalLayer(t, `{"mcpServers": {"srv": `+tc.entry+`}}`)
+			_, err := Resolve(Defaults(), global)
+			require.ErrorIs(t, err, ErrInvalidValue)
+			assert.Contains(t, err.Error(), global.Name)
+			assert.Contains(t, err.Error(), "mcpServers.srv")
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+func TestResolveRejectsEmptyMCPServerName(t *testing.T) {
+	global := globalLayer(t, `{"mcpServers": {"": {"command": "srv"}}}`)
+	_, err := Resolve(Defaults(), global)
+	require.ErrorIs(t, err, ErrInvalidValue)
+	assert.Contains(t, err.Error(), global.Name)
+	assert.Contains(t, err.Error(), "empty server name")
+}
+
+func TestResolveRejectsUnknownMCPServerKey(t *testing.T) {
+	global := globalLayer(t, `{"mcpServers": {"srv": {"command": "srv", "timeout": 5}}}`)
+	_, err := Resolve(Defaults(), global)
+	require.ErrorIs(t, err, ErrUnknownKey)
+	assert.Contains(t, err.Error(), global.Name)
+	assert.Contains(t, err.Error(), "timeout")
+}
+
+func TestResolveMisShapedMCPSecretsAreNotEchoed(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, path string
+	}{
+		{"headers not an object", `{"mcpServers": {"gh": {"type": "http", "url": "https://x", "headers": "Authorization: Bearer ghp_SECRET"}}}`, "mcpServers[gh].headers"},
+		{"env value a number", `{"mcpServers": {"gh": {"command": "srv", "env": {"TOKEN": 424242}}}}`, "mcpServers[gh].env[TOKEN]"},
+		{"env value a list", `{"mcpServers": {"gh": {"command": "srv", "env": {"TOKEN": ["ghp_SECRET"]}}}}`, "mcpServers[gh].env[TOKEN]"},
+		{"header value an object", `{"mcpServers": {"gh": {"url": "https://x", "headers": {"Authorization": {"v": "ghp_SECRET"}}}}}`, "mcpServers[gh].headers[Authorization]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			global := globalLayer(t, tc.content)
+			_, err := Resolve(Defaults(), global)
+			require.ErrorIs(t, err, ErrInvalidValue)
+			assert.Contains(t, err.Error(), tc.path)
+			assert.NotContains(t, err.Error(), "ghp_SECRET")
+			assert.NotContains(t, err.Error(), "424242")
+		})
+	}
+}
+
+func TestResolveKeepsDotsInMCPNames(t *testing.T) {
+	global := globalLayer(t, `{"mcpServers": {
+		"a.b": {"command": "srv", "env": {"X.Y": "1"}},
+		"c": {"url": "https://example.test", "headers": {"H.I": "2"}}
+	}}`)
+	r, err := Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]MCPServer{
+		"a.b": {Command: "srv", Env: map[string]string{"X.Y": "1"}},
+		"c":   {URL: "https://example.test", Headers: map[string]string{"H.I": "2"}},
+	}, r.Config.MCPServers)
+	assert.Contains(t, r.Entries(), Entry{Key: "mcpServers.a.b", Value: "stdio: srv", Origin: global.Name})
+}
+
+func TestEntriesShowMCPServersWithoutSecrets(t *testing.T) {
+	global := globalLayer(t, `{"mcpServers": {
+		"local": {"command": "npx", "args": ["-y", "pkg"], "env": {"TOKEN": "secret-env"}},
+		"remote": {"type": "http", "url": "https://example.test/mcp", "headers": {"Authorization": "secret-header"}}
+	}}`)
+	r, err := Resolve(Defaults(), global)
+	require.NoError(t, err)
+	entries := r.Entries()
+	assert.IsIncreasing(t, entryKeys(entries))
+	assert.Contains(t, entries, Entry{Key: "mcpServers.local", Value: "stdio: npx -y pkg", Origin: global.Name})
+	assert.Contains(t, entries, Entry{Key: "mcpServers.remote", Value: "http: https://example.test/mcp", Origin: global.Name})
+	for _, e := range entries {
+		assert.NotContains(t, e.Value, "secret")
+		assert.NotContains(t, e.Key, "TOKEN")
+		assert.NotContains(t, e.Key, "Authorization")
+	}
 }
 
 func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {

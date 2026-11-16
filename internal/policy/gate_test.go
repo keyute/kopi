@@ -467,3 +467,59 @@ func TestGrantCopiesArgumentsBeforeApproval(t *testing.T) {
 	copy(args, pathArgs("/changed"))
 	assert.NoError(t, g.Admit("call", "Edit", original, &Target{Path: "/allowed", Real: "/allowed"}))
 }
+
+// mcpGate is a gate with an Ask read tool and an Ask exec tool, as MCP
+// servers' tools are, and rules that may name them.
+func mcpGate(t *testing.T, approve Approver, src Source) (*Authority, *Gate) {
+	t.Helper()
+	specs := map[string]ToolSpec{
+		"mcp__s__read": {Capability: Read, Ask: true},
+		"mcp__s__exec": {Capability: Exec, Ask: true},
+	}
+	d := newDirs(t)
+	rules, err := NewRules(d.ws, d.home, specs, src)
+	require.NoError(t, err)
+	a := NewAuthority()
+	return a, NewGate(a, specs, rules, approve)
+}
+
+func TestAskToolAsksWithNoRuleEvenForRead(t *testing.T) {
+	f := &approver{answer: Allow}
+	_, g := mcpGate(t, f.approve, Source{Name: "config"})
+	require.NoError(t, g.Before(t.Context(), "c1", "mcp__s__read", nil))
+	assert.Equal(t, []Request{{CallID: "c1", Tool: "mcp__s__read"}}, f.reqs)
+	assert.NoError(t, admitApproved(g, "c1", "mcp__s__read"))
+
+	_, g = mcpGate(t, nil, Source{Name: "config"})
+	err := g.Before(t.Context(), "c1", "mcp__s__read", nil)
+	require.ErrorIs(t, err, ErrDenied)
+	assert.Contains(t, err.Error(), "or pass --allowed-tools, such as mcp__s__read: ")
+}
+
+func TestAskToolFollowsRules(t *testing.T) {
+	for _, rule := range []string{"mcp__s__read", "mcp__s__*", "mcp__*"} {
+		f := &approver{answer: Reject}
+		_, g := mcpGate(t, f.approve, Source{Name: "config", Allow: []string{rule}})
+		require.NoError(t, g.Before(t.Context(), "c1", "mcp__s__read", nil), rule)
+		assert.Empty(t, f.reqs, rule)
+	}
+
+	f := &approver{answer: Allow}
+	_, g := mcpGate(t, f.approve, Source{Name: "config", Deny: []string{"mcp__s__*"}})
+	err := g.Before(t.Context(), "c1", "mcp__s__read", nil)
+	require.ErrorIs(t, err, ErrDenied)
+	assert.Contains(t, err.Error(), "mcp__s__* (config)")
+	assert.Empty(t, f.reqs)
+}
+
+func TestPlanRefusesAskExecButAsksAboutAskRead(t *testing.T) {
+	f := &approver{answer: Allow}
+	_, g := mcpGate(t, f.approve, Source{Name: "config", Allow: []string{"mcp__s__exec"}})
+	err := g.Before(t.Context(), "c1", "mcp__s__exec", nil)
+	require.ErrorIs(t, err, ErrDenied)
+	assert.Contains(t, err.Error(), "needs execute mode")
+	assert.Empty(t, f.reqs)
+
+	require.NoError(t, g.Before(t.Context(), "c2", "mcp__s__read", nil))
+	assert.Equal(t, []Request{{CallID: "c2", Tool: "mcp__s__read"}}, f.reqs)
+}

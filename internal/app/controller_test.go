@@ -1722,25 +1722,21 @@ func TestBareDenyRemovesTool(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read"}, req.ToolNames)
-	assert.Equal(t, systemPrompt(sb.Workspace, []tool.Tool{read}), req.SystemPrompt)
+	assert.Equal(t, systemPrompt(sb.Workspace, []tool.Tool{read}, nil), req.SystemPrompt)
 	assert.NotContains(t, req.SystemPrompt, "Exec")
 }
 
-func TestPromptMentionsExecuteModeOnlyWhenNonReadToolAvailable(t *testing.T) {
-	sb := pigruntimetest.NewSandbox(t)
-	ws, err := tool.NewWorkspace(sb.Workspace, nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
-	read, write, edit := tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws)
-	const sentence = "Tools other than Read work only in execute mode and may need the user's approval."
+func TestOpenEmitsNoticesAfterTheSession(t *testing.T) {
+	h, _ := openHarness(t, Config{Notices: []string{"first", "second"}})
 
-	assert.Contains(t, systemPrompt(sb.Workspace, []tool.Tool{read, edit}), sentence)
-	assert.Contains(t, systemPrompt(sb.Workspace, []tool.Tool{read, {Name: "Probe", Capability: policy.Exec}}), sentence)
-	rules, err := policy.NewRules(sb.Workspace, sb.Home, map[string]policy.ToolSpec{"Read": {}, "Write": {}, "Edit": {}}, policy.Source{Name: "test", Deny: []string{"Write", "Edit"}})
-	require.NoError(t, err)
-	h := newHarness(t, sb, Config{Tools: []tool.Tool{read, write, edit}, Rules: rules})
-	assert.NotContains(t, h.c.prompt, sentence)
-	assert.Contains(t, h.c.prompt, "Tools available: Read.\n")
+	evs := h.rec.all()
+	i := slices.IndexFunc(evs, func(ev event.Event) bool { _, ok := ev.(event.SessionChanged); return ok })
+	require.GreaterOrEqual(t, i, 0)
+	assert.Equal(t, []event.Notice{{Text: "first"}, {Text: "second"}}, ofType[event.Notice](evs[i:]))
+	assert.Empty(t, ofType[event.Notice](evs[:i]))
+
+	require.NoError(t, h.c.NewSession(t.Context()))
+	assert.Len(t, ofType[event.Notice](h.rec.all()), 2, "a later session does not repeat them")
 }
 
 func TestResumeWithoutIDIsMissingArgument(t *testing.T) {
@@ -1825,7 +1821,7 @@ func TestTurnUsesNoAmbientState(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read"}, req.ToolNames)
-	assert.Equal(t, systemPrompt(sb.Workspace, tools), req.SystemPrompt)
+	assert.Equal(t, systemPrompt(sb.Workspace, tools, nil), req.SystemPrompt)
 	for _, marker := range pigruntimetest.DecoyMarkers {
 		assert.NotContains(t, req.Raw, marker)
 	}

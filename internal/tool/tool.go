@@ -16,6 +16,8 @@ type Tool struct {
 	Target func(args json.RawMessage) (policy.Target, error)
 	// Sandboxed reports that the OS confines what the tool's calls can do.
 	Sandboxed bool
+	// Ask makes calls ask by default whatever the capability.
+	Ask bool
 	// Run must acquire a nonmutating operation, call admit with its bound
 	// target before reading content or modifying files, and use that operation.
 	Run     func(ctx context.Context, args json.RawMessage, admit func(policy.Target) error) (string, error)
@@ -26,7 +28,7 @@ type Tool struct {
 func Specs(tools []Tool) map[string]policy.ToolSpec {
 	specs := make(map[string]policy.ToolSpec, len(tools))
 	for _, t := range tools {
-		specs[t.Name] = policy.ToolSpec{Capability: t.Capability, Target: t.Target, Sandboxed: t.Sandboxed}
+		specs[t.Name] = policy.ToolSpec{Capability: t.Capability, Target: t.Target, Sandboxed: t.Sandboxed, Ask: t.Ask}
 	}
 	return specs
 }

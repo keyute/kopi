@@ -8,5 +8,6 @@ var (
 	ErrInvalidValue       = errors.New("invalid config value")
 	ErrUnsupportedVersion = errors.New("unsupported config version")
 	ErrInvalidModel       = errors.New("invalid model: want provider/id")
+	ErrUnsetVariable      = errors.New("unset variable with no default")
 	ErrNoModel            = errors.New(`no model configured: set "model" to provider/id in the config file or pass --model`)
 )
