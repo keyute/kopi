@@ -165,6 +165,30 @@ func TestApprovalNoWithReasonContinuesTurn(t *testing.T) {
 	assert.NotContains(t, results[0], "stop and wait")
 }
 
+func TestApprovalNoWithReasonKeepsQueuedInput(t *testing.T) {
+	h, _ := editHarness(t, Config{})
+	approvals := subscribeTo[event.ApprovalRequested](h.c)
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(editCall("call-1", "a.txt")),
+		pigruntimetest.Capture(t, requests, "done"),
+	})
+
+	w, err := h.c.Submit(t.Context(), "edit a.txt")
+	require.NoError(t, err)
+	req := receiveEvent(t, approvals)
+	_, err = h.c.Submit(t.Context(), "queued meanwhile")
+	require.NoError(t, err)
+	require.True(t, h.c.Answer(req.Token, policy.Decision{Answer: policy.Reject, Reason: "use b.txt"}))
+	wait(t, w.Done())
+
+	assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
+	for _, end := range ofType[event.TurnEnd](h.rec.all()) {
+		assert.Empty(t, end.Unsent)
+	}
+	assert.Contains(t, receive(t, requests).Raw, "queued meanwhile")
+}
+
 // answers are the distinct Decisions a human can give.
 var answers = []policy.Decision{
 	{Answer: policy.Allow},

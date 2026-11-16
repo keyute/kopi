@@ -180,10 +180,24 @@ func TestRejectedCallWithReasonCarriesIt(t *testing.T) {
 }
 
 func TestReasonOnAllowIsIgnored(t *testing.T) {
-	a, g := newTestGate(nil, (&approver{answer: Allow, reason: "ignored"}).approve)
-	a.EnterExecute()
-	require.NoError(t, g.Before(t.Context(), "c1", "Edit", pathArgs("/x")))
-	assert.NoError(t, admitApproved(g, "c1", "Edit"))
+	for _, tc := range []struct {
+		name   string
+		answer Answer
+	}{{"allow", Allow}, {"allow edits", AllowEdits}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &approver{answer: tc.answer, reason: "ignored"}
+			a, g := newTestGate(nil, f.approve)
+			a.EnterExecute()
+			require.NoError(t, g.Before(t.Context(), "c1", "Edit", pathArgs("/x")))
+			require.Len(t, f.reqs, 1)
+			require.True(t, f.reqs[0].Edits)
+			assert.NoError(t, admitApproved(g, "c1", "Edit"))
+			if tc.answer == AllowEdits {
+				require.NoError(t, g.Before(t.Context(), "c2", "Edit", pathArgs("/y")))
+				assert.Len(t, f.reqs, 1)
+			}
+		})
+	}
 }
 
 func TestAllowEditsSkipsLaterDefaultEditAsksOnly(t *testing.T) {

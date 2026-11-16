@@ -32,7 +32,6 @@ type clipboard interface {
 // A nil field identifies a read started by the composer.
 type clipboardTextMsg struct {
 	text  string
-	token uint64
 	field *composer
 }
 
@@ -146,16 +145,16 @@ func readClipboard(ctx context.Context, cb clipboard, dir string) tea.Cmd {
 			slog.Warn("failed to paste an image from the clipboard", "err", err)
 			return pasteFailedMsg{}
 		}
-		return clipboardText(cb, 0, nil)
+		return clipboardText(cb, nil)
 	}
 }
 
 // readClipboardText is readClipboard for input that takes no images.
-func readClipboardText(cb clipboard, token uint64, field *composer) tea.Cmd {
-	return func() tea.Msg { return clipboardText(cb, token, field) }
+func readClipboardText(cb clipboard, field *composer) tea.Cmd {
+	return func() tea.Msg { return clipboardText(cb, field) }
 }
 
-func clipboardText(cb clipboard, token uint64, field *composer) tea.Msg {
+func clipboardText(cb clipboard, field *composer) tea.Msg {
 	text, err := cb.ReadText()
 	if err != nil {
 		slog.Warn("failed to paste from the clipboard", "err", err)
@@ -164,5 +163,5 @@ func clipboardText(cb clipboard, token uint64, field *composer) tea.Msg {
 	if text == "" {
 		return nil
 	}
-	return clipboardTextMsg{text: text, token: token, field: field}
+	return clipboardTextMsg{text: text, field: field}
 }

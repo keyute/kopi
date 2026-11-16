@@ -983,7 +983,7 @@ func TestApprovalNoSendsTheReason(t *testing.T) {
 
 func TestApprovalPasteReachesTheField(t *testing.T) {
 	m, c := newTestModel(t, 60, 30)
-	m.clip = &fakeClipboard{text: " from clipboard"}
+	m.clip = &fakeClipboard{text: " from\r\nclipboard"}
 	send(m, editApproval())
 	press(m, digit('3'))
 	big := strings.Repeat("line\r\n", 20)
@@ -995,7 +995,7 @@ func TestApprovalPasteReachesTheField(t *testing.T) {
 	m.Update(cmd())
 	press(m, enter)
 
-	want := strings.ReplaceAll(big, "\r\n", "\n") + " from clipboard"
+	want := strings.ReplaceAll(big, "\r\n", "\n") + " from\nclipboard"
 	assert.Equal(t, []answer{{1, policy.Decision{Answer: policy.Reject, Reason: want}}}, c.answers)
 	assert.Empty(t, m.composer.value())
 }

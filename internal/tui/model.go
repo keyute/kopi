@@ -164,8 +164,8 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case clipboardTextMsg:
 		defer m.refreshPending()
 		if msg.field != nil {
-			if m.approval != nil && m.approval.Token == msg.token && m.dialog.field() == msg.field {
-				return m.dialog.paste(newlines.Replace(msg.text))
+			if m.dialog != nil && m.dialog.field() == msg.field {
+				return m.dialog.paste(msg.text)
 			}
 			return nil
 		}
@@ -176,7 +176,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case tea.PasteMsg:
 		defer m.refreshPending()
 		if m.dialog != nil {
-			return m.dialog.paste(newlines.Replace(msg.Content))
+			return m.dialog.paste(msg.Content)
 		}
 		return m.paste(msg.Content)
 	case imagePastedMsg:
@@ -265,7 +265,7 @@ func (m *model) approvalKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.c.Answer(token, policy.Decision{})
 		return nil
 	case key.Matches(msg, m.keys.paste) && m.dialog.field() != nil:
-		return readClipboardText(m.clip, token, m.dialog.field())
+		return readClipboardText(m.clip, m.dialog.field())
 	}
 	picked, cmd := m.dialog.key(msg, &m.keys)
 	if picked {

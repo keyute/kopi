@@ -165,7 +165,7 @@ func (d *dialog) move(i int) tea.Cmd {
 // ignore the insertion and the paste would collapse the whole draft.
 func (d *dialog) paste(text string) tea.Cmd {
 	if f := d.field(); f != nil {
-		return f.paste(text)
+		return f.paste(newlines.Replace(text))
 	}
 	return nil
 }
