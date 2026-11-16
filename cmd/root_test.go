@@ -745,6 +745,103 @@ func TestRootSandboxedBashRefusesKopiHomeRead(t *testing.T) {
 	assert.NotContains(t, result+stderr, sentinel)
 }
 
+func TestRootSandboxedBashProtectsGitMetadata(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	for _, tc := range []struct {
+		name, path, command string
+		exists              bool
+	}{
+		{"no git cannot create HEAD", "HEAD", "printf changed > HEAD", false},
+		{"git file cannot be overwritten", ".git", "printf changed > .git", true},
+		{"git file cannot be replaced", ".git", "/bin/mv -f replacement .git", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			const original = "gitdir: synthetic-git-dir\n"
+			path := filepath.Join(e.workspace, tc.path)
+			if tc.exists {
+				e.writeFile(t, path, original)
+			}
+			e.writeFile(t, filepath.Join(e.workspace, "replacement"), "changed\n")
+
+			result, _ := printBash(t, e, tc.command, "--mode", "execute")
+
+			assert.Contains(t, result, tool.ErrExitStatus.Error())
+			assert.Contains(t, result, "Operation not permitted")
+			if tc.exists {
+				content, err := os.ReadFile(path)
+				require.NoError(t, err)
+				assert.Equal(t, original, string(content))
+			} else {
+				assert.NoFileExists(t, path)
+			}
+		})
+	}
+}
+
+func TestRootSandboxedBashHonorsConfiguredPaths(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	e := newTestEnv(t)
+	root, err := filepath.EvalSymlinks(e.root)
+	require.NoError(t, err)
+	// /tmp is always writable; TMPDIR must not cover the external targets.
+	for _, temp := range []string{"/tmp", "/private/tmp"} {
+		require.False(t, root == temp || strings.HasPrefix(root, temp+"/"), "external targets must be outside %s", temp)
+	}
+	temp := filepath.Join(root, "tmp")
+	require.NoError(t, os.Mkdir(temp, 0o700))
+	t.Setenv("TMPDIR", temp)
+	allowed := filepath.Join(root, "allowed")
+	sibling := filepath.Join(root, "sibling")
+	for _, dir := range []string{allowed, sibling} {
+		require.NoError(t, os.Mkdir(dir, 0o700))
+	}
+	secret := filepath.Join(allowed, "denied.txt")
+	const sentinel = "synthetic configured Bash secret"
+	e.writeFile(t, secret, sentinel+"\n")
+	cfg, err := json.Marshal(map[string]any{"sandbox": map[string]any{
+		"enabled": true, "allowWrite": []string{allowed}, "denyRead": []string{secret},
+	}})
+	require.NoError(t, err)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), string(cfg))
+	allowedFile := filepath.Join(allowed, "written.txt")
+	siblingFile := filepath.Join(sibling, "written.txt")
+	quotedAllowed := "'" + strings.ReplaceAll(allowedFile, "'", "'\"'\"'") + "'"
+	quotedSibling := "'" + strings.ReplaceAll(siblingFile, "'", "'\"'\"'") + "'"
+	quotedSecret := "'" + strings.ReplaceAll(secret, "'", "'\"'\"'") + "'"
+
+	result, _ := printBash(t, e, "printf 'allowed\\n' > "+quotedAllowed+" && printf 'write succeeded\\n'", "--mode", "execute")
+
+	assert.Equal(t, "write succeeded\n", result)
+	content, err := os.ReadFile(allowedFile)
+	require.NoError(t, err)
+	assert.Equal(t, "allowed\n", string(content))
+
+	result, _ = printBash(t, e, "printf changed > "+quotedSibling, "--mode", "execute")
+
+	assert.Contains(t, result, tool.ErrExitStatus.Error())
+	assert.Contains(t, result, "Operation not permitted")
+	assert.NoFileExists(t, siblingFile)
+
+	result, stderr := printBash(t, e, `IFS= read -r secret < `+quotedSecret+` && printf '%s\n' "$secret"`, "--mode", "execute")
+
+	assert.Contains(t, result, tool.ErrExitStatus.Error())
+	assert.Contains(t, result, "Operation not permitted")
+	assert.NotContains(t, result+stderr, sentinel)
+
+	result, _ = printBash(t, e, "printf changed > "+quotedSecret, "--mode", "execute")
+
+	assert.Contains(t, result, tool.ErrExitStatus.Error())
+	assert.Contains(t, result, "Operation not permitted")
+	content, err = os.ReadFile(secret)
+	require.NoError(t, err)
+	assert.Equal(t, sentinel+"\n", string(content))
+}
+
 func TestSandboxPolicy(t *testing.T) {
 	home, kopiHome, absolute := t.TempDir(), t.TempDir(), t.TempDir()
 	cfg := config.Sandbox{
