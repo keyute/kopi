@@ -22,6 +22,7 @@ import (
 	"github.com/keyute/kopi/internal/headless"
 	"github.com/keyute/kopi/internal/history"
 	"github.com/keyute/kopi/internal/pigruntime"
+	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
 	"github.com/keyute/kopi/internal/tui"
 )
@@ -51,6 +52,7 @@ func newRoot() *cobra.Command {
 func rootCmd() *cobra.Command {
 	var resumeID string
 	var cont, printOnly bool
+	var allowed, disallowed []string
 	cmd := &cobra.Command{
 		Use:           "kopi [prompt]",
 		Short:         "Kopi coding agent",
@@ -61,7 +63,11 @@ func rootCmd() *cobra.Command {
 			return setupLogging(cmd)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return run(cmd, args, printOnly, app.OpenRequest{ResumeID: resumeID, Continue: cont})
+			flagRules := []policy.Source{
+				{Name: "--allowed-tools", Allow: splitRules(allowed)},
+				{Name: "--disallowed-tools", Deny: splitRules(disallowed)},
+			}
+			return run(cmd, args, printOnly, flagRules, app.OpenRequest{ResumeID: resumeID, Continue: cont})
 		},
 	}
 	cmd.PersistentFlags().String("model", "", "model as provider/id (overrides the config file)")
@@ -69,8 +75,54 @@ func rootCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&cont, "continue", "c", false, "continue the most recent session in this directory")
 	cmd.Flags().StringVarP(&resumeID, "resume", "r", "", "resume the session with this id")
 	cmd.Flags().BoolVarP(&printOnly, "print", "p", false, "print the response to one prompt and exit")
+	cmd.PersistentFlags().String("mode", "", "mode sessions start in: plan or execute (overrides the config file)")
+	cmd.Flags().StringArrayVar(&allowed, "allowed-tools", nil, "permission rules to allow, comma-separated or repeated, e.g. \"Edit(docs/**)\"")
+	cmd.Flags().StringArrayVar(&disallowed, "disallowed-tools", nil, "permission rules to deny, comma-separated or repeated")
 	cmd.MarkFlagsMutuallyExclusive("continue", "resume")
 	return cmd
+}
+
+// splitRules splits each value on commas outside parentheses, which enclose
+// path globs like Edit(src/{a,b}/**).
+func splitRules(values []string) []string {
+	var rules []string
+	for _, v := range values {
+		depth, start := 0, 0
+		for i, r := range v {
+			switch r {
+			case '(':
+				depth++
+			case ')':
+				depth--
+			case ',':
+				if depth == 0 {
+					rules = append(rules, strings.TrimSpace(v[start:i]))
+					start = i + 1
+				}
+			}
+		}
+		rules = append(rules, strings.TrimSpace(v[start:]))
+	}
+	return rules
+}
+
+// permissionRules builds the rules from each config permission list named by
+// the layer that set it, then the flags.
+func permissionRules(cwd, home string, tools []tool.Tool, perms config.Permissions, origins map[string]string, flagRules []policy.Source) (*policy.Rules, error) {
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		names = append(names, t.Name)
+	}
+	sources := []policy.Source{
+		{Name: origins["permissions.allow"], Allow: perms.Allow},
+		{Name: origins["permissions.ask"], Ask: perms.Ask},
+		{Name: origins["permissions.deny"], Deny: perms.Deny},
+	}
+	rules, err := policy.NewRules(cwd, home, names, append(sources, flagRules...)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load permission rules: %w", err)
+	}
+	return rules, nil
 }
 
 func setupLogging(cmd *cobra.Command) error {
@@ -139,6 +191,13 @@ func resolveConfig(cmd *cobra.Command, paths config.Paths) (*config.Resolved, er
 		}
 		flags["model"] = model
 	}
+	if cmd.Flags().Changed("mode") {
+		mode, err := cmd.Flags().GetString("mode")
+		if err != nil {
+			return nil, err
+		}
+		flags["mode"] = mode
+	}
 	return config.Resolve(config.Defaults(), global, config.Map("flags", flags))
 }
 
@@ -169,7 +228,7 @@ func readPrompt(in io.Reader, args []string) (string, error) {
 	return strings.Join(prompt, "\n\n"), nil
 }
 
-func run(cmd *cobra.Command, args []string, printOnly bool, req app.OpenRequest) (err error) {
+func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.Source, req app.OpenRequest) (err error) {
 	paths, err := config.ResolvePaths()
 	if err != nil {
 		return err
@@ -181,6 +240,10 @@ func run(cmd *cobra.Command, args []string, printOnly bool, req app.OpenRequest)
 	model := resolved.Config.Model
 	if model == "" {
 		return config.ErrNoModel
+	}
+	mode, err := policy.ParseMode(resolved.Config.Mode)
+	if err != nil {
+		return err
 	}
 	fullscreen := !printOnly && isTerminal(cmd.InOrStdin()) && isTerminal(cmd.OutOrStdout())
 	var prompt string
@@ -200,6 +263,23 @@ func run(cmd *cobra.Command, args []string, printOnly bool, req app.OpenRequest)
 		return fmt.Errorf("failed to resolve working directory: %w", err)
 	}
 
+	// workRunning is set when Close leaves work running; see below.
+	var workRunning bool
+	ws, err := tool.NewWorkspace(cwd, []string{paths.Home})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if !workRunning {
+			ws.Close()
+		}
+	}()
+	tools := []tool.Tool{tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws)}
+	rules, err := permissionRules(cwd, userHome, tools, resolved.Config.Permissions, resolved.Origins, flagRules)
+	if err != nil {
+		return err
+	}
+
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM)
 	defer stop()
 
@@ -214,8 +294,6 @@ func run(cmd *cobra.Command, args []string, printOnly bool, req app.OpenRequest)
 		defer restore()
 	}
 
-	// workRunning is set when Close leaves work running; see below.
-	var workRunning bool
 	rt, err := openRuntime(ctx, paths, cwd)
 	if err != nil {
 		return err
@@ -225,17 +303,8 @@ func run(cmd *cobra.Command, args []string, printOnly bool, req app.OpenRequest)
 			rt.Close()
 		}
 	}()
-	ws, err := tool.NewWorkspace(cwd, tool.DefaultProtected(userHome, paths.Home))
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if !workRunning {
-			ws.Close()
-		}
-	}()
-
-	cfg := app.Config{Model: model, Workspace: cwd, Tools: []tool.Tool{tool.NewRead(ws)}, JoinTimeout: joinTimeout, Files: ws}
+	// Only the fullscreen interface has a human to answer approvals.
+	cfg := app.Config{Model: model, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws}
 	// Only the fullscreen interface records prompts.
 	if fullscreen {
 		store, err := history.Open(paths.HistoryFile, cwd, historyLimit)

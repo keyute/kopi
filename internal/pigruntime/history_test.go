@@ -69,7 +69,12 @@ func TestHistoryReplaysStoredTurnAsLiveEvents(t *testing.T) {
 			Name: "Fail", Label: "Fail", Description: "Always fails.",
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{}},
 			Capability: policy.Read,
-			Run:        func(context.Context, json.RawMessage) (string, error) { return "", errors.New("probe failed") },
+			Run: func(_ context.Context, _ json.RawMessage, admit func(policy.Target) error) (string, error) {
+				if err := admit(policy.Target{}); err != nil {
+					return "", err
+				}
+				return "", errors.New("probe failed")
+			},
 		},
 	}
 	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: kopiPrompt, Tools: tools, Authority: policy.NewAuthority()})

@@ -27,10 +27,14 @@ func (a agentTool) Schema() ai.ToolSchema {
 // PiG runs every hook of a parallel batch before executing any call, so the
 // mode may have changed in between.
 func (a agentTool) Execute(ctx context.Context, toolCallID string, params json.RawMessage, _ agent.ToolUpdateCallback) (agent.AgentToolResult, error) {
-	if err := a.gate.Admit(toolCallID, a.tool.Name); err != nil {
-		return errorResult(err), nil
-	}
-	out, err := a.tool.Run(ctx, params)
+	defer a.gate.Finish(toolCallID)
+	out, err := a.tool.Run(ctx, params, func(target policy.Target) error {
+		var path *policy.Target
+		if a.tool.Target != nil {
+			path = &target
+		}
+		return a.gate.Admit(toolCallID, a.tool.Name, params, path)
+	})
 	if err != nil {
 		return errorResult(err), nil
 	}
@@ -45,9 +49,12 @@ func (a agentTool) ExecutionMode() agent.ToolExecutionMode {
 }
 
 func beforeToolCall(gate *policy.Gate) agent.BeforeToolCallHook {
-	return func(_ context.Context, toolCallID, toolName string, _ json.RawMessage) agent.ToolCallHookResult {
-		if err := gate.Before(toolCallID, toolName); err != nil {
-			return agent.ToolCallHookResult{Block: true, Reason: err.Error()}
+	return func(ctx context.Context, toolCallID, toolName string, args json.RawMessage) agent.ToolCallHookResult {
+		if err := gate.Before(ctx, toolCallID, toolName, args); err != nil {
+			// PiG checks Err before ctx, but replaces a Block's Reason with
+			// "Operation aborted" when ctx is done, so only Err keeps the
+			// refusal's text when an abort lands at the same moment.
+			return agent.ToolCallHookResult{Err: err}
 		}
 		return agent.ToolCallHookResult{}
 	}

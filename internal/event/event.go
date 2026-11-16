@@ -44,6 +44,24 @@ type ToolEnd struct {
 	Summary              string
 }
 
+// ApprovalRequested asks the human to approve one call; answer with
+// Controller.Answer. It is not ordered relative to the call's ToolStart, so it
+// carries everything a prompt shows.
+type ApprovalRequested struct {
+	// Token identifies this approval for the controller's lifetime, across sessions.
+	Token         uint64
+	CallID, Title string
+	Preview       []tool.PreviewLine
+	// Rule is the ask rule and its source; "" when no rule asked.
+	Rule string
+	// Edits reports that "allow all edits this session" may be offered.
+	Edits bool
+}
+
+// ApprovalEnded follows every ApprovalRequested, whether it was answered or
+// cancelled.
+type ApprovalEnded struct{ Token uint64 }
+
 // Notice reports retry and compaction progress.
 type Notice struct{ Text string }
 
@@ -70,18 +88,20 @@ type SessionChanged struct {
 
 type Error struct{ Err error }
 
-func (TurnStart) isEvent()      {}
-func (QueueChanged) isEvent()   {}
-func (UserMessage) isEvent()    {}
-func (TextDelta) isEvent()      {}
-func (ThinkingDelta) isEvent()  {}
-func (ToolStart) isEvent()      {}
-func (ToolEnd) isEvent()        {}
-func (Notice) isEvent()         {}
-func (TurnEnd) isEvent()        {}
-func (ModeChanged) isEvent()    {}
-func (SessionChanged) isEvent() {}
-func (Error) isEvent()          {}
+func (TurnStart) isEvent()         {}
+func (QueueChanged) isEvent()      {}
+func (UserMessage) isEvent()       {}
+func (TextDelta) isEvent()         {}
+func (ThinkingDelta) isEvent()     {}
+func (ToolStart) isEvent()         {}
+func (ToolEnd) isEvent()           {}
+func (ApprovalRequested) isEvent() {}
+func (ApprovalEnded) isEvent()     {}
+func (Notice) isEvent()            {}
+func (TurnEnd) isEvent()           {}
+func (ModeChanged) isEvent()       {}
+func (SessionChanged) isEvent()    {}
+func (Error) isEvent()             {}
 
 type Status int
 

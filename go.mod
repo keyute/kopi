@@ -10,6 +10,7 @@ require (
 	github.com/MichaelKinsy/PiG v0.7.0
 	github.com/alecthomas/chroma/v2 v2.24.1
 	github.com/atotto/clipboard v0.1.4
+	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/creack/pty v1.1.24
 	github.com/go-git/go-git/v5 v5.19.3

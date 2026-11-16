@@ -111,7 +111,7 @@ func (m *model) loaded(msg candidatesMsg) {
 // composer.
 func (m *model) menuHeight() int {
 	mn := &m.menu
-	if !mn.open || len(mn.shown) == 0 {
+	if !mn.open || len(mn.shown) == 0 || m.approval != nil {
 		return 0
 	}
 	h := min(len(mn.shown), menuMax)

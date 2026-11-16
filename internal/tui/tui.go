@@ -14,6 +14,7 @@ import (
 
 	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/policy"
 )
 
 // Controller is the part of app.Controller the frontend uses.
@@ -23,6 +24,8 @@ type Controller interface {
 	SendNow(ctx context.Context, text string, images ...string) error
 	TakeQueued() []event.Input
 	Interrupt() bool
+	// Answer answers the pending approval for token; false when it is stale.
+	Answer(token uint64, a policy.Answer) bool
 	ToggleMode()
 	History() []string
 	Status() app.Status

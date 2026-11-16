@@ -116,6 +116,37 @@ type SendResult struct {
 	Undelivered []Prompt
 }
 
+type turnInterruptKey struct{}
+
+type turnInterrupt struct {
+	mu    sync.Mutex
+	abort func()
+}
+
+func (i *turnInterrupt) interrupt() bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.abort == nil {
+		return false
+	}
+	i.abort()
+	return true
+}
+
+func (i *turnInterrupt) retire() {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.abort = nil
+}
+
+// InterruptTurn synchronously requests interruption of the Send that supplied
+// ctx to a tool or approval hook. It returns false outside a Send or after
+// that Send retires; a retained context cannot interrupt a later turn.
+func InterruptTurn(ctx context.Context) bool {
+	i, ok := ctx.Value(turnInterruptKey{}).(*turnInterrupt)
+	return ok && i.interrupt()
+}
+
 // Send runs one turn. Cancelling ctx is the abort request for this turn
 // only: a ctx already done returns Interrupted without calling the provider,
 // and a turn Kopi aborted reports Interrupted unless its last assistant message
@@ -138,10 +169,15 @@ func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (Sen
 	}
 	defer s.sendInProgress.Store(false)
 	var aborted atomic.Bool
-	abort := func() {
+	interrupt := &turnInterrupt{abort: func() {
 		aborted.Store(true)
 		s.inner.RequestAbort()
-	}
+	}}
+	// Retirement is serialized with interruption and precedes releasing send
+	// ownership, so a hook retaining ctx cannot abort the next Send.
+	defer interrupt.retire()
+	toolCtx := context.WithValue(ctx, turnInterruptKey{}, interrupt)
+	abort := func() { interrupt.interrupt() }
 	runStart := abortAtRunStart(ctx, abort)
 	// handed is the handed-over prompts not yet delivered. Send is the only
 	// producer into PiG's queue and PiG delivers in queue order, after p, so
@@ -194,7 +230,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (Sen
 	})
 	// PiG gets an uncancellable ctx: a cancelled one makes it return
 	// ctx.Err() instead of the turn, so RequestAbort is the only abort path.
-	_, err := s.inner.SendContent(context.WithoutCancel(ctx), coding.BuildUserContent(p.Text, toAI(p.Images)))
+	_, err := s.inner.SendContent(context.WithoutCancel(toolCtx), coding.BuildUserContent(p.Text, toAI(p.Images)))
 	// An abort already under way must finish before Send returns, or its
 	// RequestAbort could land on the following turn.
 	if !stop() {

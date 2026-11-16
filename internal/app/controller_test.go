@@ -134,7 +134,12 @@ func testTool(name string, c policy.Capability, run func(context.Context, json.R
 		Description: "Test-only tool.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 		Capability:  c,
-		Run:         run,
+		Run: func(ctx context.Context, args json.RawMessage, admit func(policy.Target) error) (string, error) {
+			if err := admit(policy.Target{}); err != nil {
+				return "", err
+			}
+			return run(ctx, args)
+		},
 	}
 }
 
@@ -298,29 +303,37 @@ func TestResumeDeliversDisplayedHistory(t *testing.T) {
 	assert.Equal(t, "1 line", ends[0].Summary)
 }
 
+// In execute mode a non-Read call with no rule deciding it asks first.
 func TestExecToolFollowsMode(t *testing.T) {
 	var ran atomic.Int32
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{execTool(&ran)}})
+	approvals := subscribeTo[event.ApprovalRequested](h.c)
 	requests := make(chan pigruntimetest.Request, 1)
-	turn := func() string {
+	turn := func(asks bool) string {
 		h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Exec", "call-1")), pigruntimetest.Capture(t, requests, "ok")})
-		h.turn(t, "run it")
+		w, err := h.c.Submit(t.Context(), "run it")
+		require.NoError(t, err)
+		if asks {
+			assert.True(t, h.c.Answer(receiveEvent(t, approvals).Token, policy.Allow))
+		}
+		wait(t, w.Done())
 		req := receive(t, requests)
 		require.NotEmpty(t, req.ToolResults)
 		return req.ToolResults[len(req.ToolResults)-1]
 	}
 
-	denied := turn()
+	denied := turn(false)
 	assert.Contains(t, denied, `tool "Exec" needs execute mode; the session is in plan mode`)
 	assert.Zero(t, ran.Load())
 
 	h.c.EnterExecute()
-	assert.Equal(t, execOutput, turn())
+	assert.Equal(t, execOutput, turn(true))
 	assert.Equal(t, int32(1), ran.Load())
 
 	h.c.EnterPlan()
-	assert.Contains(t, turn(), policy.ErrDenied.Error())
+	assert.Contains(t, turn(false), policy.ErrDenied.Error())
 	assert.Equal(t, int32(1), ran.Load())
+	assert.Len(t, ofType[event.ApprovalRequested](h.rec.all()), 1, "plan mode refuses before asking")
 
 	assert.Equal(t, []event.ModeChanged{{Mode: policy.Execute}, {Mode: policy.Plan}}, ofType[event.ModeChanged](h.rec.all()))
 }
@@ -1606,7 +1619,7 @@ func TestFailedResumeCommandArrivesAsError(t *testing.T) {
 	assert.Equal(t, event.Outcome{Status: event.Completed}, h.turn(t, "after").Outcome())
 }
 
-func TestSessionStartAlwaysEntersPlan(t *testing.T) {
+func TestSessionStartEntersPlanByDefault(t *testing.T) {
 	h, sb := openHarness(t, Config{})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first answer")})
 	h.turn(t, "first question")
@@ -1630,7 +1643,7 @@ func TestSessionStartAlwaysEntersPlan(t *testing.T) {
 	assert.Equal(t, policy.Plan, fresh.c.Status().Mode)
 }
 
-func TestResumeEntersPlan(t *testing.T) {
+func TestResumeEntersPlanByDefault(t *testing.T) {
 	h, _ := openHarness(t, Config{})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first answer")})
 	h.turn(t, "first question")
@@ -1644,6 +1657,89 @@ func TestResumeEntersPlan(t *testing.T) {
 	assert.Equal(t, savedID, status.SessionID)
 	assert.Equal(t, policy.Plan, status.Mode)
 	assert.Positive(t, status.MessageCount)
+}
+
+func TestNewAndResumeCommandsStartInConfiguredMode(t *testing.T) {
+	h, _ := openHarness(t, Config{Mode: policy.Execute})
+	assert.Equal(t, policy.Execute, h.c.Status().Mode)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first answer")})
+	h.turn(t, "first question")
+	savedID := h.c.Status().SessionID
+	changes := subscribeTo[event.SessionChanged](h.c)
+
+	h.c.EnterPlan()
+	_, err := h.c.Submit(t.Context(), "/new")
+	require.NoError(t, err)
+	assert.NotEqual(t, savedID, receiveEvent(t, changes).SessionID)
+	assertSwitchDone(t, h)
+	assert.Equal(t, policy.Execute, h.c.Status().Mode)
+
+	h.c.EnterPlan()
+	_, err = h.c.Submit(t.Context(), "/resume "+savedID)
+	require.NoError(t, err)
+	assert.Equal(t, savedID, receiveEvent(t, changes).SessionID)
+	assertSwitchDone(t, h)
+	assert.Equal(t, policy.Execute, h.c.Status().Mode)
+	assert.Equal(t, []event.ModeChanged{
+		{Mode: policy.Execute}, {Mode: policy.Plan}, {Mode: policy.Execute}, {Mode: policy.Plan}, {Mode: policy.Execute},
+	}, ofType[event.ModeChanged](h.rec.all()))
+}
+
+func TestNewAndResumeCommandsDropExecuteInPlanConfig(t *testing.T) {
+	h, _ := openHarness(t, Config{Mode: policy.Plan})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first answer")})
+	h.turn(t, "first question")
+	savedID := h.c.Status().SessionID
+	changes := subscribeTo[event.SessionChanged](h.c)
+
+	h.c.EnterExecute()
+	_, err := h.c.Submit(t.Context(), "/new")
+	require.NoError(t, err)
+	assert.NotEqual(t, savedID, receiveEvent(t, changes).SessionID)
+	assertSwitchDone(t, h)
+	assert.Equal(t, policy.Plan, h.c.Status().Mode)
+
+	h.c.EnterExecute()
+	_, err = h.c.Submit(t.Context(), "/resume "+savedID)
+	require.NoError(t, err)
+	assert.Equal(t, savedID, receiveEvent(t, changes).SessionID)
+	assertSwitchDone(t, h)
+	assert.Equal(t, policy.Plan, h.c.Status().Mode)
+}
+
+func TestBareDenyRemovesTool(t *testing.T) {
+	var ran atomic.Int32
+	sb := pigruntimetest.NewSandbox(t)
+	read := readTool(t, sb)
+	rules, err := policy.NewRules(sb.Workspace, sb.Home, []string{"Read", "Exec"}, policy.Source{Name: "test", Deny: []string{"Exec"}})
+	require.NoError(t, err)
+	h := newHarness(t, sb, Config{Tools: []tool.Tool{read, execTool(&ran)}, Rules: rules})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "done")})
+
+	h.turn(t, "what can you use?")
+
+	req := receive(t, requests)
+	assert.Equal(t, []string{"Read"}, req.ToolNames)
+	assert.Equal(t, systemPrompt(sb.Workspace, []tool.Tool{read}), req.SystemPrompt)
+	assert.NotContains(t, req.SystemPrompt, "Exec")
+}
+
+func TestPromptMentionsWriteAndEditOnlyWhenAvailable(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	ws, err := tool.NewWorkspace(sb.Workspace, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
+	read, write, edit := tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws)
+	const sentence = "Write and Edit work only in execute mode"
+
+	assert.Contains(t, systemPrompt(sb.Workspace, []tool.Tool{read, edit}), sentence)
+	rules, err := policy.NewRules(sb.Workspace, sb.Home, []string{"Read", "Write", "Edit"}, policy.Source{Name: "test", Deny: []string{"Write", "Edit"}})
+	require.NoError(t, err)
+	h := newHarness(t, sb, Config{Tools: []tool.Tool{read, write, edit}, Rules: rules})
+	assert.NotContains(t, h.c.prompt, sentence)
+	assert.Contains(t, h.c.prompt, "Tools available: Read.\n")
 }
 
 func TestResumeWithoutIDIsMissingArgument(t *testing.T) {

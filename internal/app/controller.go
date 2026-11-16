@@ -25,6 +25,13 @@ type Config struct {
 	JoinTimeout time.Duration
 	// History records human input; nil disables it.
 	History *history.Store
+	// Rules nil means no rules.
+	Rules *policy.Rules
+	// Unattended means no human can answer, so every call that would ask for
+	// approval is denied.
+	Unattended bool
+	// Mode is the mode every session starts in.
+	Mode policy.Mode
 	// Files lists the entries that @ references complete to; nil offers none.
 	Files *tool.Workspace
 }
@@ -71,6 +78,9 @@ type Controller struct {
 	closed  bool
 	turn    *Work
 	turnSeq int
+	// approval is the call waiting for Answer; nil when none is.
+	approval    *pendingApproval
+	approvalSeq uint64
 }
 
 // sessionSwitch retains work even after it deregisters while start waits for life.
@@ -80,6 +90,7 @@ type sessionSwitch struct {
 }
 
 func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
+	cfg.Tools = slices.DeleteFunc(slices.Clone(cfg.Tools), func(t tool.Tool) bool { return cfg.Rules.Removes(t.Name) })
 	return &Controller{
 		rt:        rt,
 		cfg:       cfg,
@@ -325,6 +336,11 @@ func (c *Controller) Interrupt() bool {
 func (c *Controller) stop(w *Work, emit func(event.Event)) {
 	w.handBack = append(w.handBack, c.take(emit)...)
 	w.stopped = true
+	c.mu.Lock()
+	if c.approval != nil && c.approval.work == w {
+		c.approval = nil
+	}
+	c.mu.Unlock()
 	w.cancel()
 }
 
@@ -433,7 +449,7 @@ func (c *Controller) startTurn(ctx context.Context, parts []pigruntime.Prompt) *
 	base := context.WithoutCancel(ctx)
 	sendCtx, cancel := context.WithCancel(base)
 	c.turnSeq++
-	w := &Work{id: fmt.Sprintf("turn-%d", c.turnSeq), cancel: cancel, done: make(chan struct{})}
+	w := &Work{id: fmt.Sprintf("turn-%d", c.turnSeq), sendCtx: sendCtx, cancel: cancel, done: make(chan struct{})}
 	c.turn = w
 	c.mu.Unlock()
 
@@ -466,6 +482,7 @@ func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session
 		}
 		if len(next) > 0 {
 			ctx, w.cancel = context.WithCancel(base)
+			w.sendCtx = ctx
 			parts = next
 			emit(event.TurnEnd{WorkID: w.id, Outcome: res.Outcome, Elapsed: elapsed})
 			emit(event.TurnStart{WorkID: w.id, Prompt: joined(parts).Text})
@@ -633,6 +650,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 	}
 
+	d := newDisplay(c.cfg.Tools)
 	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
 		Model:        c.cfg.Model,
 		ResumeID:     req.ResumeID,
@@ -640,6 +658,8 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		SystemPrompt: c.prompt,
 		Tools:        c.cfg.Tools,
 		Authority:    c.authority,
+		Rules:        c.cfg.Rules,
+		Approve:      c.approver(d),
 	})
 	if err != nil {
 		return err
@@ -659,10 +679,15 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 		cancel()
 	}
-	// Execute mode is never carried into a session start.
-	c.EnterPlan()
+	// A session starts in the configured mode, never in the mode the previous
+	// session was left in.
+	if c.cfg.Mode == policy.Execute {
+		c.EnterExecute()
+	} else {
+		c.EnterPlan()
+	}
 
-	bound, d := c.relay.bind(), newDisplay(c.cfg.Tools)
+	bound := c.relay.bind()
 	emit := func(ev event.Event) { bound(d.apply(ev)) }
 	unsubscribe := sess.Subscribe(emit)
 	id := sess.ID()

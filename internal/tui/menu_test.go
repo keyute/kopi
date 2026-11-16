@@ -132,6 +132,21 @@ func TestTabFillsCommandThenListsItsArguments(t *testing.T) {
 	})
 }
 
+func TestApprovalHidesMenuUntilItEnds(t *testing.T) {
+	m, _ := newMenuModel(t, 60, 30)
+	keys(m, "/")
+	require.Positive(t, m.menuHeight())
+
+	send(m, editApproval())
+	assert.Zero(t, m.menuHeight())
+	assert.Empty(t, menuText(m))
+	assert.NotContains(t, screen(m), "❭ /plan       switch to plan mode")
+	assert.Contains(t, screen(m), "❯ 1. Yes")
+
+	send(m, event.ApprovalEnded{Token: 1})
+	assert.Equal(t, "❭ /plan       switch to plan mode", menuText(m)[0])
+}
+
 func TestEnterOnCommandRunsIt(t *testing.T) {
 	m, c := newMenuModel(t, 60, 30)
 	keys(m, "/pl")

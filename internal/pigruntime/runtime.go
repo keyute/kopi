@@ -100,14 +100,18 @@ type OpenOptions struct {
 	SystemPrompt string
 	Tools        []tool.Tool
 	Authority    *policy.Authority
+	// Rules nil means no rules.
+	Rules *policy.Rules
+	// Approve nil means nobody can answer, so a call needing approval is denied.
+	Approve policy.Approver
 }
 
 func (r *Runtime) Open(ctx context.Context, o OpenOptions) (*Session, error) {
-	caps := make(map[string]policy.Capability, len(o.Tools))
+	specs := make(map[string]policy.ToolSpec, len(o.Tools))
 	for _, t := range o.Tools {
-		caps[t.Name] = t.Capability
+		specs[t.Name] = policy.ToolSpec{Capability: t.Capability, Target: t.Target}
 	}
-	return r.open(ctx, o, policy.NewGate(o.Authority, caps))
+	return r.open(ctx, o, policy.NewGate(o.Authority, specs, o.Rules, o.Approve))
 }
 
 // open takes the gate separately so a test can install one that does not

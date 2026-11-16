@@ -107,7 +107,7 @@ func TestListSkipsGitAndListsHiddenShallowFirst(t *testing.T) {
 func TestListSkipsProtectedStores(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
 	writeFile(t, filepath.Join(home, "notes.txt"), "")
-	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 
 	got, err := ws.List(100)
 	require.NoError(t, err)
@@ -118,7 +118,7 @@ func TestReadDirRejectsDirectorySwappedForProtectedSymlink(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
 	dir := filepath.Join(home, "ordinary")
 	require.NoError(t, os.Mkdir(dir, 0o755))
-	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 	vetted, err := os.Stat(dir)
 	require.NoError(t, err)
 
@@ -134,7 +134,7 @@ func TestListIsEmptyInWorkspaceInsideProtectedStore(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
 	dir := filepath.Join(home, ".ssh", "project")
 	writeFile(t, filepath.Join(dir, "readme.txt"), "hello")
-	ws := newWorkspace(t, dir, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, dir, protectedStores(home, kopiHome))
 
 	got, err := ws.List(100)
 	require.NoError(t, err)
@@ -170,7 +170,7 @@ func TestListDoesNotApplyGitignoreLinkedToProtectedStore(t *testing.T) {
 			writeFile(t, filepath.Join(home, "proj", "secret.txt"), "")
 			writeFile(t, filepath.Join(home, "proj", "other.txt"), "")
 			require.NoError(t, tc.link(home))
-			ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+			ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 
 			got, err := ws.List(100)
 			require.NoError(t, err)

@@ -42,10 +42,21 @@ type fakeController struct {
 	history    []string
 	histories  int
 	subscriber func(event.Event)
+	answers    []answer
 	commands   []app.Command
 	args       map[string][]app.Candidate
 	files      []app.Candidate
 	filesErr   error
+}
+
+type answer struct {
+	token uint64
+	a     policy.Answer
+}
+
+func (f *fakeController) Answer(token uint64, a policy.Answer) bool {
+	f.answers = append(f.answers, answer{token, a})
+	return true
 }
 
 func (f *fakeController) Subscribe(fn func(event.Event)) func() {
@@ -869,4 +880,182 @@ func TestToggleModeKey(t *testing.T) {
 	press(m, shiftTab)
 	press(m, tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
 	assert.Equal(t, 1, c.toggles)
+}
+
+func editApproval() event.ApprovalRequested {
+	return event.ApprovalRequested{
+		Token: 1, CallID: "c1", Title: "Edit a.go",
+		Preview: []tool.PreviewLine{{Kind: tool.Removed, Text: "old"}, {Kind: tool.Added, Text: "new"}},
+		Edits:   true,
+	}
+}
+
+func digit(r rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: r, Text: string(r)} }
+
+func TestApprovalCapturesKeys(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	send(m, editApproval())
+
+	press(m, digit('x'))
+	pasteText(m, "pasted")
+	press(m, shiftTab)
+
+	assert.Empty(t, m.composer.value())
+	assert.Zero(t, c.toggles)
+	assert.Empty(t, c.answers)
+	assert.Contains(t, screen(m), "❯ 1. Yes")
+}
+
+func TestApprovalEnterAnswersTheSelectedOption(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	send(m, editApproval())
+
+	press(m, up)
+	press(m, down)
+	press(m, down)
+	press(m, down)
+	press(m, up)
+	press(m, enter)
+
+	assert.Equal(t, []answer{{1, policy.AllowEdits}}, c.answers)
+	assert.Contains(t, screen(m), "❯ 2. Yes, allow all edits this session", "the prompt stays until it ends")
+}
+
+func TestApprovalFollowsReboundMenuKeys(t *testing.T) {
+	opts := testOptions()
+	opts.Keys["menu-up"] = []string{"ctrl+p"}
+	opts.Keys["menu-down"] = []string{"ctrl+n"}
+	m, c := newTestModelWith(t, 60, 30, opts)
+	send(m, editApproval())
+
+	press(m, tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	press(m, tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	press(m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	assert.Contains(t, screen(m), "❯ 2. Yes, allow all edits this session")
+
+	press(m, down)
+	press(m, up)
+	press(m, up)
+	assert.Contains(t, screen(m), "❯ 2. Yes, allow all edits this session", "the arrow keys are unbound")
+	press(m, enter)
+	assert.Equal(t, []answer{{1, policy.AllowEdits}}, c.answers)
+}
+
+func TestApprovalDigitAnswersDirectly(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	send(m, editApproval())
+
+	press(m, digit('4'))
+	press(m, digit('3'))
+	press(m, digit('1'))
+
+	assert.Equal(t, []answer{{1, policy.Reject}, {1, policy.Allow}}, c.answers)
+}
+
+func TestApprovalEscRejects(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	send(m, editApproval())
+
+	press(m, escape)
+
+	assert.Equal(t, []answer{{1, policy.Reject}}, c.answers)
+	assert.Zero(t, c.interrupts, "the controller interrupts on a rejection")
+}
+
+func TestApprovalEndedRestoresTheComposerWithItsDraft(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	typeText(m, "draft")
+	send(m, editApproval())
+	assert.NotContains(t, screen(m), "❯ draft")
+
+	send(m, event.ApprovalEnded{Token: 2})
+	assert.Contains(t, screen(m), "❯ 1. Yes", "another call's end leaves the prompt")
+
+	send(m, event.ApprovalEnded{Token: 1})
+	assert.Contains(t, screen(m), "❯ draft")
+	assert.NotContains(t, screen(m), "❯ 1. Yes")
+	assert.Len(t, screen(m), 30)
+}
+
+func TestStaleApprovalEndedCannotDismissReusedCallID(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	first := editApproval()
+	send(m, first, event.ApprovalEnded{Token: first.Token})
+	second := first
+	second.Token++
+	second.Title = "Edit b.go"
+	send(m, second, event.ApprovalEnded{Token: first.Token})
+
+	require.NotNil(t, m.approval)
+	assert.Equal(t, second, *m.approval)
+	assert.Contains(t, screen(m), "Edit b.go")
+	press(m, enter)
+	assert.Equal(t, []answer{{second.Token, policy.Allow}}, c.answers)
+	send(m, event.ApprovalEnded{Token: second.Token})
+	assert.Nil(t, m.approval)
+}
+
+func TestTurnEndAndSessionChangedClearTheApproval(t *testing.T) {
+	for _, ev := range []event.Event{event.TurnEnd{}, event.SessionChanged{SessionID: "s2"}} {
+		m, _ := newTestModel(t, 60, 30)
+		send(m, editApproval())
+		send(m, ev)
+		assert.Nil(t, m.approval)
+		assert.Contains(t, screen(m), "❯")
+		assert.NotContains(t, screen(m), "❯ 1. Yes")
+	}
+}
+
+func TestCancelInterruptsDuringApproval(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	c.running = true
+	send(m, event.TurnStart{}, editApproval())
+
+	assert.Nil(t, press(m, ctrlC))
+
+	assert.Equal(t, 1, c.interrupts)
+	assert.Empty(t, c.answers)
+}
+
+func TestApprovalSurvivesTinyTerminalResizes(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	send(m, event.TurnStart{}, editApproval())
+	press(m, down)
+	prompt := append([]string(nil), m.prompt...)
+
+	for height := 0; height <= 4; height++ {
+		require.NotPanics(t, func() {
+			m.Update(tea.WindowSizeMsg{Width: 60, Height: height})
+			m.View()
+		}, "height %d", height)
+		assert.NotNil(t, m.approval)
+		assert.Empty(t, m.prompt)
+	}
+
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	assert.Equal(t, prompt, m.prompt)
+	s := screen(m)
+	assert.Len(t, s, 30)
+	assert.Contains(t, s, "Edit a.go")
+	assert.Contains(t, s, "- old")
+	assert.Contains(t, s, "+ new")
+	assert.Equal(t, []string{"  1. Yes", "❯ 2. Yes, allow all edits this session", "  3. No (esc)", ""}, s[len(s)-5:len(s)-1])
+	assert.Empty(t, c.answers)
+	press(m, enter)
+	assert.Equal(t, []answer{{1, policy.AllowEdits}}, c.answers)
+}
+
+func TestApprovalWithLongPreviewFitsTheTerminal(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	ev := editApproval()
+	for i := range 50 {
+		ev.Preview = append(ev.Preview, tool.PreviewLine{Kind: tool.Added, Text: fmt.Sprintf("line %d", i)})
+	}
+	send(m, event.TurnStart{}, ev)
+
+	s := screen(m)
+	assert.Len(t, s, 20)
+	assert.Equal(t, []string{"❯ 1. Yes", "  2. Yes, allow all edits this session", "  3. No (esc)", ""}, s[len(s)-5:len(s)-1])
+	assert.Contains(t, s, "  … 47 more lines")
+	assert.Contains(t, s, "Edit a.go")
 }

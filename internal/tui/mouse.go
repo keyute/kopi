@@ -93,7 +93,7 @@ func (m *model) press(mo tea.Mouse) {
 		unit := m.unitAt(p, n)
 		m.drag = drag{region: regionTranscript, at: mo, press: p, count: n, unit: unit, x: mo.X}
 		m.sel = unit
-	case mo.Y >= top && mo.Y < top+m.composer.height():
+	case m.approval == nil && mo.Y >= top && mo.Y < top+m.composer.height():
 		m.drag = drag{region: regionComposer}
 		m.composer.press(mo.X, mo.Y-top, n)
 	}
