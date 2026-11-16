@@ -138,14 +138,23 @@ func readClipboard(ctx context.Context, cb clipboard, dir string) tea.Cmd {
 			slog.Warn("failed to paste an image from the clipboard", "err", err)
 			return pasteFailedMsg{}
 		}
-		text, err := cb.ReadText()
-		if err != nil {
-			slog.Warn("failed to paste from the clipboard", "err", err)
-			return nil
-		}
-		if text == "" {
-			return nil
-		}
-		return tea.PasteMsg{Content: text}
+		return clipboardText(cb)
 	}
+}
+
+// readClipboardText is readClipboard for input that takes no images.
+func readClipboardText(cb clipboard) tea.Cmd {
+	return func() tea.Msg { return clipboardText(cb) }
+}
+
+func clipboardText(cb clipboard) tea.Msg {
+	text, err := cb.ReadText()
+	if err != nil {
+		slog.Warn("failed to paste from the clipboard", "err", err)
+		return nil
+	}
+	if text == "" {
+		return nil
+	}
+	return tea.PasteMsg{Content: text}
 }

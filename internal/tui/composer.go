@@ -13,6 +13,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/event"
@@ -75,9 +76,9 @@ type composer struct {
 	spans  []app.Span
 }
 
-// newComposer keeps the textarea's stock editing keys except newline, which
+// baseComposer keeps the textarea's stock editing keys except newline, which
 // is Kopi's, and paste, which Kopi owns.
-func newComposer(th theme, newline key.Binding) composer {
+func baseComposer(newline key.Binding) composer {
 	ta := textarea.New()
 	ta.ShowLineNumbers = false
 	ta.MaxWidth = 0
@@ -85,16 +86,45 @@ func newComposer(th theme, newline key.Binding) composer {
 	ta.MaxContentHeight = maxComposerLines
 	ta.KeyMap.InsertNewline = newline
 	ta.KeyMap.Paste.SetEnabled(false)
-	ta.SetPromptFunc(promptWidth, func(p textarea.PromptInfo) string {
+	return composer{ta: ta, blocks: map[string]block{}, imageOf: map[string]string{}}
+}
+
+func newComposer(th theme, newline key.Binding) composer {
+	c := baseComposer(newline)
+	c.ta.SetPromptFunc(promptWidth, func(p textarea.PromptInfo) string {
 		if p.LineNumber == 0 {
 			return "❯ "
 		}
 		return "  "
 	})
-	c := composer{ta: ta, blocks: map[string]block{}, imageOf: map[string]string{}}
 	c.style(th)
 	c.ta.Focus()
 	return c
+}
+
+// newField is a blurred text field inside a dialog, without a prompt or
+// shade. Only its editing, paste and expanded are used.
+func newField(th theme, newline key.Binding, placeholder string) composer {
+	c := baseComposer(newline)
+	// A nil func falls back to the textarea's stock prompt.
+	c.ta.SetPromptFunc(0, func(textarea.PromptInfo) string { return "" })
+	c.ta.Placeholder = placeholder
+	c.fieldStyle(th)
+	c.ta.Blur()
+	return c
+}
+
+func (c *composer) fieldStyle(th theme) {
+	none := lipgloss.NewStyle()
+	state := textarea.StyleState{
+		Text:        none,
+		CursorLine:  none,
+		EndOfBuffer: none,
+		Placeholder: fg(th.dim),
+		Prompt:      none,
+		Selection:   none.Reverse(true),
+	}
+	c.ta.SetStyles(textarea.Styles{Focused: state, Blurred: state, Cursor: textarea.CursorStyle{Color: th.text}})
 }
 
 func (c *composer) style(th theme) {

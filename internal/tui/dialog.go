@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -13,18 +14,30 @@ import (
 // cursorMark marks the selected row in the menu and in dialogs.
 const cursorMark = "❭ "
 
+// option is a dialog choice; one with a field takes text, and selecting it
+// focuses the field.
+type option struct {
+	label string
+	field *composer
+}
+
 // dialog is a choice drawn in the composer's slot.
 type dialog struct {
 	title   string
 	body    []string // rendered at width-2; rows indents them
 	note    string
-	options []string
+	options []option
 	sel     int
 }
 
 // rows draws d between two rules: the title, body and note two in, a blank
-// row, then the numbered options with the cursor on sel.
-func (d dialog) rows(width int, th theme) []string {
+// row, then the numbered options with the cursor on sel. A field shows the
+// rows budget leaves after every row but the body's, at most fieldCap; leaving
+// the body out keeps that count the same whatever body is later fitted into
+// what remains. With none left, the selected option's field still shows one
+// row and a field below an unselected label shows none, so it never pushes the
+// selected row out.
+func (d *dialog) rows(width, budget, fieldCap int, th theme) []string {
 	none := lipgloss.NewStyle()
 	rule := fg(th.frame).Render(strings.Repeat("─", width))
 	rows := append([]string{rule}, hang("  ", none, d.title, none.Bold(true), width)...)
@@ -35,29 +48,133 @@ func (d dialog) rows(width int, th theme) []string {
 		rows = append(rows, hang("  ", none, d.note, fg(th.dim), width)...)
 	}
 	rows = append(rows, "")
+	var slots []fieldSlot
 	for i, o := range d.options {
 		prefix, st := "  ", none
 		if i == d.sel {
 			prefix, st = cursorMark, fg(th.accent)
 		}
-		rows = append(rows, hang(prefix, fg(th.accent), fmt.Sprintf("%d. %s", i+1, o), st, width)...)
+		label := fmt.Sprintf("%d. %s", i+1, o.label)
+		if o.field == nil {
+			rows = append(rows, hang(prefix, fg(th.accent), label, st, width)...)
+			continue
+		}
+		head := label + "  "
+		if indent := lipgloss.Width(prefix + head); fitsBeside(o.field.value(), width-indent) {
+			slots = append(slots, fieldSlot{at: len(rows), f: o.field, head: fg(th.accent).Render(prefix) + st.Render(head), indent: indent})
+			continue
+		}
+		rows = append(rows, hang(prefix, fg(th.accent), label, st, width)...)
+		slots = append(slots, fieldSlot{at: len(rows), f: o.field, indent: 2, selected: i == d.sel})
 	}
-	return append(rows, rule)
+	rows = append(rows, rule)
+	room := min(fieldCap, budget-(len(rows)-len(d.body)))
+	for i := len(slots) - 1; i >= 0; i-- {
+		if s := slots[i]; room >= 1 || s.head != "" || s.selected {
+			rows = slices.Insert(rows, s.at, s.rows(width, max(1, room), th)...)
+		}
+	}
+	return rows
 }
 
-// dialogKey is msg's effect on n options with sel selected: the new
-// selection, and whether msg picks it.
-func dialogKey(msg tea.KeyPressMsg, km *keyMap, sel, n int) (int, bool) {
+// fitsBeside reports whether draft v fits one row of inline cells. The
+// textarea wraps a row that fills its width, as it keeps a cell for the
+// cursor, so this is decided here rather than by setting a trial width,
+// which would move a scrolled view.
+func fitsBeside(v string, inline int) bool {
+	return !strings.Contains(v, "\n") && lipgloss.Width(v) < inline && inline >= 2
+}
+
+// fieldSlot is where a field's rows go among a dialog's rows: beside its
+// label, which head draws, or below it when head is empty.
+type fieldSlot struct {
+	at       int
+	f        *composer
+	head     string
+	indent   int
+	selected bool
+}
+
+func (s fieldSlot) rows(width, fieldMax int, th theme) []string {
+	s.f.fieldStyle(th)
+	s.f.ta.MaxHeight = fieldMax
+	s.f.ta.SetWidth(width - s.indent)
+	rows := strings.Split(s.f.ta.View(), "\n")
+	for i := range rows {
+		if i == 0 && s.head != "" {
+			rows[i] = s.head + rows[i]
+		} else {
+			rows[i] = strings.Repeat(" ", s.indent) + rows[i]
+		}
+	}
+	return rows
+}
+
+// field is the selected option's field, nil when it has none.
+func (d *dialog) field() *composer { return d.options[d.sel].field }
+
+// key applies msg and reports whether it picks the selected option. On an
+// option with a field, the menu keys leave only from the draft's edge rows and
+// digits are text.
+func (d *dialog) key(msg tea.KeyPressMsg, km *keyMap) (picked bool, cmd tea.Cmd) {
+	if f := d.field(); f != nil {
+		switch {
+		case key.Matches(msg, km.submit):
+			return true, nil
+		case key.Matches(msg, km.menuUp) && f.atTop():
+			return false, d.move(max(0, d.sel-1))
+		case key.Matches(msg, km.menuDown) && f.atBottom() && d.sel < len(d.options)-1:
+			return false, d.move(d.sel + 1)
+		}
+		return false, f.update(msg)
+	}
 	switch {
 	case key.Matches(msg, km.menuUp):
-		return max(0, sel-1), false
+		return false, d.move(max(0, d.sel-1))
 	case key.Matches(msg, km.menuDown):
-		return min(n-1, sel+1), false
+		return false, d.move(min(len(d.options)-1, d.sel+1))
 	case key.Matches(msg, km.submit):
-		return sel, true
+		return true, nil
 	}
-	if d, err := strconv.Atoi(msg.String()); err == nil && d >= 1 && d <= n {
-		return d - 1, true
+	if n, err := strconv.Atoi(msg.String()); err == nil && n >= 1 && n <= len(d.options) {
+		if d.options[n-1].field != nil {
+			return false, d.move(n - 1)
+		}
+		d.sel = n - 1
+		return true, nil
 	}
-	return sel, false
+	return false, nil
+}
+
+// move selects option i, moving the focus to its field.
+func (d *dialog) move(i int) tea.Cmd {
+	if i == d.sel {
+		return nil
+	}
+	if f := d.field(); f != nil {
+		f.ta.Blur()
+	}
+	d.sel = i
+	if f := d.field(); f != nil {
+		return f.ta.Focus()
+	}
+	return nil
+}
+
+// paste goes to the selected option's field only; a blurred textarea would
+// ignore the insertion and the paste would collapse the whole draft.
+func (d *dialog) paste(text string) tea.Cmd {
+	if f := d.field(); f != nil {
+		return f.paste(text)
+	}
+	return nil
+}
+
+// text is the selected option's draft as sent, "" without a field.
+func (d *dialog) text() string {
+	if f := d.field(); f != nil {
+		text, _ := f.expanded()
+		return text
+	}
+	return ""
 }

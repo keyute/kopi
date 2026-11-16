@@ -66,7 +66,7 @@ func TestApprovalYesRunsEdit(t *testing.T) {
 	assert.Equal(t, []tool.PreviewLine{{Kind: tool.Removed, Text: "alpha"}, {Kind: tool.Added, Text: "beta"}}, req.Preview)
 	assert.Empty(t, req.Rule)
 	assert.True(t, req.Edits)
-	assert.True(t, h.c.Answer(req.Token, policy.Allow))
+	assert.True(t, h.c.Answer(req.Token, policy.Decision{Answer: policy.Allow}))
 	wait(t, w.Done())
 
 	assert.Equal(t, event.ApprovalEnded{Token: req.Token}, receiveEvent(t, ended))
@@ -86,7 +86,7 @@ func TestApprovalAllowEditsSkipsLaterPrompts(t *testing.T) {
 	w, err := h.c.Submit(t.Context(), "edit both")
 	require.NoError(t, err)
 	req := receiveEvent(t, approvals)
-	assert.True(t, h.c.Answer(req.Token, policy.AllowEdits))
+	assert.True(t, h.c.Answer(req.Token, policy.Decision{Answer: policy.AllowEdits}))
 	wait(t, w.Done())
 
 	assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
@@ -98,88 +98,135 @@ func TestApprovalAllowEditsSkipsLaterPrompts(t *testing.T) {
 }
 
 func TestApprovalNoInterruptsTurnAndModelSeesRejection(t *testing.T) {
-	rules, err := policy.NewRules(t.TempDir(), t.TempDir(), []string{"Edit", "Write"}, policy.Source{Name: "test", Allow: []string{"Write"}})
-	require.NoError(t, err)
-	h, sb := editHarness(t, Config{Rules: rules})
-	approvals, ended := subscribeTo[event.ApprovalRequested](h.c), subscribeTo[event.ApprovalEnded](h.c)
-	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(editCall("call-1", "a.txt"), writeCall("call-2", "b.txt")), pigruntimetest.Text("unreached")})
+	for _, reason := range []string{"", " \n\t"} {
+		t.Run(fmt.Sprintf("reason=%q", reason), func(t *testing.T) {
+			rules, err := policy.NewRules(t.TempDir(), t.TempDir(), []string{"Edit", "Write"}, policy.Source{Name: "test", Allow: []string{"Write"}})
+			require.NoError(t, err)
+			h, sb := editHarness(t, Config{Rules: rules})
+			approvals, ended := subscribeTo[event.ApprovalRequested](h.c), subscribeTo[event.ApprovalEnded](h.c)
+			h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(editCall("call-1", "a.txt"), writeCall("call-2", "b.txt")), pigruntimetest.Text("unreached")})
 
-	w, err := h.c.Submit(t.Context(), "edit a.txt")
+			w, err := h.c.Submit(t.Context(), "edit a.txt")
+			require.NoError(t, err)
+			req := receiveEvent(t, approvals)
+			queued, err := h.c.Submit(t.Context(), "queued meanwhile")
+			require.NoError(t, err)
+			assert.Nil(t, queued)
+			assert.True(t, h.c.Answer(req.Token, policy.Decision{Answer: policy.Reject, Reason: reason}))
+			wait(t, w.Done())
+
+			assert.Equal(t, event.ApprovalEnded{Token: req.Token}, receiveEvent(t, ended))
+			assert.Equal(t, event.Outcome{Status: event.Interrupted}, w.Outcome())
+			ends := ofType[event.TurnEnd](h.rec.all())
+			require.Len(t, ends, 1)
+			assert.Equal(t, []event.Input{{Text: "queued meanwhile"}}, ends[0].Unsent)
+			assert.Equal(t, "alpha\n", fileText(t, sb, "a.txt"))
+			assert.Equal(t, "alpha\n", fileText(t, sb, "b.txt"), "the following rule-allowed tool must not run")
+			assert.Equal(t, 1, h.faux.CallCount(), "the rejection stops the turn before another model request")
+
+			requests := make(chan pigruntimetest.Request, 1)
+			h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "understood")})
+			h.turn(t, "carry on")
+			results := receive(t, requests).ToolResults
+			require.Len(t, results, 1)
+			assert.Contains(t, results[0], policy.ErrRejected.Error())
+			assert.Contains(t, results[0], "stop and wait")
+		})
+	}
+}
+
+func TestApprovalNoWithReasonContinuesTurn(t *testing.T) {
+	h, sb := editHarness(t, Config{})
+	approvals := subscribeTo[event.ApprovalRequested](h.c)
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(editCall("call-1", "a.txt"), editCall("call-2", "b.txt")),
+		pigruntimetest.Capture(t, requests, "done"),
+	})
+
+	w, err := h.c.Submit(t.Context(), "edit both")
 	require.NoError(t, err)
-	req := receiveEvent(t, approvals)
-	queued, err := h.c.Submit(t.Context(), "queued meanwhile")
-	require.NoError(t, err)
-	assert.Nil(t, queued)
-	assert.True(t, h.c.Answer(req.Token, policy.Reject))
+	first := receiveEvent(t, approvals)
+	assert.Equal(t, "call-1", first.CallID)
+	require.True(t, h.c.Answer(first.Token, policy.Decision{Answer: policy.Reject, Reason: "  leave a.txt alone\n"}))
+	second := receiveEvent(t, approvals)
+	assert.Equal(t, "call-2", second.CallID)
+	require.True(t, h.c.Answer(second.Token, policy.Decision{Answer: policy.Allow}))
 	wait(t, w.Done())
 
-	assert.Equal(t, event.ApprovalEnded{Token: req.Token}, receiveEvent(t, ended))
-	assert.Equal(t, event.Outcome{Status: event.Interrupted}, w.Outcome())
-	ends := ofType[event.TurnEnd](h.rec.all())
-	require.Len(t, ends, 1)
-	assert.Equal(t, []event.Input{{Text: "queued meanwhile"}}, ends[0].Unsent)
+	assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
 	assert.Equal(t, "alpha\n", fileText(t, sb, "a.txt"))
-	assert.Equal(t, "alpha\n", fileText(t, sb, "b.txt"), "the following rule-allowed tool must not run")
-	assert.Equal(t, 1, h.faux.CallCount(), "the rejection stops the turn before another model request")
-
-	requests := make(chan pigruntimetest.Request, 1)
-	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "understood")})
-	h.turn(t, "carry on")
+	assert.Equal(t, "beta\n", fileText(t, sb, "b.txt"))
 	results := receive(t, requests).ToolResults
-	require.Len(t, results, 1)
+	require.Len(t, results, 2)
 	assert.Contains(t, results[0], policy.ErrRejected.Error())
+	assert.Contains(t, results[0], "with this feedback:\nleave a.txt alone")
+	assert.NotContains(t, results[0], "alone\n")
+	assert.NotContains(t, results[0], "stop and wait")
+}
+
+// answers are the distinct Decisions a human can give.
+var answers = []policy.Decision{
+	{Answer: policy.Allow},
+	{Answer: policy.AllowEdits},
+	{Answer: policy.Reject},
+	{Answer: policy.Reject, Reason: "use b.txt"},
 }
 
 func TestApprovalClaimedAnswerSurvivesCancellation(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		rec := &recorder{}
-		c := &Controller{turn: &Work{sendCtx: ctx, cancel: cancel}, emit: rec.add}
-		approve := c.approver(newDisplay(nil))
-		done := make(chan struct{})
-		var answer policy.Answer
-		var err error
-		go func() {
-			answer, err = approve(ctx, policy.Request{CallID: "call-1", Tool: "Edit"})
-			close(done)
-		}()
+	for _, want := range []policy.Decision{{Answer: policy.Reject}, {Answer: policy.Reject, Reason: "use b.txt"}} {
+		t.Run(fmt.Sprintf("reason=%q", want.Reason), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				rec := &recorder{}
+				c := &Controller{turn: &Work{sendCtx: ctx, cancel: cancel}, emit: rec.add}
+				approve := c.approver(newDisplay(nil))
+				done := make(chan struct{})
+				var answer policy.Decision
+				var err error
+				go func() {
+					answer, err = approve(ctx, policy.Request{CallID: "call-1", Tool: "Edit"})
+					close(done)
+				}()
 
-		synctest.Wait()
-		requests := ofType[event.ApprovalRequested](rec.all())
-		require.Len(t, requests, 1)
-		c.queue.Lock()
-		c.mu.Lock()
-		p := c.approval
-		require.NotNil(t, p)
-		p.claimed = true
-		c.approval = nil
-		c.mu.Unlock()
-		c.queue.Unlock()
-		// Hold delivery after Answer claims the slot, forcing cancellation to
-		// reach the approver before the buffered answer is available.
-		defer close(p.answer)
-		p.work.cancel()
-		synctest.Wait()
-		select {
-		case <-done:
-			assert.Fail(t, "approver returned before the claimed answer was delivered")
-		default:
-		}
+				synctest.Wait()
+				requests := ofType[event.ApprovalRequested](rec.all())
+				require.Len(t, requests, 1)
+				c.queue.Lock()
+				c.mu.Lock()
+				p := c.approval
+				require.NotNil(t, p)
+				p.claimed = true
+				c.approval = nil
+				c.mu.Unlock()
+				c.queue.Unlock()
+				// Hold delivery after Answer claims the slot, forcing cancellation to
+				// reach the approver before the buffered answer is available.
+				defer close(p.answer)
+				p.work.cancel()
+				synctest.Wait()
+				select {
+				case <-done:
+					assert.Fail(t, "approver returned before the claimed answer was delivered")
+				default:
+				}
 
-		p.answer <- policy.Reject
-		synctest.Wait()
-		<-done
-		require.NoError(t, err)
-		require.Equal(t, policy.Reject, answer)
-		assert.Equal(t, []event.ApprovalEnded{{Token: requests[0].Token}}, ofType[event.ApprovalEnded](rec.all()))
-	})
+				p.answer <- want
+				synctest.Wait()
+				<-done
+				require.NoError(t, err)
+				require.Equal(t, want, answer)
+				assert.Equal(t, []event.ApprovalEnded{{Token: requests[0].Token}}, ofType[event.ApprovalEnded](rec.all()))
+			})
+		})
+	}
 }
 
 func TestApprovalCancellationBeforeAnswer(t *testing.T) {
 	for _, interrupt := range []bool{false, true} {
-		for _, a := range []policy.Answer{policy.Allow, policy.AllowEdits, policy.Reject} {
-			t.Run(fmt.Sprintf("interrupt=%t/answer=%d", interrupt, a), func(t *testing.T) {
+		for _, a := range answers {
+			t.Run(fmt.Sprintf("interrupt=%t/answer=%d/reason=%q", interrupt, a.Answer, a.Reason), func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
 					ctx, cancel := context.WithCancel(t.Context())
 					defer cancel()
@@ -188,7 +235,7 @@ func TestApprovalCancellationBeforeAnswer(t *testing.T) {
 					done := make(chan struct{})
 					go func() {
 						answer, err := c.approver(newDisplay(nil))(ctx, policy.Request{Tool: "Edit"})
-						assert.Equal(t, policy.Reject, answer)
+						assert.Equal(t, policy.Decision{}, answer)
 						assert.ErrorIs(t, err, context.Canceled)
 						close(done)
 					}()
@@ -224,7 +271,7 @@ func TestApprovalRegistrationAfterCancellation(t *testing.T) {
 				cancel()
 			}
 			answer, err := c.approver(newDisplay(nil))(ctx, policy.Request{Tool: "Edit"})
-			assert.Equal(t, policy.Reject, answer)
+			assert.Equal(t, policy.Decision{}, answer)
 			assert.ErrorIs(t, err, context.Canceled)
 			assert.Empty(t, rec.all())
 			assert.Nil(t, c.approval)
@@ -233,8 +280,8 @@ func TestApprovalRegistrationAfterCancellation(t *testing.T) {
 }
 
 func TestApprovalAnswerBeforeCancellation(t *testing.T) {
-	for _, a := range []policy.Answer{policy.Allow, policy.AllowEdits, policy.Reject} {
-		t.Run(fmt.Sprintf("answer=%d", a), func(t *testing.T) {
+	for _, a := range answers {
+		t.Run(fmt.Sprintf("answer=%d/reason=%q", a.Answer, a.Reason), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
@@ -288,7 +335,7 @@ func TestApprovalSendCancellationBeforeForwarding(t *testing.T) {
 					if registerLate {
 						cancel()
 						answer, err := approve(approvalCtx, policy.Request{Tool: "Edit"})
-						assert.Equal(t, policy.Reject, answer)
+						assert.Equal(t, policy.Decision{}, answer)
 						assert.ErrorIs(t, err, context.Canceled)
 						assert.Empty(t, ofType[event.ApprovalRequested](rec.all()))
 						assert.Nil(t, c.approval)
@@ -297,7 +344,7 @@ func TestApprovalSendCancellationBeforeForwarding(t *testing.T) {
 					done := make(chan struct{})
 					go func() {
 						answer, err := approve(approvalCtx, policy.Request{Tool: "Edit"})
-						assert.Equal(t, policy.Reject, answer)
+						assert.Equal(t, policy.Decision{}, answer)
 						assert.ErrorIs(t, err, context.Canceled)
 						close(done)
 					}()
@@ -305,9 +352,9 @@ func TestApprovalSendCancellationBeforeForwarding(t *testing.T) {
 					requests := ofType[event.ApprovalRequested](rec.all())
 					require.Len(t, requests, 1)
 					cancel()
-					assert.False(t, c.Answer(requests[0].Token, policy.AllowEdits))
-					assert.False(t, c.Answer(requests[0].Token, policy.Allow))
-					assert.False(t, c.Answer(requests[0].Token, policy.Reject))
+					for _, a := range answers {
+						assert.False(t, c.Answer(requests[0].Token, a))
+					}
 					cancelApproval()
 					synctest.Wait()
 					<-done
@@ -329,11 +376,11 @@ func TestApprovalSendNowStillAsksOnFollowingSend(t *testing.T) {
 	require.NoError(t, err)
 	first := receiveEvent(t, approvals)
 	require.NoError(t, h.c.SendNow(t.Context(), "edit b.txt instead"))
-	assert.False(t, h.c.Answer(first.Token, policy.AllowEdits))
+	assert.False(t, h.c.Answer(first.Token, policy.Decision{Answer: policy.AllowEdits}))
 	second := receiveEvent(t, approvals)
 	assert.Equal(t, "call-2", second.CallID)
 	assert.Greater(t, second.Token, first.Token)
-	require.True(t, h.c.Answer(second.Token, policy.Allow))
+	require.True(t, h.c.Answer(second.Token, policy.Decision{Answer: policy.Allow}))
 	wait(t, w.Done())
 	assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
 	assert.Equal(t, "alpha\n", fileText(t, sb, "a.txt"))
@@ -352,7 +399,7 @@ func TestApprovalCancelledAllowEditsDoesNotSkipNextTurn(t *testing.T) {
 	require.NoError(t, err)
 	first := receiveEvent(t, approvals)
 	require.True(t, h.c.Interrupt())
-	assert.False(t, h.c.Answer(first.Token, policy.AllowEdits))
+	assert.False(t, h.c.Answer(first.Token, policy.Decision{Answer: policy.AllowEdits}))
 	wait(t, w.Done())
 	assert.Equal(t, "alpha\n", fileText(t, sb, "a.txt"))
 
@@ -361,7 +408,7 @@ func TestApprovalCancelledAllowEditsDoesNotSkipNextTurn(t *testing.T) {
 	require.NoError(t, err)
 	second := receiveEvent(t, approvals)
 	assert.Equal(t, "call-2", second.CallID)
-	require.True(t, h.c.Answer(second.Token, policy.Allow))
+	require.True(t, h.c.Answer(second.Token, policy.Decision{Answer: policy.Allow}))
 	wait(t, w.Done())
 	assert.Equal(t, "beta\n", fileText(t, sb, "b.txt"))
 }
@@ -379,7 +426,7 @@ func TestApprovalCancelledByInterruptEnds(t *testing.T) {
 	assert.Equal(t, event.ApprovalEnded{Token: req.Token}, receiveEvent(t, ended))
 	wait(t, w.Done())
 	assert.Equal(t, event.Outcome{Status: event.Interrupted}, w.Outcome())
-	assert.False(t, h.c.Answer(req.Token, policy.Allow), "the cancelled approval is gone")
+	assert.False(t, h.c.Answer(req.Token, policy.Decision{Answer: policy.Allow}), "the cancelled approval is gone")
 	assert.Equal(t, "alpha\n", fileText(t, sb, "a.txt"))
 }
 
@@ -403,7 +450,7 @@ func TestApprovalCancelledBySessionSwitchEnds(t *testing.T) {
 	})
 	require.GreaterOrEqual(t, endedAt, 0)
 	assert.Less(t, endedAt, changedAt)
-	assert.False(t, h.c.Answer(req.Token, policy.Allow))
+	assert.False(t, h.c.Answer(req.Token, policy.Decision{Answer: policy.Allow}))
 	assert.Equal(t, "alpha\n", fileText(t, sb, "a.txt"))
 }
 
@@ -411,14 +458,14 @@ func TestApprovalStaleAnswerIsIgnored(t *testing.T) {
 	h, sb := editHarness(t, Config{})
 	approvals := subscribeTo[event.ApprovalRequested](h.c)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(editCall("call-1", "a.txt")), pigruntimetest.Text("done")})
-	assert.False(t, h.c.Answer(0, policy.Allow), "nothing is pending yet")
+	assert.False(t, h.c.Answer(0, policy.Decision{Answer: policy.Allow}), "nothing is pending yet")
 
 	w, err := h.c.Submit(t.Context(), "edit a.txt")
 	require.NoError(t, err)
 	req := receiveEvent(t, approvals)
-	assert.False(t, h.c.Answer(req.Token+1, policy.Reject))
-	assert.True(t, h.c.Answer(req.Token, policy.Allow))
-	assert.False(t, h.c.Answer(req.Token, policy.Reject))
+	assert.False(t, h.c.Answer(req.Token+1, policy.Decision{Answer: policy.Reject}))
+	assert.True(t, h.c.Answer(req.Token, policy.Decision{Answer: policy.Allow}))
+	assert.False(t, h.c.Answer(req.Token, policy.Decision{Answer: policy.Reject}))
 	wait(t, w.Done())
 
 	assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
@@ -437,13 +484,13 @@ func TestApprovalAllowsEachEditInBatch(t *testing.T) {
 	require.NoError(t, err)
 	first := receiveEvent(t, approvals)
 	assert.Equal(t, "call-1", first.CallID)
-	require.True(t, h.c.Answer(first.Token, policy.Allow))
+	require.True(t, h.c.Answer(first.Token, policy.Decision{Answer: policy.Allow}))
 	assert.Equal(t, event.ApprovalEnded{Token: first.Token}, receiveEvent(t, ended))
 	second := receiveEvent(t, approvals)
 	assert.Equal(t, "call-2", second.CallID)
 	assert.Greater(t, second.Token, first.Token)
 	assert.Equal(t, "alpha\n", fileText(t, sb, "b.txt"))
-	require.True(t, h.c.Answer(second.Token, policy.Allow))
+	require.True(t, h.c.Answer(second.Token, policy.Decision{Answer: policy.Allow}))
 	assert.Equal(t, event.ApprovalEnded{Token: second.Token}, receiveEvent(t, ended))
 	wait(t, w.Done())
 
@@ -476,7 +523,7 @@ func TestApprovalReusedCallIDCannotReuseAnswer(t *testing.T) {
 			w, err := h.c.Submit(t.Context(), "edit a.txt")
 			require.NoError(t, err)
 			first := receiveEvent(t, approvals)
-			require.True(t, h.c.Answer(first.Token, policy.Allow))
+			require.True(t, h.c.Answer(first.Token, policy.Decision{Answer: policy.Allow}))
 			if transition != "model message" {
 				wait(t, w.Done())
 				assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
@@ -493,12 +540,12 @@ func TestApprovalReusedCallIDCannotReuseAnswer(t *testing.T) {
 			assert.Equal(t, first.CallID, second.CallID)
 			assert.Greater(t, second.Token, first.Token)
 			assert.Equal(t, "beta\n", fileText(t, sb, "a.txt"))
-			assert.False(t, h.c.Answer(first.Token, policy.Allow))
-			assert.False(t, h.c.Answer(first.Token, policy.AllowEdits))
-			assert.False(t, h.c.Answer(first.Token, policy.Reject))
-			assert.False(t, h.c.Answer(second.Token+1, policy.Allow))
+			assert.False(t, h.c.Answer(first.Token, policy.Decision{Answer: policy.Allow}))
+			assert.False(t, h.c.Answer(first.Token, policy.Decision{Answer: policy.AllowEdits}))
+			assert.False(t, h.c.Answer(first.Token, policy.Decision{Answer: policy.Reject}))
+			assert.False(t, h.c.Answer(second.Token+1, policy.Decision{Answer: policy.Allow}))
 			assert.Equal(t, "alpha\n", fileText(t, sb, "b.txt"))
-			require.True(t, h.c.Answer(second.Token, policy.Allow))
+			require.True(t, h.c.Answer(second.Token, policy.Decision{Answer: policy.Allow}))
 			wait(t, w.Done())
 			assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
 			assert.Equal(t, "beta\n", fileText(t, sb, "b.txt"))
@@ -521,7 +568,7 @@ func TestApprovalAllowEditsResetsAcrossSessions(t *testing.T) {
 			w, err := h.c.Submit(t.Context(), "edit a.txt")
 			require.NoError(t, err)
 			first := receiveEvent(t, approvals)
-			require.True(t, h.c.Answer(first.Token, policy.AllowEdits))
+			require.True(t, h.c.Answer(first.Token, policy.Decision{Answer: policy.AllowEdits}))
 			wait(t, w.Done())
 			assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
 			assert.Equal(t, "beta\n", fileText(t, sb, "a.txt"))
@@ -539,7 +586,7 @@ func TestApprovalAllowEditsResetsAcrossSessions(t *testing.T) {
 			assert.Greater(t, second.Token, first.Token)
 			assert.Equal(t, "call-2", second.CallID)
 			assert.Equal(t, "alpha\n", fileText(t, sb, "b.txt"))
-			require.True(t, h.c.Answer(second.Token, policy.Allow))
+			require.True(t, h.c.Answer(second.Token, policy.Decision{Answer: policy.Allow}))
 			wait(t, w.Done())
 			assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
 			assert.Equal(t, "beta\n", fileText(t, sb, "b.txt"))

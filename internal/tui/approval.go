@@ -30,23 +30,38 @@ func approvalOptions(a *event.ApprovalRequested, km *keyMap) []approvalOption {
 	return append(opts, approvalOption{no, policy.Reject})
 }
 
-// approvalRows draws the prompt in place of the composer, in the dialog's
-// frame: the title, the preview capped at maxPreview rows, the rule that
-// asked, a blank row, and the options with the cursor on choice. maxRows caps
-// the whole prompt; past it the top is cut so the options stay visible.
-func approvalRows(a *event.ApprovalRequested, choice int, km *keyMap, width, maxPreview, maxRows int, th theme) []string {
-	if maxRows <= 0 {
-		return nil
-	}
-	d := dialog{title: a.Title, sel: choice}
+// newApprovalDialog is the prompt for a: the rule that asked as its note and
+// approvalOptions as its options, the reject option taking a reason.
+func newApprovalDialog(a *event.ApprovalRequested, km *keyMap, th theme) *dialog {
+	d := &dialog{title: a.Title}
 	if a.Rule != "" {
 		d.note = "asked by " + a.Rule
 	}
 	for _, o := range approvalOptions(a, km) {
-		d.options = append(d.options, o.label)
+		opt := option{label: o.label}
+		if o.answer == policy.Reject {
+			f := newField(th, km.newline, "What should change?")
+			opt.field = &f
+		}
+		d.options = append(d.options, opt)
 	}
-	d.body = previewRows(a.Preview, min(maxPreview, maxRows-len(d.rows(width, th))), width-2, th)
-	rows := d.rows(width, th)
+	return d
+}
+
+// approvalRows draws d, a's prompt, in place of the composer: the title, the
+// preview capped at maxPreview rows, the rule that asked, a blank row, and
+// the options. The reason field grows to maxPreview rows within what maxRows
+// leaves after the other rows, and the preview fits into what is left after
+// it. Past maxRows the top is cut so the options stay visible.
+func approvalRows(d *dialog, a *event.ApprovalRequested, width, maxPreview, maxRows int, th theme) []string {
+	if maxRows <= 0 {
+		return nil
+	}
+	fieldCap := max(1, maxPreview)
+	// Measure the rest without the last render's preview.
+	d.body = nil
+	d.body = previewRows(a.Preview, min(maxPreview, maxRows-len(d.rows(width, maxRows, fieldCap, th))), width-2, th)
+	rows := d.rows(width, maxRows, fieldCap, th)
 	return rows[max(0, len(rows)-maxRows):]
 }
 

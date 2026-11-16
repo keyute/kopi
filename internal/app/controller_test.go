@@ -314,7 +314,7 @@ func TestExecToolFollowsMode(t *testing.T) {
 		w, err := h.c.Submit(t.Context(), "run it")
 		require.NoError(t, err)
 		if asks {
-			assert.True(t, h.c.Answer(receiveEvent(t, approvals).Token, policy.Allow))
+			assert.True(t, h.c.Answer(receiveEvent(t, approvals).Token, policy.Decision{Answer: policy.Allow}))
 		}
 		wait(t, w.Done())
 		req := receive(t, requests)
