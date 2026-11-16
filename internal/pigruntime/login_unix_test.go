@@ -165,8 +165,8 @@ func TestLoginTerminalSecretEditingAndAbort(t *testing.T) {
 		wantErr           error
 	}{
 		{name: "hidden editing", input: "synthetic-keX\x7fy\r", want: "synthetic-key"},
-		{name: "ctrl-c", input: "\x03", wantErr: io.EOF},
-		{name: "ctrl-d", input: "\x04", wantErr: io.EOF},
+		{name: "ctrl-c", input: "\x03", wantErr: context.Canceled},
+		{name: "ctrl-d", input: "\x04", wantErr: context.Canceled},
 		{name: "empty", input: "\r"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

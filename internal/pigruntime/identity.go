@@ -1,6 +1,7 @@
 package pigruntime
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,13 +12,16 @@ import (
 
 	"github.com/MichaelKinsy/PiG/ai"
 	"github.com/MichaelKinsy/PiG/coding"
+	"github.com/tailscale/hujson"
 )
 
 // Anthropic subscription tokens require the client identity PiG selects from
 // the request's credential, even when that credential comes from the environment.
 var keepClientIdentity = []string{"anthropic"}
 
-// identify registers provider defaults so model headers retain higher precedence.
+// identify registers provider defaults so model headers retain higher
+// precedence. A header the provider's models.json headers already set is left
+// out, since registered headers outrank them and the user's value must win.
 // Native providers must not be re-registered: that would replace them.
 func (r *Runtime) identify(provider string) error {
 	mr := r.svcs.ModelRuntime()
@@ -34,7 +38,7 @@ func (r *Runtime) identify(provider string) error {
 	if len(headers) == 0 {
 		return nil
 	}
-	// Read names only: resolving discarded header values could execute commands.
+	// Read names only: resolving header values could execute commands.
 	var configured struct {
 		Providers map[string]struct {
 			Headers map[string]json.RawMessage `json:"headers"`
@@ -45,24 +49,27 @@ func (r *Runtime) identify(provider string) error {
 		return fmt.Errorf("failed to read provider header names: %w", err)
 	}
 	if err == nil {
-		if err := json.Unmarshal(data, &configured); err != nil {
-			return fmt.Errorf("failed to decode provider header names: %w", err)
+		// PiG accepts a BOM, comments and trailing commas, and ignores a
+		// models.json it cannot parse, so such a file configures no headers.
+		std, err := hujson.Standardize(bytes.TrimPrefix(data, []byte("\uFEFF")))
+		if err == nil {
+			err = json.Unmarshal(std, &configured)
+		}
+		if err != nil {
+			configured.Providers = nil
 		}
 	}
-	registration := make(map[string]string, len(headers))
-	for name, value := range headers {
-		matched := false
-		for existing := range configured.Providers[provider].Headers {
+	for existing := range configured.Providers[provider].Headers {
+		for name := range headers {
 			if strings.EqualFold(existing, name) {
-				registration[existing] = value
-				matched = true
+				delete(headers, name)
 			}
 		}
-		if !matched {
-			registration[name] = value
-		}
 	}
-	if err := mr.RegisterProvider(provider, coding.ProviderConfigInput{Headers: registration}); err != nil {
+	if len(headers) == 0 {
+		return nil
+	}
+	if err := mr.RegisterProvider(provider, coding.ProviderConfigInput{Headers: headers}); err != nil {
 		return fmt.Errorf("failed to set request identity for provider %q: %w", provider, err)
 	}
 	return nil

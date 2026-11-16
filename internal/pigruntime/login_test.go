@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -115,6 +116,30 @@ func TestLoginOpensDeviceVerificationURLInBrowser(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for browser opener")
 	}
+}
+
+func TestLoginOpensOnlyWebURLsInBrowser(t *testing.T) {
+	opened := make(chan string, 8)
+	var out strings.Builder
+	l := &loginIO{out: &out, openURL: func(u string) error {
+		opened <- u
+		return nil
+	}}
+	for _, bad := range []string{"file:///etc/passwd", "javascript:alert(1)", "http://[::1"} {
+		l.notify(ai.AuthURLEvent{URL: bad})
+		l.notify(ai.AuthDeviceCodeEvent{VerificationURI: bad, UserCode: "TEST-CODE"})
+		assert.Equal(t, 2, strings.Count(out.String(), bad), "%s is printed for both events", bad)
+	}
+	// Opens run in goroutines, so a web URL marks when the others would have landed.
+	l.notify(ai.AuthURLEvent{URL: loginURL})
+
+	select {
+	case u := <-opened:
+		assert.Equal(t, loginURL, u)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for browser opener")
+	}
+	assert.Empty(t, opened, "only the web URL was opened")
 }
 
 // loginCall is what a recording provider's sign-in received.
@@ -266,6 +291,23 @@ func TestLoginRejectsEmptyAPIKey(t *testing.T) {
 	i := slices.IndexFunc(providers, func(p Provider) bool { return p.ID == oauthProvider })
 	require.GreaterOrEqual(t, i, 0)
 	assert.False(t, providers[i].LoggedIn)
+}
+
+func TestLoginRewordsSignInFailure(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	errPort := errors.New("address in use")
+	signIn := recordingSignIn(make(chan loginCall, 1), false)
+	signIn.Login = func(context.Context, ai.AuthInteraction, ai.LoginOptions) (ai.Credential, error) {
+		return ai.Credential{}, fmt.Errorf("Port 1455 is in use, probably by an unfinished login in another pi session: %w", errPort)
+	}
+	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{OAuth: signIn})))
+
+	err := r.Login(t.Context(), oauthProvider, strings.NewReader(""), io.Discard)
+
+	require.ErrorIs(t, err, errPort)
+	assert.Contains(t, err.Error(), "another Kopi session")
+	assert.NotContains(t, err.Error(), "another pi session")
 }
 
 func TestLoginAsksForMethodWhenProviderOffersBoth(t *testing.T) {

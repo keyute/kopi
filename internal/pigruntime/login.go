@@ -68,18 +68,14 @@ func storesAPIKey(p *ai.ModelsProvider) bool {
 	return p.Auth.APIKey != nil && p.Auth.APIKey.Login != nil
 }
 
-// storedCredential reports the type of the provider's credential in Kopi's
-// store, if it has one.
-func (r *Runtime) storedCredential(ctx context.Context, provider string) (ai.CredentialType, bool, error) {
+// storedCredential reports whether Kopi's store holds a credential for the
+// provider.
+func (r *Runtime) storedCredential(ctx context.Context, provider string) (bool, error) {
 	creds, err := r.svcs.ModelRuntime().ListCredentials(ctx)
 	if err != nil {
-		return "", false, fmt.Errorf("failed to list credentials: %w", err)
+		return false, fmt.Errorf("failed to list credentials: %w", err)
 	}
-	i := slices.IndexFunc(creds, func(c ai.CredentialInfo) bool { return c.ProviderID == provider })
-	if i < 0 {
-		return "", false, nil
-	}
-	return creds[i].Type, true, nil
+	return slices.ContainsFunc(creds, func(c ai.CredentialInfo) bool { return c.ProviderID == provider }), nil
 }
 
 // Login signs in to the provider's account or stores an API key for it,
@@ -149,7 +145,7 @@ func (r *Runtime) Login(ctx context.Context, provider string, in io.Reader, out 
 // Logout deletes the provider's credential from Kopi's store. PiG's logout
 // deletes without checking, so the credential is looked up first.
 func (r *Runtime) Logout(ctx context.Context, provider string) error {
-	_, ok, err := r.storedCredential(ctx, provider)
+	ok, err := r.storedCredential(ctx, provider)
 	if err != nil {
 		return err
 	}
@@ -330,6 +326,10 @@ func (l *loginIO) readSecret(ctx context.Context, p ai.AuthSecretPrompt) (string
 	}()
 	select {
 	case res := <-done:
+		// In raw mode the editor reports Ctrl-C, and Ctrl-D on an empty line, as EOF.
+		if errors.Is(res.err, io.EOF) {
+			return "", context.Canceled
+		}
 		if res.err != nil {
 			return "", fmt.Errorf("failed to read login input: %w", res.err)
 		}

@@ -1,14 +1,12 @@
 package pigruntime
 
 import (
-	"encoding/json"
 	"fmt"
 	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/MichaelKinsy/PiG/ai"
@@ -67,20 +65,23 @@ func TestIdentifyLeavesNativeProviderAlone(t *testing.T) {
 	assert.NotNil(t, r.svcs.ModelRuntime().GetRegisteredNativeProvider(fauxProvider))
 }
 
-func TestIdentifyConfiguredModelHeadersOverrideProviderIdentityCaseInsensitively(t *testing.T) {
+func TestIdentifyLeavesConfiguredProviderIdentityCaseInsensitively(t *testing.T) {
 	t.Setenv("KOPI_UNSET_IDENTITY_TEST", "")
 	require.NoError(t, os.Unsetenv("KOPI_UNSET_IDENTITY_TEST"))
 	for _, tc := range []struct {
 		name, headers string
+		// unresolved marks values that fail at request resolution, which
+		// identify must never reach.
+		unresolved bool
 	}{
-		{"lowercase", `"user-agent":"provider-agent","originator":"provider-origin"`},
-		{"mixed case", `"uSeR-aGeNt":"provider-agent","Originator":"provider-origin"`},
-		{"duplicate case", `"User-Agent":"earlier-agent","user-agent":"provider-agent","originator":"earlier-origin","Originator":"provider-origin"`},
-		{"reversed duplicate case", `"user-agent":"earlier-agent","User-Agent":"provider-agent","Originator":"earlier-origin","originator":"provider-origin"`},
-		{"unset environment", `"user-agent":"$KOPI_UNSET_IDENTITY_TEST","Originator":"$KOPI_UNSET_IDENTITY_TEST"`},
-		{"failing command", `"user-agent":"!exit 73","Originator":"!exit 74"`},
-		{"duplicate unresolved values", `"User-Agent":"$KOPI_UNSET_IDENTITY_TEST","user-agent":"!exit 73","originator":"!exit 74","Originator":"$KOPI_UNSET_IDENTITY_TEST"`},
-		{"reversed duplicate unresolved values", `"user-agent":"!exit 73","User-Agent":"$KOPI_UNSET_IDENTITY_TEST","Originator":"$KOPI_UNSET_IDENTITY_TEST","originator":"!exit 74"`},
+		{"lowercase", `"user-agent":"provider-agent","originator":"provider-origin"`, false},
+		{"mixed case", `"uSeR-aGeNt":"provider-agent","Originator":"provider-origin"`, false},
+		{"duplicate case", `"User-Agent":"earlier-agent","user-agent":"provider-agent","originator":"earlier-origin","Originator":"provider-origin"`, false},
+		{"reversed duplicate case", `"user-agent":"earlier-agent","User-Agent":"provider-agent","Originator":"earlier-origin","originator":"provider-origin"`, false},
+		{"unset environment", `"user-agent":"$KOPI_UNSET_IDENTITY_TEST","Originator":"$KOPI_UNSET_IDENTITY_TEST"`, true},
+		{"failing command", `"user-agent":"!exit 73","Originator":"!exit 74"`, true},
+		{"duplicate unresolved values", `"User-Agent":"$KOPI_UNSET_IDENTITY_TEST","user-agent":"!exit 73","originator":"!exit 74","Originator":"$KOPI_UNSET_IDENTITY_TEST"`, true},
+		{"reversed duplicate unresolved values", `"user-agent":"!exit 73","User-Agent":"$KOPI_UNSET_IDENTITY_TEST","Originator":"$KOPI_UNSET_IDENTITY_TEST","originator":"!exit 74"`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sb := newSandbox(t)
@@ -89,35 +90,25 @@ func TestIdentifyConfiguredModelHeadersOverrideProviderIdentityCaseInsensitively
 			mr := r.svcs.ModelRuntime()
 			before := mr.GetAllModels("kopi-codex")
 			require.Len(t, before, 3)
-			wantRegistration := map[string]string{}
-			require.NoError(t, json.Unmarshal([]byte("{"+tc.headers+"}"), &wantRegistration))
-			for key := range wantRegistration {
-				if strings.EqualFold(key, "User-Agent") {
-					wantRegistration[key] = kopiUserAgent
-				} else {
-					wantRegistration[key] = "kopi"
-				}
-			}
 			for range 2 {
 				require.NoError(t, r.identify("kopi-codex"))
-				cfg := mr.GetRegisteredProviderConfig("kopi-codex")
-				require.NotNil(t, cfg)
-				assert.Equal(t, wantRegistration, cfg.Headers)
-				assert.Empty(t, cfg.Models)
+				assert.Nil(t, mr.GetRegisteredProviderConfig("kopi-codex"), "the configured identity is not overridden")
 				after := mr.GetAllModels("kopi-codex")
 				require.Len(t, after, len(before))
 				for i, model := range after {
 					original, current := *before[i].(*ai.Model), *model.(*ai.Model)
-					// Registration rebinds the execution backend, not catalog metadata.
-					original.Provider, current.Provider = nil, nil
 					assert.Equal(t, original, current, "catalog fields remain unchanged")
 					configured, err := mr.GetCompatibilityRequestConfig(model.(*ai.Model))
+					if tc.unresolved {
+						require.Error(t, err, "configured values are deferred until request resolution")
+						continue
+					}
 					require.NoError(t, err)
 					headers := http.Header{}
 					for key, value := range configured.Headers {
 						headers.Add(key, *value)
 					}
-					wantAgent, wantOrigin := kopiUserAgent, "kopi"
+					wantAgent, wantOrigin := "provider-agent", "provider-origin"
 					if model.ModelID() == "explicit" {
 						wantAgent, wantOrigin = "model-agent", "model-origin"
 						auth, err := mr.GetModelAuth(t.Context(), model)
@@ -138,6 +129,39 @@ func TestIdentifyConfiguredModelHeadersOverrideProviderIdentityCaseInsensitively
 			}
 		})
 	}
+}
+
+func TestIdentifyRegistersOnlyUnconfiguredIdentity(t *testing.T) {
+	sb := newSandbox(t)
+	// PiG accepts a BOM, comments and trailing commas in models.json.
+	writeAgentFile(t, sb, "models.json", "\uFEFF"+`{
+	// A user's own identity for this provider.
+	"providers": {"kopi-codex": {"baseUrl": "http://127.0.0.1:1/v1", "api": "openai-codex-responses", "apiKey": "synthetic-key",
+		"headers": {"user-agent": "!exit 73",},
+		"models": [{"id": "codex-1"},],
+	},},
+}`)
+	r, _ := newTestRuntime(t, sb)
+	mr := r.svcs.ModelRuntime()
+	require.NotNil(t, mr.GetModel("kopi-codex", "codex-1"), "PiG loaded the file")
+
+	require.NoError(t, r.identify("kopi-codex"))
+
+	cfg := mr.GetRegisteredProviderConfig("kopi-codex")
+	require.NotNil(t, cfg)
+	assert.Equal(t, map[string]string{"originator": "kopi"}, cfg.Headers)
+}
+
+func TestIdentifyIgnoresUnparsableModelsFile(t *testing.T) {
+	sb := newSandbox(t)
+	writeAgentFile(t, sb, "models.json", `{"providers":{"openai-codex":{"headers":{"User-Agent":"user-agent"`)
+	r, _ := newTestRuntime(t, sb)
+
+	require.NoError(t, r.identify("openai-codex"))
+
+	cfg := r.svcs.ModelRuntime().GetRegisteredProviderConfig("openai-codex")
+	require.NotNil(t, cfg)
+	assert.Equal(t, map[string]string{"User-Agent": kopiUserAgent, "originator": "kopi"}, cfg.Headers)
 }
 
 func TestIdentifyDoesNotResolveUnrelatedProviderHeaders(t *testing.T) {
