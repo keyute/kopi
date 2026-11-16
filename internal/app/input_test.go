@@ -78,12 +78,13 @@ func TestMatch(t *testing.T) {
 	assert.Equal(t, []Candidate{{Value: "src/a.go"}}, Match(Query{Kind: KindReference, Text: "src/"}, dirs))
 
 	sessions := []Candidate{
-		{Value: "0a1b2c3d", Description: "2026-11-01 10:00:00  fix the parser"},
-		{Value: "4e5f6a7b", Description: "2026-11-02 11:00:00  add tests"},
+		{Value: "0a1b2c3d", Label: "2026-11-01 10:00:00", Description: "fix the parser"},
+		{Value: "4e5f6a7b", Label: "2026-11-02 11:00:00", Description: "add tests"},
 	}
 	assert.Equal(t, sessions[1:], Match(Query{Kind: KindArgument, Text: "tests"}, sessions))
 	assert.Equal(t, sessions[:1], Match(Query{Kind: KindArgument, Text: "parser"}, sessions))
-	assert.Equal(t, sessions[1:], Match(Query{Kind: KindArgument, Text: "4e5f"}, sessions))
+	assert.Equal(t, sessions[1:], Match(Query{Kind: KindArgument, Text: "11-02"}, sessions))
+	assert.Empty(t, Match(Query{Kind: KindArgument, Text: "4e5f"}, sessions), "the hidden ID does not match")
 	assert.Empty(t, Match(Query{Kind: KindCommand, Text: "tests"}, sessions))
 }
 

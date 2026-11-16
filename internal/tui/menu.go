@@ -148,7 +148,7 @@ func (m *model) menuRows() []string {
 	labels := make([]string, n)
 	labelW, described := 0, false
 	for i, cd := range window {
-		labels[i] = oneLine(cd.Value)
+		labels[i] = oneLine(cd.Shown())
 		if mn.kind == app.KindCommand {
 			labels[i] = "/" + labels[i]
 		}

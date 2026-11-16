@@ -6,8 +6,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	"github.com/keyute/kopi/internal/pigruntime"
 )
 
 type Command struct {
@@ -87,12 +85,8 @@ func (c *Controller) sessionCandidates() ([]Candidate, error) {
 	}
 	out := make([]Candidate, 0, len(sessions))
 	for _, s := range sessions {
-		out = append(out, Candidate{Value: s.ID, Description: describeSession(s)})
+		first, _, _ := strings.Cut(s.FirstMessage, "\n")
+		out = append(out, Candidate{Value: s.ID, Label: s.Modified.Local().Format(time.DateTime), Description: first})
 	}
 	return out, nil
-}
-
-func describeSession(s pigruntime.SessionInfo) string {
-	first, _, _ := strings.Cut(s.FirstMessage, "\n")
-	return s.Modified.Local().Format(time.DateTime) + "  " + first
 }

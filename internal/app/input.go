@@ -115,11 +115,16 @@ func QueryAt(text string, line, col int) (Query, bool) {
 	return Query{}, false
 }
 
-// Candidate is one completion: Value is inserted, Description is shown beside it.
-type Candidate struct{ Value, Description string }
+// Candidate is one completion: Value is inserted, Label is shown in its place
+// when set, and Description is shown beside it.
+type Candidate struct{ Value, Label, Description string }
 
-// Match is the candidates matching q.Text, best first; all of them in order when q.Text is empty.
-// An argument also matches on its description, ranked by the better of the two.
+// Shown is what the menu displays for c.
+func (c Candidate) Shown() string { return cmp.Or(c.Label, c.Value) }
+
+// Match is the candidates matching q.Text on what they show, best first; all of
+// them in order when q.Text is empty. An argument also matches on its
+// description, ranked by the better of the two.
 // For a reference it leaves out the directory q.Text names exactly.
 func Match(q Query, cs []Candidate) []Candidate {
 	if q.Text == "" {
@@ -127,7 +132,7 @@ func Match(q Query, cs []Candidate) []Candidate {
 	}
 	values := make([]string, 0, len(cs))
 	for _, c := range cs {
-		values = append(values, c.Value)
+		values = append(values, c.Shown())
 	}
 	matches := fuzzy.Find(q.Text, values)
 	if q.Kind == KindArgument {

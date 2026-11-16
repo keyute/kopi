@@ -44,6 +44,7 @@ func TestArgumentsListsSessionsForResume(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, cs, 1)
 	assert.Equal(t, h.c.Status().SessionID, cs[0].Value)
+	assert.NotEmpty(t, cs[0].Label)
 	assert.Contains(t, cs[0].Description, "first line")
 	assert.NotContains(t, cs[0].Description, "second line")
 

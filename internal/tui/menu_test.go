@@ -28,8 +28,8 @@ func newMenuModel(t *testing.T, width, height int) (*model, *fakeController) {
 		{Name: "quit", Summary: "exit kopi"},
 	}
 	c.args = map[string][]app.Candidate{"resume": {
-		{Value: "abc123", Description: "2h ago  fix the bug"},
-		{Value: "def456", Description: "1d ago  add tests"},
+		{Value: "abc123", Label: "2h ago", Description: "fix the bug"},
+		{Value: "def456", Label: "1d ago", Description: "add tests"},
 	}}
 	c.files = []app.Candidate{{Value: "a.go"}, {Value: "dir/"}, {Value: "dir/b.go"}, {Value: "my file.txt"}}
 	return m, c
@@ -121,7 +121,7 @@ func TestTabFillsCommandThenListsItsArguments(t *testing.T) {
 		settle(m, press(m, tab))
 
 		assert.Equal(t, "/resume ", m.composer.value())
-		assert.Equal(t, []string{"❭ abc123      2h ago  fix the bug", "  def456      1d ago  add tests"}, menuText(m))
+		assert.Equal(t, []string{"❭ 2h ago      fix the bug", "  1d ago      add tests"}, menuText(m))
 
 		press(m, down)
 		settle(m, press(m, enter))
@@ -151,7 +151,7 @@ func TestEnterOnCommandWithArgumentFillsItIn(t *testing.T) {
 
 		assert.Empty(t, c.submitted)
 		assert.Equal(t, "/resume ", m.composer.value())
-		assert.Equal(t, []string{"❭ abc123      2h ago  fix the bug", "  def456      1d ago  add tests"}, menuText(m))
+		assert.Equal(t, []string{"❭ 2h ago      fix the bug", "  1d ago      add tests"}, menuText(m))
 	})
 }
 
