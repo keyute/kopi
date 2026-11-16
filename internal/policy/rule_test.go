@@ -9,7 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var testTools = []string{"Read", "Edit", "Write"}
+var testTools = map[string]ToolSpec{
+	"Read":  {Capability: Read, Target: pathTarget},
+	"Edit":  {Capability: Write, Target: pathTarget},
+	"Write": {Capability: Write, Target: pathTarget},
+}
 
 type dirs struct{ ws, home string }
 
@@ -43,6 +47,18 @@ func TestNewRulesRejectsUnknownToolNamingRuleAndSource(t *testing.T) {
 	_, err := NewRules(d.ws, d.home, testTools, Source{Name: "config", Deny: []string{"Bash"}})
 	require.ErrorIs(t, err, ErrInvalidRule)
 	assert.Contains(t, err.Error(), `config: rule "Bash": unknown tool "Bash"`)
+}
+
+func TestNewRulesRejectsPathRuleForPathlessTool(t *testing.T) {
+	d := newDirs(t)
+	tools := map[string]ToolSpec{"Read": {Capability: Read, Target: pathTarget}, "Exec": {Capability: Exec}}
+	for _, text := range []string{"Exec(ls)", "Exec(!x)"} {
+		_, err := NewRules(d.ws, d.home, tools, Source{Name: "config", Ask: []string{text}})
+		require.ErrorIs(t, err, ErrInvalidRule, text)
+		assert.Contains(t, err.Error(), `config: rule "`+text+`": tool "Exec" takes no path`)
+	}
+	_, err := NewRules(d.ws, d.home, tools, Source{Name: "config", Allow: []string{"Exec"}, Deny: []string{"*(x)"}})
+	assert.NoError(t, err)
 }
 
 func TestNewRulesRejectsMalformedRuleNamingSource(t *testing.T) {
@@ -124,7 +140,7 @@ func TestRuleGovernsOnlyItsTool(t *testing.T) {
 		assert.Equal(t, want, eff, tool)
 	}
 	r = d.rules(t, Source{Name: "config", Deny: []string{"*(.env)"}})
-	for _, tool := range testTools {
+	for tool := range testTools {
 		eff, text, _ := r.decide(tool, env)
 		assert.Equal(t, effectDeny, eff, tool)
 		assert.Equal(t, "*(.env)", text)
@@ -228,7 +244,7 @@ func TestRemovesOnlyForBareDeny(t *testing.T) {
 	assert.False(t, r.Removes("Write"))
 
 	all := d.rules(t, Source{Name: "config", Deny: []string{"*"}})
-	for _, tool := range testTools {
+	for tool := range testTools {
 		assert.True(t, all.Removes(tool), tool)
 	}
 	assert.False(t, d.rules(t, Source{Name: "config", Deny: []string{"*(.env)"}}).Removes("Read"))

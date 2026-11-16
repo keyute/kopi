@@ -98,7 +98,7 @@ func TestApprovalAllowEditsSkipsLaterPrompts(t *testing.T) {
 }
 
 func TestApprovalNoInterruptsTurnAndModelSeesRejection(t *testing.T) {
-	rules, err := policy.NewRules(t.TempDir(), t.TempDir(), []string{"Edit", "Write"}, policy.Source{Name: "test", Allow: []string{"Write"}})
+	rules, err := policy.NewRules(t.TempDir(), t.TempDir(), map[string]policy.ToolSpec{"Edit": {}, "Write": {}}, policy.Source{Name: "test", Allow: []string{"Write"}})
 	require.NoError(t, err)
 	h, sb := editHarness(t, Config{Rules: rules})
 	approvals, ended := subscribeTo[event.ApprovalRequested](h.c), subscribeTo[event.ApprovalEnded](h.c)

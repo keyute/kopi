@@ -133,6 +133,53 @@ func TestDefaultAsks(t *testing.T) {
 	}
 }
 
+// sandboxedGate is a gate with one Sandboxed exec tool, Shell, and rules that
+// may name it.
+func sandboxedGate(t *testing.T, approve Approver, src Source) (*Authority, *Gate) {
+	t.Helper()
+	specs := map[string]ToolSpec{"Shell": {Capability: Exec, Sandboxed: true}}
+	d := newDirs(t)
+	rules, err := NewRules(d.ws, d.home, specs, src)
+	require.NoError(t, err)
+	a := NewAuthority()
+	return a, NewGate(a, specs, rules, approve)
+}
+
+func TestSandboxedRunsWithoutAskingInExecute(t *testing.T) {
+	a, g := sandboxedGate(t, nil, Source{Name: "config"})
+	a.EnterExecute()
+	require.NoError(t, g.Before(t.Context(), "c1", "Shell", nil))
+	assert.NoError(t, admitApproved(g, "c1", "Shell"))
+
+	f := &approver{answer: Reject}
+	a, g = sandboxedGate(t, f.approve, Source{Name: "config"})
+	a.EnterExecute()
+	require.NoError(t, g.Before(t.Context(), "c1", "Shell", nil))
+	assert.Empty(t, f.reqs)
+}
+
+func TestSandboxedStillObeysRulesAndPlan(t *testing.T) {
+	f := &approver{answer: Allow}
+	a, g := sandboxedGate(t, f.approve, Source{Name: "config", Ask: []string{"Shell"}})
+	a.EnterExecute()
+	require.NoError(t, g.Before(t.Context(), "c1", "Shell", nil))
+	assert.Equal(t, []Request{{CallID: "c1", Tool: "Shell", Rule: "Shell (config)"}}, f.reqs)
+
+	f = &approver{answer: Allow}
+	a, g = sandboxedGate(t, f.approve, Source{Name: "config", Deny: []string{"Shell"}})
+	a.EnterExecute()
+	err := g.Before(t.Context(), "c1", "Shell", nil)
+	require.ErrorIs(t, err, ErrDenied)
+	assert.Contains(t, err.Error(), "Shell (config)")
+	assert.Empty(t, f.reqs)
+
+	_, g = sandboxedGate(t, f.approve, Source{Name: "config", Allow: []string{"Shell"}})
+	err = g.Before(t.Context(), "c1", "Shell", nil)
+	require.ErrorIs(t, err, ErrDenied)
+	assert.Contains(t, err.Error(), "needs execute mode")
+	assert.Empty(t, f.reqs)
+}
+
 func TestAskRuleOffersNoEdits(t *testing.T) {
 	d := newDirs(t)
 	f := &approver{answer: Allow}

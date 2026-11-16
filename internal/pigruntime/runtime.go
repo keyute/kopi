@@ -109,7 +109,7 @@ type OpenOptions struct {
 func (r *Runtime) Open(ctx context.Context, o OpenOptions) (*Session, error) {
 	specs := make(map[string]policy.ToolSpec, len(o.Tools))
 	for _, t := range o.Tools {
-		specs[t.Name] = policy.ToolSpec{Capability: t.Capability, Target: t.Target}
+		specs[t.Name] = policy.ToolSpec{Capability: t.Capability, Target: t.Target, Sandboxed: t.Sandboxed}
 	}
 	return r.open(ctx, o, policy.NewGate(o.Authority, specs, o.Rules, o.Approve))
 }

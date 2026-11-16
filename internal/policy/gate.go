@@ -18,6 +18,9 @@ type ToolSpec struct {
 	Capability Capability
 	// Target is nil for a tool that acts on no path.
 	Target func(args json.RawMessage) (Target, error)
+	// Sandboxed reports that the OS confines what a call can do, so a call no
+	// rule matches runs without asking.
+	Sandboxed bool
 }
 
 type Answer int
@@ -102,7 +105,7 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 		}
 	case effectAllow:
 	default:
-		if spec.Capability != Read && (spec.Capability != Write || !g.editsGranted()) {
+		if spec.Capability != Read && !spec.Sandboxed && (spec.Capability != Write || !g.editsGranted()) {
 			req.Edits = spec.Capability == Write
 			allow := tool
 			if target != nil {

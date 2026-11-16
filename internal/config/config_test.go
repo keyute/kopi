@@ -27,6 +27,7 @@ func withDefaults(c Config) Config {
 	c.Keys = DefaultKeys()
 	c.StatusLine = DefaultStatusLine()
 	c.Permissions = Permissions{Allow: []string{}, Ask: []string{}, Deny: []string{}}
+	c.Sandbox = Sandbox{AllowWrite: []string{}, DenyRead: []string{}}
 	return c
 }
 
@@ -220,6 +221,11 @@ func TestResolveRejectsInvalidUIValueNamingLayer(t *testing.T) {
 		{"non-string rule", `{"permissions": {"ask": [5]}}`},
 		{"permissions not an object", `{"permissions": ["Read"]}`},
 		{"null permissions", `{"permissions": null}`},
+		{"null sandbox enabled", `{"sandbox": {"enabled": null}}`},
+		{"string sandbox enabled", `{"sandbox": {"enabled": "true"}}`},
+		{"string sandbox network", `{"sandbox": {"network": "true"}}`},
+		{"null sandbox list", `{"sandbox": {"allowWrite": null}}`},
+		{"null sandbox", `{"sandbox": null}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			global := globalLayer(t, tc.content)
@@ -262,11 +268,49 @@ func TestPermissionListsReplaceAcrossLayers(t *testing.T) {
 	assert.Equal(t, "default", r.Origins["permissions.ask"])
 }
 
+func TestResolveSandboxEnabled(t *testing.T) {
+	r, err := Resolve(Defaults())
+	require.NoError(t, err)
+	assert.Nil(t, r.Config.Sandbox.Enabled)
+	assert.NotContains(t, r.Origins, "sandbox.enabled")
+
+	for _, enabled := range []bool{true, false} {
+		global := globalLayer(t, fmt.Sprintf(`{"sandbox": {"enabled": %t}}`, enabled))
+		r, err := Resolve(Defaults(), global)
+		require.NoError(t, err)
+		require.NotNil(t, r.Config.Sandbox.Enabled)
+		assert.Equal(t, enabled, *r.Config.Sandbox.Enabled)
+		assert.Equal(t, global.Name, r.Origins["sandbox.enabled"])
+	}
+}
+
+func TestResolveRejectsEmptySandboxPathNamingLayerAndIndex(t *testing.T) {
+	for _, key := range []string{"allowWrite", "denyRead"} {
+		t.Run(key, func(t *testing.T) {
+			global := globalLayer(t, fmt.Sprintf(`{"sandbox": {%q: ["~/.cache", ""]}}`, key))
+			_, err := Resolve(Defaults(), global)
+			require.ErrorIs(t, err, ErrInvalidValue)
+			assert.Contains(t, err.Error(), global.Name)
+			assert.Contains(t, err.Error(), "sandbox."+key+"[1]")
+		})
+	}
+}
+
+func TestSandboxListsReplaceAcrossLayers(t *testing.T) {
+	global := globalLayer(t, `{"sandbox": {"allowWrite": ["~/.cache", "/tmp/x"], "denyRead": ["~/.aws"], "network": true}}`)
+	r, err := Resolve(Defaults(), global, Map("flags", map[string]any{"sandbox": map[string]any{"allowWrite": []any{"/var/y"}}}))
+	require.NoError(t, err)
+	assert.Equal(t, Sandbox{AllowWrite: []string{"/var/y"}, DenyRead: []string{"~/.aws"}, Network: true}, r.Config.Sandbox)
+	assert.Equal(t, "flags", r.Origins["sandbox.allowWrite"])
+	assert.Equal(t, global.Name, r.Origins["sandbox.denyRead"])
+	assert.Equal(t, global.Name, r.Origins["sandbox.network"])
+}
+
 func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	r, err := Resolve(Defaults())
 	require.NoError(t, err)
 	entries := r.Entries()
-	assert.Len(t, entries, 8+len(KeyActions))
+	assert.Len(t, entries, 12+len(KeyActions))
 	assert.IsIncreasing(t, entryKeys(entries))
 	assert.Contains(t, entries, Entry{Key: "model", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "version", Value: "1", Origin: "default"})
@@ -278,12 +322,17 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "permissions.allow", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "permissions.ask", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "permissions.deny", Value: "[]", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "sandbox.enabled", Value: "", Origin: "unset"})
+	assert.Contains(t, entries, Entry{Key: "sandbox.allowWrite", Value: "[]", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "sandbox.denyRead", Value: "[]", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "sandbox.network", Value: "false", Origin: "default"})
 
 	r, err = Resolve(Defaults(), Map("flags", map[string]any{
 		"model":       "a/b",
 		"mode":        "execute",
 		"statusline":  map[string]any{"right": []any{}},
 		"permissions": map[string]any{"deny": []any{"Read(.env)", "*(~/.ssh)"}},
+		"sandbox":     map[string]any{"enabled": false, "denyRead": []any{"~/.aws"}, "network": true},
 	}))
 	require.NoError(t, err)
 	entries = r.Entries()
@@ -292,6 +341,10 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "statusline.right", Value: "[]", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "permissions.deny", Value: `["Read(.env)","*(~/.ssh)"]`, Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "permissions.allow", Value: "[]", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "sandbox.enabled", Value: "false", Origin: "flags"})
+	assert.Contains(t, entries, Entry{Key: "sandbox.denyRead", Value: `["~/.aws"]`, Origin: "flags"})
+	assert.Contains(t, entries, Entry{Key: "sandbox.network", Value: "true", Origin: "flags"})
+	assert.Contains(t, entries, Entry{Key: "sandbox.allowWrite", Value: "[]", Origin: "default"})
 }
 
 func entryKeys(entries []Entry) []string {

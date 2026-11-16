@@ -14,6 +14,8 @@ type Tool struct {
 	Capability policy.Capability
 	// Target is nil for a tool that acts on no path.
 	Target func(args json.RawMessage) (policy.Target, error)
+	// Sandboxed reports that the OS confines what the tool's calls can do.
+	Sandboxed bool
 	// Run must acquire a nonmutating operation, call admit with its bound
 	// target before reading content or modifying files, and use that operation.
 	Run     func(ctx context.Context, args json.RawMessage, admit func(policy.Target) error) (string, error)
