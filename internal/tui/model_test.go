@@ -43,6 +43,10 @@ type fakeController struct {
 	histories  int
 	subscriber func(event.Event)
 	answers    []answer
+	commands   []app.Command
+	args       map[string][]app.Candidate
+	files      []app.Candidate
+	filesErr   error
 }
 
 type answer struct {
@@ -95,6 +99,12 @@ func (f *fakeController) Interrupt() bool {
 }
 
 func (f *fakeController) Status() app.Status { return f.status }
+
+func (f *fakeController) Commands() []app.Command { return f.commands }
+
+func (f *fakeController) Arguments(name string) ([]app.Candidate, error) { return f.args[name], nil }
+
+func (f *fakeController) Files() ([]app.Candidate, error) { return f.files, f.filesErr }
 
 // testOptions are the options config's defaults resolve to.
 func testOptions() Options {
@@ -909,6 +919,26 @@ func TestApprovalEnterAnswersTheSelectedOption(t *testing.T) {
 
 	assert.Equal(t, []answer{{1, policy.AllowEdits}}, c.answers)
 	assert.Contains(t, screen(m), "❯ 2. Yes, allow all edits this session", "the prompt stays until it ends")
+}
+
+func TestApprovalFollowsReboundMenuKeys(t *testing.T) {
+	opts := testOptions()
+	opts.Keys["menu-up"] = []string{"ctrl+p"}
+	opts.Keys["menu-down"] = []string{"ctrl+n"}
+	m, c := newTestModelWith(t, 60, 30, opts)
+	send(m, editApproval())
+
+	press(m, tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	press(m, tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	press(m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	assert.Contains(t, screen(m), "❯ 2. Yes, allow all edits this session")
+
+	press(m, down)
+	press(m, up)
+	press(m, up)
+	assert.Contains(t, screen(m), "❯ 2. Yes, allow all edits this session", "the arrow keys are unbound")
+	press(m, enter)
+	assert.Equal(t, []answer{{1, policy.AllowEdits}}, c.answers)
 }
 
 func TestApprovalDigitAnswersDirectly(t *testing.T) {

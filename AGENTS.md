@@ -23,13 +23,21 @@
 ## Authority
 
 - Every model-facing tool goes through `internal/policy`: `Gate.Before` in the pre-dispatch hook and `Gate.Admit` inside execution.
-- Only human control input changes mode. Sessions start and resume in the configured `mode` (default plan); `--mode` overrides it for the session the process opens.
-- File-modifying tools act only through `tool.Workspace` (os.Root confinement, protected stores refused before any side effect) and the permission rules. Never add a shell without an OS sandbox.
+- Only human control input changes mode. Sessions start and resume in the configured `mode` (default plan); `--mode` overrides the config file.
+- File-modifying tools act only through `tool.Workspace` (os.Root confinement, Kopi's home refused before any side effect) and the permission rules. Never add a shell without an OS sandbox.
 
 ## State
 
 - Kopi reads and writes only under its home (`$KOPI_HOME`, default `~/.kopi`). Never read or write `~/.pi`, `~/.pig`, `~/.claude` or any other tool's store, in code or in tests.
 - Tests use `t.TempDir()`, synthetic credentials and no network, and synchronise on channels, never sleeps.
+
+## Built in or configured
+
+- The binary owns how Kopi works: mechanics, tool contracts and their limits, model-facing text about Kopi's own tools, the default look, and protection of Kopi's home and of the gate itself. These are constants, not config keys.
+- The binary assumes nothing that differs from one user's machine to the next: no built-in list of paths outside Kopi's home, other tools' stores, credential locations, providers, models or personal rules. The user states those in `config.json`.
+- A behaviour users reasonably set differently is a `config.json` key with its default in `config.Defaults()`. A flag that overrides a key is a config layer over the file, never a separate code path.
+- Add a key only for a setting someone needs to change, never to move mechanics out of the binary.
+- When it is unclear which side something is on, check what peer agents build in and follow the majority.
 
 ## Style
 

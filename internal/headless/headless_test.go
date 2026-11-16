@@ -44,10 +44,10 @@ func startRun(t *testing.T, sb pigruntimetest.Sandbox, cfg app.Config, mode poli
 	rt := pigruntimetest.NewRuntime(t, sb)
 	faux, model := pigruntimetest.RegisterFaux(t, rt, "kopi-faux")
 	faux.SetResponses(steps)
-	cfg.Model, cfg.Workspace, cfg.JoinTimeout, cfg.Unattended = model, sb.Workspace, waitLimit, true
+	cfg.Model, cfg.Workspace, cfg.JoinTimeout, cfg.Unattended, cfg.Mode = model, sb.Workspace, waitLimit, true, mode
 	c := app.NewController(rt, cfg)
 	t.Cleanup(func() { assert.NoError(t, c.Close(context.Background())) })
-	require.NoError(t, c.Open(t.Context(), app.OpenRequest{Mode: mode}))
+	require.NoError(t, c.Open(t.Context(), app.OpenRequest{}))
 	ctx, cancel := context.WithCancel(t.Context())
 	h := &harness{c: c, out: &bytes.Buffer{}, interrupts: make(chan os.Signal), cancel: cancel, result: make(chan error, 1)}
 	f := New(c, prompt, h.out)

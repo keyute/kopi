@@ -75,7 +75,7 @@ func rootCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&cont, "continue", "c", false, "continue the most recent session in this directory")
 	cmd.Flags().StringVarP(&resumeID, "resume", "r", "", "resume the session with this id")
 	cmd.Flags().BoolVarP(&printOnly, "print", "p", false, "print the response to one prompt and exit")
-	cmd.Flags().String("mode", "", "mode the session starts in, overriding the config file: plan or execute")
+	cmd.PersistentFlags().String("mode", "", "mode sessions start in: plan or execute (overrides the config file)")
 	cmd.Flags().StringArrayVar(&allowed, "allowed-tools", nil, "permission rules to allow, comma-separated or repeated, e.g. \"Edit(docs/**)\"")
 	cmd.Flags().StringArrayVar(&disallowed, "disallowed-tools", nil, "permission rules to deny, comma-separated or repeated")
 	cmd.MarkFlagsMutuallyExclusive("continue", "resume")
@@ -191,6 +191,13 @@ func resolveConfig(cmd *cobra.Command, paths config.Paths) (*config.Resolved, er
 		}
 		flags["model"] = model
 	}
+	if cmd.Flags().Changed("mode") {
+		mode, err := cmd.Flags().GetString("mode")
+		if err != nil {
+			return nil, err
+		}
+		flags["mode"] = mode
+	}
 	return config.Resolve(config.Defaults(), global, config.Map("flags", flags))
 }
 
@@ -237,18 +244,6 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	mode, err := policy.ParseMode(resolved.Config.Mode)
 	if err != nil {
 		return err
-	}
-	// The flag overrides only the session the process opens; /new and /resume
-	// start in the configured mode.
-	req.Mode = mode
-	if cmd.Flags().Changed("mode") {
-		name, err := cmd.Flags().GetString("mode")
-		if err != nil {
-			return err
-		}
-		if req.Mode, err = policy.ParseMode(name); err != nil {
-			return fmt.Errorf("failed to parse --mode: %w", err)
-		}
 	}
 	fullscreen := !printOnly && isTerminal(cmd.InOrStdin()) && isTerminal(cmd.OutOrStdout())
 	var prompt string
@@ -309,7 +304,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		}
 	}()
 	// Only the fullscreen interface has a human to answer approvals.
-	cfg := app.Config{Model: model, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode}
+	cfg := app.Config{Model: model, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws}
 	// Only the fullscreen interface records prompts.
 	if fullscreen {
 		store, err := history.Open(paths.HistoryFile, cwd, historyLimit)

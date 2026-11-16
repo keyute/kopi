@@ -24,10 +24,8 @@ Commands in the fullscreen interface:
 | --- | --- |
 | `/plan` | Switch to plan mode |
 | `/execute` | Switch to execute mode |
-| `/status` | Show mode, model, session, running work and tools |
 | `/new` | Start a new session |
-| `/resume [id]` | Resume a session, or list this directory's sessions |
-| `/help` | List commands |
+| `/resume <id>` | Resume a session |
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
 
@@ -43,6 +41,10 @@ Keys in the fullscreen interface (defaults, see Configuration):
 - Ctrl+Enter sends now: it stops the current response and continues the turn with the queued messages plus the draft.
 - Alt+Enter, Shift+Enter or Ctrl+J inserts a newline. Ctrl+Enter and Shift+Enter need a terminal that reports modified Enter.
 - Up at the top of the input pulls queued messages back into it for editing; with nothing queued it browses input history, and Down goes back.
+- `/` at the start of the input lists commands; picking `/resume` from the menu lists this directory's sessions, which you filter by date or first message.
+- `@` at the start of the input or after a space lists files and directories under the start directory, leaving out `.git`, anything a `.gitignore` in the start directory or below ignores and Kopi's home.
+- While that menu shows, Up and Down choose, Tab fills in, Enter fills in and runs a command (a command that takes an argument, or a file reference, is only filled in), and Esc closes the menu.
+- Known commands and `@` references are highlighted in the input. An `@path` is sent as written; a space in an inserted path is written `\ `.
 - Esc interrupts the running turn.
 - Ctrl+C interrupts the running turn, else clears the draft, else a second press within two seconds exits.
 - After an interrupt, queued messages return to the input; `/new`, `/resume` and exiting discard them.
@@ -106,6 +108,9 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `paste` | `ctrl+v` |
 | `history-prev`, `history-next` | `up`, `down` |
 | `queue-edit` | `up` |
+| `complete` | `tab` |
+| `menu-up`, `menu-down` | `up`, `down` |
+| `menu-close` | `esc` |
 | `expand-all` | `ctrl+o` |
 | `page-up`, `page-down` | `pgup`, `pgdown` |
 
@@ -115,7 +120,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 ## Modes and tools
 
 - Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab. Plan mode allows only `Read`.
-- Sessions start and resume in the configured `mode` (default plan), including ones opened with `/new` and `/resume`; `--mode` overrides it for the session the process opens.
+- Sessions start and resume in the configured `mode` (default plan), including ones opened with `/new` and `/resume`; `--mode` overrides the config file.
 - `Read` reads text files inside the start directory: up to 2000 lines, 2000 characters per line and 100 KiB per call; binary files and directories are refused.
 - `Write` creates a file or replaces its whole content; `Edit` replaces a string that must match exactly once unless `replace_all` is set, in a text file of up to 10 MiB. Both work inside the start directory, replace the file atomically and keep its mode.
 - All three refuse Kopi's home, including paths there that do not exist yet.
@@ -141,7 +146,7 @@ Permission rules in `config.json` allow, ask about or deny calls:
 - `--allowed-tools` and `--disallowed-tools` add allow and deny rules to the config's; each is repeatable and takes comma-separated rules (commas inside `()` or `{}` do not split).
 - A rule's path counts as a match on either the path as written or its resolved target when it denies, asks or exempts from an allow, and only on both when it allows or exempts from a deny or ask.
 
-The fullscreen interface asks before a call that needs approval, showing the change: `Yes`, `Yes, allow all edits this session` (for `Write` and `Edit` when no rule asked), or `No`, which stops the turn. Allowing all edits never overrides a deny or ask rule and lasts until the session ends. Print mode cannot ask, so it denies those calls, and the refusal says to add an allow rule.
+The fullscreen interface asks before a call that needs approval, showing the change: `Yes`, `Yes, allow all edits this session` (for `Write` and `Edit` when no rule asked), or `No`, which stops the turn. The `menu-up` and `menu-down` keys choose and `submit` answers, a digit answers with that option, and `interrupt` answers `No`. Allowing all edits never overrides a deny or ask rule and lasts until the session ends. Print mode cannot ask, so it denies those calls, and the refusal says to add an allow rule.
 
 ## Limitations
 
@@ -166,13 +171,13 @@ task fmt
 
 Tests are mock-backed (PiG's faux provider and a local HTTP mock server); none use a live provider.
 
-Manual live check: `kopi login openai-codex`, run with a model, ask it to read a file, then try `/execute`, `/plan`, `/status`, Ctrl+C and `--continue`; then `kopi -p` with an argument and with piped input.
+Manual live check: `kopi login openai-codex`, run with a model, ask it to read a file, then try `/execute`, `/plan`, Ctrl+C and `--continue`; then `kopi -p` with an argument and with piped input.
 
 ## Not implemented
 
 Project-level config and trust, loading project instruction files, a sandboxed shell, saved approvals, a `/permissions` command, approval classification, delegation and workflows, background jobs, MCP, a Kopi provider identity, release packaging and self-update, and login for providers that need an installation device ID (`openai`).
 
-The fullscreen interface has no slash-command completion menu. Recalled history and re-edited queued messages show their full text rather than paste blocks.
+Recalled history and re-edited queued messages show their full text rather than paste blocks.
 
 ## Contributing
 

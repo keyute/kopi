@@ -31,7 +31,8 @@ func editHarness(t *testing.T, cfg Config) (*harness, pigruntimetest.Sandbox) {
 	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
 	cfg.Tools = []tool.Tool{tool.NewEdit(ws), tool.NewWrite(ws)}
 	h := newHarness(t, sb, cfg)
-	require.NoError(t, h.c.Open(t.Context(), OpenRequest{Mode: policy.Execute}))
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	h.c.EnterExecute()
 	return h, sb
 }
 

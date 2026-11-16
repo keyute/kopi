@@ -29,8 +29,7 @@ const delim = "."
 type Config struct {
 	Version int    `koanf:"version"`
 	Model   string `koanf:"model"` // "provider/id"; empty means not configured (there is no default model)
-	// Mode is the mode sessions start in, plan or execute; --mode overrides it
-	// for the session the process opens.
+	// Mode is the mode sessions start in, plan or execute.
 	Mode string `koanf:"mode"`
 	// Keys maps an action from KeyActions to the keys bound to it.
 	Keys        map[string][]string `koanf:"keys"`

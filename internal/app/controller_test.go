@@ -75,13 +75,6 @@ func untimed(evs []event.Event) []event.Event {
 	return evs
 }
 
-func lastNotice(t *testing.T, rec *recorder) string {
-	t.Helper()
-	notices := ofType[event.Notice](rec.all())
-	require.NotEmpty(t, notices)
-	return notices[len(notices)-1].Text
-}
-
 type harness struct {
 	c    *Controller
 	faux *ai.FauxProviderHandle
@@ -560,7 +553,7 @@ func TestFailedResumeAsTurnFinishesKeepsSessionUsable(t *testing.T) {
 	assert.Equal(t, 2, h.faux.CallCount())
 }
 
-func TestPromptWhileBusyIsQueuedAndStatusWorks(t *testing.T) {
+func TestPromptWhileBusyIsQueuedAndCommandRuns(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
 	requests := make(chan pigruntimetest.Request, 1)
@@ -573,11 +566,11 @@ func TestPromptWhileBusyIsQueuedAndStatusWorks(t *testing.T) {
 	got, err := h.c.Submit(t.Context(), "another prompt")
 	require.NoError(t, err)
 	assert.Nil(t, got)
-	got, err = h.c.Submit(t.Context(), "/status")
+	got, err = h.c.Submit(t.Context(), "/execute")
 	require.NoError(t, err)
 	assert.Nil(t, got)
-	assert.Contains(t, lastNotice(t, h.rec), "turn: running")
 	assert.True(t, h.c.Status().Busy)
+	assert.Equal(t, policy.Execute, h.c.Status().Mode)
 
 	close(release)
 	wait(t, w.Done())
@@ -1348,7 +1341,7 @@ func TestInputIsRecordedInHistory(t *testing.T) {
 	w, err := h.c.Submit(t.Context(), "hold")
 	require.NoError(t, err)
 	wait(t, started)
-	for _, input := range []string{"queued", "/status", "/status", "  "} {
+	for _, input := range []string{"queued", "/plan", "/plan", "  "} {
 		_, err := h.c.Submit(t.Context(), input)
 		require.NoError(t, err, input)
 	}
@@ -1359,7 +1352,7 @@ func TestInputIsRecordedInHistory(t *testing.T) {
 	close(release)
 	wait(t, w.Done())
 
-	assert.Equal(t, []string{"hold", "queued", "/status", "/nope"}, h.c.History())
+	assert.Equal(t, []string{"hold", "queued", "/plan", "/nope"}, h.c.History())
 }
 
 func TestUnwritableHistoryNeverFailsSubmit(t *testing.T) {
@@ -1376,9 +1369,28 @@ func TestUnwritableHistoryNeverFailsSubmit(t *testing.T) {
 
 func TestHistoryIsNilWithoutStore(t *testing.T) {
 	h, _ := openHarness(t, Config{})
-	_, err := h.c.Submit(t.Context(), "/status")
+	_, err := h.c.Submit(t.Context(), "/plan")
 	require.NoError(t, err)
 	assert.Nil(t, h.c.History())
+}
+
+func TestFilesListsWorkspaceEntries(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "src"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src", "main.go"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), nil, 0o600))
+	ws, err := tool.NewWorkspace(dir, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Files: ws})
+
+	cs, err := h.c.Files()
+	require.NoError(t, err)
+	assert.Equal(t, []Candidate{{Value: "notes.txt"}, {Value: "src/"}, {Value: "src/main.go"}}, cs)
+
+	cs, err = newHarness(t, pigruntimetest.NewSandbox(t), Config{}).c.Files()
+	require.NoError(t, err)
+	assert.Nil(t, cs)
 }
 
 func TestUnknownCommandNeverReachesProvider(t *testing.T) {
@@ -1602,7 +1614,7 @@ func TestFailedResumeCommandArrivesAsError(t *testing.T) {
 	assert.Equal(t, event.Outcome{Status: event.Completed}, h.turn(t, "after").Outcome())
 }
 
-func TestSessionStartAlwaysEntersPlan(t *testing.T) {
+func TestSessionStartEntersPlanByDefault(t *testing.T) {
 	h, sb := openHarness(t, Config{})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first answer")})
 	h.turn(t, "first question")
@@ -1626,7 +1638,7 @@ func TestSessionStartAlwaysEntersPlan(t *testing.T) {
 	assert.Equal(t, policy.Plan, fresh.c.Status().Mode)
 }
 
-func TestResumeEntersPlan(t *testing.T) {
+func TestResumeEntersPlanByDefault(t *testing.T) {
 	h, _ := openHarness(t, Config{})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first answer")})
 	h.turn(t, "first question")
@@ -1642,30 +1654,15 @@ func TestResumeEntersPlan(t *testing.T) {
 	assert.Positive(t, status.MessageCount)
 }
 
-func TestOpenRequestModeIsHonouredAndNewReturnsToPlan(t *testing.T) {
-	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{})
-	require.NoError(t, h.c.Open(t.Context(), OpenRequest{Mode: policy.Execute}))
-	assert.Equal(t, policy.Execute, h.c.Status().Mode)
-	oldID := h.c.Status().SessionID
-	changes := subscribeTo[event.SessionChanged](h.c)
-
-	_, err := h.c.Submit(t.Context(), "/new")
-	require.NoError(t, err)
-	assert.NotEqual(t, oldID, receiveEvent(t, changes).SessionID)
-	assertSwitchDone(t, h)
-
-	assert.Equal(t, policy.Plan, h.c.Status().Mode)
-	assert.Equal(t, []event.ModeChanged{{Mode: policy.Execute}, {Mode: policy.Plan}}, ofType[event.ModeChanged](h.rec.all()))
-}
-
 func TestNewAndResumeCommandsStartInConfiguredMode(t *testing.T) {
 	h, _ := openHarness(t, Config{Mode: policy.Execute})
-	assert.Equal(t, policy.Plan, h.c.Status().Mode)
+	assert.Equal(t, policy.Execute, h.c.Status().Mode)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first answer")})
 	h.turn(t, "first question")
 	savedID := h.c.Status().SessionID
 	changes := subscribeTo[event.SessionChanged](h.c)
 
+	h.c.EnterPlan()
 	_, err := h.c.Submit(t.Context(), "/new")
 	require.NoError(t, err)
 	assert.NotEqual(t, savedID, receiveEvent(t, changes).SessionID)
@@ -1678,6 +1675,31 @@ func TestNewAndResumeCommandsStartInConfiguredMode(t *testing.T) {
 	assert.Equal(t, savedID, receiveEvent(t, changes).SessionID)
 	assertSwitchDone(t, h)
 	assert.Equal(t, policy.Execute, h.c.Status().Mode)
+	assert.Equal(t, []event.ModeChanged{
+		{Mode: policy.Execute}, {Mode: policy.Plan}, {Mode: policy.Execute}, {Mode: policy.Plan}, {Mode: policy.Execute},
+	}, ofType[event.ModeChanged](h.rec.all()))
+}
+
+func TestNewAndResumeCommandsDropExecuteInPlanConfig(t *testing.T) {
+	h, _ := openHarness(t, Config{Mode: policy.Plan})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first answer")})
+	h.turn(t, "first question")
+	savedID := h.c.Status().SessionID
+	changes := subscribeTo[event.SessionChanged](h.c)
+
+	h.c.EnterExecute()
+	_, err := h.c.Submit(t.Context(), "/new")
+	require.NoError(t, err)
+	assert.NotEqual(t, savedID, receiveEvent(t, changes).SessionID)
+	assertSwitchDone(t, h)
+	assert.Equal(t, policy.Plan, h.c.Status().Mode)
+
+	h.c.EnterExecute()
+	_, err = h.c.Submit(t.Context(), "/resume "+savedID)
+	require.NoError(t, err)
+	assert.Equal(t, savedID, receiveEvent(t, changes).SessionID)
+	assertSwitchDone(t, h)
+	assert.Equal(t, policy.Plan, h.c.Status().Mode)
 }
 
 func TestBareDenyRemovesTool(t *testing.T) {
@@ -1697,7 +1719,6 @@ func TestBareDenyRemovesTool(t *testing.T) {
 	assert.Equal(t, []string{"Read"}, req.ToolNames)
 	assert.Equal(t, systemPrompt(sb.Workspace, []tool.Tool{read}), req.SystemPrompt)
 	assert.NotContains(t, req.SystemPrompt, "Exec")
-	assert.Equal(t, []ToolStatus{{"Read", policy.Read, true}}, h.c.Status().Tools)
 }
 
 func TestPromptMentionsWriteAndEditOnlyWhenAvailable(t *testing.T) {
@@ -1716,21 +1737,16 @@ func TestPromptMentionsWriteAndEditOnlyWhenAvailable(t *testing.T) {
 	assert.Contains(t, h.c.prompt, "Tools available: Read.\n")
 }
 
-func TestResumeWithoutIDListsSessions(t *testing.T) {
+func TestResumeWithoutIDIsMissingArgument(t *testing.T) {
 	h, _ := openHarness(t, Config{})
-	notices := subscribeTo[event.Notice](h.c)
-	_, err := h.c.Submit(t.Context(), "/resume")
-	require.NoError(t, err)
-	assert.Equal(t, "no saved sessions for this workspace", receiveEvent(t, notices).Text)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("still here")})
+	id := h.c.Status().SessionID
 
-	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("answer")})
-	h.turn(t, "list me")
-	_, err = h.c.Submit(t.Context(), "/resume")
-	require.NoError(t, err)
-	notice := receiveEvent(t, notices).Text
-	assert.Contains(t, notice, h.c.Status().SessionID)
-	assert.Contains(t, notice, "list me")
-	assert.NotContains(t, notice, "messages")
+	_, err := h.c.Submit(t.Context(), "/resume")
+	require.ErrorIs(t, err, ErrMissingArgument)
+
+	assert.Equal(t, id, h.c.Status().SessionID)
+	assert.Equal(t, event.Outcome{Status: event.Completed}, h.turn(t, "after").Outcome())
 }
 
 func TestOpenErrorsPassThrough(t *testing.T) {
@@ -1753,31 +1769,6 @@ func TestOpenErrorsPassThrough(t *testing.T) {
 			assert.ErrorIs(t, err, ErrNoSession)
 		})
 	}
-}
-
-func TestStatusReportsToolsHonestly(t *testing.T) {
-	var ran atomic.Int32
-	sb := pigruntimetest.NewSandbox(t)
-	h := newHarness(t, sb, Config{Tools: []tool.Tool{readTool(t, sb), execTool(&ran)}})
-	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
-
-	status := h.c.Status()
-	assert.Equal(t, []ToolStatus{{"Read", policy.Read, true}, {"Exec", policy.Exec, false}}, status.Tools)
-	assert.Equal(t, sb.Workspace, status.Workspace)
-	assert.Equal(t, fauxProvider+"/faux-1", status.Model)
-
-	_, err := h.c.Submit(t.Context(), "/status")
-	require.NoError(t, err)
-	notice := lastNotice(t, h.rec)
-	for _, want := range []string{
-		"mode: plan", "model: " + status.Model, "workspace: " + sb.Workspace, "session: " + status.SessionID + " (0 messages)",
-		"turn: idle", "Read (read): allowed", "Exec (exec): not allowed in plan mode", approvalNote,
-	} {
-		assert.Contains(t, notice, want)
-	}
-
-	h.c.EnterExecute()
-	assert.Equal(t, []ToolStatus{{"Read", policy.Read, true}, {"Exec", policy.Exec, true}}, h.c.Status().Tools)
 }
 
 func TestStatusReportsContextUsageAndBranch(t *testing.T) {
@@ -1803,15 +1794,9 @@ func TestStatusReportsContextUsageAndBranch(t *testing.T) {
 	assert.Equal(t, "feature/status", status.Branch)
 }
 
-func TestHelpListsCommands(t *testing.T) {
+func TestQuitReturnsErrQuit(t *testing.T) {
 	h, _ := openHarness(t, Config{})
-	_, err := h.c.Submit(t.Context(), "/help")
-	require.NoError(t, err)
-	notice := lastNotice(t, h.rec)
-	for _, cmd := range h.c.Commands() {
-		assert.Contains(t, notice, cmd.Usage)
-	}
-	_, err = h.c.Submit(t.Context(), "/quit")
+	_, err := h.c.Submit(t.Context(), "/quit")
 	assert.ErrorIs(t, err, ErrQuit)
 }
 
@@ -1936,10 +1921,13 @@ func assertInertAfterClose(t *testing.T, h *harness) {
 	t.Helper()
 	delivered := len(h.rec.all())
 	mode, gen := h.c.authority.Snapshot()
-	for _, cmd := range []string{"/execute", "/status", "/help", "/plan", "/new", "/resume", "/resume no-such-session"} {
+	for _, cmd := range []string{"/execute", "/plan", "/new", "/resume", "/resume no-such-session"} {
 		_, err := h.c.Submit(t.Context(), cmd)
 		assert.ErrorIs(t, err, ErrNoSession, cmd)
 	}
+	cs, err := h.c.Arguments("resume")
+	require.NoError(t, err)
+	assert.Nil(t, cs)
 	h.c.EnterExecute()
 	h.c.EnterPlan()
 	gotMode, gotGen := h.c.authority.Snapshot()

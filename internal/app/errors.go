@@ -9,4 +9,5 @@ var (
 	ErrUnknownCommand   = errors.New("unknown command")
 	ErrNoSession        = errors.New("no open session")
 	ErrWorkStillRunning = errors.New("work is still running")
+	ErrMissingArgument  = errors.New("missing argument")
 )

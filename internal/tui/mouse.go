@@ -76,8 +76,12 @@ func (m *model) mouse(msg tea.MouseMsg) tea.Cmd {
 
 // press starts a drag in the transcript or the composer. A double click
 // selects the word under the pointer and a triple click its line; in the
-// composer that is the logical line across soft wraps.
+// composer that is the logical line across soft wraps. A press on the menu,
+// which covers the rows above the composer, is ignored.
 func (m *model) press(mo tea.Mouse) {
+	if menuEnd := m.composerTop() - 1; mo.Y >= menuEnd-m.menuHeight() && mo.Y < menuEnd {
+		return
+	}
 	m.sel, m.drag = selection{}, drag{}
 	if mo.Button != tea.MouseLeft {
 		return

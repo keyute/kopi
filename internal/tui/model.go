@@ -89,6 +89,12 @@ type model struct {
 	approval *event.ApprovalRequested
 	choice   int
 	prompt   []string
+	menu     menu
+	// seen is the draft and cursor syncInput last reconciled.
+	seen struct {
+		value     string
+		line, col int
+	}
 }
 
 func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model {
@@ -114,6 +120,11 @@ func (m *model) Init() tea.Cmd {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	cmd := m.update(msg)
+	return m, tea.Batch(cmd, m.syncInput())
+}
+
+func (m *model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -129,41 +140,56 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.relayout()
 		}
 	case eventsMsg:
-		return m, m.applyBatch(msg)
+		return m.applyBatch(msg)
 	case spinner.TickMsg:
 		if !m.busy {
-			return m, nil
+			return nil
 		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
+		return cmd
 	case tea.MouseMsg:
-		return m, m.mouse(msg)
+		return m.mouse(msg)
 	case autoScrollMsg:
-		return m, m.autoScroll()
+		return m.autoScroll()
 	case interruptMsg:
 		defer m.refreshPending()
-		return m, m.cancel()
+		return m.cancel()
 	case flashMsg:
 		if msg.seq == m.flashSeq {
 			m.flashText, m.exitArmed = "", false
 		}
 	case tea.KeyPressMsg:
 		defer m.refreshPending()
-		return m, m.key(msg)
+		return m.key(msg)
 	case tea.PasteMsg:
 		if m.approval != nil {
-			return m, nil
+			return nil
 		}
 		defer m.refreshPending()
-		return m, m.paste(msg.Content)
+		return m.paste(msg.Content)
 	case imagePastedMsg:
 		defer m.refreshPending()
-		return m, m.composer.insertImage(msg.path)
+		return m.composer.insertImage(msg.path)
 	case pasteFailedMsg:
-		return m, m.flash("paste failed")
+		return m.flash("paste failed")
+	case candidatesMsg:
+		m.loaded(msg)
 	}
-	return m, nil
+	return nil
+}
+
+// syncInput reconciles what is derived from the draft after any message that may have changed it.
+func (m *model) syncInput() tea.Cmd {
+	value, line, col := m.composer.value(), m.composer.ta.Line(), m.composer.ta.Column()
+	if value == m.seen.value && line == m.seen.line && col == m.seen.col {
+		return nil
+	}
+	if value != m.seen.value {
+		m.composer.spans = app.Spans(value)
+	}
+	m.seen.value, m.seen.line, m.seen.col = value, line, col
+	return m.followMenu()
 }
 
 func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
@@ -178,6 +204,11 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	if m.approval != nil {
 		m.approvalKey(msg)
 		return nil
+	}
+	if m.menuHeight() > 0 {
+		if cmd, ok := m.menuKey(msg); ok {
+			return cmd
+		}
 	}
 	switch {
 	case key.Matches(msg, km.interrupt):
@@ -222,11 +253,11 @@ func (m *model) approvalKey(msg tea.KeyPressMsg) {
 	switch s := msg.String(); {
 	case key.Matches(msg, m.keys.interrupt):
 		m.c.Answer(token, policy.Reject)
-	case s == "up":
+	case key.Matches(msg, m.keys.menuUp):
 		m.choice = max(0, m.choice-1)
-	case s == "down":
+	case key.Matches(msg, m.keys.menuDown):
 		m.choice = min(len(opts)-1, m.choice+1)
-	case s == "enter":
+	case key.Matches(msg, m.keys.submit):
 		m.c.Answer(token, opts[m.choice].answer)
 	default:
 		if n, err := strconv.Atoi(s); err == nil && n >= 1 && n <= len(opts) {
@@ -520,6 +551,7 @@ func (m *model) View() tea.View {
 	if m.approval != nil {
 		rows = append(rows, m.prompt...)
 	} else {
+		copy(rows[len(rows)-m.menuHeight():], m.menuRows())
 		rows = append(rows, m.composer.view(m.width, m.th)...)
 	}
 	rows = append(rows, statusLine(m.status, m.layout, m.flashText, m.width, m.th))

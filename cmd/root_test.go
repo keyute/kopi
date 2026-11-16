@@ -126,8 +126,9 @@ func TestRootRejectsInvalidMode(t *testing.T) {
 
 	_, _, err := execute(t, "", "--model", mockModel, "--mode", "auto", "-p", "hi")
 
-	require.Error(t, err)
-	assert.Equal(t, `failed to parse --mode: invalid mode "auto": want plan or execute`, err.Error())
+	require.ErrorIs(t, err, config.ErrInvalidValue)
+	assert.Contains(t, err.Error(), "flags")
+	assert.Contains(t, err.Error(), "want plan or execute")
 	assert.NoDirExists(t, e.agentDir)
 }
 
@@ -529,7 +530,7 @@ func TestRootPrintExecuteAllowCannotExemptGit(t *testing.T) {
 	assert.Equal(t, "alpha\n", content)
 }
 
-func TestRootPrintStartsInPlan(t *testing.T) {
+func TestRootPrintStartsInPlanByDefault(t *testing.T) {
 	result, content := printEdit(t, "docs/a.md", "--allowed-tools", "Edit(docs/**)")
 
 	assert.Contains(t, result, `tool "Edit" needs execute mode`)

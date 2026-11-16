@@ -30,10 +30,13 @@ type Config struct {
 	// Unattended means no human can answer, so every call that would ask for
 	// approval is denied.
 	Unattended bool
-	// Mode is the mode the sessions that NewSession, Resume, /new and /resume
-	// open start in; Open takes it from its OpenRequest.
+	// Mode is the mode every session starts in.
 	Mode policy.Mode
+	// Files lists the entries that @ references complete to; nil offers none.
+	Files *tool.Workspace
 }
+
+const maxReferenceEntries = 10000
 
 // Controller holds all frontend-neutral behaviour: frontends pass input in
 // and render the events they subscribe to.
@@ -106,8 +109,6 @@ func (c *Controller) Subscribe(fn func(event.Event)) func() {
 type OpenRequest struct {
 	ResumeID string
 	Continue bool
-	// Mode is the mode the session starts in; the zero value is plan.
-	Mode policy.Mode
 }
 
 func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
@@ -115,11 +116,11 @@ func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
 }
 
 func (c *Controller) NewSession(ctx context.Context) error {
-	return c.start(ctx, OpenRequest{Mode: c.cfg.Mode})
+	return c.start(ctx, OpenRequest{})
 }
 
 func (c *Controller) Resume(ctx context.Context, id string) error {
-	return c.start(ctx, OpenRequest{ResumeID: id, Mode: c.cfg.Mode})
+	return c.start(ctx, OpenRequest{ResumeID: id})
 }
 
 // switchTo starts the switch to req in the background; its failure arrives as
@@ -148,11 +149,12 @@ func (c *Controller) Sessions() ([]pigruntime.SessionInfo, error) {
 }
 
 // Submit takes one message of human input with the paths of its images. A
-// control command is executed and returns (nil, nil), ErrQuit for /quit or
-// ErrUnknownCommand. /new and /resume return at once and report their result
-// through events. Anything else is a prompt: it starts a root turn or, while
-// one runs, is queued for that turn and returns (nil, nil). After Close every
-// input but a blank line returns ErrNoSession.
+// control command is executed and returns (nil, nil), ErrQuit for /quit,
+// ErrMissingArgument for /resume without an id or ErrUnknownCommand. /new and
+// /resume with an id return at once and report their result through events.
+// Anything else is a prompt: it starts a root turn or, while one runs, is
+// queued for that turn and returns (nil, nil). After Close every input but a
+// blank line returns ErrNoSession.
 func (c *Controller) Submit(ctx context.Context, text string, images ...string) (*Work, error) {
 	return c.input(ctx, text, images, false)
 }
@@ -221,6 +223,22 @@ func (c *Controller) History() []string {
 		return nil
 	}
 	return c.cfg.History.Texts()
+}
+
+// Files returns the workspace entries @ references complete to; nil when disabled.
+func (c *Controller) Files() ([]Candidate, error) {
+	if c.cfg.Files == nil {
+		return nil, nil
+	}
+	paths, err := c.cfg.Files.List(maxReferenceEntries)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list files: %w", err)
+	}
+	out := make([]Candidate, 0, len(paths))
+	for _, p := range paths {
+		out = append(out, Candidate{Value: p})
+	}
+	return out, nil
 }
 
 // submitPrompt starts a turn with p or queues p for the running one. It never
@@ -292,7 +310,9 @@ func (c *Controller) Commands() []Command {
 	cmds := commandTable()
 	out := make([]Command, 0, len(cmds))
 	for _, cmd := range cmds {
-		out = append(out, cmd.Command)
+		cm := cmd.Command
+		cm.Argument = cmd.args != nil
+		out = append(out, cm)
 	}
 	return out
 }
@@ -361,16 +381,12 @@ func (c *Controller) Status() Status {
 	c.mu.Unlock()
 
 	mode, _ := c.authority.Snapshot()
-	s := Status{SessionID: sessID, Mode: mode, Model: c.cfg.Model, Workspace: c.cfg.Workspace, Busy: busy, Branch: gitBranch(c.cfg.Workspace)}
+	s := Status{SessionID: sessID, Mode: mode, Model: c.cfg.Model, Busy: busy, Branch: gitBranch(c.cfg.Workspace)}
 	if sess != nil {
 		s.MessageCount = sess.MessageCount()
 		if tokens, window, ok := sess.ContextUsage(); ok {
 			s.ContextTokens, s.ContextWindow = tokens, window
 		}
-	}
-	for _, t := range c.cfg.Tools {
-		allowed := !t.Capability.NeedsExecute() || mode == policy.Execute
-		s.Tools = append(s.Tools, ToolStatus{Name: t.Name, Capability: t.Capability, Allowed: allowed})
 	}
 	return s
 }
@@ -657,9 +673,9 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 		cancel()
 	}
-	// A session starts in the mode its request names, never in the mode the
-	// previous session was left in.
-	if req.Mode == policy.Execute {
+	// A session starts in the configured mode, never in the mode the previous
+	// session was left in.
+	if c.cfg.Mode == policy.Execute {
 		c.EnterExecute()
 	} else {
 		c.EnterPlan()
@@ -719,8 +735,4 @@ func (c *Controller) releaseSwitch(w *Work, emit func(event.Event), committed bo
 		}
 		emit(end)
 	}
-}
-
-func (c *Controller) notice(text string) {
-	c.relay.emit(event.Notice{Text: text})
 }
