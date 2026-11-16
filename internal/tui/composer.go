@@ -14,6 +14,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/event"
 )
 
@@ -30,6 +31,9 @@ const (
 // beyond is past every row and column of the input; PositionAt maps
 // coordinates past the content to its end.
 const beyond = math.MaxInt32
+
+// promptWidth is the cells of the composer's prompt gutter.
+const promptWidth = 2
 
 // imageCount numbers image blocks for the whole process, so markers from drafts
 // that are later joined never collide.
@@ -68,6 +72,7 @@ type composer struct {
 	// a drag extends from.
 	clicks int
 	unit   selection
+	spans  []app.Span
 }
 
 // newComposer keeps the textarea's stock editing keys except newline, which
@@ -80,7 +85,7 @@ func newComposer(th theme, newline key.Binding) composer {
 	ta.MaxContentHeight = maxComposerLines
 	ta.KeyMap.InsertNewline = newline
 	ta.KeyMap.Paste.SetEnabled(false)
-	ta.SetPromptFunc(2, func(p textarea.PromptInfo) string {
+	ta.SetPromptFunc(promptWidth, func(p textarea.PromptInfo) string {
 		if p.LineNumber == 0 {
 			return "❯ "
 		}
@@ -159,6 +164,19 @@ func (c *composer) repeat(k tea.KeyPressMsg, n int) tea.Cmd {
 		cmds[i] = c.forward(k)
 	}
 	return tea.Batch(cmds...)
+}
+
+// replace puts s in place of runes [from, to) of the cursor's line, which hold
+// the cursor, leaving the cursor after s. The deletes go straight to the
+// textarea, so a marker inside the range loses only its runes in the range.
+func (c *composer) replace(from, to int, s string) tea.Cmd {
+	c.stopBrowsing()
+	c.lastPaste = ""
+	c.ta.ClearSelection()
+	c.ta.SetCursorColumn(to)
+	back := c.repeat(tea.KeyPressMsg{Code: tea.KeyBackspace}, to-from)
+	c.ta.InsertString(s)
+	return back
 }
 
 // press handles the n-th quick press at (x, y), relative to the textarea's
@@ -496,6 +514,6 @@ func (c *composer) height() int { return c.ta.Height() }
 func (c *composer) view(width int, th theme) []string {
 	blank := shade(th).Render(strings.Repeat(" ", width))
 	rows := []string{blank}
-	rows = append(rows, strings.Split(c.ta.View(), "\n")...)
+	rows = append(rows, c.highlight(strings.Split(c.ta.View(), "\n"), th)...)
 	return append(rows, blank)
 }

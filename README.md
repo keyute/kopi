@@ -23,10 +23,8 @@ Commands in the fullscreen interface:
 | --- | --- |
 | `/plan` | Switch to plan mode |
 | `/execute` | Switch to execute mode |
-| `/status` | Show mode, model, session, running work and tools |
 | `/new` | Start a new session |
-| `/resume [id]` | Resume a session, or list this directory's sessions |
-| `/help` | List commands |
+| `/resume <id>` | Resume a session |
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
 
@@ -42,6 +40,10 @@ Keys in the fullscreen interface (defaults, see Configuration):
 - Ctrl+Enter sends now: it stops the current response and continues the turn with the queued messages plus the draft.
 - Alt+Enter, Shift+Enter or Ctrl+J inserts a newline. Ctrl+Enter and Shift+Enter need a terminal that reports modified Enter.
 - Up at the top of the input pulls queued messages back into it for editing; with nothing queued it browses input history, and Down goes back.
+- `/` at the start of the input lists commands; picking `/resume` from the menu lists this directory's sessions, which you filter by date or first message.
+- `@` at the start of the input or after a space lists files and directories under the start directory, leaving out `.git`, anything a `.gitignore` in the start directory or below ignores and the protected paths.
+- While that menu shows, Up and Down choose, Tab fills in, Enter fills in and runs a command (a command that takes an argument, or a file reference, is only filled in), and Esc closes the menu.
+- Known commands and `@` references are highlighted in the input. An `@path` is sent as written; a space in an inserted path is written `\ `.
 - Esc interrupts the running turn.
 - Ctrl+C interrupts the running turn, else clears the draft, else a second press within two seconds exits.
 - After an interrupt, queued messages return to the input; `/new`, `/resume` and exiting discard them.
@@ -103,6 +105,9 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `paste` | `ctrl+v` |
 | `history-prev`, `history-next` | `up`, `down` |
 | `queue-edit` | `up` |
+| `complete` | `tab` |
+| `menu-up`, `menu-down` | `up`, `down` |
+| `menu-close` | `esc` |
 | `expand-all` | `ctrl+o` |
 | `page-up`, `page-down` | `pgup`, `pgdown` |
 
@@ -137,13 +142,13 @@ task fmt
 
 Tests are mock-backed (PiG's faux provider and a local HTTP mock server); none use a live provider.
 
-Manual live check: `kopi login openai-codex`, run with a model, ask it to read a file, then try `/execute`, `/plan`, `/status`, Ctrl+C and `--continue`; then `kopi -p` with an argument and with piped input.
+Manual live check: `kopi login openai-codex`, run with a model, ask it to read a file, then try `/execute`, `/plan`, Ctrl+C and `--continue`; then `kopi -p` with an argument and with piped input.
 
 ## Not implemented
 
 Project-level config and trust, loading project instruction files, sandboxed shell and file-modifying tools, approval classification, delegation and workflows, background jobs, MCP, a Kopi provider identity, release packaging and self-update, and login for providers that need an installation device ID (`openai`).
 
-The fullscreen interface has no slash-command completion menu. Recalled history and re-edited queued messages show their full text rather than paste blocks.
+Recalled history and re-edited queued messages show their full text rather than paste blocks.
 
 ## Contributing
 

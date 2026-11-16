@@ -19,6 +19,9 @@ func (c *composer) setHistory(entries []string) {
 // stopBrowsing keeps what is shown as the draft.
 func (c *composer) stopBrowsing() { c.hist.back = 0 }
 
+// browsing reports whether a recalled entry is shown.
+func (c *composer) browsing() bool { return c.hist.back != 0 }
+
 // atTop reports whether the cursor is on the draft's first visual row.
 func (c *composer) atTop() bool {
 	return c.ta.Line() == 0 && c.ta.LineInfo().RowOffset == 0

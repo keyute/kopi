@@ -42,6 +42,10 @@ type fakeController struct {
 	history    []string
 	histories  int
 	subscriber func(event.Event)
+	commands   []app.Command
+	args       map[string][]app.Candidate
+	files      []app.Candidate
+	filesErr   error
 }
 
 func (f *fakeController) Subscribe(fn func(event.Event)) func() {
@@ -84,6 +88,12 @@ func (f *fakeController) Interrupt() bool {
 }
 
 func (f *fakeController) Status() app.Status { return f.status }
+
+func (f *fakeController) Commands() []app.Command { return f.commands }
+
+func (f *fakeController) Arguments(name string) ([]app.Candidate, error) { return f.args[name], nil }
+
+func (f *fakeController) Files() ([]app.Candidate, error) { return f.files, f.filesErr }
 
 // testOptions are the options config's defaults resolve to.
 func testOptions() Options {

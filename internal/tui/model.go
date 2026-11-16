@@ -82,6 +82,12 @@ type model struct {
 	pickVerb  func() verb
 	// verb is the running or last turn's.
 	verb verb
+	menu menu
+	// seen is the draft and cursor syncInput last reconciled.
+	seen struct {
+		value     string
+		line, col int
+	}
 }
 
 func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model {
@@ -107,6 +113,11 @@ func (m *model) Init() tea.Cmd {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	cmd := m.update(msg)
+	return m, tea.Batch(cmd, m.syncInput())
+}
+
+func (m *model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -122,38 +133,53 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.relayout()
 		}
 	case eventsMsg:
-		return m, m.applyBatch(msg)
+		return m.applyBatch(msg)
 	case spinner.TickMsg:
 		if !m.busy {
-			return m, nil
+			return nil
 		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
+		return cmd
 	case tea.MouseMsg:
-		return m, m.mouse(msg)
+		return m.mouse(msg)
 	case autoScrollMsg:
-		return m, m.autoScroll()
+		return m.autoScroll()
 	case interruptMsg:
 		defer m.refreshPending()
-		return m, m.cancel()
+		return m.cancel()
 	case flashMsg:
 		if msg.seq == m.flashSeq {
 			m.flashText, m.exitArmed = "", false
 		}
 	case tea.KeyPressMsg:
 		defer m.refreshPending()
-		return m, m.key(msg)
+		return m.key(msg)
 	case tea.PasteMsg:
 		defer m.refreshPending()
-		return m, m.paste(msg.Content)
+		return m.paste(msg.Content)
 	case imagePastedMsg:
 		defer m.refreshPending()
-		return m, m.composer.insertImage(msg.path)
+		return m.composer.insertImage(msg.path)
 	case pasteFailedMsg:
-		return m, m.flash("paste failed")
+		return m.flash("paste failed")
+	case candidatesMsg:
+		m.loaded(msg)
 	}
-	return m, nil
+	return nil
+}
+
+// syncInput reconciles what is derived from the draft after any message that may have changed it.
+func (m *model) syncInput() tea.Cmd {
+	value, line, col := m.composer.value(), m.composer.ta.Line(), m.composer.ta.Column()
+	if value == m.seen.value && line == m.seen.line && col == m.seen.col {
+		return nil
+	}
+	if value != m.seen.value {
+		m.composer.spans = app.Spans(value)
+	}
+	m.seen.value, m.seen.line, m.seen.col = value, line, col
+	return m.followMenu()
 }
 
 func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
@@ -164,6 +190,11 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	if m.exitArmed {
 		m.exitArmed, m.flashText = false, ""
+	}
+	if m.menuHeight() > 0 {
+		if cmd, ok := m.menuKey(msg); ok {
+			return cmd
+		}
 	}
 	switch {
 	case key.Matches(msg, km.interrupt):
@@ -453,6 +484,7 @@ func (m *model) View() tea.View {
 	if m.busy {
 		rows = append(rows, workingRow(&m.spinner, m.verb, formatDuration(time.Since(m.turnStart)), m.th), "")
 	}
+	copy(rows[len(rows)-m.menuHeight():], m.menuRows())
 	rows = append(rows, m.composer.view(m.width, m.th)...)
 	rows = append(rows, statusLine(m.status, m.layout, m.flashText, m.width, m.th))
 	v.SetContent(strings.Join(rows, "\n"))

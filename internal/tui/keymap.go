@@ -4,7 +4,8 @@ import "charm.land/bubbles/v2/key"
 
 type keyMap struct {
 	submit, newline, interrupt, cancel, quit, sendNow, toggleMode, expandAll,
-	pageUp, pageDown, paste, historyPrev, historyNext, queueEdit key.Binding
+	pageUp, pageDown, paste, historyPrev, historyNext, queueEdit,
+	complete, menuUp, menuDown, menuClose key.Binding
 }
 
 // bindings names each binding by its config action. A binding with no keys
@@ -25,6 +26,10 @@ func (km *keyMap) bindings() map[string]*key.Binding {
 		"history-prev": &km.historyPrev,
 		"history-next": &km.historyNext,
 		"queue-edit":   &km.queueEdit,
+		"complete":     &km.complete,
+		"menu-up":      &km.menuUp,
+		"menu-down":    &km.menuDown,
+		"menu-close":   &km.menuClose,
 	}
 }
 

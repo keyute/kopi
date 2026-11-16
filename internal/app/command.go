@@ -3,46 +3,38 @@ package app
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
-
-	"github.com/keyute/kopi/internal/event"
 )
 
 type Command struct {
-	Name, Usage, Summary string
+	Name, Summary string
+	// Argument reports that the command's argument is chosen from Arguments.
+	Argument bool
 }
 
 type command struct {
 	Command
-	run func(c *Controller, ctx context.Context, args string) error
+	run  func(c *Controller, ctx context.Context, args string) error
+	args func(c *Controller) ([]Candidate, error)
 }
 
-// commandTable is a function rather than a package variable because /help
-// reads the table back, which would be an initialization cycle.
 func commandTable() []command {
 	return []command{
-		{Command{"plan", "/plan", "switch to plan mode (read-only tools)"}, func(c *Controller, _ context.Context, _ string) error {
+		{Command: Command{Name: "plan", Summary: "switch to plan mode (read-only tools)"}, run: func(c *Controller, _ context.Context, _ string) error {
 			c.EnterPlan()
 			return nil
 		}},
-		{Command{"execute", "/execute", "switch to execute mode"}, func(c *Controller, _ context.Context, _ string) error {
+		{Command: Command{Name: "execute", Summary: "switch to execute mode"}, run: func(c *Controller, _ context.Context, _ string) error {
 			c.EnterExecute()
 			return nil
 		}},
-		{Command{"status", "/status", "show mode, model, session, running work and tools"}, func(c *Controller, _ context.Context, _ string) error {
-			c.notice(renderStatus(c.Status()))
-			return nil
-		}},
-		{Command{"new", "/new", "start a new session"}, func(c *Controller, ctx context.Context, _ string) error {
+		{Command: Command{Name: "new", Summary: "start a new session"}, run: func(c *Controller, ctx context.Context, _ string) error {
 			return c.switchTo(ctx, OpenRequest{})
 		}},
-		{Command{"resume", "/resume [id]", "resume a session, or list sessions without an id"}, (*Controller).resumeCommand},
-		{Command{"help", "/help", "list commands"}, func(c *Controller, _ context.Context, _ string) error {
-			c.notice(renderHelp(c.Commands()))
-			return nil
-		}},
-		{Command{"quit", "/quit", "exit kopi"}, func(*Controller, context.Context, string) error {
+		{Command: Command{Name: "resume", Summary: "resume a session"}, run: (*Controller).resumeCommand, args: (*Controller).sessionCandidates},
+		{Command: Command{Name: "quit", Summary: "exit kopi"}, run: func(*Controller, context.Context, string) error {
 			return ErrQuit
 		}},
 	}
@@ -60,52 +52,41 @@ func parse(line string) (name, args string, isCommand bool) {
 }
 
 func (c *Controller) resumeCommand(ctx context.Context, id string) error {
-	if id != "" {
-		return c.switchTo(ctx, OpenRequest{ResumeID: id})
+	if id == "" {
+		return fmt.Errorf("%w: /resume needs a session id", ErrMissingArgument)
 	}
-	// The listing reads every session file, so it runs in the background. It
-	// holds life so that it cannot touch the runtime after Close.
-	go func() {
-		c.life.Lock()
-		defer c.life.Unlock()
-		c.mu.Lock()
-		closed := c.closed
-		c.mu.Unlock()
-		if closed {
-			return
-		}
-		if err := c.listSessions(); err != nil {
-			c.relay.emit(event.Error{Err: err})
-		}
-	}()
-	return nil
+	return c.switchTo(ctx, OpenRequest{ResumeID: id})
 }
 
-func (c *Controller) listSessions() error {
+// Arguments returns the candidates for command name's argument; nil when it takes
+// none. It may read every session file, so frontends call it off their event loop.
+func (c *Controller) Arguments(name string) ([]Candidate, error) {
+	cmds := commandTable()
+	i := slices.IndexFunc(cmds, func(cmd command) bool { return cmd.Name == name })
+	if i < 0 || cmds[i].args == nil {
+		return nil, nil
+	}
+	// Held so that it cannot touch the runtime after Close.
+	c.life.Lock()
+	defer c.life.Unlock()
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return nil, nil
+	}
+	return cmds[i].args(c)
+}
+
+func (c *Controller) sessionCandidates() ([]Candidate, error) {
 	sessions, err := c.Sessions()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if len(sessions) == 0 {
-		c.notice("no saved sessions for this workspace")
-		return nil
-	}
-	var b strings.Builder
-	b.WriteString("sessions (newest first):")
+	out := make([]Candidate, 0, len(sessions))
 	for _, s := range sessions {
 		first, _, _ := strings.Cut(s.FirstMessage, "\n")
-		fmt.Fprintf(&b, "\n  %s  %s  %s", s.ID, s.Modified.Local().Format(time.DateTime), first)
+		out = append(out, Candidate{Value: s.ID, Label: s.Modified.Local().Format(time.DateTime), Description: first})
 	}
-	c.notice(b.String())
-	return nil
-}
-
-func renderHelp(cmds []Command) string {
-	var b strings.Builder
-	b.WriteString("commands:")
-	for _, cmd := range cmds {
-		fmt.Fprintf(&b, "\n  %-13s %s", cmd.Usage, cmd.Summary)
-	}
-	b.WriteString("\n  //text        send a prompt that starts with /")
-	return b.String()
+	return out, nil
 }

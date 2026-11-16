@@ -23,6 +23,10 @@ var KeyActions = []string{
 	"history-prev",
 	"history-next",
 	"queue-edit",
+	"complete",
+	"menu-up",
+	"menu-down",
+	"menu-close",
 }
 
 // StatusSegments lists every segment the status line can show.
@@ -49,6 +53,10 @@ func DefaultKeys() map[string][]string {
 		"history-prev": {"up"},
 		"history-next": {"down"},
 		"queue-edit":   {"up"},
+		"complete":     {"tab"},
+		"menu-up":      {"up"},
+		"menu-down":    {"down"},
+		"menu-close":   {"esc"},
 	}
 }
 
