@@ -114,6 +114,22 @@ func TestListSkipsProtectedStores(t *testing.T) {
 	assert.ElementsMatch(t, []string{".env", "notes.txt"}, got)
 }
 
+func TestReadDirRejectsDirectorySwappedForProtectedSymlink(t *testing.T) {
+	home, kopiHome := syntheticHome(t)
+	dir := filepath.Join(home, "ordinary")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	vetted, err := os.Stat(dir)
+	require.NoError(t, err)
+
+	require.NoError(t, os.Rename(dir, filepath.Join(home, "ordinary-original")))
+	require.NoError(t, os.Symlink(".ssh", dir))
+
+	got, err := ws.readDir("ordinary", vetted)
+	require.ErrorIs(t, err, ErrOutsideWorkspace)
+	assert.Empty(t, got)
+}
+
 func TestListIsEmptyInWorkspaceInsideProtectedStore(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
 	dir := filepath.Join(home, ".ssh", "project")
