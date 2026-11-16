@@ -92,9 +92,11 @@ func TestApprovalAllowEditsSkipsLaterPrompts(t *testing.T) {
 }
 
 func TestApprovalNoInterruptsTurnAndModelSeesRejection(t *testing.T) {
-	h, sb := editHarness(t, Config{})
+	rules, err := policy.NewRules(t.TempDir(), t.TempDir(), []string{"Edit", "Write"}, policy.Source{Name: "test", Allow: []string{"Write"}})
+	require.NoError(t, err)
+	h, sb := editHarness(t, Config{Rules: rules})
 	approvals, ended := subscribeTo[event.ApprovalRequested](h.c), subscribeTo[event.ApprovalEnded](h.c)
-	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(editCall("call-1", "a.txt")), pigruntimetest.Text("unreached")})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(editCall("call-1", "a.txt"), writeCall("call-2", "b.txt")), pigruntimetest.Text("unreached")})
 
 	w, err := h.c.Submit(t.Context(), "edit a.txt")
 	require.NoError(t, err)
@@ -111,6 +113,7 @@ func TestApprovalNoInterruptsTurnAndModelSeesRejection(t *testing.T) {
 	require.Len(t, ends, 1)
 	assert.Equal(t, []event.Input{{Text: "queued meanwhile"}}, ends[0].Unsent)
 	assert.Equal(t, "alpha\n", fileText(t, sb, "a.txt"))
+	assert.Equal(t, "alpha\n", fileText(t, sb, "b.txt"), "the following rule-allowed tool must not run")
 	assert.Equal(t, 1, h.faux.CallCount(), "the rejection stops the turn before another model request")
 
 	requests := make(chan pigruntimetest.Request, 1)

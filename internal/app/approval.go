@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/policy"
 )
 
@@ -12,6 +13,9 @@ import (
 // slot is enough.
 type pendingApproval struct {
 	callID string
+	work   *Work
+	ctx    context.Context
+	emit   func(event.Event)
 	// answer has room for the one answer, so Answer never blocks.
 	answer chan policy.Answer
 }
@@ -25,10 +29,10 @@ func (c *Controller) approver(d *display) policy.Approver {
 	return func(ctx context.Context, r policy.Request) (policy.Answer, error) {
 		p := &pendingApproval{callID: r.CallID, answer: make(chan policy.Answer, 1)}
 		c.mu.Lock()
+		// The approver runs only during a send on the current session.
+		p.work, p.ctx, p.emit = c.turn, ctx, c.emit
 		c.approval = p
-		// The approver runs only during a send on the current session, so
-		// emit is that session's.
-		emit := c.emit
+		emit := p.emit
 		c.mu.Unlock()
 		emit(d.approval(r))
 		defer emit(event.ApprovalEnded{CallID: r.CallID})
@@ -58,19 +62,24 @@ func (c *Controller) approver(d *display) policy.Approver {
 // hands queued input back; the model still sees the rejection as the call's
 // result.
 func (c *Controller) Answer(callID string, a policy.Answer) bool {
+	c.queue.Lock()
 	c.mu.Lock()
 	p := c.approval
 	if p == nil || p.callID != callID {
 		c.mu.Unlock()
+		c.queue.Unlock()
 		return false
 	}
 	c.approval = nil
 	c.mu.Unlock()
 	if a == policy.Reject {
-		// Interrupting before delivering means the send is already cancelled
-		// when the rejection returns, so the turn cannot go on to another
-		// model request.
-		c.Interrupt()
+		c.stop(p.work, p.emit)
+	}
+	c.queue.Unlock()
+	if a == policy.Reject {
+		// Cancellation forwarding is asynchronous. Stop PiG synchronously
+		// before releasing the rejection, without holding controller locks.
+		pigruntime.InterruptTurn(p.ctx)
 	}
 	p.answer <- a
 	return true

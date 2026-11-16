@@ -33,6 +33,9 @@ func approvalOptions(a *event.ApprovalRequested, km *keyMap) []approvalOption {
 // options with the cursor on choice, and a blank row. maxRows caps the whole
 // prompt; past it the top is cut so the options stay visible.
 func approvalRows(a *event.ApprovalRequested, choice int, km *keyMap, width, maxPreview, maxRows int, th theme) []string {
+	if maxRows <= 0 {
+		return nil
+	}
 	none := lipgloss.NewStyle()
 	head := hang("", none, a.Title, none.Bold(true), width)
 	var rule []string

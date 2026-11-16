@@ -329,6 +329,24 @@ func TestWriteFileReplacesKeepingMode(t *testing.T) {
 	assert.Equal(t, []string{"run.sh"}, listDir(t, dir))
 }
 
+func TestWriteFileReplacesKeepingPrivateMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "private.txt")
+	writeFile(t, path, "old")
+	require.NoError(t, os.Chmod(path, 0o600))
+	ws := newWorkspace(t, dir, nil)
+
+	require.NoError(t, ws.WriteFile("private.txt", []byte("new")))
+
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "new", string(got))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, fs.FileMode(0o600), info.Mode().Perm())
+	assert.Equal(t, []string{"private.txt"}, listDir(t, dir))
+}
+
 func TestWriteFileRefusesPathsOutsideWorkspace(t *testing.T) {
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "ws")

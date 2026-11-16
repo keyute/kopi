@@ -969,6 +969,34 @@ func TestCancelInterruptsDuringApproval(t *testing.T) {
 	assert.Empty(t, c.answers)
 }
 
+func TestApprovalSurvivesTinyTerminalResizes(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	send(m, event.TurnStart{}, editApproval())
+	press(m, down)
+	prompt := append([]string(nil), m.prompt...)
+
+	for height := 0; height <= 4; height++ {
+		require.NotPanics(t, func() {
+			m.Update(tea.WindowSizeMsg{Width: 60, Height: height})
+			m.View()
+		}, "height %d", height)
+		assert.NotNil(t, m.approval)
+		assert.Empty(t, m.prompt)
+	}
+
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	assert.Equal(t, prompt, m.prompt)
+	s := screen(m)
+	assert.Len(t, s, 30)
+	assert.Contains(t, s, "Edit a.go")
+	assert.Contains(t, s, "- old")
+	assert.Contains(t, s, "+ new")
+	assert.Equal(t, []string{"  1. Yes", "❯ 2. Yes, allow all edits this session", "  3. No (esc)", ""}, s[len(s)-5:len(s)-1])
+	assert.Empty(t, c.answers)
+	press(m, enter)
+	assert.Equal(t, []answer{{"c1", policy.AllowEdits}}, c.answers)
+}
+
 func TestApprovalWithLongPreviewFitsTheTerminal(t *testing.T) {
 	m, _ := newTestModel(t, 40, 20)
 	ev := editApproval()

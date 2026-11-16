@@ -177,7 +177,12 @@ func (w *Workspace) WriteFile(path string, data []byte) error {
 		return fmt.Errorf("failed to create parent of %s: %w", path, err)
 	}
 	tmp := filepath.Join(filepath.Dir(rel), "."+filepath.Base(rel)+"."+rand.Text()+".tmp")
-	f, err := w.root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
+	tempMode := fs.FileMode(0o666)
+	if mode != nil {
+		// Keep replacement data private until the original mode is restored.
+		tempMode = 0o600
+	}
+	f, err := w.root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, tempMode)
 	if err != nil {
 		return fmt.Errorf("failed to create temp file for %s: %w", path, err)
 	}

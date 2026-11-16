@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -19,6 +20,15 @@ func plainApprovalRows(a event.ApprovalRequested, choice, maxPreview int) []stri
 		rows[i] = strings.TrimRight(ansi.Strip(r), " ")
 	}
 	return rows
+}
+
+func TestApprovalRowsWithNonpositiveMaxRows(t *testing.T) {
+	km := newKeyMap(config.DefaultKeys())
+	for _, maxRows := range []int{-4, -1, 0} {
+		t.Run(fmt.Sprint(maxRows), func(t *testing.T) {
+			assert.Nil(t, approvalRows(nil, 0, &km, 40, 10, maxRows, mocha()))
+		})
+	}
 }
 
 func TestApprovalRowsShowTitlePreviewAndOptions(t *testing.T) {

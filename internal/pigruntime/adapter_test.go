@@ -6,10 +6,12 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/MichaelKinsy/PiG/agent"
 	"github.com/MichaelKinsy/PiG/ai"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
 )
@@ -228,4 +230,112 @@ func TestCancellingSendUnblocksPendingApproval(t *testing.T) {
 	require.NoError(t, <-done)
 	assert.Zero(t, ran.Load())
 	assert.Equal(t, 1, faux.CallCount())
+}
+
+// gatedAbortContext preserves cancellation but holds its AfterFunc forwarding.
+// Value must not expose the forwarding context's private cancellation state.
+type gatedAbortContext struct {
+	context.Context
+	forward context.Context
+	started chan struct{}
+	release chan struct{}
+}
+
+func (c *gatedAbortContext) Done() <-chan struct{} { return c.forward.Done() }
+func (c *gatedAbortContext) Err() error            { return c.forward.Err() }
+func (c *gatedAbortContext) AfterFunc(f func()) func() bool {
+	return context.AfterFunc(c.forward, func() {
+		close(c.started)
+		<-c.release
+		f()
+	})
+}
+
+func TestInterruptTurnRejectsBeforeCancellationForwarding(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{
+		ai.FauxAssistantMessage(ai.FauxContentBlocks{
+			ai.FauxToolCall("Exec", map[string]any{}, &ai.FauxToolCallOptions{ID: "reject"}),
+			ai.FauxToolCall("Probe", map[string]any{}, &ai.FauxToolCallOptions{ID: "allowed"}),
+		}, ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)}),
+		reply("unreached"),
+	})
+	var ran atomic.Int32
+	hooks := make(chan context.Context, 1)
+	reject := make(chan struct{})
+	authority := policy.NewAuthority()
+	authority.EnterExecute()
+	rules, err := policy.NewRules(sb.ws, sb.kopiHome, []string{"Exec", "Probe"}, policy.Source{Name: "test", Allow: []string{"Probe"}})
+	require.NoError(t, err)
+	sess, err := r.Open(t.Context(), OpenOptions{
+		Model: fauxModel, Authority: authority, Rules: rules,
+		Tools: []tool.Tool{execTool(&ran), probeTool(func(context.Context, json.RawMessage) (string, error) {
+			ran.Add(1)
+			return toolOutput, nil
+		})},
+		Approve: func(ctx context.Context, _ policy.Request) (policy.Answer, error) {
+			hooks <- ctx
+			<-reject
+			return policy.Reject, nil
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+	runEnded := make(chan struct{}, 1)
+	t.Cleanup(sess.inner.Subscribe(func(ev agent.AgentEvent) {
+		if _, ok := ev.(agent.AgentEndEvent); ok {
+			runEnded <- struct{}{}
+		}
+	}))
+	forward, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx := &gatedAbortContext{Context: context.WithoutCancel(t.Context()), forward: forward, started: make(chan struct{}), release: make(chan struct{})}
+	type result struct {
+		res SendResult
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		res, err := sess.Send(ctx, Prompt{Text: "run"}, nil)
+		done <- result{res, err}
+	}()
+	hook := <-hooks
+	cancel()
+	<-ctx.started
+	require.True(t, InterruptTurn(hook))
+	assert.ErrorIs(t, hook.Err(), context.Canceled)
+	close(reject)
+	<-runEnded
+	// Send must still join the held forwarding after the run finishes.
+	close(ctx.release)
+	first := <-done
+	require.NoError(t, first.err)
+	assert.Equal(t, event.Interrupted, first.res.Outcome.Status)
+	assert.Zero(t, ran.Load())
+	assert.Equal(t, 1, faux.CallCount())
+
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done")})
+	started, release := make(chan struct{}), make(chan struct{})
+	// The next tool approval is rule-allowed; hold its tool execution instead.
+	t.Cleanup(sess.inner.Subscribe(func(ev agent.AgentEvent) {
+		if _, ok := ev.(agent.AgentStartEvent); ok {
+			close(started)
+			<-release
+		}
+	}))
+	go func() {
+		res, err := sess.Send(t.Context(), Prompt{Text: "next"}, nil)
+		done <- result{res, err}
+	}()
+	<-started
+	assert.False(t, InterruptTurn(hook), "retired hook must not abort the new Send")
+	assert.False(t, InterruptTurn(t.Context()))
+	close(release)
+	next := <-done
+	require.NoError(t, next.err)
+	assert.Equal(t, event.Completed, next.res.Outcome.Status)
+	assert.Equal(t, int32(1), ran.Load())
+	assert.Contains(t, toolResultTexts(<-requests)[0], policy.ErrRejected.Error())
 }
