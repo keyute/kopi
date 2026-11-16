@@ -1000,6 +1000,60 @@ func TestApprovalPasteReachesTheField(t *testing.T) {
 	assert.Empty(t, m.composer.value())
 }
 
+func TestApprovalClipboardCompletionAfterTransitionIsDiscarded(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ev   event.Event
+	}{
+		{"approval ended", event.ApprovalEnded{Token: 1}},
+		{"turn ended", event.TurnEnd{}},
+		{"session changed", event.SessionChanged{SessionID: "s2"}},
+		{"replacement approval", event.ApprovalRequested{Token: 2, Title: "Edit b.go", Edits: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newTestModel(t, 60, 30)
+			m.clip = &fakeClipboard{text: "stale clipboard"}
+			typeText(m, "composer draft")
+			send(m, editApproval())
+			press(m, digit('3'))
+			keys(m, "feedback")
+			oldField := m.dialog.field()
+			cmd := press(m, ctrlV)
+			require.NotNil(t, cmd)
+
+			send(m, tc.ev)
+			if m.approval != nil {
+				press(m, digit('3'))
+				keys(m, "replacement feedback")
+			}
+			m.Update(cmd())
+
+			assert.Equal(t, "composer draft", m.composer.value())
+			assert.Equal(t, "feedback", oldField.value())
+			if m.approval != nil {
+				assert.Equal(t, "replacement feedback", m.dialog.text())
+			}
+		})
+	}
+}
+
+func TestApprovalClipboardCompletionAfterLeavingFieldIsDiscarded(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	m.clip = &fakeClipboard{text: "stale clipboard"}
+	send(m, editApproval())
+	press(m, digit('3'))
+	keys(m, "feedback")
+	field := m.dialog.field()
+	cmd := press(m, ctrlV)
+	require.NotNil(t, cmd)
+
+	press(m, up)
+	m.Update(cmd())
+
+	assert.Equal(t, "feedback", field.value())
+	assert.Empty(t, m.composer.value())
+}
+
 func TestApprovalFieldGrowsWithinTheScreen(t *testing.T) {
 	m, _ := newTestModel(t, 60, 30)
 	send(m, editApproval())
