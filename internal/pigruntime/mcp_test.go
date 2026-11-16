@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/MichaelKinsy/PiG/mcp"
@@ -370,7 +373,7 @@ func TestServersStdio(t *testing.T) {
 	assert.JSONEq(t, `{"x":"y"}`, out)
 }
 
-func TestServersToolNameClashAcrossServers(t *testing.T) {
+func TestServersRejectAmbiguousServerName(t *testing.T) {
 	first := &mcpfake.Server{Tools: []map[string]any{echoTool("b__x"), echoTool("y")}}
 	second := &mcpfake.Server{Tools: []map[string]any{echoTool("x"), echoTool("z")}}
 	s, _ := startFakes(t, map[string]*mcpfake.Server{"a": first, "a__b": second})
@@ -378,8 +381,10 @@ func TestServersToolNameClashAcrossServers(t *testing.T) {
 	statuses := s.Wait(t.Context())
 	assert.Equal(t, []string{"mcp__a__b__x", "mcp__a__y"}, toolNames(statuses[0]))
 	assert.Empty(t, statuses[0].Skipped)
-	assert.Equal(t, []string{"mcp__a__b__z"}, toolNames(statuses[1]))
-	assert.Equal(t, []string{"x: same name as b__x of server a"}, statuses[1].Skipped)
+	assert.ErrorIs(t, statuses[1].Err, tool.ErrInvalidMCPServerName)
+	assert.Empty(t, statuses[1].Tools)
+	assert.Empty(t, statuses[1].Skipped)
+	assert.Zero(t, second.Connections())
 	assert.Equal(t, statuses, s.Wait(t.Context()))
 }
 
@@ -410,4 +415,206 @@ func TestServersRedactExpandedURL(t *testing.T) {
 	assert.Contains(t, statuses[2].Err.Error(), `"`+configured+`"`)
 	var ue *url.Error
 	require.ErrorAs(t, statuses[2].Err, &ue)
+}
+
+func TestServersInvalidNamesFailBeforeDial(t *testing.T) {
+	for _, name := range []string{"", "github__other", "github_", "github.", "github..other", "github._other"} {
+		t.Run(name, func(t *testing.T) {
+			fake := &mcpfake.Server{Tools: []map[string]any{echoTool("t")}}
+			s, _ := startWith(t, map[string]config.MCPServer{name: {Command: "fake"}, "safe": {Command: "fake"}}, func(got string, _ config.MCPServer) (mcp.Transport, error) {
+				require.Equal(t, "safe", got)
+				return fake.Connect(), nil
+			})
+			for _, st := range s.Wait(t.Context()) {
+				if st.Name == "safe" {
+					require.NoError(t, st.Err)
+				} else {
+					require.ErrorIs(t, st.Err, tool.ErrInvalidMCPServerName)
+				}
+			}
+		})
+	}
+}
+
+type mcpFetchFunc func(*http.Request) (*http.Response, error)
+
+func (f mcpFetchFunc) Do(r *http.Request) (*http.Response, error) { return f(r) }
+
+// scriptedHTTP uses the same wire replies as the in-memory fake, without sockets.
+func scriptedHTTP(t *testing.T, fake *mcpfake.Server, intercept mcpFetchFunc) dialFunc {
+	t.Helper()
+	return func(string, config.MCPServer) (mcp.Transport, error) {
+		noGET := false
+		return mcp.NewStreamableHTTPTransport(mcp.StreamableHTTPTransportOptions{
+			URL: "https://example.invalid/mcp", OpenGetStream: &noGET,
+			Fetch: mcpFetchFunc(func(r *http.Request) (*http.Response, error) {
+				if intercept != nil {
+					if res, err := intercept(r); res != nil || err != nil {
+						return res, err
+					}
+				}
+				res := &http.Response{StatusCode: http.StatusAccepted, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}
+				if r.Method == http.MethodDelete {
+					return res, nil
+				}
+				raw, err := io.ReadAll(r.Body)
+				if err != nil {
+					return nil, err
+				}
+				msg, err := mcp.ParseJSONRPCMessage(raw)
+				if err != nil {
+					return nil, err
+				}
+				if reply := fake.Answer(msg); reply != nil {
+					body, err := json.Marshal(reply)
+					if err != nil {
+						return nil, err
+					}
+					res.StatusCode = http.StatusOK
+					res.Header.Set("Content-Type", "application/json")
+					res.Header.Set("Mcp-Session-Id", "synthetic-session")
+					res.Body = io.NopCloser(strings.NewReader(string(body)))
+				}
+				return res, nil
+			}),
+		})
+	}
+}
+
+func TestServersCancelInitializedHTTP(t *testing.T) {
+	for _, action := range []string{"cancel startup", "close", "cancel reconnect", "close reconnect"} {
+		t.Run(action, func(t *testing.T) {
+			entered := make(chan struct{})
+			fake := &mcpfake.Server{Tools: []map[string]any{echoTool("t")}, Reply: echo}
+			var notifications atomic.Int32
+			reconnect := strings.Contains(action, "reconnect")
+			dial := scriptedHTTP(t, fake, func(r *http.Request) (*http.Response, error) {
+				if r.Method != http.MethodPost {
+					return nil, nil
+				}
+				raw, err := io.ReadAll(r.Body)
+				if err != nil {
+					return nil, err
+				}
+				r.Body = io.NopCloser(strings.NewReader(string(raw)))
+				msg, err := mcp.ParseJSONRPCMessage(raw)
+				if err != nil {
+					return nil, err
+				}
+				if msg.Method == "notifications/initialized" && (notifications.Add(1) > 1 || !reconnect) {
+					close(entered)
+					<-r.Context().Done()
+					return nil, r.Context().Err()
+				}
+				return nil, nil
+			})
+			s, cancel := startWith(t, map[string]config.MCPServer{"srv": {Command: "fake"}}, dial)
+			callDone := make(chan error, 1)
+			var cancelCall context.CancelFunc
+			if reconnect {
+				tl := s.Wait(t.Context())[0].Tools[0]
+				s.servers[0].invalidate(s.servers[0].client)
+				ctx, stop := context.WithCancel(t.Context())
+				cancelCall = stop
+				defer stop()
+				go func() {
+					_, err := tl.Run(ctx, json.RawMessage(`{}`), func(policy.Target) error { return nil })
+					callDone <- err
+				}()
+			}
+			<-entered
+			switch {
+			case strings.HasPrefix(action, "close"):
+				s.Close()
+			case reconnect:
+				cancelCall()
+			default:
+				cancel()
+			}
+			if reconnect {
+				require.Error(t, <-callDone)
+			}
+			s.Close()
+		})
+	}
+}
+
+func TestServersHTTPExpiredSessionReconnectsWithoutReplay(t *testing.T) {
+	var calls atomic.Int32
+	var initializes atomic.Int32
+	fake := &mcpfake.Server{Tools: []map[string]any{echoTool("t")}, Reply: echo}
+	dial := scriptedHTTP(t, fake, func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodPost {
+			return nil, nil
+		}
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		r.Body = io.NopCloser(strings.NewReader(string(raw)))
+		msg, err := mcp.ParseJSONRPCMessage(raw)
+		if err != nil {
+			return nil, err
+		}
+		if msg.Method == "initialize" {
+			initializes.Add(1)
+		}
+		if msg.Method == "tools/call" && calls.Add(1) == 1 {
+			return &http.Response{StatusCode: http.StatusNotFound, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("expired"))}, nil
+		}
+		return nil, nil
+	})
+	s, _ := startWith(t, map[string]config.MCPServer{"srv": {Command: "fake"}}, dial)
+	tl := s.Wait(t.Context())[0].Tools[0]
+	_, err := call(t, tl, `{}`)
+	var expired *mcp.McpSessionExpiredError
+	require.ErrorAs(t, err, &expired)
+	assert.Equal(t, int32(1), calls.Load())
+	assert.Equal(t, int32(1), initializes.Load())
+	out, err := call(t, tl, `{"next":true}`)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"next":true}`, out)
+	assert.Equal(t, int32(2), calls.Load())
+	assert.Equal(t, int32(2), initializes.Load())
+}
+
+func TestServersSuccessfulHTTPOutlivesConnectContext(t *testing.T) {
+	fake := &mcpfake.Server{Tools: []map[string]any{echoTool("t")}, Reply: echo}
+	s, _ := startWith(t, map[string]config.MCPServer{"srv": {Command: "fake"}}, scriptedHTTP(t, fake, nil))
+	st := s.Wait(t.Context())[0]
+	require.NoError(t, st.Err)
+	require.ErrorIs(t, s.startup.Err(), context.Canceled)
+	out, err := call(t, st.Tools[0], `{"startup":true}`)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"startup":true}`, out)
+
+	srv := s.servers[0]
+	srv.invalidate(srv.client)
+	ctx, cancel := context.WithCancel(t.Context())
+	_, err = srv.live(ctx)
+	require.NoError(t, err)
+	cancel()
+	out, err = call(t, st.Tools[0], `{"reconnect":true}`)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"reconnect":true}`, out)
+}
+
+func TestServersInvalidationPreservesNewerClient(t *testing.T) {
+	fake := &mcpfake.Server{Tools: []map[string]any{echoTool("t")}, Reply: echo}
+	s, _ := startFakes(t, map[string]*mcpfake.Server{"srv": fake})
+	st := s.Wait(t.Context())[0]
+	require.NoError(t, st.Err)
+	srv := s.servers[0]
+	old := srv.client
+	srv.invalidate(old)
+	newer, err := srv.live(t.Context())
+	require.NoError(t, err)
+	require.NotSame(t, old, newer)
+	// A concurrent call may report expiration after a replacement was cached.
+	srv.invalidate(old)
+	assert.Same(t, newer, srv.client)
+	out, err := call(t, st.Tools[0], `{"newer":true}`)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"newer":true}`, out)
+	assert.Equal(t, 2, fake.Connections())
 }

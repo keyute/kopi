@@ -134,3 +134,12 @@ func TestMCPDisplay(t *testing.T) {
 		{Kind: Context, Text: "}"},
 	}, d.Preview(json.RawMessage(`{"n":1}`)))
 }
+
+func TestValidateMCPServerName(t *testing.T) {
+	for _, name := range []string{"github", "github-other", "my.server", "my_server", "_github", "café-docs", "A1"} {
+		assert.NoError(t, ValidateMCPServerName(name), name)
+	}
+	for _, name := range []string{"", "github__other", "github_", "github.", "github..other", "github._other", "café", ".."} {
+		assert.ErrorIs(t, ValidateMCPServerName(name), ErrInvalidMCPServerName, name)
+	}
+}

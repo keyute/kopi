@@ -489,3 +489,17 @@ func TestParseModelRef(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveMCPServerNameContract(t *testing.T) {
+	for _, name := range []string{"github__other", "github_", "github.", "github..other", "github._other"} {
+		global := globalLayer(t, fmt.Sprintf(`{"mcpServers": {%q: {"command": "fake"}}}`, name))
+		_, err := Resolve(Defaults(), global)
+		require.ErrorIs(t, err, ErrInvalidValue, name)
+		assert.Contains(t, err.Error(), global.Name)
+	}
+	for _, name := range []string{"github", "github-other", "my.server", "my_server", "_github", "café-docs"} {
+		global := globalLayer(t, fmt.Sprintf(`{"mcpServers": {%q: {"command": "fake"}}}`, name))
+		_, err := Resolve(Defaults(), global)
+		require.NoError(t, err, name)
+	}
+}

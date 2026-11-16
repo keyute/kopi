@@ -20,6 +20,7 @@ import (
 	"github.com/knadh/koanf/v2"
 
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/tool"
 )
 
 const Version = 1
@@ -302,8 +303,8 @@ func validateSandbox(s Sandbox) error {
 
 func validateMCPServers(servers map[string]MCPServer) error {
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
-		if name == "" {
-			return fmt.Errorf("%w: mcpServers: empty server name", ErrInvalidValue)
+		if err := tool.ValidateMCPServerName(name); err != nil {
+			return fmt.Errorf("%w: mcpServers.%s: %w", ErrInvalidValue, name, err)
 		}
 		if err := servers[name].Validate(); err != nil {
 			return fmt.Errorf("mcpServers.%s: %w", name, err)

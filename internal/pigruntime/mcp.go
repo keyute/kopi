@@ -91,6 +91,10 @@ func startServers(ctx context.Context, cancel context.CancelFunc, o ServerOption
 		life, stop := context.WithCancel(context.Background())
 		srv := &server{name: name, version: o.Version, dial: dial, life: life, stop: stop, done: make(chan struct{}), status: ServerStatus{Name: name}}
 		s.servers = append(s.servers, srv)
+		if err := tool.ValidateMCPServerName(name); err != nil {
+			srv.fail(fmt.Errorf("failed to name tools: %w", err))
+			continue
+		}
 		prefix := tool.MCPName(name, "")
 		if first, ok := prefixes[prefix]; ok {
 			srv.fail(fmt.Errorf("failed to name tools: %w: %q and %q", ErrServerNameClash, first, name))
@@ -234,7 +238,22 @@ func (s *server) connect(ctx context.Context) (*mcp.Client, *mcp.InitializeResul
 		return nil, nil, fmt.Errorf("failed to create transport: %w", err)
 	}
 	c := mcp.NewClient(mcp.ClientOptions{Implementation: mcp.Implementation{Name: "kopi", Version: s.version}})
+	// PiG sends initialized with Background, so cancellation must also close
+	// the transport while Connect is in progress. Join a running close before
+	// returning; a stopped hook must not outlive a successful connection.
+	closed := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = t.Close()
+		close(closed)
+	})
 	init, err := c.Connect(ctx, t)
+	if !stop() {
+		<-closed
+	}
+	if ctx.Err() != nil {
+		s.closeClient(c)
+		err = ctx.Err()
+	}
 	if err != nil {
 		err = fmt.Errorf("failed to connect: %w", err)
 		// Connect has closed the transport, so its stderr is complete.
@@ -301,6 +320,9 @@ func (s *server) call(name string) func(context.Context, json.RawMessage) (strin
 		}
 		result, err := c.CallTool(ctx, name, args, mcp.RequestOptions{TimeoutMs: int(callTimeout / time.Millisecond)})
 		if err != nil {
+			if _, expired := errors.AsType[*mcp.McpSessionExpiredError](err); expired {
+				s.invalidate(c)
+			}
 			return "", s.redact(fmt.Errorf("failed to call %s: %w", name, err))
 		}
 		text := resultText(result)
@@ -371,6 +393,15 @@ func (s *server) live(ctx context.Context) (*mcp.Client, error) {
 	}
 	s.client = c
 	return c, nil
+}
+
+func (s *server) invalidate(c *mcp.Client) {
+	s.mu.Lock()
+	if s.client == c {
+		s.client = nil
+	}
+	s.mu.Unlock()
+	s.closeClient(c)
 }
 
 func (s *server) close() {

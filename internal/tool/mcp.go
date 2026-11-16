@@ -19,6 +19,19 @@ func MCPName(server, tool string) string {
 	return policy.MCPPrefix + mcpNamePart(server) + "__" + mcpNamePart(tool)
 }
 
+// ValidateMCPServerName keeps the normalized server component unambiguous in
+// permission prefixes such as mcp__github__*.
+func ValidateMCPServerName(name string) error {
+	part := mcpNamePart(name)
+	if part == "" {
+		return fmt.Errorf("%w: empty server name", ErrInvalidMCPServerName)
+	}
+	if strings.Contains(part, "__") || strings.HasSuffix(part, "_") {
+		return fmt.Errorf("%w: normalized server name must not contain __ or end in _", ErrInvalidMCPServerName)
+	}
+	return nil
+}
+
 func mcpNamePart(s string) string {
 	return strings.Map(func(r rune) rune {
 		switch {

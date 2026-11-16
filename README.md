@@ -197,7 +197,7 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - Print mode never asks: in a folder with no decision it skips the `.mcp.json` servers and warns on stderr.
 - To change a saved answer, remove the folder's entry from `trust.json`.
 - Servers start at startup; Kopi waits up to 10 seconds for them before the session opens. A server that fails or is late is reported and its tools are absent for the run; the fullscreen interface shows the reasons in the transcript, print mode on stderr.
-- A server's tools are named `mcp__<server>__<tool>`, with characters outside `A-Z`, `a-z`, `0-9`, `_` and `-` turned into `_`. A name over 64 characters, or one that two tools share, is skipped and reported.
+- A server's tools are named `mcp__<server>__<tool>`, with characters outside `A-Z`, `a-z`, `0-9`, `_` and `-` turned into `_`. The normalized server component must be nonempty, must not contain `__`, and must not end in `_`, so a whole-server permission prefix cannot match another server. Invalid server names fail before connecting. A name over 64 characters, or one that two tools share, is skipped and reported.
 - A tool the server marks read-only (`readOnlyHint`) works in plan mode; any other works only in execute mode.
 - Every MCP call asks unless a rule allows it, read-only or not, and print mode denies it without one. A rule names one tool, `mcp__context7__resolve-library-id`, or ends in `*` to cover a prefix: `mcp__context7__*` for a whole server, `mcp__*` for every server. MCP rules take no path, and are accepted for servers that are not configured here.
 - Server instructions are added to the system prompt, at most 2 KB each. Results are text, capped like other tool output; images and other content show as placeholders.

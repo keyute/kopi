@@ -10,6 +10,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/gofrs/flock"
 )
 
 const version = 1
@@ -92,11 +94,24 @@ func (s *Store) Lookup(dir string) (d Decision, ok bool, err error) {
 // Set records the decision for dir and rewrites the trust file. It applies the
 // change to the file as it is now, so a decision another process saved since
 // Open is kept.
-func (s *Store) Set(dir string, d Decision) error {
-	dir, err := canonical(dir)
+func (s *Store) Set(dir string, d Decision) (err error) {
+	dir, err = canonical(dir)
 	if err != nil {
 		return err
 	}
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return fmt.Errorf("failed to create trust file directory: %w", err)
+	}
+	// The sidecar stays in place because write replaces the data inode.
+	lock := flock.New(s.path + ".lock")
+	if err := lock.Lock(); err != nil {
+		return fmt.Errorf("failed to lock trust file %s: %w", s.path, err)
+	}
+	defer func() {
+		if unlockErr := lock.Unlock(); unlockErr != nil && err == nil {
+			err = fmt.Errorf("failed to unlock trust file %s: %w", s.path, unlockErr)
+		}
+	}()
 	fresh, err := Open(s.path)
 	if err != nil {
 		return err
@@ -133,9 +148,6 @@ func (s *Store) write() error {
 		return fmt.Errorf("failed to encode trust file: %w", err)
 	}
 	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("failed to create trust file directory: %w", err)
-	}
 	tmp, err := os.CreateTemp(dir, ".trust-*.json") // created 0600
 	if err != nil {
 		return fmt.Errorf("failed to create trust file: %w", err)
