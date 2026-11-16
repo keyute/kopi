@@ -310,6 +310,34 @@ func TestSeatbeltMissingDenyWriteCannotBeCreated(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(root, "protected"))
 }
 
+func TestSeatbeltMissingDeniedAncestorCannotBeSymlink(t *testing.T) {
+	base := t.TempDir()
+	root, target := filepath.Join(base, "root"), filepath.Join(base, "target")
+	require.NoError(t, os.Mkdir(root, 0o700))
+	secret := filepath.Join(target, "secret")
+	writeFile(t, secret)
+	missing := filepath.Join(root, "missing")
+	denied := filepath.Join(missing, "secret")
+
+	for _, tc := range []struct {
+		name   string
+		policy Policy
+	}{
+		{"DenyRead", Policy{Write: []string{root}, DenyRead: []string{denied}}},
+		{"DenyWrite", Policy{Write: []string{root}, DenyWrite: []string{denied}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sb := newSandbox(t, tc.policy)
+			assert.Error(t, bash(t, sb, `ln -s "$TARGET" "$ROOT/missing"`, "TARGET="+target, "ROOT="+root))
+			_, err := os.Lstat(missing)
+			assert.ErrorIs(t, err, os.ErrNotExist)
+			got, err := os.ReadFile(secret)
+			require.NoError(t, err)
+			assert.Equal(t, "x", string(got))
+		})
+	}
+}
+
 func TestSeatbeltShellBasics(t *testing.T) {
 	sb := newSandbox(t, Policy{Write: []string{filepath.Join(t.TempDir(), "root")}})
 	for _, script := range []string{
