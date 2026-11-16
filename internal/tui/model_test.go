@@ -903,7 +903,7 @@ func TestApprovalCapturesKeys(t *testing.T) {
 	assert.Empty(t, m.composer.value())
 	assert.Zero(t, c.toggles)
 	assert.Empty(t, c.answers)
-	assert.Contains(t, screen(m), "❯ 1. Yes")
+	assert.Contains(t, screen(m), "❭ 1. Yes")
 }
 
 func TestApprovalEnterAnswersTheSelectedOption(t *testing.T) {
@@ -918,7 +918,7 @@ func TestApprovalEnterAnswersTheSelectedOption(t *testing.T) {
 	press(m, enter)
 
 	assert.Equal(t, []answer{{1, policy.AllowEdits}}, c.answers)
-	assert.Contains(t, screen(m), "❯ 2. Yes, allow all edits this session", "the prompt stays until it ends")
+	assert.Contains(t, screen(m), "❭ 2. Yes, allow all edits this session", "the prompt stays until it ends")
 }
 
 func TestApprovalFollowsReboundMenuKeys(t *testing.T) {
@@ -931,12 +931,12 @@ func TestApprovalFollowsReboundMenuKeys(t *testing.T) {
 	press(m, tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
 	press(m, tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
 	press(m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	assert.Contains(t, screen(m), "❯ 2. Yes, allow all edits this session")
+	assert.Contains(t, screen(m), "❭ 2. Yes, allow all edits this session")
 
 	press(m, down)
 	press(m, up)
 	press(m, up)
-	assert.Contains(t, screen(m), "❯ 2. Yes, allow all edits this session", "the arrow keys are unbound")
+	assert.Contains(t, screen(m), "❭ 2. Yes, allow all edits this session", "the arrow keys are unbound")
 	press(m, enter)
 	assert.Equal(t, []answer{{1, policy.AllowEdits}}, c.answers)
 }
@@ -969,11 +969,11 @@ func TestApprovalEndedRestoresTheComposerWithItsDraft(t *testing.T) {
 	assert.NotContains(t, screen(m), "❯ draft")
 
 	send(m, event.ApprovalEnded{Token: 2})
-	assert.Contains(t, screen(m), "❯ 1. Yes", "another call's end leaves the prompt")
+	assert.Contains(t, screen(m), "❭ 1. Yes", "another call's end leaves the prompt")
 
 	send(m, event.ApprovalEnded{Token: 1})
 	assert.Contains(t, screen(m), "❯ draft")
-	assert.NotContains(t, screen(m), "❯ 1. Yes")
+	assert.NotContains(t, screen(m), "❭ 1. Yes")
 	assert.Len(t, screen(m), 30)
 }
 
@@ -988,7 +988,7 @@ func TestStaleApprovalEndedCannotDismissReusedCallID(t *testing.T) {
 
 	require.NotNil(t, m.approval)
 	assert.Equal(t, second, *m.approval)
-	assert.Contains(t, screen(m), "Edit b.go")
+	assert.Contains(t, screen(m), "  Edit b.go")
 	press(m, enter)
 	assert.Equal(t, []answer{{second.Token, policy.Allow}}, c.answers)
 	send(m, event.ApprovalEnded{Token: second.Token})
@@ -1002,7 +1002,7 @@ func TestTurnEndAndSessionChangedClearTheApproval(t *testing.T) {
 		send(m, ev)
 		assert.Nil(t, m.approval)
 		assert.Contains(t, screen(m), "❯")
-		assert.NotContains(t, screen(m), "❯ 1. Yes")
+		assert.NotContains(t, screen(m), "❭ 1. Yes")
 	}
 }
 
@@ -1036,10 +1036,10 @@ func TestApprovalSurvivesTinyTerminalResizes(t *testing.T) {
 	assert.Equal(t, prompt, m.prompt)
 	s := screen(m)
 	assert.Len(t, s, 30)
-	assert.Contains(t, s, "Edit a.go")
-	assert.Contains(t, s, "- old")
-	assert.Contains(t, s, "+ new")
-	assert.Equal(t, []string{"  1. Yes", "❯ 2. Yes, allow all edits this session", "  3. No (esc)", ""}, s[len(s)-5:len(s)-1])
+	assert.Contains(t, s, "  Edit a.go")
+	assert.Contains(t, s, "  - old")
+	assert.Contains(t, s, "  + new")
+	assert.Equal(t, []string{"  1. Yes", "❭ 2. Yes, allow all edits this session", "  3. No (esc)", strings.Repeat("─", 60)}, s[len(s)-5:len(s)-1])
 	assert.Empty(t, c.answers)
 	press(m, enter)
 	assert.Equal(t, []answer{{1, policy.AllowEdits}}, c.answers)
@@ -1055,7 +1055,7 @@ func TestApprovalWithLongPreviewFitsTheTerminal(t *testing.T) {
 
 	s := screen(m)
 	assert.Len(t, s, 20)
-	assert.Equal(t, []string{"❯ 1. Yes", "  2. Yes, allow all edits this session", "  3. No (esc)", ""}, s[len(s)-5:len(s)-1])
-	assert.Contains(t, s, "  … 47 more lines")
-	assert.Contains(t, s, "Edit a.go")
+	assert.Equal(t, []string{"❭ 1. Yes", "  2. Yes, allow all edits this session", "  3. No (esc)", strings.Repeat("─", 40)}, s[len(s)-5:len(s)-1])
+	assert.Contains(t, s, "    … 47 more lines")
+	assert.Contains(t, s, "  Edit a.go")
 }

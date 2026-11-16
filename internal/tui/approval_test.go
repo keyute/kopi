@@ -13,6 +13,8 @@ import (
 	"github.com/keyute/kopi/internal/tool"
 )
 
+var rule40 = strings.Repeat("─", 40)
+
 func plainApprovalRows(a event.ApprovalRequested, choice, maxPreview int) []string {
 	km := newKeyMap(config.DefaultKeys())
 	rows := approvalRows(&a, choice, &km, 40, maxPreview, 100, mocha())
@@ -42,21 +44,22 @@ func TestApprovalRowsShowTitlePreviewAndOptions(t *testing.T) {
 		Edits: true,
 	}
 	assert.Equal(t, []string{
-		"Edit a.go",
-		"  keep",
-		"- old",
-		"+ new",
+		rule40,
+		"  Edit a.go",
+		"    keep",
+		"  - old",
+		"  + new",
 		"",
 		"  1. Yes",
-		"❯ 2. Yes, allow all edits this session",
+		"❭ 2. Yes, allow all edits this session",
 		"  3. No (esc)",
-		"",
+		rule40,
 	}, plainApprovalRows(a, 1, 10))
 }
 
 func TestApprovalRowsWithoutEditsOfferNoAsTwo(t *testing.T) {
 	a := event.ApprovalRequested{CallID: "c1", Title: "Write a.go"}
-	assert.Equal(t, []string{"Write a.go", "", "❯ 1. Yes", "  2. No (esc)", ""}, plainApprovalRows(a, 0, 10))
+	assert.Equal(t, []string{rule40, "  Write a.go", "", "❭ 1. Yes", "  2. No (esc)", rule40}, plainApprovalRows(a, 0, 10))
 }
 
 func TestApprovalRowsCapThePreview(t *testing.T) {
@@ -65,10 +68,24 @@ func TestApprovalRowsCapThePreview(t *testing.T) {
 		a.Preview = append(a.Preview, tool.PreviewLine{Kind: tool.Added, Text: "x"})
 	}
 	rows := plainApprovalRows(a, 0, 4)
-	assert.Equal(t, []string{"Write a.go", "+ x", "+ x", "+ x", "  … 7 more lines", ""}, rows[:6])
+	assert.Equal(t, []string{rule40, "  Write a.go", "  + x", "  + x", "  + x", "    … 7 more lines", ""}, rows[:7])
 
 	a.Preview = a.Preview[:4]
-	assert.Equal(t, []string{"Write a.go", "+ x", "+ x", "+ x", "+ x", ""}, plainApprovalRows(a, 0, 4)[:6], "an exact fit has no marker")
+	assert.Equal(t, []string{rule40, "  Write a.go", "  + x", "  + x", "  + x", "  + x", ""}, plainApprovalRows(a, 0, 4)[:7], "an exact fit has no marker")
+}
+
+func TestApprovalRowsCutTheTopFirst(t *testing.T) {
+	a := event.ApprovalRequested{
+		Title:   "Edit a.go",
+		Preview: []tool.PreviewLine{{Kind: tool.Removed, Text: "old"}, {Kind: tool.Added, Text: "new"}},
+		Edits:   true,
+	}
+	km := newKeyMap(config.DefaultKeys())
+	rows := approvalRows(&a, 0, &km, 40, 10, 4, mocha())
+	for i, r := range rows {
+		rows[i] = strings.TrimRight(ansi.Strip(r), " ")
+	}
+	assert.Equal(t, []string{"❭ 1. Yes", "  2. Yes, allow all edits this session", "  3. No (esc)", rule40}, rows)
 }
 
 func TestPreviewRowsWrappedBudget(t *testing.T) {
@@ -148,7 +165,7 @@ func BenchmarkPreviewRowsHugeLine(b *testing.B) {
 
 func TestApprovalRowsNameTheRuleOnlyWhenSet(t *testing.T) {
 	a := event.ApprovalRequested{Title: "Edit .git/config", Rule: "Edit(.git) (built-in)"}
-	assert.Equal(t, "asked by Edit(.git) (built-in)", plainApprovalRows(a, 0, 10)[1])
+	assert.Equal(t, "  asked by Edit(.git) (built-in)", plainApprovalRows(a, 0, 10)[2])
 
 	a.Rule = ""
 	assert.NotContains(t, strings.Join(plainApprovalRows(a, 0, 10), "\n"), "asked by")

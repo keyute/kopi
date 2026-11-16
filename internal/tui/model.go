@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -250,20 +249,16 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 func (m *model) approvalKey(msg tea.KeyPressMsg) {
 	opts := approvalOptions(m.approval, &m.keys)
 	token := m.approval.Token
-	switch s := msg.String(); {
-	case key.Matches(msg, m.keys.interrupt):
+	if key.Matches(msg, m.keys.interrupt) {
 		m.c.Answer(token, policy.Reject)
-	case key.Matches(msg, m.keys.menuUp):
-		m.choice = max(0, m.choice-1)
-	case key.Matches(msg, m.keys.menuDown):
-		m.choice = min(len(opts)-1, m.choice+1)
-	case key.Matches(msg, m.keys.submit):
-		m.c.Answer(token, opts[m.choice].answer)
-	default:
-		if n, err := strconv.Atoi(s); err == nil && n >= 1 && n <= len(opts) {
-			m.c.Answer(token, opts[n-1].answer)
-		}
+		return
 	}
+	sel, picked := dialogKey(msg, &m.keys, m.choice, len(opts))
+	if picked {
+		m.c.Answer(token, opts[sel].answer)
+		return
+	}
+	m.choice = sel
 }
 
 // cancel is the cancel key and SIGINT: it interrupts a running turn, else

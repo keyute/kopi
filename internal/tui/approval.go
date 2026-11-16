@@ -5,7 +5,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/event"
@@ -31,35 +30,23 @@ func approvalOptions(a *event.ApprovalRequested, km *keyMap) []approvalOption {
 	return append(opts, approvalOption{no, policy.Reject})
 }
 
-// approvalRows draws the prompt in place of the composer: the title, the
-// preview capped at maxPreview rows, the rule that asked, a blank row, the
-// options with the cursor on choice, and a blank row. maxRows caps the whole
-// prompt; past it the top is cut so the options stay visible.
+// approvalRows draws the prompt in place of the composer, in the dialog's
+// frame: the title, the preview capped at maxPreview rows, the rule that
+// asked, a blank row, and the options with the cursor on choice. maxRows caps
+// the whole prompt; past it the top is cut so the options stay visible.
 func approvalRows(a *event.ApprovalRequested, choice int, km *keyMap, width, maxPreview, maxRows int, th theme) []string {
 	if maxRows <= 0 {
 		return nil
 	}
-	none := lipgloss.NewStyle()
-	head := hang("", none, a.Title, none.Bold(true), width)
-	var rule []string
+	d := dialog{title: a.Title, sel: choice}
 	if a.Rule != "" {
-		rule = hang("", none, "asked by "+a.Rule, fg(th.dim), width)
+		d.note = "asked by " + a.Rule
 	}
-	tail := []string{""}
-	for i, o := range approvalOptions(a, km) {
-		prefix, st := "  ", none
-		if i == choice {
-			prefix, st = "❯ ", fg(th.accent)
-		}
-		tail = append(tail, hang(prefix, fg(th.accent), fmt.Sprintf("%d. %s", i+1, o.label), st, width)...)
+	for _, o := range approvalOptions(a, km) {
+		d.options = append(d.options, o.label)
 	}
-	tail = append(tail, "")
-
-	limit := min(maxPreview, maxRows-len(head)-len(rule)-len(tail))
-	rows := head
-	rows = append(rows, previewRows(a.Preview, limit, width, th)...)
-	rows = append(rows, rule...)
-	rows = append(rows, tail...)
+	d.body = previewRows(a.Preview, min(maxPreview, maxRows-len(d.rows(width, th))), width-2, th)
+	rows := d.rows(width, th)
 	return rows[max(0, len(rows)-maxRows):]
 }
 
