@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -485,6 +486,27 @@ func TestOpenRejectsResumeWithContinue(t *testing.T) {
 	r, _ := newTestRuntime(t, sb)
 	_, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, ResumeID: "x", Continue: true, Authority: policy.NewAuthority()})
 	assert.Error(t, err)
+}
+
+func TestOpenRunsSandboxedToolWithoutApproval(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{callTool("Exec", "call-1"), captureRequest(requests, "ran")})
+
+	var ran atomic.Int32
+	exec := execTool(&ran)
+	exec.Sandboxed = true
+	authority := policy.NewAuthority()
+	authority.EnterExecute()
+	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, Tools: []tool.Tool{exec}, Authority: authority})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+
+	_, err = sess.Send(t.Context(), Prompt{Text: "run it"}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, execOutput, lastToolResult(t, <-requests))
+	assert.Equal(t, int32(1), ran.Load())
 }
 
 func TestSessionsListsOnlyKopiAgentDir(t *testing.T) {

@@ -20,6 +20,7 @@ import (
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/headless"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
+	"github.com/keyute/kopi/internal/sandbox"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -170,11 +171,11 @@ func TestRootRejectsInvalidRuleInFlag(t *testing.T) {
 		t.Run(flag, func(t *testing.T) {
 			e := newTestEnv(t)
 
-			_, _, err := execute(t, "", "--model", mockModel, flag, "Read,Bash(ls)", "-p", "hi")
+			_, _, err := execute(t, "", "--model", mockModel, flag, "Read,Nope(ls)", "-p", "hi")
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), flag+": ")
-			assert.Contains(t, err.Error(), `unknown tool "Bash"`)
+			assert.Contains(t, err.Error(), `unknown tool "Nope"`)
 			assert.NoDirExists(t, e.agentDir)
 		})
 	}
@@ -183,13 +184,23 @@ func TestRootRejectsInvalidRuleInFlag(t *testing.T) {
 func TestRootRejectsInvalidRuleInConfig(t *testing.T) {
 	e := newTestEnv(t)
 	configFile := filepath.Join(e.kopiHome, "config.json")
-	e.writeFile(t, configFile, `{"permissions":{"deny":["Bash"]}}`)
+	e.writeFile(t, configFile, `{"permissions":{"deny":["Nope"]}}`)
 
 	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), configFile)
-	assert.Contains(t, err.Error(), `unknown tool "Bash"`)
+	assert.Contains(t, err.Error(), `unknown tool "Nope"`)
+	assert.NoDirExists(t, e.agentDir)
+}
+
+func TestRootRejectsPathRuleForBash(t *testing.T) {
+	e := newTestEnv(t)
+
+	_, _, err := execute(t, "", "--model", mockModel, "--allowed-tools", "Bash(ls)", "-p", "hi")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "takes no path")
 	assert.NoDirExists(t, e.agentDir)
 }
 
@@ -361,7 +372,7 @@ func TestRootStreamsTurnFromMockServer(t *testing.T) {
 	for _, tl := range req.body["tools"].([]any) {
 		tools = append(tools, tl.(map[string]any)["function"].(map[string]any)["name"].(string))
 	}
-	assert.Equal(t, []string{"Read", "Write", "Edit"}, tools)
+	assert.Equal(t, []string{"Read", "Write", "Edit", "Bash"}, tools)
 	messages := req.body["messages"].([]any)
 	first := messages[0].(map[string]any)
 	assert.Contains(t, []string{"system", "developer"}, first["role"])
@@ -588,4 +599,354 @@ func TestRootDisallowedToolsBeatsAllowedTools(t *testing.T) {
 
 	assert.Contains(t, result, "--disallowed-tools")
 	assert.Equal(t, "alpha\n", content)
+}
+
+// sandboxAvailable reports whether this machine can run the OS sandbox; it
+// cannot on Linux, nor on macOS when the tests themselves run under Seatbelt.
+func sandboxAvailable(t *testing.T) bool {
+	t.Helper()
+	_, err := sandbox.New(t.Context(), sandbox.Policy{})
+	if err != nil {
+		require.ErrorIs(t, err, sandbox.ErrUnavailable)
+	}
+	return err == nil
+}
+
+// streamBash answers with one Bash call running command.
+func streamBash(w http.ResponseWriter, command string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	writeChunk(w, map[string]any{"role": "assistant", "content": ""}, nil)
+	args, _ := json.Marshal(map[string]any{"command": command})
+	writeChunk(w, map[string]any{"tool_calls": []any{map[string]any{
+		"index": 0, "id": "call_0", "type": "function",
+		"function": map[string]any{"name": "Bash", "arguments": string(args)},
+	}}}, nil)
+	writeChunk(w, map[string]any{}, "tool_calls")
+	fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
+// printBash runs kopi -p with flags while the model runs command with Bash,
+// and returns the tool result the model got back and kopi's stderr.
+func printBash(t *testing.T, e testEnv, command string, flags ...string) (result, stderr string) {
+	t.Helper()
+	var calls atomic.Int32
+	server := newMockProvider(t, func(w http.ResponseWriter) {
+		if calls.Add(1) == 1 {
+			streamBash(w, command)
+			return
+		}
+		streamText(w, "done")
+	})
+	e.writeMockModels(t, server.URL)
+
+	type outcome struct {
+		stderr string
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		_, stderr, err := execute(t, "", append([]string{"--model", mockModel, "-p", "run it"}, flags...)...)
+		done <- outcome{stderr, err}
+	}()
+	select {
+	case o := <-done:
+		require.NoError(t, o.err)
+		stderr = o.stderr
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for the print run to finish")
+	}
+
+	server.next(t)
+	var results []string
+	for _, m := range server.next(t).body["messages"].([]any) {
+		if msg := m.(map[string]any); msg["role"] == "tool" {
+			results = append(results, fmt.Sprint(msg["content"]))
+		}
+	}
+	require.Len(t, results, 1)
+	return results[0], stderr
+}
+
+func TestRootSandboxEnabledButUnavailableFails(t *testing.T) {
+	if sandboxAvailable(t) {
+		t.Skip("the sandbox is available here")
+	}
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"sandbox":{"enabled":true}}`)
+	before := pigruntimetest.Snapshot(t, e.root)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.ErrorIs(t, err, sandbox.ErrUnavailable)
+	assert.Contains(t, err.Error(), "failed to start the sandbox")
+	assert.Equal(t, before, pigruntimetest.Snapshot(t, e.root))
+}
+
+func TestRootSandboxUnavailableWarns(t *testing.T) {
+	if sandboxAvailable(t) {
+		t.Skip("the sandbox is available here")
+	}
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+
+	_, stderr, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "sandbox is unavailable; Bash runs without it and needs approval or an allow rule")
+}
+
+func TestRootSandboxDisabledBashNeedsApproval(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"sandbox":{"enabled":false}}`)
+
+	result, _ := printBash(t, e, "echo hi", "--mode", "execute")
+
+	assert.Contains(t, result, `tool "Bash" needs approval`)
+	assert.Contains(t, result, "--allowed-tools")
+}
+
+func TestRootSandboxUnavailableBashNeedsApproval(t *testing.T) {
+	if sandboxAvailable(t) {
+		t.Skip("the sandbox is available here")
+	}
+
+	result, _ := printBash(t, newTestEnv(t), "echo hi", "--mode", "execute")
+
+	assert.Contains(t, result, `tool "Bash" needs approval`)
+	assert.Contains(t, result, "--allowed-tools")
+}
+
+func TestRootSandboxDisabledBashRunsWithAllowRule(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"sandbox":{"enabled":false}}`)
+
+	result, stderr := printBash(t, e, "echo hi", "--mode", "execute", "--allowed-tools", "Bash")
+
+	assert.Equal(t, "hi\n", result)
+	assert.NotContains(t, stderr, "sandbox is unavailable")
+}
+
+func TestRootSandboxedBashRunsWithoutAllowRule(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+
+	result, _ := printBash(t, newTestEnv(t), "echo hi", "--mode", "execute")
+
+	assert.Equal(t, "hi\n", result)
+}
+
+func TestRootSandboxedBashRefusesKopiHomeRead(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	e := newTestEnv(t)
+	secret := filepath.Join(e.kopiHome, "secret's.txt")
+	const sentinel = "synthetic kopi Bash secret"
+	e.writeFile(t, secret, sentinel+"\n")
+	quoted := "'" + strings.ReplaceAll(secret, "'", "'\"'\"'") + "'"
+	command := `IFS= read -r secret < ` + quoted + ` && printf '%s\n' "$secret"`
+
+	result, stderr := printBash(t, e, command, "--mode", "execute")
+
+	assert.Contains(t, result, tool.ErrExitStatus.Error())
+	assert.Contains(t, result, "exit code")
+	assert.NotContains(t, result, "needs approval")
+	assert.NotContains(t, result+stderr, sentinel)
+}
+
+func TestRootSandboxedBashRefusesKopiHomeWrite(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	e := newTestEnv(t)
+	path := filepath.Join(e.kopiHome, "config.json")
+	const original = "{}\n"
+	e.writeFile(t, path, original)
+	quoted := "'" + strings.ReplaceAll(path, "'", "'\"'\"'") + "'"
+
+	result, _ := printBash(t, e, "printf changed >> "+quoted, "--mode", "execute")
+
+	assert.Contains(t, result, tool.ErrExitStatus.Error())
+	assert.NotContains(t, result, "needs approval")
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, original, string(content))
+}
+
+func TestRootSandboxedBashProtectsGitMetadata(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	for _, tc := range []struct {
+		name, path, command string
+		exists              bool
+	}{
+		{"no git cannot create HEAD", "HEAD", "printf changed > HEAD", false},
+		{"git file cannot be overwritten", ".git", "printf changed > .git", true},
+		{"git file cannot be replaced", ".git", "/bin/mv -f replacement .git", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			const original = "gitdir: synthetic-git-dir\n"
+			path := filepath.Join(e.workspace, tc.path)
+			if tc.exists {
+				e.writeFile(t, path, original)
+			}
+			e.writeFile(t, filepath.Join(e.workspace, "replacement"), "changed\n")
+
+			result, _ := printBash(t, e, tc.command, "--mode", "execute")
+
+			assert.Contains(t, result, tool.ErrExitStatus.Error())
+			assert.Contains(t, result, "Operation not permitted")
+			if tc.exists {
+				content, err := os.ReadFile(path)
+				require.NoError(t, err)
+				assert.Equal(t, original, string(content))
+			} else {
+				assert.NoFileExists(t, path)
+			}
+		})
+	}
+}
+
+func TestRootSandboxedBashHonorsConfiguredPaths(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	e := newTestEnv(t)
+	root, err := filepath.EvalSymlinks(e.root)
+	require.NoError(t, err)
+	// /tmp is always writable; TMPDIR must not cover the external targets.
+	for _, temp := range []string{"/tmp", "/private/tmp"} {
+		require.False(t, root == temp || strings.HasPrefix(root, temp+"/"), "external targets must be outside %s", temp)
+	}
+	temp := filepath.Join(root, "tmp")
+	require.NoError(t, os.Mkdir(temp, 0o700))
+	t.Setenv("TMPDIR", temp)
+	allowed := filepath.Join(root, "allowed")
+	sibling := filepath.Join(root, "sibling")
+	for _, dir := range []string{allowed, sibling} {
+		require.NoError(t, os.Mkdir(dir, 0o700))
+	}
+	secret := filepath.Join(allowed, "denied.txt")
+	const sentinel = "synthetic configured Bash secret"
+	e.writeFile(t, secret, sentinel+"\n")
+	cfg, err := json.Marshal(map[string]any{"sandbox": map[string]any{
+		"enabled": true, "allowWrite": []string{allowed}, "denyRead": []string{secret},
+	}})
+	require.NoError(t, err)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), string(cfg))
+	allowedFile := filepath.Join(allowed, "written.txt")
+	siblingFile := filepath.Join(sibling, "written.txt")
+	quotedAllowed := "'" + strings.ReplaceAll(allowedFile, "'", "'\"'\"'") + "'"
+	quotedSibling := "'" + strings.ReplaceAll(siblingFile, "'", "'\"'\"'") + "'"
+	quotedSecret := "'" + strings.ReplaceAll(secret, "'", "'\"'\"'") + "'"
+
+	result, _ := printBash(t, e, "printf 'allowed\\n' > "+quotedAllowed+" && printf 'write succeeded\\n'", "--mode", "execute")
+
+	assert.Equal(t, "write succeeded\n", result)
+	content, err := os.ReadFile(allowedFile)
+	require.NoError(t, err)
+	assert.Equal(t, "allowed\n", string(content))
+
+	result, _ = printBash(t, e, "printf changed > "+quotedSibling, "--mode", "execute")
+
+	assert.Contains(t, result, tool.ErrExitStatus.Error())
+	assert.Contains(t, result, "Operation not permitted")
+	assert.NoFileExists(t, siblingFile)
+
+	result, stderr := printBash(t, e, `IFS= read -r secret < `+quotedSecret+` && printf '%s\n' "$secret"`, "--mode", "execute")
+
+	assert.Contains(t, result, tool.ErrExitStatus.Error())
+	assert.Contains(t, result, "Operation not permitted")
+	assert.NotContains(t, result+stderr, sentinel)
+
+	result, _ = printBash(t, e, "printf changed > "+quotedSecret, "--mode", "execute")
+
+	assert.Contains(t, result, tool.ErrExitStatus.Error())
+	assert.Contains(t, result, "Operation not permitted")
+	content, err = os.ReadFile(secret)
+	require.NoError(t, err)
+	assert.Equal(t, sentinel+"\n", string(content))
+}
+
+func TestSandboxPolicy(t *testing.T) {
+	home, kopiHome, absolute := t.TempDir(), t.TempDir(), t.TempDir()
+	cfg := config.Sandbox{
+		AllowWrite: []string{absolute, "~/x", "~", "rel"},
+		DenyRead:   []string{absolute, "~/x", "~", "rel"},
+		Network:    true,
+	}
+	gitFiles := func(cwd string) []string {
+		var out []string
+		for _, name := range []string{"hooks", "config", "commondir", "config.worktree", "worktrees", "modules"} {
+			out = append(out, filepath.Join(cwd, ".git", name))
+		}
+		return out
+	}
+
+	t.Run("git directory", func(t *testing.T) {
+		cwd := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(cwd, ".git"), 0o755))
+		expanded := []string{absolute, filepath.Join(home, "x"), home, filepath.Join(cwd, "rel")}
+		write := []string{cwd, "/tmp", os.TempDir()}
+
+		p := sandboxPolicy(cfg, cwd, home, kopiHome)
+
+		assert.Equal(t, append(write, expanded...), p.Write)
+		for _, path := range append(p.Write, p.DenyRead...) {
+			assert.True(t, filepath.IsAbs(path), path)
+		}
+		assert.Equal(t, append([]string{kopiHome}, expanded...), p.DenyRead)
+		assert.Equal(t, gitFiles(cwd), p.DenyWrite)
+		assert.True(t, p.Network)
+	})
+
+	t.Run("git file", func(t *testing.T) {
+		cwd := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(cwd, ".git"), []byte("gitdir: /elsewhere\n"), 0o600))
+
+		p := sandboxPolicy(cfg, cwd, home, kopiHome)
+
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".git")), p.DenyWrite)
+	})
+
+	t.Run("no git", func(t *testing.T) {
+		cwd := t.TempDir()
+
+		p := sandboxPolicy(cfg, cwd, home, kopiHome)
+
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, "HEAD")), p.DenyWrite)
+	})
+
+	t.Run("git symlink to a directory", func(t *testing.T) {
+		cwd := t.TempDir()
+		require.NoError(t, os.Symlink(t.TempDir(), filepath.Join(cwd, ".git")))
+
+		p := sandboxPolicy(cfg, cwd, home, kopiHome)
+
+		assert.Equal(t, gitFiles(cwd), p.DenyWrite)
+	})
+}
+
+func TestSandboxPolicyPreservesSymlinkParent(t *testing.T) {
+	cwd, home, kopiHome := t.TempDir(), t.TempDir(), t.TempDir()
+	real := filepath.Join(t.TempDir(), "child")
+	require.NoError(t, os.Mkdir(real, 0o700))
+	for _, base := range []string{cwd, home} {
+		require.NoError(t, os.Symlink(real, filepath.Join(base, "link")))
+	}
+	for _, tc := range []struct{ name, path, want string }{
+		{"relative", "link/../target", cwd + string(filepath.Separator) + "link/../target"},
+		{"home", "~/link/../target", home + string(filepath.Separator) + "link/../target"},
+		{"absolute", cwd + string(filepath.Separator) + "link/../target", cwd + string(filepath.Separator) + "link/../target"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := sandboxPolicy(config.Sandbox{AllowWrite: []string{tc.path}, DenyRead: []string{tc.path}}, cwd, home, kopiHome)
+			assert.Equal(t, tc.want, p.Write[len(p.Write)-1])
+			assert.Equal(t, tc.want, p.DenyRead[len(p.DenyRead)-1])
+		})
+	}
 }

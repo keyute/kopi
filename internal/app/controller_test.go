@@ -1711,7 +1711,7 @@ func TestBareDenyRemovesTool(t *testing.T) {
 	var ran atomic.Int32
 	sb := pigruntimetest.NewSandbox(t)
 	read := readTool(t, sb)
-	rules, err := policy.NewRules(sb.Workspace, sb.Home, []string{"Read", "Exec"}, policy.Source{Name: "test", Deny: []string{"Exec"}})
+	rules, err := policy.NewRules(sb.Workspace, sb.Home, map[string]policy.ToolSpec{"Read": {}, "Exec": {}}, policy.Source{Name: "test", Deny: []string{"Exec"}})
 	require.NoError(t, err)
 	h := newHarness(t, sb, Config{Tools: []tool.Tool{read, execTool(&ran)}, Rules: rules})
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
@@ -1726,16 +1726,17 @@ func TestBareDenyRemovesTool(t *testing.T) {
 	assert.NotContains(t, req.SystemPrompt, "Exec")
 }
 
-func TestPromptMentionsWriteAndEditOnlyWhenAvailable(t *testing.T) {
+func TestPromptMentionsExecuteModeOnlyWhenNonReadToolAvailable(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	ws, err := tool.NewWorkspace(sb.Workspace, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
 	read, write, edit := tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws)
-	const sentence = "Write and Edit work only in execute mode"
+	const sentence = "Tools other than Read work only in execute mode and may need the user's approval."
 
 	assert.Contains(t, systemPrompt(sb.Workspace, []tool.Tool{read, edit}), sentence)
-	rules, err := policy.NewRules(sb.Workspace, sb.Home, []string{"Read", "Write", "Edit"}, policy.Source{Name: "test", Deny: []string{"Write", "Edit"}})
+	assert.Contains(t, systemPrompt(sb.Workspace, []tool.Tool{read, {Name: "Probe", Capability: policy.Exec}}), sentence)
+	rules, err := policy.NewRules(sb.Workspace, sb.Home, map[string]policy.ToolSpec{"Read": {}, "Write": {}, "Edit": {}}, policy.Source{Name: "test", Deny: []string{"Write", "Edit"}})
 	require.NoError(t, err)
 	h := newHarness(t, sb, Config{Tools: []tool.Tool{read, write, edit}, Rules: rules})
 	assert.NotContains(t, h.c.prompt, sentence)

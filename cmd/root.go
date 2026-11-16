@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -23,6 +24,7 @@ import (
 	"github.com/keyute/kopi/internal/history"
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/sandbox"
 	"github.com/keyute/kopi/internal/tool"
 	"github.com/keyute/kopi/internal/tui"
 )
@@ -109,16 +111,12 @@ func splitRules(values []string) []string {
 // permissionRules builds the rules from each config permission list named by
 // the layer that set it, then the flags.
 func permissionRules(cwd, home string, tools []tool.Tool, perms config.Permissions, origins map[string]string, flagRules []policy.Source) (*policy.Rules, error) {
-	names := make([]string, 0, len(tools))
-	for _, t := range tools {
-		names = append(names, t.Name)
-	}
 	sources := []policy.Source{
 		{Name: origins["permissions.allow"], Allow: perms.Allow},
 		{Name: origins["permissions.ask"], Ask: perms.Ask},
 		{Name: origins["permissions.deny"], Deny: perms.Deny},
 	}
-	rules, err := policy.NewRules(cwd, home, names, append(sources, flagRules...)...)
+	rules, err := policy.NewRules(cwd, home, tool.Specs(tools), append(sources, flagRules...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load permission rules: %w", err)
 	}
@@ -263,6 +261,11 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		return fmt.Errorf("failed to resolve working directory: %w", err)
 	}
 
+	sb, unavailable, err := openSandbox(cmd.Context(), resolved.Config.Sandbox, cwd, userHome, paths.Home)
+	if err != nil {
+		return err
+	}
+
 	// workRunning is set when Close leaves work running; see below.
 	var workRunning bool
 	ws, err := tool.NewWorkspace(cwd, []string{paths.Home})
@@ -274,7 +277,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			ws.Close()
 		}
 	}()
-	tools := []tool.Tool{tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws)}
+	tools := []tool.Tool{tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb))}
 	rules, err := permissionRules(cwd, userHome, tools, resolved.Config.Permissions, resolved.Origins, flagRules)
 	if err != nil {
 		return err
@@ -292,6 +295,10 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			return err
 		}
 		defer restore()
+	}
+	// Logged only now so that in fullscreen it goes to the log file.
+	if unavailable != nil {
+		slog.Warn("sandbox is unavailable; Bash runs without it and needs approval or an allow rule", "err", unavailable)
 	}
 
 	rt, err := openRuntime(ctx, paths, cwd)
@@ -355,6 +362,66 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		closeErr = fmt.Errorf("running work did not stop before exit: %w", closeErr)
 	}
 	return errors.Join(runErr, closeErr)
+}
+
+// openSandbox returns the sandbox Bash runs under, or nil when sandbox.enabled
+// is false. With enabled unset, a machine without a usable sandbox is not an
+// error: the sandbox is nil and unavailable says why.
+func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHome string) (sb *sandbox.Sandbox, unavailable, err error) {
+	if cfg.Enabled != nil && !*cfg.Enabled {
+		return nil, nil, nil
+	}
+	sb, err = sandbox.New(ctx, sandboxPolicy(cfg, cwd, userHome, kopiHome))
+	switch {
+	case cfg.Enabled == nil && errors.Is(err, sandbox.ErrUnavailable):
+		return nil, err, nil
+	case err != nil:
+		return nil, nil, fmt.Errorf("failed to start the sandbox: %w", err)
+	}
+	return sb, nil, nil
+}
+
+// sandboxPolicy lets commands write only the workspace, temporary
+// directories and the paths the user allowed, never read Kopi's home, and
+// never write the git files that decide which config and hooks git runs, which
+// would run code outside the sandbox.
+func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.Policy {
+	expand := func(paths []string) []string {
+		out := make([]string, 0, len(paths))
+		for _, p := range paths {
+			switch {
+			case filepath.IsAbs(p):
+			case p == "~":
+				p = userHome
+			case strings.HasPrefix(p, "~/"):
+				p = userHome + string(filepath.Separator) + p[2:]
+			default:
+				p = cwd + string(filepath.Separator) + p
+			}
+			out = append(out, p)
+		}
+		return out
+	}
+	gitDir := filepath.Join(cwd, ".git")
+	var denyWrite []string
+	for _, name := range []string{"hooks", "config", "commondir", "config.worktree", "worktrees", "modules"} {
+		denyWrite = append(denyWrite, filepath.Join(gitDir, name))
+	}
+	if _, err := os.Lstat(gitDir); errors.Is(err, os.ErrNotExist) {
+		// With no .git, git takes a directory holding HEAD, objects and refs
+		// for a git directory and runs its config.
+		denyWrite = append(denyWrite, filepath.Join(cwd, "HEAD"))
+	} else if info, err := os.Stat(gitDir); err != nil || !info.IsDir() {
+		// A .git file, as in a linked worktree or submodule, names the git directory.
+		denyWrite = append(denyWrite, gitDir)
+	}
+	write := []string{cwd, "/tmp", os.TempDir()}
+	return sandbox.Policy{
+		Write:     append(write, expand(cfg.AllowWrite)...),
+		DenyRead:  append([]string{kopiHome}, expand(cfg.DenyRead)...),
+		DenyWrite: denyWrite,
+		Network:   cfg.Network,
+	}
 }
 
 // diagnose turns the open failures a user can fix into Kopi's own advice.
