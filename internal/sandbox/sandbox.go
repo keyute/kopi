@@ -23,15 +23,15 @@ type Sandbox struct{ prefix []string }
 // New checks that the platform sandbox works and builds it for p. It returns
 // ErrUnavailable when this platform has no sandbox or it cannot be applied.
 func New(ctx context.Context, p Policy) (*Sandbox, error) {
-	for _, list := range [][]string{p.Write, p.DenyRead, p.DenyWrite} {
-		for _, path := range list {
-			if !filepath.IsAbs(path) {
-				return nil, fmt.Errorf("sandbox path %q is not absolute", path)
-			}
-		}
-	}
 	switch runtime.GOOS {
 	case "darwin":
+		for _, list := range [][]string{p.Write, p.DenyRead, p.DenyWrite} {
+			for _, path := range list {
+				if !filepath.IsAbs(path) {
+					return nil, fmt.Errorf("sandbox path %q is not absolute", path)
+				}
+			}
+		}
 		if err := probe(ctx); err != nil {
 			return nil, err
 		}

@@ -111,16 +111,12 @@ func splitRules(values []string) []string {
 // permissionRules builds the rules from each config permission list named by
 // the layer that set it, then the flags.
 func permissionRules(cwd, home string, tools []tool.Tool, perms config.Permissions, origins map[string]string, flagRules []policy.Source) (*policy.Rules, error) {
-	specs := make(map[string]policy.ToolSpec, len(tools))
-	for _, t := range tools {
-		specs[t.Name] = policy.ToolSpec{Capability: t.Capability, Target: t.Target}
-	}
 	sources := []policy.Source{
 		{Name: origins["permissions.allow"], Allow: perms.Allow},
 		{Name: origins["permissions.ask"], Ask: perms.Ask},
 		{Name: origins["permissions.deny"], Deny: perms.Deny},
 	}
-	rules, err := policy.NewRules(cwd, home, specs, append(sources, flagRules...)...)
+	rules, err := policy.NewRules(cwd, home, tool.Specs(tools), append(sources, flagRules...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load permission rules: %w", err)
 	}
@@ -302,7 +298,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	}
 	// Logged only now so that in fullscreen it goes to the log file.
 	if unavailable != nil {
-		slog.Warn("sandbox is unavailable; Bash runs without it and asks before each command", "err", unavailable)
+		slog.Warn("sandbox is unavailable; Bash runs without it and needs approval or an allow rule", "err", unavailable)
 	}
 
 	rt, err := openRuntime(ctx, paths, cwd)
@@ -419,11 +415,7 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 		// A .git file, as in a linked worktree or submodule, names the git directory.
 		denyWrite = append(denyWrite, gitDir)
 	}
-	write := []string{cwd}
-	if filepath.IsAbs("/tmp") {
-		write = append(write, "/tmp")
-	}
-	write = append(write, os.TempDir())
+	write := []string{cwd, "/tmp", os.TempDir()}
 	return sandbox.Policy{
 		Write:     append(write, expand(cfg.AllowWrite)...),
 		DenyRead:  append([]string{kopiHome}, expand(cfg.DenyRead)...),

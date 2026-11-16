@@ -22,6 +22,15 @@ type Tool struct {
 	Display Display
 }
 
+// Specs returns what the policy needs to know of each tool, by name.
+func Specs(tools []Tool) map[string]policy.ToolSpec {
+	specs := make(map[string]policy.ToolSpec, len(tools))
+	for _, t := range tools {
+		specs[t.Name] = policy.ToolSpec{Capability: t.Capability, Target: t.Target, Sandboxed: t.Sandboxed}
+	}
+	return specs
+}
+
 // Display is how a call reads in a transcript.
 type Display struct {
 	// Title names one call: "Read cmd/root.go".

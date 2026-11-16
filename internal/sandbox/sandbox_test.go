@@ -9,6 +9,9 @@ import (
 )
 
 func TestNewRejectsRelativePath(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("only darwin builds a sandbox from the paths")
+	}
 	for _, p := range []Policy{{Write: []string{"rel"}}, {DenyRead: []string{"a/b"}}, {DenyWrite: []string{""}}} {
 		_, err := New(t.Context(), p)
 		require.Error(t, err)

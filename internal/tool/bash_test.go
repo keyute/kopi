@@ -47,6 +47,15 @@ func TestBashRunsCommand(t *testing.T) {
 	assert.Equal(t, "2 lines", tool.Display.Summary(out))
 }
 
+func TestBashTimeoutIsMilliseconds(t *testing.T) {
+	tool, _ := newBashTool(t)
+
+	_, err := tool.Run(context.Background(), json.RawMessage(`{"command":"sleep 600","timeout":1}`), allowTarget)
+
+	require.ErrorIs(t, err, ErrTimedOut)
+	assert.ErrorContains(t, err, "after 1ms")
+}
+
 func TestBashRejectsInvalidArgs(t *testing.T) {
 	tool, _ := newBashTool(t)
 

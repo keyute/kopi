@@ -693,7 +693,7 @@ func TestRootSandboxUnavailableWarns(t *testing.T) {
 	_, stderr, err := execute(t, "", "--model", mockModel, "-p", "hi")
 
 	require.NoError(t, err)
-	assert.Contains(t, stderr, "sandbox is unavailable; Bash runs without it and asks before each command")
+	assert.Contains(t, stderr, "sandbox is unavailable; Bash runs without it and needs approval or an allow rule")
 }
 
 func TestRootSandboxDisabledBashNeedsApproval(t *testing.T) {
@@ -701,6 +701,17 @@ func TestRootSandboxDisabledBashNeedsApproval(t *testing.T) {
 	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"sandbox":{"enabled":false}}`)
 
 	result, _ := printBash(t, e, "echo hi", "--mode", "execute")
+
+	assert.Contains(t, result, `tool "Bash" needs approval`)
+	assert.Contains(t, result, "--allowed-tools")
+}
+
+func TestRootSandboxUnavailableBashNeedsApproval(t *testing.T) {
+	if sandboxAvailable(t) {
+		t.Skip("the sandbox is available here")
+	}
+
+	result, _ := printBash(t, newTestEnv(t), "echo hi", "--mode", "execute")
 
 	assert.Contains(t, result, `tool "Bash" needs approval`)
 	assert.Contains(t, result, "--allowed-tools")
@@ -743,6 +754,25 @@ func TestRootSandboxedBashRefusesKopiHomeRead(t *testing.T) {
 	assert.Contains(t, result, "exit code")
 	assert.NotContains(t, result, "needs approval")
 	assert.NotContains(t, result+stderr, sentinel)
+}
+
+func TestRootSandboxedBashRefusesKopiHomeWrite(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	e := newTestEnv(t)
+	path := filepath.Join(e.kopiHome, "config.json")
+	const original = "{}\n"
+	e.writeFile(t, path, original)
+	quoted := "'" + strings.ReplaceAll(path, "'", "'\"'\"'") + "'"
+
+	result, _ := printBash(t, e, "printf changed >> "+quoted, "--mode", "execute")
+
+	assert.Contains(t, result, tool.ErrExitStatus.Error())
+	assert.NotContains(t, result, "needs approval")
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, original, string(content))
 }
 
 func TestRootSandboxedBashProtectsGitMetadata(t *testing.T) {
@@ -861,11 +891,7 @@ func TestSandboxPolicy(t *testing.T) {
 		cwd := t.TempDir()
 		require.NoError(t, os.Mkdir(filepath.Join(cwd, ".git"), 0o755))
 		expanded := []string{absolute, filepath.Join(home, "x"), home, filepath.Join(cwd, "rel")}
-		write := []string{cwd}
-		if filepath.IsAbs("/tmp") {
-			write = append(write, "/tmp")
-		}
-		write = append(write, os.TempDir())
+		write := []string{cwd, "/tmp", os.TempDir()}
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
