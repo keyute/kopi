@@ -48,6 +48,8 @@ type ToolEnd struct {
 // Controller.Answer. It is not ordered relative to the call's ToolStart, so it
 // carries everything a prompt shows.
 type ApprovalRequested struct {
+	// Token identifies this approval for the controller's lifetime, across sessions.
+	Token         uint64
 	CallID, Title string
 	Preview       []tool.PreviewLine
 	// Rule is the ask rule and its source; "" when no rule asked.
@@ -58,7 +60,7 @@ type ApprovalRequested struct {
 
 // ApprovalEnded follows every ApprovalRequested, whether it was answered or
 // cancelled.
-type ApprovalEnded struct{ CallID string }
+type ApprovalEnded struct{ Token uint64 }
 
 // Notice reports retry and compaction progress.
 type Notice struct{ Text string }

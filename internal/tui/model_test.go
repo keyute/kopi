@@ -46,12 +46,12 @@ type fakeController struct {
 }
 
 type answer struct {
-	callID string
-	a      policy.Answer
+	token uint64
+	a     policy.Answer
 }
 
-func (f *fakeController) Answer(callID string, a policy.Answer) bool {
-	f.answers = append(f.answers, answer{callID, a})
+func (f *fakeController) Answer(token uint64, a policy.Answer) bool {
+	f.answers = append(f.answers, answer{token, a})
 	return true
 }
 
@@ -874,7 +874,7 @@ func TestToggleModeKey(t *testing.T) {
 
 func editApproval() event.ApprovalRequested {
 	return event.ApprovalRequested{
-		CallID: "c1", Title: "Edit a.go",
+		Token: 1, CallID: "c1", Title: "Edit a.go",
 		Preview: []tool.PreviewLine{{Kind: tool.Removed, Text: "old"}, {Kind: tool.Added, Text: "new"}},
 		Edits:   true,
 	}
@@ -907,7 +907,7 @@ func TestApprovalEnterAnswersTheSelectedOption(t *testing.T) {
 	press(m, up)
 	press(m, enter)
 
-	assert.Equal(t, []answer{{"c1", policy.AllowEdits}}, c.answers)
+	assert.Equal(t, []answer{{1, policy.AllowEdits}}, c.answers)
 	assert.Contains(t, screen(m), "❯ 2. Yes, allow all edits this session", "the prompt stays until it ends")
 }
 
@@ -919,7 +919,7 @@ func TestApprovalDigitAnswersDirectly(t *testing.T) {
 	press(m, digit('3'))
 	press(m, digit('1'))
 
-	assert.Equal(t, []answer{{"c1", policy.Reject}, {"c1", policy.Allow}}, c.answers)
+	assert.Equal(t, []answer{{1, policy.Reject}, {1, policy.Allow}}, c.answers)
 }
 
 func TestApprovalEscRejects(t *testing.T) {
@@ -928,7 +928,7 @@ func TestApprovalEscRejects(t *testing.T) {
 
 	press(m, escape)
 
-	assert.Equal(t, []answer{{"c1", policy.Reject}}, c.answers)
+	assert.Equal(t, []answer{{1, policy.Reject}}, c.answers)
 	assert.Zero(t, c.interrupts, "the controller interrupts on a rejection")
 }
 
@@ -938,13 +938,31 @@ func TestApprovalEndedRestoresTheComposerWithItsDraft(t *testing.T) {
 	send(m, editApproval())
 	assert.NotContains(t, screen(m), "❯ draft")
 
-	send(m, event.ApprovalEnded{CallID: "other"})
+	send(m, event.ApprovalEnded{Token: 2})
 	assert.Contains(t, screen(m), "❯ 1. Yes", "another call's end leaves the prompt")
 
-	send(m, event.ApprovalEnded{CallID: "c1"})
+	send(m, event.ApprovalEnded{Token: 1})
 	assert.Contains(t, screen(m), "❯ draft")
 	assert.NotContains(t, screen(m), "❯ 1. Yes")
 	assert.Len(t, screen(m), 30)
+}
+
+func TestStaleApprovalEndedCannotDismissReusedCallID(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	first := editApproval()
+	send(m, first, event.ApprovalEnded{Token: first.Token})
+	second := first
+	second.Token++
+	second.Title = "Edit b.go"
+	send(m, second, event.ApprovalEnded{Token: first.Token})
+
+	require.NotNil(t, m.approval)
+	assert.Equal(t, second, *m.approval)
+	assert.Contains(t, screen(m), "Edit b.go")
+	press(m, enter)
+	assert.Equal(t, []answer{{second.Token, policy.Allow}}, c.answers)
+	send(m, event.ApprovalEnded{Token: second.Token})
+	assert.Nil(t, m.approval)
 }
 
 func TestTurnEndAndSessionChangedClearTheApproval(t *testing.T) {
@@ -994,7 +1012,7 @@ func TestApprovalSurvivesTinyTerminalResizes(t *testing.T) {
 	assert.Equal(t, []string{"  1. Yes", "❯ 2. Yes, allow all edits this session", "  3. No (esc)", ""}, s[len(s)-5:len(s)-1])
 	assert.Empty(t, c.answers)
 	press(m, enter)
-	assert.Equal(t, []answer{{"c1", policy.AllowEdits}}, c.answers)
+	assert.Equal(t, []answer{{1, policy.AllowEdits}}, c.answers)
 }
 
 func TestApprovalWithLongPreviewFitsTheTerminal(t *testing.T) {

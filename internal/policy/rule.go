@@ -19,8 +19,6 @@ type Source struct {
 	Allow, Ask, Deny []string
 }
 
-var BuiltIn = Source{Name: "built-in", Ask: []string{"Edit(.git)", "Write(.git)"}}
-
 var ruleName = regexp.MustCompile(`^(\*|[A-Za-z_][A-Za-z0-9_]*)$`)
 
 type rule struct {
@@ -252,6 +250,11 @@ func (r *Rules) decide(tool string, t *Target) (eff effect, text, src string) {
 		{effectAsk, true, func(s source) []rule { return s.ask }},
 		{effectAllow, false, func(s source) []rule { return s.allow }},
 	} {
+		if l.eff == effectAsk && (tool == "Edit" || tool == "Write") && t != nil {
+			if r.underGit(t.Path) || r.underGit(t.Real) {
+				return effectAsk, tool + "(.git)", "built-in"
+			}
+		}
 		for _, s := range r.sources {
 			if text, ok := r.listMatches(l.rules(s), tool, t, l.tightening); ok {
 				return l.eff, text, s.name
@@ -259,6 +262,14 @@ func (r *Rules) decide(tool string, t *Target) (eff effect, text, src string) {
 		}
 	}
 	return effectNone, "", ""
+}
+
+func (r *Rules) underGit(p string) bool {
+	p = filepath.ToSlash(filepath.Clean(p))
+	if r.fold {
+		p = strings.ToLower(p)
+	}
+	return slices.Contains(strings.Split(p, "/"), ".git")
 }
 
 // listMatches reports whether some positive rule in rules matches and no

@@ -12,10 +12,10 @@ import (
 // session's hooks one at a time and only the current session sends, so one
 // slot is enough.
 type pendingApproval struct {
-	callID string
-	work   *Work
-	ctx    context.Context
-	emit   func(event.Event)
+	token uint64
+	work  *Work
+	ctx   context.Context
+	emit  func(event.Event)
 	// answer has room for the one answer, so Answer never blocks.
 	answer chan policy.Answer
 }
@@ -27,15 +27,19 @@ func (c *Controller) approver(d *display) policy.Approver {
 		return nil
 	}
 	return func(ctx context.Context, r policy.Request) (policy.Answer, error) {
-		p := &pendingApproval{callID: r.CallID, answer: make(chan policy.Answer, 1)}
+		p := &pendingApproval{answer: make(chan policy.Answer, 1)}
 		c.mu.Lock()
+		c.approvalSeq++
+		p.token = c.approvalSeq
 		// The approver runs only during a send on the current session.
 		p.work, p.ctx, p.emit = c.turn, ctx, c.emit
 		c.approval = p
 		emit := p.emit
 		c.mu.Unlock()
-		emit(d.approval(r))
-		defer emit(event.ApprovalEnded{CallID: r.CallID})
+		req := d.approval(r)
+		req.Token = p.token
+		emit(req)
+		defer emit(event.ApprovalEnded{Token: p.token})
 		select {
 		case a := <-p.answer:
 			return a, nil
@@ -57,15 +61,15 @@ func (c *Controller) approver(d *display) policy.Approver {
 	}
 }
 
-// Answer resolves the pending approval for callID. It returns false when no
-// approval for callID is pending. A rejection also interrupts the turn, which
+// Answer resolves the pending approval for token. It returns false when no
+// approval for token is pending. A rejection also interrupts the turn, which
 // hands queued input back; the model still sees the rejection as the call's
 // result.
-func (c *Controller) Answer(callID string, a policy.Answer) bool {
+func (c *Controller) Answer(token uint64, a policy.Answer) bool {
 	c.queue.Lock()
 	c.mu.Lock()
 	p := c.approval
-	if p == nil || p.callID != callID {
+	if p == nil || p.token != token {
 		c.mu.Unlock()
 		c.queue.Unlock()
 		return false

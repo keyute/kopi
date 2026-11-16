@@ -120,15 +120,14 @@ func splitRules(values []string) []string {
 	return rules
 }
 
-// permissionRules builds the rules from the built-in source, each config
-// permission list named by the layer that set it, then the flags.
+// permissionRules builds the rules from each config permission list named by
+// the layer that set it, then the flags.
 func permissionRules(cwd, home string, tools []tool.Tool, perms config.Permissions, origins map[string]string, flagRules []policy.Source) (*policy.Rules, error) {
 	names := make([]string, 0, len(tools))
 	for _, t := range tools {
 		names = append(names, t.Name)
 	}
 	sources := []policy.Source{
-		policy.BuiltIn,
 		{Name: origins["permissions.allow"], Allow: perms.Allow},
 		{Name: origins["permissions.ask"], Ask: perms.Ask},
 		{Name: origins["permissions.deny"], Deny: perms.Deny},

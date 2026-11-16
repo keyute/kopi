@@ -73,7 +73,8 @@ type Controller struct {
 	turn    *Work
 	turnSeq int
 	// approval is the call waiting for Answer; nil when none is.
-	approval *pendingApproval
+	approval    *pendingApproval
+	approvalSeq uint64
 }
 
 // sessionSwitch retains work even after it deregisters while start waits for life.

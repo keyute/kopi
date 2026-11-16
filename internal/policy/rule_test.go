@@ -236,7 +236,7 @@ func TestRemovesOnlyForBareDeny(t *testing.T) {
 
 func TestBuiltInAsksForEditsUnderGit(t *testing.T) {
 	d := newDirs(t)
-	r := d.rules(t, BuiltIn)
+	r := d.rules(t)
 	for _, tool := range []string{"Edit", "Write"} {
 		for _, p := range []string{".git/config", "sub/repo/.git/HEAD"} {
 			eff, text, src := r.decide(tool, at(filepath.Join(d.ws, p)))
@@ -249,6 +249,77 @@ func TestBuiltInAsksForEditsUnderGit(t *testing.T) {
 	}
 	eff, _, _ := r.decide("Read", at(filepath.Join(d.ws, ".git/config")))
 	assert.Equal(t, effectNone, eff)
+}
+
+func TestBuiltInGitComponentsAndAliases(t *testing.T) {
+	d := newDirs(t)
+	r := d.rules(t, Source{Name: "config", Allow: []string{"*"}})
+	for _, tool := range []string{"Edit", "Write"} {
+		for _, tc := range []struct {
+			name   string
+			target *Target
+			want   effect
+		}{
+			{"git itself", at("/repo/.git"), effectAsk},
+			{"ancestor", at("/repo/.git/hooks/pre-commit"), effectAsk},
+			{"drive prefix", at("C:/repo/.git/hooks/pre-commit"), effectAsk},
+			{"resolved alias", &Target{Path: "/repo/link/pre-commit", Real: "/repo/.git/hooks/pre-commit"}, effectAsk},
+			{"lexical alias", &Target{Path: "/repo/.git/hooks/pre-commit", Real: "/repo/hooks/pre-commit"}, effectAsk},
+			{"normalized", at("/repo/sub/../.git/hooks/pre-commit"), effectAsk},
+			{"normalized away", at("/repo/.git/../src/a.go"), effectAllow},
+			{"not a component", at("/repo/not.git/hooks/pre-commit"), effectAllow},
+			{"suffix", at("/repo/.gitignore"), effectAllow},
+			{"ordinary", at("/repo/src/a.go"), effectAllow},
+			{"no target", nil, effectAllow},
+		} {
+			t.Run(tool+"/"+tc.name, func(t *testing.T) {
+				eff, text, src := r.decide(tool, tc.target)
+				assert.Equal(t, tc.want, eff)
+				if tc.want == effectAsk {
+					assert.Equal(t, tool+"(.git)", text)
+					assert.Equal(t, "built-in", src)
+				}
+			})
+		}
+		upper := at("C:/repo/.GIT/hooks/pre-commit")
+		r.fold = false
+		eff, _, _ := r.decide(tool, upper)
+		assert.Equal(t, effectAllow, eff)
+		r.fold = true
+		eff, _, _ = r.decide(tool, upper)
+		assert.Equal(t, effectAsk, eff)
+		r.fold = false
+	}
+}
+
+func TestBuiltInGitAskPrecedenceInsideGitWorkspace(t *testing.T) {
+	for _, sub := range []string{".git", ".git/hooks"} {
+		t.Run(sub, func(t *testing.T) {
+			d := newDirs(t)
+			d.ws = filepath.Join(d.ws, sub)
+			require.NoError(t, os.MkdirAll(d.ws, 0o755))
+			for _, tool := range []string{"Edit", "Write"} {
+				target := at(filepath.Join(d.ws, "pre-commit"))
+				config := Source{Name: "config", Allow: []string{tool}, Ask: []string{tool, tool + "(!pre-commit)"}}
+				r := d.rules(t, config)
+				eff, text, src := r.decide(tool, target)
+				assert.Equal(t, effectAsk, eff)
+				assert.Equal(t, tool+"(.git)", text)
+				assert.Equal(t, "built-in", src)
+
+				config.Ask = []string{tool}
+				eff, _, src = d.rules(t, config).decide(tool, target)
+				assert.Equal(t, effectAsk, eff)
+				assert.Equal(t, "built-in", src)
+
+				deny := Source{Name: "deny", Deny: []string{tool + "(pre-commit)"}}
+				eff, text, src = d.rules(t, config, deny).decide(tool, target)
+				assert.Equal(t, effectDeny, eff)
+				assert.Equal(t, tool+"(pre-commit)", text)
+				assert.Equal(t, "deny", src)
+			}
+		})
+	}
 }
 
 // linkedDir returns a link to a new directory and the directory's resolved path.

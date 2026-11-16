@@ -522,6 +522,13 @@ func TestRootPrintExecuteWithoutAllowRuleDenies(t *testing.T) {
 	assert.Equal(t, "alpha\n", content)
 }
 
+func TestRootPrintExecuteAllowCannotExemptGit(t *testing.T) {
+	result, content := printEdit(t, ".git/hooks/pre-commit", "--mode", "execute", "--allowed-tools", "Edit")
+
+	assert.Contains(t, result, "Edit(.git) (built-in)")
+	assert.Equal(t, "alpha\n", content)
+}
+
 func TestRootPrintStartsInPlan(t *testing.T) {
 	result, content := printEdit(t, "docs/a.md", "--allowed-tools", "Edit(docs/**)")
 

@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -170,7 +171,7 @@ func TestRejectedCallIsRefused(t *testing.T) {
 func TestAllowEditsSkipsLaterDefaultEditAsksOnly(t *testing.T) {
 	d := newDirs(t)
 	f := &approver{answer: AllowEdits}
-	rules := d.rules(t, BuiltIn, Source{Name: "config", Deny: []string{"Edit(secret)"}})
+	rules := d.rules(t, Source{Name: "config", Deny: []string{"Edit(secret)"}})
 	a, g := newTestGate(rules, f.approve)
 	a.EnterExecute()
 	ws := func(p string) json.RawMessage { return pathArgs(filepath.Join(d.ws, p)) }
@@ -187,6 +188,39 @@ func TestAllowEditsSkipsLaterDefaultEditAsksOnly(t *testing.T) {
 	require.NoError(t, g.Before(t.Context(), "c4", "Bash", nil))
 	assert.Len(t, f.reqs, 3)
 	assert.ErrorIs(t, g.Before(t.Context(), "c5", "Edit", ws("secret")), ErrDenied)
+}
+
+func TestBuiltInGitAskSurvivesAllEditsInsideGitWorkspace(t *testing.T) {
+	for _, sub := range []string{".git", ".git/hooks"} {
+		t.Run(sub, func(t *testing.T) {
+			d := newDirs(t)
+			ordinary := filepath.Join(d.ws, "a.go")
+			d.ws = filepath.Join(d.ws, sub)
+			require.NoError(t, os.MkdirAll(d.ws, 0o755))
+			f := &approver{answer: AllowEdits}
+			a := NewAuthority()
+			g := NewGate(a, map[string]ToolSpec{
+				"Edit":  {Capability: Write, Target: pathTarget},
+				"Write": {Capability: Write, Target: pathTarget},
+			}, d.rules(t), f.approve)
+			a.EnterExecute()
+			require.NoError(t, g.Before(t.Context(), "initial", "Edit", pathArgs(ordinary)))
+			require.NoError(t, g.Admit("initial", "Edit"))
+			require.Len(t, f.reqs, 1)
+			require.True(t, f.reqs[0].Edits)
+			f.answer = Reject
+			for _, tool := range []string{"Edit", "Write"} {
+				err := g.Before(t.Context(), tool, tool, pathArgs(filepath.Join(d.ws, "pre-commit")))
+				require.ErrorIs(t, err, ErrRejected)
+				assert.ErrorIs(t, g.Admit(tool, tool), ErrNoGrant)
+			}
+			require.Len(t, f.reqs, 3)
+			assert.Equal(t, "Edit(.git) (built-in)", f.reqs[1].Rule)
+			assert.Equal(t, "Write(.git) (built-in)", f.reqs[2].Rule)
+			assert.False(t, f.reqs[1].Edits)
+			assert.False(t, f.reqs[2].Edits)
+		})
+	}
 }
 
 func TestAllowEditsNotOfferedGrantsOnlyTheCall(t *testing.T) {
@@ -235,7 +269,7 @@ func TestNoApproverDeniesNamingTheAllowRule(t *testing.T) {
 
 func TestNoApproverDeniesNamingTheAskRule(t *testing.T) {
 	d := newDirs(t)
-	a, g := newTestGate(d.rules(t, BuiltIn), nil)
+	a, g := newTestGate(d.rules(t), nil)
 	a.EnterExecute()
 	err := g.Before(t.Context(), "c1", "Edit", pathArgs(filepath.Join(d.ws, ".git/config")))
 	require.ErrorIs(t, err, ErrDenied)

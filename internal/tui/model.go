@@ -218,19 +218,19 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 // swallowed. The prompt stays until its ApprovalEnded arrives.
 func (m *model) approvalKey(msg tea.KeyPressMsg) {
 	opts := approvalOptions(m.approval, &m.keys)
-	id := m.approval.CallID
+	token := m.approval.Token
 	switch s := msg.String(); {
 	case key.Matches(msg, m.keys.interrupt):
-		m.c.Answer(id, policy.Reject)
+		m.c.Answer(token, policy.Reject)
 	case s == "up":
 		m.choice = max(0, m.choice-1)
 	case s == "down":
 		m.choice = min(len(opts)-1, m.choice+1)
 	case s == "enter":
-		m.c.Answer(id, opts[m.choice].answer)
+		m.c.Answer(token, opts[m.choice].answer)
 	default:
 		if n, err := strconv.Atoi(s); err == nil && n >= 1 && n <= len(opts) {
-			m.c.Answer(id, opts[n-1].answer)
+			m.c.Answer(token, opts[n-1].answer)
 		}
 	}
 }
@@ -354,7 +354,7 @@ func (m *model) apply(ev event.Event) {
 		m.approval, m.choice = &ev, 0
 		return
 	case event.ApprovalEnded:
-		if m.approval != nil && m.approval.CallID == ev.CallID {
+		if m.approval != nil && m.approval.Token == ev.Token {
 			m.approval = nil
 		}
 		return
