@@ -96,3 +96,22 @@ func TestInstallationIDRejectsInvalidFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "not-a-uuid", string(content), "an invalid file is reported, not regenerated")
 }
+
+func TestInstallationIDReadsExistingFromReadOnlyDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "home")
+	require.NoError(t, os.Mkdir(dir, 0o700))
+	path := filepath.Join(dir, "installation_id")
+	want := uuid.NewString()
+	require.NoError(t, os.WriteFile(path, []byte(want), 0o600))
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	id, err := installationID(path)
+
+	require.NoError(t, err)
+	assert.Equal(t, want, id)
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "no temporary file is created")
+	assert.Equal(t, "installation_id", entries[0].Name())
+}

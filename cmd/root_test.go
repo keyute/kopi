@@ -428,12 +428,15 @@ func TestRootCodexProviderHeadersOverrideIdentityCaseInsensitively(t *testing.T)
 	for _, tc := range []struct {
 		headers  string
 		resolves bool
+		// agent and origin are expected without model headers; empty expects Kopi's own identity.
+		agent, origin string
 	}{
-		{`"user-agent":"provider-agent","Originator":"provider-origin"`, true},
-		{`"user-agent":"$KOPI_UNSET_IDENTITY_TEST","Originator":"$KOPI_UNSET_IDENTITY_TEST"`, false},
-		{`"user-agent":"!exit 73","Originator":"!exit 74"`, false},
-		{`"User-Agent":"$KOPI_UNSET_IDENTITY_TEST","user-agent":"!exit 73","originator":"!exit 74","Originator":"$KOPI_UNSET_IDENTITY_TEST"`, false},
-		{`"user-agent":"!exit 73","User-Agent":"$KOPI_UNSET_IDENTITY_TEST","Originator":"$KOPI_UNSET_IDENTITY_TEST","originator":"!exit 74"`, false},
+		{headers: ``, resolves: true},
+		{headers: `"user-agent":"provider-agent","Originator":"provider-origin"`, resolves: true, agent: "provider-agent", origin: "provider-origin"},
+		{headers: `"user-agent":"$KOPI_UNSET_IDENTITY_TEST","Originator":"$KOPI_UNSET_IDENTITY_TEST"`},
+		{headers: `"user-agent":"!exit 73","Originator":"!exit 74"`},
+		{headers: `"User-Agent":"$KOPI_UNSET_IDENTITY_TEST","user-agent":"!exit 73","originator":"!exit 74","Originator":"$KOPI_UNSET_IDENTITY_TEST"`},
+		{headers: `"user-agent":"!exit 73","User-Agent":"$KOPI_UNSET_IDENTITY_TEST","Originator":"$KOPI_UNSET_IDENTITY_TEST","originator":"!exit 74"`},
 	} {
 		for _, explicit := range []bool{false, true} {
 			t.Run(fmt.Sprint(explicit)+tc.headers, func(t *testing.T) {
@@ -463,12 +466,16 @@ func TestRootCodexProviderHeadersOverrideIdentityCaseInsensitively(t *testing.T)
 				require.NotEmpty(t, requests)
 				for len(requests) > 0 {
 					headers := <-requests
-					if explicit {
+					switch {
+					case explicit:
 						assert.Equal(t, "model-agent", headers.Get("User-Agent"))
 						assert.Equal(t, "model-origin", headers.Get("Originator"))
-					} else {
-						assert.Equal(t, "provider-agent", headers.Get("User-Agent"))
-						assert.Equal(t, "provider-origin", headers.Get("Originator"))
+					case tc.origin == "":
+						assert.Equal(t, "kopi", headers.Get("Originator"))
+						assert.True(t, strings.HasPrefix(headers.Get("User-Agent"), "kopi/"), headers.Get("User-Agent"))
+					default:
+						assert.Equal(t, tc.agent, headers.Get("User-Agent"))
+						assert.Equal(t, tc.origin, headers.Get("Originator"))
 					}
 				}
 			})

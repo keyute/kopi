@@ -182,10 +182,10 @@ func (l *loginIO) prompt(ctx context.Context, p ai.AuthPrompt) (string, error) {
 	switch p := p.(type) {
 	case ai.AuthTextPrompt:
 		l.ask(p.Message, p.Placeholder)
-		return l.read(ctx, l.readLine)
+		return l.read(ctx)
 	case ai.AuthManualCodePrompt:
 		l.ask(p.Message, p.Placeholder)
-		return l.read(ctx, l.readLine)
+		return l.read(ctx)
 	case ai.AuthSecretPrompt:
 		secret, err := l.readSecret(ctx, p)
 		if err == nil && secret == "" {
@@ -248,7 +248,7 @@ func (l *loginIO) selectOption(ctx context.Context, p ai.AuthSelectPrompt) (stri
 		fmt.Fprintf(l.out, "  %d) %s\n", i+1, o.Label)
 	}
 	fmt.Fprint(l.out, "Choice: ")
-	answer, err := l.read(ctx, l.readLine)
+	answer, err := l.read(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -261,14 +261,14 @@ func (l *loginIO) selectOption(ctx context.Context, p ai.AuthSelectPrompt) (stri
 	return "", fmt.Errorf("invalid choice %q", answer)
 }
 
-// read runs fn off the prompt's goroutine so a cancelled ctx (the OAuth
+// read runs readLine off the prompt's goroutine so a cancelled ctx (the OAuth
 // callback server winning against a pasted code) returns at once.
-func (l *loginIO) read(ctx context.Context, fn func() (string, error)) (string, error) {
+func (l *loginIO) read(ctx context.Context) (string, error) {
 	if l.pending == nil {
 		ch := make(chan readResult, 1)
 		l.pending = ch
 		go func() {
-			text, err := fn()
+			text, err := l.readLine()
 			ch <- readResult{text: text, err: err}
 		}()
 	}
@@ -293,7 +293,7 @@ func (l *loginIO) readSecret(ctx context.Context, p ai.AuthSecretPrompt) (string
 	f, ok := l.in.(*os.File)
 	if !ok || !term.IsTerminal(int(f.Fd())) {
 		l.ask(p.Message, p.Placeholder)
-		return l.read(ctx, l.readLine)
+		return l.read(ctx)
 	}
 	if err := context.Cause(ctx); err != nil {
 		return "", err
@@ -325,6 +325,8 @@ func (l *loginIO) readSecret(ctx context.Context, p ai.AuthSecretPrompt) (string
 	case res := <-done:
 		// In raw mode the editor reports Ctrl-C, and Ctrl-D on an empty line, as EOF.
 		if errors.Is(res.err, io.EOF) {
+			// The terminal is still raw, so end the prompt line explicitly.
+			fmt.Fprint(l.out, "\r\n")
 			return "", context.Canceled
 		}
 		if res.err != nil {
