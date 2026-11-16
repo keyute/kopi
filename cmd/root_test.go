@@ -127,7 +127,7 @@ func TestRootRejectsInvalidMode(t *testing.T) {
 	_, _, err := execute(t, "", "--model", mockModel, "--mode", "auto", "-p", "hi")
 
 	require.Error(t, err)
-	assert.Equal(t, `invalid --mode "auto": want plan or execute`, err.Error())
+	assert.Equal(t, `failed to parse --mode: invalid mode "auto": want plan or execute`, err.Error())
 	assert.NoDirExists(t, e.agentDir)
 }
 
@@ -360,19 +360,17 @@ func TestRootReportsProviderFailure(t *testing.T) {
 	assert.NotContains(t, stdout+stderr+err.Error(), syntheticKey)
 }
 
-// The workspace spans HOME and KOPI_HOME, so only the protected list, not the
-// workspace boundary, can refuse these reads.
+// The workspace spans KOPI_HOME, so only the protected list, not the workspace
+// boundary, can refuse this read.
 func TestRootReadRefusesProtectedPaths(t *testing.T) {
 	e := newTestEnv(t)
 	t.Chdir(e.root)
 	secret := filepath.Join(e.kopiHome, "secret.txt")
-	key := filepath.Join(e.home, ".ssh", "id_x")
 	e.writeFile(t, secret, "synthetic kopi secret")
-	e.writeFile(t, key, "synthetic private key")
 	var calls atomic.Int32
 	server := newMockProvider(t, func(w http.ResponseWriter) {
 		if calls.Add(1) == 1 {
-			streamReads(w, secret, key)
+			streamReads(w, secret)
 			return
 		}
 		streamText(w, "done")
@@ -389,11 +387,9 @@ func TestRootReadRefusesProtectedPaths(t *testing.T) {
 			results = append(results, fmt.Sprint(msg["content"]))
 		}
 	}
-	require.Len(t, results, 2)
-	for _, r := range results {
-		assert.Contains(t, r, tool.ErrProtected.Error())
-		assert.NotContains(t, r, "synthetic")
-	}
+	require.Len(t, results, 1)
+	assert.Contains(t, results[0], tool.ErrProtected.Error())
+	assert.NotContains(t, results[0], "synthetic")
 }
 
 // lastUserText is the text of the last user message in a chat-completions
@@ -470,7 +466,11 @@ func streamEdit(w http.ResponseWriter, path string) {
 // back and the file's content afterwards.
 func printEdit(t *testing.T, path string, flags ...string) (result, content string) {
 	t.Helper()
-	e := newTestEnv(t)
+	return printEditIn(t, newTestEnv(t), path, flags...)
+}
+
+func printEditIn(t *testing.T, e testEnv, path string, flags ...string) (result, content string) {
+	t.Helper()
 	file := filepath.Join(e.workspace, path)
 	e.writeFile(t, file, "alpha\n")
 	var calls atomic.Int32
@@ -531,6 +531,25 @@ func TestRootPrintExecuteAllowCannotExemptGit(t *testing.T) {
 
 func TestRootPrintStartsInPlan(t *testing.T) {
 	result, content := printEdit(t, "docs/a.md", "--allowed-tools", "Edit(docs/**)")
+
+	assert.Contains(t, result, `tool "Edit" needs execute mode`)
+	assert.Equal(t, "alpha\n", content)
+}
+
+func TestRootPrintStartsInConfiguredMode(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"mode":"execute"}`)
+
+	_, content := printEditIn(t, e, "docs/a.md", "--allowed-tools", "Edit(docs/**)")
+
+	assert.Equal(t, "beta\n", content)
+}
+
+func TestRootModeFlagBeatsConfig(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"mode":"execute"}`)
+
+	result, content := printEditIn(t, e, "docs/a.md", "--mode", "plan", "--allowed-tools", "Edit(docs/**)")
 
 	assert.Contains(t, result, `tool "Edit" needs execute mode`)
 	assert.Equal(t, "alpha\n", content)

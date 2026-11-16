@@ -1,6 +1,9 @@
 package policy
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
 type Capability string
 
@@ -27,6 +30,16 @@ func (m Mode) String() string {
 		return "execute"
 	}
 	return "plan"
+}
+
+func ParseMode(name string) (Mode, error) {
+	switch name {
+	case "plan":
+		return Plan, nil
+	case "execute":
+		return Execute, nil
+	}
+	return 0, fmt.Errorf("invalid mode %q: want plan or execute", name)
 }
 
 // Authority holds the session mode. The generation increases on every actual

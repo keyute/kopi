@@ -82,6 +82,8 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `images/` holds pasted clipboard images, removed after a day.
 - `agent/` is PiG's agent directory, created on first run: its credential file (`auth.json`), session logs (`sessions/`), other PiG state and an optional `models.json`.
 
+`mode` is the mode sessions start in: `plan` (default) or `execute`.
+
 `keys` maps each fullscreen action to a list of key strings, and `statusline` lists the status line's `left` and `right` segments from `model`, `context`, `branch`, `mode` and `notice`, which shows transient hints such as `Copied` (default left `model, context, branch`, right `notice, mode`):
 
 ```json
@@ -113,10 +115,10 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 ## Modes and tools
 
 - Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab. Plan mode allows only `Read`.
-- A session starts in plan, including a resumed one, unless `--mode execute` is given; that applies to the session the process opens, and `/new` and `/resume` still start in plan.
+- Sessions start and resume in the configured `mode` (default plan), including ones opened with `/new` and `/resume`; `--mode` overrides it for the session the process opens.
 - `Read` reads text files inside the start directory: up to 2000 lines, 2000 characters per line and 100 KiB per call; binary files and directories are refused.
 - `Write` creates a file or replaces its whole content; `Edit` replaces a string that must match exactly once unless `replace_all` is set, in a text file of up to 10 MiB. Both work inside the start directory, replace the file atomically and keep its mode.
-- All three refuse Kopi's home and `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.config/gh`, `~/.netrc`, `~/.git-credentials`, `~/.npmrc`, `~/.docker`, `~/.kube`, `~/.azure`, `~/.pi`, `~/.pig`, `~/.claude`, `~/.claude.json` and `~/.codex`, including paths there that do not exist yet.
+- All three refuse Kopi's home, including paths there that do not exist yet.
 
 Permission rules in `config.json` allow, ask about or deny calls:
 
@@ -146,7 +148,8 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - Kopi is not an OS sandbox, and permission rules are not an OS boundary: they match the path a call names.
 - Symlinks in rule paths, the start directory and the home directory are resolved once, at start.
 - `Write` and `Edit` check the target before renaming the new file over it, so another process that swaps a directory for a symlink in between can redirect the write, within the start directory only.
-- `Read` protection is by file identity, re-checked on every read: a hard link into a protected store or a credential copied elsewhere is readable, whether a store exists is observable, and if a protected location cannot be inspected all reads are refused.
+- `Read` protection is by file identity, re-checked on every read: a hard link into Kopi's home or a credential copied elsewhere is readable, whether Kopi's home exists is observable, and if Kopi's home cannot be inspected all reads are refused.
+- Kopi refuses no credential locations outside its home; deny them with rules, such as `*(~/.ssh)`.
 - `Read` detects binary files from their first 8 KiB and refuses absolute symlinks, even ones pointing inside the start directory.
 - PiG's built-in providers still use ambient credentials: API keys in the environment, Google application-default credentials and the AWS profile and credential chain.
 - Importing PiG changes the TLS settings of Go's process-wide default HTTP transport.

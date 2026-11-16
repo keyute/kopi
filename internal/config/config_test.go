@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,6 +23,7 @@ func globalLayer(t *testing.T, content string) Layer {
 
 // withDefaults returns c with the default UI blocks filled in.
 func withDefaults(c Config) Config {
+	c.Mode = "plan"
 	c.Keys = DefaultKeys()
 	c.StatusLine = DefaultStatusLine()
 	c.Permissions = Permissions{Allow: []string{}, Ask: []string{}, Deny: []string{}}
@@ -35,7 +37,28 @@ func TestResolveDefaultsOnly(t *testing.T) {
 	assert.Equal(t, "default", r.Origins["version"])
 	assert.Equal(t, "default", r.Origins["keys.submit"])
 	assert.Equal(t, "default", r.Origins["statusline.left"])
+	assert.Equal(t, "default", r.Origins["mode"])
 	assert.NotContains(t, r.Origins, "model")
+}
+
+func TestResolveModeFromGlobalFile(t *testing.T) {
+	global := globalLayer(t, `{"mode": "execute"}`)
+	r, err := Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Equal(t, "execute", r.Config.Mode)
+	assert.Equal(t, global.Name, r.Origins["mode"])
+}
+
+func TestResolveRejectsInvalidModeNamingLayer(t *testing.T) {
+	for _, mode := range []string{"auto", "", "Plan"} {
+		t.Run(mode, func(t *testing.T) {
+			global := globalLayer(t, fmt.Sprintf(`{"mode": %q}`, mode))
+			_, err := Resolve(Defaults(), global)
+			require.ErrorIs(t, err, ErrInvalidValue)
+			assert.Contains(t, err.Error(), global.Name)
+			assert.Contains(t, err.Error(), "want plan or execute")
+		})
+	}
 }
 
 func TestResolveLaterLayersOverrideEarlier(t *testing.T) {
@@ -243,10 +266,11 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	r, err := Resolve(Defaults())
 	require.NoError(t, err)
 	entries := r.Entries()
-	assert.Len(t, entries, 7+len(KeyActions))
+	assert.Len(t, entries, 8+len(KeyActions))
 	assert.IsIncreasing(t, entryKeys(entries))
 	assert.Contains(t, entries, Entry{Key: "model", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "version", Value: "1", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "mode", Value: "plan", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "keys.submit", Value: `["enter"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "keys.newline", Value: `["shift+enter","alt+enter","ctrl+j"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "statusline.left", Value: `["model","context","branch"]`, Origin: "default"})
@@ -257,12 +281,14 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 
 	r, err = Resolve(Defaults(), Map("flags", map[string]any{
 		"model":       "a/b",
+		"mode":        "execute",
 		"statusline":  map[string]any{"right": []any{}},
 		"permissions": map[string]any{"deny": []any{"Read(.env)", "*(~/.ssh)"}},
 	}))
 	require.NoError(t, err)
 	entries = r.Entries()
 	assert.Contains(t, entries, Entry{Key: "model", Value: "a/b", Origin: "flags"})
+	assert.Contains(t, entries, Entry{Key: "mode", Value: "execute", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "statusline.right", Value: "[]", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "permissions.deny", Value: `["Read(.env)","*(~/.ssh)"]`, Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "permissions.allow", Value: "[]", Origin: "default"})

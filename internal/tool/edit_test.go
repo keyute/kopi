@@ -98,7 +98,7 @@ func TestEditRefusesUneditableTargets(t *testing.T) {
 	writeFile(t, filepath.Join(home, "bin"), "ELF\x00x")
 	writeFile(t, filepath.Join(home, "big.txt"), "x"+strings.Repeat(" ", maxEditBytes))
 	writeFile(t, filepath.Join(home, "a.txt"), "alpha")
-	tool := NewEdit(newWorkspace(t, home, DefaultProtected(home, kopiHome)))
+	tool := NewEdit(newWorkspace(t, home, protectedStores(home, kopiHome)))
 
 	for _, tc := range []struct {
 		name, path, oldString string

@@ -50,7 +50,7 @@ func newRoot() *cobra.Command {
 }
 
 func rootCmd() *cobra.Command {
-	var resumeID, modeName string
+	var resumeID string
 	var cont, printOnly bool
 	var allowed, disallowed []string
 	cmd := &cobra.Command{
@@ -63,15 +63,11 @@ func rootCmd() *cobra.Command {
 			return setupLogging(cmd)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			mode, err := parseMode(modeName)
-			if err != nil {
-				return err
-			}
 			flagRules := []policy.Source{
 				{Name: "--allowed-tools", Allow: splitRules(allowed)},
 				{Name: "--disallowed-tools", Deny: splitRules(disallowed)},
 			}
-			return run(cmd, args, printOnly, flagRules, app.OpenRequest{ResumeID: resumeID, Continue: cont, Mode: mode})
+			return run(cmd, args, printOnly, flagRules, app.OpenRequest{ResumeID: resumeID, Continue: cont})
 		},
 	}
 	cmd.PersistentFlags().String("model", "", "model as provider/id (overrides the config file)")
@@ -79,21 +75,11 @@ func rootCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&cont, "continue", "c", false, "continue the most recent session in this directory")
 	cmd.Flags().StringVarP(&resumeID, "resume", "r", "", "resume the session with this id")
 	cmd.Flags().BoolVarP(&printOnly, "print", "p", false, "print the response to one prompt and exit")
-	cmd.Flags().StringVar(&modeName, "mode", "plan", "mode the session starts in: plan or execute")
+	cmd.Flags().String("mode", "", "mode the session starts in, overriding the config file: plan or execute")
 	cmd.Flags().StringArrayVar(&allowed, "allowed-tools", nil, "permission rules to allow, comma-separated or repeated, e.g. \"Edit(docs/**)\"")
 	cmd.Flags().StringArrayVar(&disallowed, "disallowed-tools", nil, "permission rules to deny, comma-separated or repeated")
 	cmd.MarkFlagsMutuallyExclusive("continue", "resume")
 	return cmd
-}
-
-func parseMode(name string) (policy.Mode, error) {
-	switch name {
-	case "plan":
-		return policy.Plan, nil
-	case "execute":
-		return policy.Execute, nil
-	}
-	return 0, fmt.Errorf("invalid --mode %q: want plan or execute", name)
 }
 
 // splitRules splits each value on the commas outside parentheses and braces,
@@ -248,6 +234,22 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	if model == "" {
 		return config.ErrNoModel
 	}
+	mode, err := policy.ParseMode(resolved.Config.Mode)
+	if err != nil {
+		return err
+	}
+	// The flag overrides only the session the process opens; /new and /resume
+	// start in the configured mode.
+	req.Mode = mode
+	if cmd.Flags().Changed("mode") {
+		name, err := cmd.Flags().GetString("mode")
+		if err != nil {
+			return err
+		}
+		if req.Mode, err = policy.ParseMode(name); err != nil {
+			return fmt.Errorf("failed to parse --mode: %w", err)
+		}
+	}
 	fullscreen := !printOnly && isTerminal(cmd.InOrStdin()) && isTerminal(cmd.OutOrStdout())
 	var prompt string
 	if fullscreen {
@@ -268,7 +270,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 
 	// workRunning is set when Close leaves work running; see below.
 	var workRunning bool
-	ws, err := tool.NewWorkspace(cwd, tool.DefaultProtected(userHome, paths.Home))
+	ws, err := tool.NewWorkspace(cwd, []string{paths.Home})
 	if err != nil {
 		return err
 	}
@@ -307,7 +309,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		}
 	}()
 	// Only the fullscreen interface has a human to answer approvals.
-	cfg := app.Config{Model: model, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen}
+	cfg := app.Config{Model: model, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode}
 	// Only the fullscreen interface records prompts.
 	if fullscreen {
 		store, err := history.Open(paths.HistoryFile, cwd, historyLimit)

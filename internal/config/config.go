@@ -29,6 +29,9 @@ const delim = "."
 type Config struct {
 	Version int    `koanf:"version"`
 	Model   string `koanf:"model"` // "provider/id"; empty means not configured (there is no default model)
+	// Mode is the mode sessions start in, plan or execute; --mode overrides it
+	// for the session the process opens.
+	Mode string `koanf:"mode"`
 	// Keys maps an action from KeyActions to the keys bound to it.
 	Keys        map[string][]string `koanf:"keys"`
 	StatusLine  StatusLine          `koanf:"statusline"`
@@ -52,6 +55,7 @@ type Layer struct {
 func Defaults() Layer {
 	values := uiDefaults()
 	values["version"] = Version
+	values["mode"] = policy.Plan.String()
 	values["permissions"] = map[string]any{"allow": []string{}, "ask": []string{}, "deny": []string{}}
 	return Map("default", values)
 }
@@ -99,6 +103,11 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 		if c.Model != "" {
 			if _, _, err := ParseModelRef(c.Model); err != nil {
 				return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
+			}
+		}
+		if k.Exists("mode") {
+			if _, err := policy.ParseMode(c.Mode); err != nil {
+				return nil, fmt.Errorf("config layer %s: %w: %w", l.Name, ErrInvalidValue, err)
 			}
 		}
 		if err := validateUI(c); err != nil {
@@ -206,6 +215,7 @@ func (r *Resolved) Entries() []Entry {
 	c := r.Config
 	values := map[string]any{
 		"model":             c.Model,
+		"mode":              c.Mode,
 		"version":           c.Version,
 		"statusline.left":   c.StatusLine.Left,
 		"statusline.right":  c.StatusLine.Right,

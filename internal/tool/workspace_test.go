@@ -106,9 +106,20 @@ func syntheticHome(t *testing.T) (home, kopiHome string) {
 	return home, kopiHome
 }
 
+// protectedStores lists the Kopi home and the stores under home that the tests
+// exercise: directories, a file replaced by rename, a nested path and stores
+// that do not exist yet.
+func protectedStores(home, kopiHome string) []string {
+	paths := []string{kopiHome}
+	for _, name := range []string{".ssh", ".aws", ".claude.json", ".config/gh", ".codex", ".netrc", ".docker"} {
+		paths = append(paths, filepath.Join(home, filepath.FromSlash(name)))
+	}
+	return paths
+}
+
 func TestOpenRefusesProtectedStoresInsideHomeWorkspace(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
-	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 
 	for _, path := range []string{
 		".ssh/id_x",
@@ -131,7 +142,7 @@ func TestOpenRefusesProtectedStoresInsideHomeWorkspace(t *testing.T) {
 func TestOpenRefusesSymlinkedCredentialStore(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
 	require.NoError(t, os.Symlink(".ssh", filepath.Join(home, "link")))
-	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 
 	_, err := ws.Open("link/id_x")
 	require.ErrorIs(t, err, ErrProtected)
@@ -142,7 +153,7 @@ func TestOpenRefusesCredentialStoreThatIsSymlink(t *testing.T) {
 	require.NoError(t, os.RemoveAll(filepath.Join(home, ".ssh")))
 	writeFile(t, filepath.Join(home, "dotfiles", "ssh", "id_x"), "private key")
 	require.NoError(t, os.Symlink(filepath.Join("dotfiles", "ssh"), filepath.Join(home, ".ssh")))
-	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 
 	for _, path := range []string{".ssh/id_x", "dotfiles/ssh/id_x"} {
 		f, err := ws.Open(path)
@@ -156,7 +167,7 @@ func TestOpenRefusesCaseVariantOfProtectedStore(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".SSH")); err != nil {
 		t.Skip("filesystem is case-sensitive")
 	}
-	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 
 	_, err := ws.Open(".SSH/id_x")
 	require.ErrorIs(t, err, ErrProtected)
@@ -168,7 +179,7 @@ func TestOpenRefusesMissingPathsInProtectedStore(t *testing.T) {
 	require.NoError(t, os.Symlink("missing", filepath.Join(home, ".ssh", "dangling")))
 	require.NoError(t, os.Symlink("../.env", filepath.Join(home, ".ssh", "outward")))
 	require.NoError(t, os.Symlink(filepath.Join(t.TempDir(), "x"), filepath.Join(home, ".ssh", "escape")))
-	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 
 	for _, path := range []string{
 		".ssh/nonexistent",
@@ -191,7 +202,7 @@ func TestOpenRefusesMissingPathsInProtectedStore(t *testing.T) {
 
 func TestOpenRefusesFileStoreReplacedByRename(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
-	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 	tmp := filepath.Join(home, ".claude.json.tmp")
 	writeFile(t, tmp, `{"token":"new"}`)
 	require.NoError(t, os.Rename(tmp, filepath.Join(home, ".claude.json")))
@@ -202,7 +213,7 @@ func TestOpenRefusesFileStoreReplacedByRename(t *testing.T) {
 
 func TestOpenRefusesStoreCreatedAfterStart(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
-	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 	writeFile(t, filepath.Join(home, ".config", "gh", "hosts.yml"), "token")
 
 	for _, path := range []string{".config/gh/hosts.yml", ".config/gh/missing"} {
@@ -213,7 +224,7 @@ func TestOpenRefusesStoreCreatedAfterStart(t *testing.T) {
 
 func TestOpenRefusesStoreRecreatedAfterStart(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
-	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 	require.NoError(t, os.RemoveAll(filepath.Join(home, ".aws")))
 	writeFile(t, filepath.Join(home, ".aws", "credentials"), "aws secret")
 
@@ -225,7 +236,7 @@ func TestOpenSkipsProtectedPathUnderRegularFile(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
 	writeFile(t, filepath.Join(home, ".config"), "not a directory")
 	writeFile(t, filepath.Join(home, "notes.txt"), "hello")
-	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 
 	assert.Equal(t, "hello", readAll(t, ws, "notes.txt"))
 	_, err := ws.Open(".ssh/id_x")
@@ -239,7 +250,7 @@ func TestNewWorkspaceRejectsRelativeProtectedPath(t *testing.T) {
 
 func TestOpenReadsDotEnvInWorkspace(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
-	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 
 	assert.Equal(t, "TOKEN=1", readAll(t, ws, ".env"))
 }
@@ -247,7 +258,7 @@ func TestOpenReadsDotEnvInWorkspace(t *testing.T) {
 func TestOpenReportsMissingFile(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
 	require.NoError(t, os.Mkdir(filepath.Join(home, "sub"), 0o755))
-	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 
 	for _, path := range []string{"missing.txt", "sub/missing.txt", "nodir/missing.txt"} {
 		_, err := ws.Open(path)
@@ -259,7 +270,7 @@ func TestOpenReportsMissingFile(t *testing.T) {
 func TestNewWorkspaceSkipsMissingProtectedEntries(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "a.txt"), "hello")
-	ws := newWorkspace(t, dir, DefaultProtected(filepath.Join(dir, "no-home"), filepath.Join(dir, "no-kopi")))
+	ws := newWorkspace(t, dir, protectedStores(filepath.Join(dir, "no-home"), filepath.Join(dir, "no-kopi")))
 
 	assert.Equal(t, "hello", readAll(t, ws, "a.txt"))
 }
@@ -268,7 +279,7 @@ func TestOpenRefusesEverythingInWorkspaceInsideProtectedStore(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
 	dir := filepath.Join(home, ".ssh", "project")
 	writeFile(t, filepath.Join(dir, "readme.txt"), "hello")
-	ws := newWorkspace(t, dir, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, dir, protectedStores(home, kopiHome))
 
 	for _, path := range []string{"readme.txt", "."} {
 		_, err := ws.Open(path)
@@ -378,7 +389,7 @@ func TestWriteFileRefusesProtectedStores(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
 	require.NoError(t, os.Symlink(".ssh", filepath.Join(home, "link")))
 	require.NoError(t, os.Symlink(filepath.Join(home, ".config", "gh", "hosts.yml"), filepath.Join(home, "gh-link")))
-	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 	before := listDir(t, home)
 
 	for _, path := range []string{
@@ -412,7 +423,7 @@ func TestWriteFileRefusesCaseVariantOfMissingStore(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".SSH")); err != nil {
 		t.Skip("filesystem is case-sensitive")
 	}
-	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 	before := listDir(t, home)
 
 	err := ws.WriteFile(".Config/GH/hosts.yml", []byte("x"))
@@ -422,7 +433,7 @@ func TestWriteFileRefusesCaseVariantOfMissingStore(t *testing.T) {
 
 func TestWriteFileWritesOutsideStores(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
-	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 
 	require.NoError(t, ws.WriteFile(".config/other/settings.json", []byte("{}")))
 	require.NoError(t, ws.WriteFile(".ssh-notes.txt", []byte("hi")))

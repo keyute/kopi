@@ -57,18 +57,6 @@ func NewWorkspace(dir string, protected []string) (*Workspace, error) {
 	return &Workspace{root: root, given: given, realDir: realDir, protected: protected}, nil
 }
 
-func DefaultProtected(home, kopiHome string) []string {
-	paths := []string{kopiHome}
-	for _, name := range []string{
-		".ssh", ".aws", ".gnupg", ".config/gcloud", ".config/gh", ".netrc",
-		".git-credentials", ".npmrc", ".docker", ".kube", ".azure",
-		".pi", ".pig", ".claude", ".claude.json", ".codex",
-	} {
-		paths = append(paths, filepath.Join(home, filepath.FromSlash(name)))
-	}
-	return paths
-}
-
 func (w *Workspace) Open(path string) (*os.File, error) {
 	rel, err := w.relative(path)
 	if err != nil {

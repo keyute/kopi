@@ -30,6 +30,9 @@ type Config struct {
 	// Unattended means no human can answer, so every call that would ask for
 	// approval is denied.
 	Unattended bool
+	// Mode is the mode the sessions that NewSession, Resume, /new and /resume
+	// open start in; Open takes it from its OpenRequest.
+	Mode policy.Mode
 }
 
 // Controller holds all frontend-neutral behaviour: frontends pass input in
@@ -112,11 +115,11 @@ func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
 }
 
 func (c *Controller) NewSession(ctx context.Context) error {
-	return c.start(ctx, OpenRequest{})
+	return c.start(ctx, OpenRequest{Mode: c.cfg.Mode})
 }
 
 func (c *Controller) Resume(ctx context.Context, id string) error {
-	return c.start(ctx, OpenRequest{ResumeID: id})
+	return c.start(ctx, OpenRequest{ResumeID: id, Mode: c.cfg.Mode})
 }
 
 // switchTo starts the switch to req in the background; its failure arrives as

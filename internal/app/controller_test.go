@@ -1658,6 +1658,28 @@ func TestOpenRequestModeIsHonouredAndNewReturnsToPlan(t *testing.T) {
 	assert.Equal(t, []event.ModeChanged{{Mode: policy.Execute}, {Mode: policy.Plan}}, ofType[event.ModeChanged](h.rec.all()))
 }
 
+func TestNewAndResumeCommandsStartInConfiguredMode(t *testing.T) {
+	h, _ := openHarness(t, Config{Mode: policy.Execute})
+	assert.Equal(t, policy.Plan, h.c.Status().Mode)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first answer")})
+	h.turn(t, "first question")
+	savedID := h.c.Status().SessionID
+	changes := subscribeTo[event.SessionChanged](h.c)
+
+	_, err := h.c.Submit(t.Context(), "/new")
+	require.NoError(t, err)
+	assert.NotEqual(t, savedID, receiveEvent(t, changes).SessionID)
+	assertSwitchDone(t, h)
+	assert.Equal(t, policy.Execute, h.c.Status().Mode)
+
+	h.c.EnterPlan()
+	_, err = h.c.Submit(t.Context(), "/resume "+savedID)
+	require.NoError(t, err)
+	assert.Equal(t, savedID, receiveEvent(t, changes).SessionID)
+	assertSwitchDone(t, h)
+	assert.Equal(t, policy.Execute, h.c.Status().Mode)
+}
+
 func TestBareDenyRemovesTool(t *testing.T) {
 	var ran atomic.Int32
 	sb := pigruntimetest.NewSandbox(t)

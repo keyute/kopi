@@ -17,7 +17,7 @@ func TestOpenRefusesFIFOWithoutBlocking(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
 	require.NoError(t, syscall.Mkfifo(filepath.Join(home, "pipe"), 0o600))
 	require.NoError(t, syscall.Mkfifo(filepath.Join(home, ".ssh", "pipe"), 0o600))
-	ws := newWorkspace(t, home, DefaultProtected(home, kopiHome))
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 
 	for _, tc := range []struct {
 		path string

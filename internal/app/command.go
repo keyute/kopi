@@ -35,7 +35,7 @@ func commandTable() []command {
 			return nil
 		}},
 		{Command{"new", "/new", "start a new session"}, func(c *Controller, ctx context.Context, _ string) error {
-			return c.switchTo(ctx, OpenRequest{})
+			return c.switchTo(ctx, OpenRequest{Mode: c.cfg.Mode})
 		}},
 		{Command{"resume", "/resume [id]", "resume a session, or list sessions without an id"}, (*Controller).resumeCommand},
 		{Command{"help", "/help", "list commands"}, func(c *Controller, _ context.Context, _ string) error {
@@ -61,7 +61,7 @@ func parse(line string) (name, args string, isCommand bool) {
 
 func (c *Controller) resumeCommand(ctx context.Context, id string) error {
 	if id != "" {
-		return c.switchTo(ctx, OpenRequest{ResumeID: id})
+		return c.switchTo(ctx, OpenRequest{ResumeID: id, Mode: c.cfg.Mode})
 	}
 	// The listing reads every session file, so it runs in the background. It
 	// holds life so that it cannot touch the runtime after Close.

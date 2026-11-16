@@ -23,7 +23,7 @@
 ## Authority
 
 - Every model-facing tool goes through `internal/policy`: `Gate.Before` in the pre-dispatch hook and `Gate.Admit` inside execution.
-- Only human control input changes mode. Sessions start and resume in plan unless the user passes `--mode execute`, which applies to the session the process opens.
+- Only human control input changes mode. Sessions start and resume in the configured `mode` (default plan); `--mode` overrides it for the session the process opens.
 - File-modifying tools act only through `tool.Workspace` (os.Root confinement, protected stores refused before any side effect) and the permission rules. Never add a shell without an OS sandbox.
 
 ## State
