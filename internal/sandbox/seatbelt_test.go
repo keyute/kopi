@@ -46,17 +46,19 @@ func values(defs map[string]string, prefix string) []string {
 	}
 }
 
-func fullPolicy() Policy {
+func fullPolicy(t *testing.T) Policy {
+	t.Helper()
+	base := filepath.Join(filepath.VolumeName(t.TempDir())+string(filepath.Separator), "kopi-test")
 	return Policy{
-		Write:     []string{"/kopi-test/w"},
-		DenyRead:  []string{"/kopi-test/w/secret"},
-		DenyWrite: []string{"/kopi-test/w/.git/hooks"},
+		Write:     []string{filepath.Join(base, "w")},
+		DenyRead:  []string{filepath.Join(base, "w", "secret")},
+		DenyWrite: []string{filepath.Join(base, "w", ".git", "hooks")},
 		Network:   true,
 	}
 }
 
 func TestSeatbeltSectionOrder(t *testing.T) {
-	profile, _ := profileOf(t, seatbeltPrefix(fullPolicy()))
+	profile, _ := profileOf(t, seatbeltPrefix(fullPolicy(t)))
 	markers := []string{
 		"\n(allow file-read*)\n",
 		"(deny file-read*\n",
@@ -89,20 +91,20 @@ func TestSeatbeltOmitsRulesWithoutFilters(t *testing.T) {
 		assert.NotContains(t, empty, head)
 	}
 
-	full, _ := profileOf(t, seatbeltPrefix(fullPolicy()))
+	full, _ := profileOf(t, seatbeltPrefix(fullPolicy(t)))
 	for _, profile := range []string{empty, full} {
 		for _, bare := range []string{"(allow file-write*)", "(deny file-read*)", "(deny file-write*)", "(deny file-write-unlink)", "(deny file-write-unlink file-write-create)"} {
 			assert.NotContains(t, profile, bare)
 		}
 	}
 
-	onlyDenyWrite, _ := profileOf(t, seatbeltPrefix(Policy{DenyWrite: []string{"/kopi-test/x"}}))
+	onlyDenyWrite, _ := profileOf(t, seatbeltPrefix(Policy{DenyWrite: []string{t.TempDir()}}))
 	assert.NotContains(t, onlyDenyWrite, "(allow file-write*")
 	assert.NotContains(t, onlyDenyWrite, "(deny file-read*")
 }
 
 func TestSeatbeltPreferences(t *testing.T) {
-	restricted, _ := profileOf(t, seatbeltPrefix(fullPolicy()))
+	restricted, _ := profileOf(t, seatbeltPrefix(fullPolicy(t)))
 	unrestricted, _ := profileOf(t, seatbeltPrefix(Policy{}))
 	for _, rule := range []string{
 		`(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))`,
@@ -136,7 +138,7 @@ func TestSeatbeltNetwork(t *testing.T) {
 }
 
 func TestSeatbeltParamsMatchDefinitions(t *testing.T) {
-	p := fullPolicy()
+	p := fullPolicy(t)
 	profile, defs := profileOf(t, seatbeltPrefix(p))
 	used := map[string]bool{}
 	for _, m := range regexp.MustCompile(`\(param "([^"]*)"\)`).FindAllStringSubmatch(profile, -1) {
@@ -177,16 +179,25 @@ func TestSeatbeltPathForms(t *testing.T) {
 }
 
 func TestSeatbeltAncestors(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
 	_, defs := profileOf(t, seatbeltPrefix(Policy{
-		DenyRead:  []string{"/kopi-test/a/x"},
-		DenyWrite: []string{"/kopi-test/a/b/c", "/kopi-test/a/b/d"},
+		DenyRead:  []string{filepath.Join(base, "a", "x")},
+		DenyWrite: []string{filepath.Join(base, "a", "b", "c"), filepath.Join(base, "a", "b", "d")},
 	}))
-	assert.Equal(t, []string{"/kopi-test/a", "/kopi-test", "/kopi-test/a/b"}, values(defs, "ANCESTOR"))
+	want := []string{filepath.Join(base, "a")}
+	for d := base; d != filepath.Dir(d); d = filepath.Dir(d) {
+		want = append(want, d)
+	}
+	want = append(want, filepath.Join(base, "a", "b"))
+	assert.Equal(t, want, values(defs, "ANCESTOR"))
 }
 
 func TestSeatbeltDenyReadIsAlsoDenyWrite(t *testing.T) {
-	profile, defs := profileOf(t, seatbeltPrefix(Policy{DenyRead: []string{"/kopi-test/s"}}))
-	assert.Equal(t, []string{"/kopi-test/s"}, values(defs, "DENY_WRITE"))
+	path, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	profile, defs := profileOf(t, seatbeltPrefix(Policy{DenyRead: []string{path}}))
+	assert.Equal(t, []string{path}, values(defs, "DENY_WRITE"))
 	assert.Contains(t, profile, `(deny file-write*
   (literal (param "DENY_WRITE_0")) (subpath (param "DENY_WRITE_0")))`)
 }
@@ -410,4 +421,42 @@ func TestSeatbeltUnixSocketUnreachable(t *testing.T) {
 		_, ok := <-accepted
 		assert.False(t, ok, network)
 	}
+}
+
+func TestSeatbeltSymlinkParentForms(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	real := filepath.Join(base, "real")
+	link := filepath.Join(base, "link")
+	require.NoError(t, os.MkdirAll(filepath.Join(real, "child"), 0o700))
+	require.NoError(t, os.Mkdir(filepath.Join(real, "existing"), 0o700))
+	require.NoError(t, os.Symlink(filepath.Join(real, "child"), link))
+	for _, suffix := range []string{"existing", "existing/", "missing/deep", "missing/deep/"} {
+		t.Run(suffix, func(t *testing.T) {
+			path := link + "/../" + suffix
+			resolved := filepath.Join(real, suffix)
+			_, defs := profileOf(t, seatbeltPrefix(Policy{
+				Write: []string{path, path}, DenyRead: []string{path}, DenyWrite: []string{path},
+			}))
+			for _, prefix := range []string{"WRITE", "DENY_READ", "DENY_WRITE"} {
+				assert.Equal(t, []string{resolved}, values(defs, prefix))
+				assert.NotContains(t, values(defs, prefix), filepath.Clean(path))
+			}
+			assert.Contains(t, values(defs, "ANCESTOR"), real)
+		})
+	}
+}
+
+func TestSeatbeltSymlinkParentWriteEnforcement(t *testing.T) {
+	base := t.TempDir()
+	real, link := filepath.Join(base, "real"), filepath.Join(base, "link")
+	require.NoError(t, os.MkdirAll(filepath.Join(real, "child"), 0o700))
+	require.NoError(t, os.Mkdir(filepath.Join(real, "target"), 0o700))
+	require.NoError(t, os.Mkdir(filepath.Join(base, "target"), 0o700))
+	require.NoError(t, os.Symlink(filepath.Join(real, "child"), link))
+	sb := newSandbox(t, Policy{Write: []string{link + "/../target"}})
+	require.NoError(t, bash(t, sb, `touch "$REAL/target/f"`, "REAL="+real))
+	assert.Error(t, bash(t, sb, `touch "$BASE/target/f"`, "BASE="+base))
+	assert.FileExists(t, filepath.Join(real, "target", "f"))
+	assert.NoFileExists(t, filepath.Join(base, "target", "f"))
 }

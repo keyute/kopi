@@ -398,9 +398,9 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 			case p == "~":
 				p = userHome
 			case strings.HasPrefix(p, "~/"):
-				p = filepath.Join(userHome, p[2:])
+				p = userHome + string(filepath.Separator) + p[2:]
 			default:
-				p = filepath.Join(cwd, p)
+				p = cwd + string(filepath.Separator) + p
 			}
 			out = append(out, p)
 		}
@@ -419,8 +419,13 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 		// A .git file, as in a linked worktree or submodule, names the git directory.
 		denyWrite = append(denyWrite, gitDir)
 	}
+	write := []string{cwd}
+	if filepath.IsAbs("/tmp") {
+		write = append(write, "/tmp")
+	}
+	write = append(write, os.TempDir())
 	return sandbox.Policy{
-		Write:     append([]string{cwd, "/tmp", os.TempDir()}, expand(cfg.AllowWrite)...),
+		Write:     append(write, expand(cfg.AllowWrite)...),
 		DenyRead:  append([]string{kopiHome}, expand(cfg.DenyRead)...),
 		DenyWrite: denyWrite,
 		Network:   cfg.Network,

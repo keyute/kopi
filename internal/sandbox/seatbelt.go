@@ -103,13 +103,18 @@ func rule(b *strings.Builder, head string, keys []string, filter func(string) st
 	b.WriteString(")\n")
 }
 
-// forms returns each path as written and with its symlinks resolved, so a rule
-// holds whichever form Seatbelt checks.
+// forms keeps a cleaned lexical alias only when it names the resolved target:
+// cleaning link/.. first could introduce a rule for an unrelated path.
 func forms(lists ...[]string) []string {
 	var out []string
 	for _, list := range lists {
 		for _, p := range list {
-			out = appendNew(out, filepath.Clean(p), policy.Resolve(p))
+			resolved := policy.Resolve(p)
+			clean := filepath.Clean(p)
+			if policy.Resolve(clean) == resolved {
+				out = appendNew(out, clean)
+			}
+			out = appendNew(out, resolved)
 		}
 	}
 	return out

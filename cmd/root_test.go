@@ -746,10 +746,10 @@ func TestRootSandboxedBashRefusesKopiHomeRead(t *testing.T) {
 }
 
 func TestSandboxPolicy(t *testing.T) {
-	home, kopiHome := t.TempDir(), t.TempDir()
+	home, kopiHome, absolute := t.TempDir(), t.TempDir(), t.TempDir()
 	cfg := config.Sandbox{
-		AllowWrite: []string{"/abs", "~/x", "~", "rel"},
-		DenyRead:   []string{"/abs", "~/x", "~", "rel"},
+		AllowWrite: []string{absolute, "~/x", "~", "rel"},
+		DenyRead:   []string{absolute, "~/x", "~", "rel"},
 		Network:    true,
 	}
 	gitFiles := func(cwd string) []string {
@@ -763,11 +763,19 @@ func TestSandboxPolicy(t *testing.T) {
 	t.Run("git directory", func(t *testing.T) {
 		cwd := t.TempDir()
 		require.NoError(t, os.Mkdir(filepath.Join(cwd, ".git"), 0o755))
-		expanded := []string{"/abs", filepath.Join(home, "x"), home, filepath.Join(cwd, "rel")}
+		expanded := []string{absolute, filepath.Join(home, "x"), home, filepath.Join(cwd, "rel")}
+		write := []string{cwd}
+		if filepath.IsAbs("/tmp") {
+			write = append(write, "/tmp")
+		}
+		write = append(write, os.TempDir())
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, append([]string{cwd, "/tmp", os.TempDir()}, expanded...), p.Write)
+		assert.Equal(t, append(write, expanded...), p.Write)
+		for _, path := range append(p.Write, p.DenyRead...) {
+			assert.True(t, filepath.IsAbs(path), path)
+		}
 		assert.Equal(t, append([]string{kopiHome}, expanded...), p.DenyRead)
 		assert.Equal(t, gitFiles(cwd), p.DenyWrite)
 		assert.True(t, p.Network)
@@ -798,4 +806,24 @@ func TestSandboxPolicy(t *testing.T) {
 
 		assert.Equal(t, gitFiles(cwd), p.DenyWrite)
 	})
+}
+
+func TestSandboxPolicyPreservesSymlinkParent(t *testing.T) {
+	cwd, home, kopiHome := t.TempDir(), t.TempDir(), t.TempDir()
+	real := filepath.Join(t.TempDir(), "child")
+	require.NoError(t, os.Mkdir(real, 0o700))
+	for _, base := range []string{cwd, home} {
+		require.NoError(t, os.Symlink(real, filepath.Join(base, "link")))
+	}
+	for _, tc := range []struct{ name, path, want string }{
+		{"relative", "link/../target", cwd + string(filepath.Separator) + "link/../target"},
+		{"home", "~/link/../target", home + string(filepath.Separator) + "link/../target"},
+		{"absolute", cwd + string(filepath.Separator) + "link/../target", cwd + string(filepath.Separator) + "link/../target"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := sandboxPolicy(config.Sandbox{AllowWrite: []string{tc.path}, DenyRead: []string{tc.path}}, cwd, home, kopiHome)
+			assert.Equal(t, tc.want, p.Write[len(p.Write)-1])
+			assert.Equal(t, tc.want, p.DenyRead[len(p.DenyRead)-1])
+		})
+	}
 }

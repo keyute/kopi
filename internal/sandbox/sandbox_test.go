@@ -21,13 +21,13 @@ func TestNewUnavailableOffDarwin(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		t.Skip("darwin has a sandbox")
 	}
-	_, err := New(t.Context(), Policy{Write: []string{"/x"}})
+	_, err := New(t.Context(), Policy{Write: []string{t.TempDir()}})
 	require.ErrorIs(t, err, ErrUnavailable)
 	assert.Contains(t, err.Error(), runtime.GOOS)
 }
 
 func TestWrapDoesNotAliasPrefix(t *testing.T) {
-	s := &Sandbox{prefix: seatbeltPrefix(Policy{Write: []string{"/w"}})}
+	s := &Sandbox{prefix: seatbeltPrefix(Policy{Write: []string{t.TempDir()}})}
 	want := append([]string(nil), s.prefix...)
 
 	a := s.Wrap([]string{"a"})
