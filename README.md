@@ -131,7 +131,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - Requests send `User-Agent: kopi/<version> (<os>; <arch>)`, add `originator: kopi` for Codex-API models, and carry no PiG attribution headers.
 - `anthropic` requests keep the `User-Agent` PiG sends for them: Claude Code's with an account sign-in, PiG's with an API key.
 - `github-copilot` requests keep GitHub Copilot Chat's `User-Agent`, which PiG's Copilot models set.
-- A `User-Agent` in a provider's `headers` in `agent/models.json` is replaced by Kopi's, except for `anthropic`; one in a model's `headers` is kept.
+- Provider and model `headers` in `agent/models.json` override Kopi's defaults, including `User-Agent` and `originator`.
 - Still PiG's: the page a browser sign-in returns to shows pi's logo, and xAI's sign-in sends `referrer: pig`.
 
 ## Modes and tools

@@ -205,10 +205,11 @@ func (l *loginIO) notify(e ai.AuthEvent) {
 		if e.Instructions != "" {
 			fmt.Fprintln(l.out, e.Instructions)
 		}
-		l.open(e.URL)
+		// The opener waits for the browser's launcher; do not block the login flow.
+		go l.open(e.URL)
 	case ai.AuthDeviceCodeEvent:
 		fmt.Fprintf(l.out, "Visit %s and enter the code %s\n", e.VerificationURI, e.UserCode)
-		l.open(e.VerificationURI)
+		go l.open(e.VerificationURI)
 	case ai.AuthProgressEvent:
 		fmt.Fprintln(l.out, e.Message)
 	case ai.AuthInfoEvent:
@@ -219,18 +220,14 @@ func (l *loginIO) notify(e ai.AuthEvent) {
 	}
 }
 
-// open runs off the flow's goroutine because the opener waits for the
-// browser's launcher; the printed URL is the fallback when it fails.
 func (l *loginIO) open(rawURL string) {
 	u, err := url.Parse(rawURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return
 	}
-	go func() {
-		if err := l.openURL(rawURL); err != nil {
-			slog.Debug("failed to open browser", "error", err)
-		}
-	}()
+	if err := l.openURL(rawURL); err != nil {
+		slog.Debug("failed to open browser", "error", err)
+	}
 }
 
 func (l *loginIO) ask(message, placeholder string) {

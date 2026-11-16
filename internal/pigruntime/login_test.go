@@ -126,20 +126,18 @@ func TestLoginOpensOnlyWebURLsInBrowser(t *testing.T) {
 		return nil
 	}}
 	for _, bad := range []string{"file:///etc/passwd", "javascript:alert(1)", "http://[::1"} {
+		l.open(bad)
+		assert.Empty(t, opened, "%s must not open in the browser", bad)
 		l.notify(ai.AuthURLEvent{URL: bad})
 		l.notify(ai.AuthDeviceCodeEvent{VerificationURI: bad, UserCode: "TEST-CODE"})
 		assert.Equal(t, 2, strings.Count(out.String(), bad), "%s is printed for both events", bad)
 	}
-	// Opens run in goroutines, so a web URL marks when the others would have landed.
-	l.notify(ai.AuthURLEvent{URL: loginURL})
-
-	select {
-	case u := <-opened:
-		assert.Equal(t, loginURL, u)
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for browser opener")
+	for _, web := range []string{loginURL, "http://login.example/authorize"} {
+		l.open(web)
+		require.Len(t, opened, 1)
+		assert.Equal(t, web, <-opened)
 	}
-	assert.Empty(t, opened, "only the web URL was opened")
+	assert.Empty(t, opened, "only web URLs were opened")
 }
 
 // loginCall is what a recording provider's sign-in received.
