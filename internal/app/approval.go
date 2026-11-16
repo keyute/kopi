@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"strings"
 
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/pigruntime"
@@ -20,7 +21,7 @@ type pendingApproval struct {
 	// send even when the Work continues with a new context.
 	sendCtx context.Context
 	// answer has room for the one answer, so Answer never blocks.
-	answer  chan policy.Answer
+	answer  chan policy.Decision
 	claimed bool // guarded by Controller.mu; cancellation must wait for a claimed answer
 }
 
@@ -30,19 +31,19 @@ func (c *Controller) approver(d *display) policy.Approver {
 	if c.cfg.Unattended {
 		return nil
 	}
-	return func(ctx context.Context, r policy.Request) (policy.Answer, error) {
-		p := &pendingApproval{answer: make(chan policy.Answer, 1)}
+	return func(ctx context.Context, r policy.Request) (policy.Decision, error) {
+		p := &pendingApproval{answer: make(chan policy.Decision, 1)}
 		c.queue.Lock()
 		c.mu.Lock()
 		if err := ctx.Err(); err != nil {
 			c.mu.Unlock()
 			c.queue.Unlock()
-			return policy.Reject, err
+			return policy.Decision{}, err
 		}
 		if c.turn == nil || c.turn.stopped || c.turn.sendCtx.Err() != nil {
 			c.mu.Unlock()
 			c.queue.Unlock()
-			return policy.Reject, context.Canceled
+			return policy.Decision{}, context.Canceled
 		}
 		c.approvalSeq++
 		p.token = c.approvalSeq
@@ -69,21 +70,23 @@ func (c *Controller) approver(d *display) policy.Approver {
 			c.mu.Unlock()
 			c.queue.Unlock()
 			if !claimed {
-				return policy.Reject, ctx.Err()
+				return policy.Decision{}, ctx.Err()
 			}
 			// Answer claimed the slot first and its answer is on the way; a
-			// rejection interrupts before it is sent, and must still reach the
-			// model as a rejection rather than as a cancel.
+			// rejection without a reason interrupts before it is sent, and must
+			// still reach the model as a rejection rather than as a cancel.
 			return <-p.answer, nil
 		}
 	}
 }
 
 // Answer resolves the pending approval for token. It returns false when no
-// approval for token is pending. A rejection also interrupts the turn, which
-// hands queued input back; the model still sees the rejection as the call's
-// result.
-func (c *Controller) Answer(token uint64, a policy.Answer) bool {
+// approval for token is pending. A rejection without a reason also interrupts
+// the turn, which hands queued input back; with one the turn goes on. Either
+// way the model sees the rejection as the call's result.
+func (c *Controller) Answer(token uint64, d policy.Decision) bool {
+	d.Reason = strings.TrimSpace(d.Reason)
+	stop := d.Answer == policy.Reject && d.Reason == ""
 	c.queue.Lock()
 	c.mu.Lock()
 	p := c.approval
@@ -101,15 +104,15 @@ func (c *Controller) Answer(token uint64, a policy.Answer) bool {
 	p.claimed = true
 	c.approval = nil
 	c.mu.Unlock()
-	if a == policy.Reject {
+	if stop {
 		c.stop(p.work, p.emit)
 	}
 	c.queue.Unlock()
-	if a == policy.Reject {
+	if stop {
 		// Cancellation forwarding is asynchronous. Stop PiG synchronously
 		// before releasing the rejection, without holding controller locks.
 		pigruntime.InterruptTurn(p.ctx)
 	}
-	p.answer <- a
+	p.answer <- d
 	return true
 }

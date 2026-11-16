@@ -25,6 +25,6 @@ func systemPrompt(workspace string, tools []tool.Tool) string {
 	if slices.Contains(names, "Write") || slices.Contains(names, "Edit") {
 		lines = append(lines, "Write and Edit work only in execute mode and may need the user's approval.")
 	}
-	lines = append(lines, "A tool call that is refused or that the user rejects returns an error saying so; never retry a rejected call.")
+	lines = append(lines, "A tool call that is refused or that the user rejects returns an error saying so; when the rejection carries the user's feedback, act on it; never retry a rejected call unchanged.")
 	return strings.Join(lines, "\n")
 }

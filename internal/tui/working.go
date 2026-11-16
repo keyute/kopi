@@ -9,6 +9,6 @@ func newSpinner(th theme) spinner.Model {
 }
 
 // workingRow is the row above the composer while a turn runs.
-func workingRow(sp *spinner.Model, v verb, elapsed string, th theme) string {
-	return sp.View() + " " + fg(th.muted).Render(v.ing+"… "+elapsed)
+func workingRow(sp *spinner.Model, text string, th theme) string {
+	return sp.View() + " " + fg(th.muted).Render(text)
 }

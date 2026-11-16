@@ -5,7 +5,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/event"
@@ -31,35 +30,38 @@ func approvalOptions(a *event.ApprovalRequested, km *keyMap) []approvalOption {
 	return append(opts, approvalOption{no, policy.Reject})
 }
 
-// approvalRows draws the prompt in place of the composer: the title, the
-// preview capped at maxPreview rows, the rule that asked, a blank row, the
-// options with the cursor on choice, and a blank row. maxRows caps the whole
-// prompt; past it the top is cut so the options stay visible.
-func approvalRows(a *event.ApprovalRequested, choice int, km *keyMap, width, maxPreview, maxRows int, th theme) []string {
+// newApprovalDialog is the prompt for a: the rule that asked as its note and
+// approvalOptions as its options, the reject option taking a reason.
+func newApprovalDialog(a *event.ApprovalRequested, km *keyMap, th theme) *dialog {
+	d := &dialog{title: a.Title}
+	if a.Rule != "" {
+		d.note = "asked by " + a.Rule
+	}
+	for _, o := range approvalOptions(a, km) {
+		opt := option{label: o.label}
+		if o.answer == policy.Reject {
+			f := newField(th, km.newline, "What should change?")
+			opt.field = &f
+		}
+		d.options = append(d.options, opt)
+	}
+	return d
+}
+
+// approvalRows draws d, a's prompt, in place of the composer: the title, the
+// preview capped at maxPreview rows, the rule that asked, a blank row, and
+// the options. The reason field grows to maxPreview rows within what maxRows
+// leaves after the other rows, and the preview fits into what is left after
+// it. Past maxRows the top is cut so the options stay visible.
+func approvalRows(d *dialog, a *event.ApprovalRequested, width, maxPreview, maxRows int, th theme) []string {
 	if maxRows <= 0 {
 		return nil
 	}
-	none := lipgloss.NewStyle()
-	head := hang("", none, a.Title, none.Bold(true), width)
-	var rule []string
-	if a.Rule != "" {
-		rule = hang("", none, "asked by "+a.Rule, fg(th.dim), width)
-	}
-	tail := []string{""}
-	for i, o := range approvalOptions(a, km) {
-		prefix, st := "  ", none
-		if i == choice {
-			prefix, st = "❯ ", fg(th.accent)
-		}
-		tail = append(tail, hang(prefix, fg(th.accent), fmt.Sprintf("%d. %s", i+1, o.label), st, width)...)
-	}
-	tail = append(tail, "")
-
-	limit := min(maxPreview, maxRows-len(head)-len(rule)-len(tail))
-	rows := head
-	rows = append(rows, previewRows(a.Preview, limit, width, th)...)
-	rows = append(rows, rule...)
-	rows = append(rows, tail...)
+	fieldCap := max(1, maxPreview)
+	// Measure the rest without the last render's preview.
+	d.body = nil
+	d.body = previewRows(a.Preview, min(maxPreview, maxRows-len(d.rows(width, maxRows, fieldCap, th))), width-2, th)
+	rows := d.rows(width, maxRows, fieldCap, th)
 	return rows[max(0, len(rows)-maxRows):]
 }
 

@@ -2,31 +2,32 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/tool"
 )
 
+var rule40 = strings.Repeat("─", 40)
+
 func plainApprovalRows(a event.ApprovalRequested, choice, maxPreview int) []string {
 	km := newKeyMap(config.DefaultKeys())
-	rows := approvalRows(&a, choice, &km, 40, maxPreview, 100, mocha())
-	for i, r := range rows {
-		rows[i] = strings.TrimRight(ansi.Strip(r), " ")
-	}
-	return rows
+	d := newApprovalDialog(&a, &km, mocha())
+	d.sel = choice
+	return plainRows(approvalRows(d, &a, 40, maxPreview, 100, mocha()))
 }
 
 func TestApprovalRowsWithNonpositiveMaxRows(t *testing.T) {
-	km := newKeyMap(config.DefaultKeys())
 	for _, maxRows := range []int{-4, -1, 0} {
 		t.Run(fmt.Sprint(maxRows), func(t *testing.T) {
-			assert.Nil(t, approvalRows(nil, 0, &km, 40, 10, maxRows, mocha()))
+			assert.Nil(t, approvalRows(nil, nil, 40, 10, maxRows, mocha()))
 		})
 	}
 }
@@ -42,21 +43,22 @@ func TestApprovalRowsShowTitlePreviewAndOptions(t *testing.T) {
 		Edits: true,
 	}
 	assert.Equal(t, []string{
-		"Edit a.go",
-		"  keep",
-		"- old",
-		"+ new",
+		rule40,
+		"  Edit a.go",
+		"    keep",
+		"  - old",
+		"  + new",
 		"",
 		"  1. Yes",
-		"❯ 2. Yes, allow all edits this session",
-		"  3. No (esc)",
-		"",
+		"❭ 2. Yes, allow all edits this session",
+		"  3. No (esc)  What should change?",
+		rule40,
 	}, plainApprovalRows(a, 1, 10))
 }
 
 func TestApprovalRowsWithoutEditsOfferNoAsTwo(t *testing.T) {
 	a := event.ApprovalRequested{CallID: "c1", Title: "Write a.go"}
-	assert.Equal(t, []string{"Write a.go", "", "❯ 1. Yes", "  2. No (esc)", ""}, plainApprovalRows(a, 0, 10))
+	assert.Equal(t, []string{rule40, "  Write a.go", "", "❭ 1. Yes", "  2. No (esc)  What should change?", rule40}, plainApprovalRows(a, 0, 10))
 }
 
 func TestApprovalRowsCapThePreview(t *testing.T) {
@@ -65,10 +67,73 @@ func TestApprovalRowsCapThePreview(t *testing.T) {
 		a.Preview = append(a.Preview, tool.PreviewLine{Kind: tool.Added, Text: "x"})
 	}
 	rows := plainApprovalRows(a, 0, 4)
-	assert.Equal(t, []string{"Write a.go", "+ x", "+ x", "+ x", "  … 7 more lines", ""}, rows[:6])
+	assert.Equal(t, []string{rule40, "  Write a.go", "  + x", "  + x", "  + x", "    … 7 more lines", ""}, rows[:7])
 
 	a.Preview = a.Preview[:4]
-	assert.Equal(t, []string{"Write a.go", "+ x", "+ x", "+ x", "+ x", ""}, plainApprovalRows(a, 0, 4)[:6], "an exact fit has no marker")
+	assert.Equal(t, []string{rule40, "  Write a.go", "  + x", "  + x", "  + x", "  + x", ""}, plainApprovalRows(a, 0, 4)[:7], "an exact fit has no marker")
+}
+
+func TestApprovalRowsCutTheTopFirst(t *testing.T) {
+	a := event.ApprovalRequested{
+		Title:   "Edit a.go",
+		Preview: []tool.PreviewLine{{Kind: tool.Removed, Text: "old"}, {Kind: tool.Added, Text: "new"}},
+		Edits:   true,
+	}
+	km := newKeyMap(config.DefaultKeys())
+	rows := plainRows(approvalRows(newApprovalDialog(&a, &km, mocha()), &a, 40, 10, 4, mocha()))
+	assert.Equal(t, []string{"❭ 1. Yes", "  2. Yes, allow all edits this session", "  3. No (esc)  What should change?", rule40}, rows)
+}
+
+func TestApprovalRowsKeepTheFieldWithATallDraft(t *testing.T) {
+	a := event.ApprovalRequested{Title: "Edit a.go", Preview: []tool.PreviewLine{{Kind: tool.Added, Text: "x"}}, Edits: true}
+	km := newKeyMap(config.DefaultKeys())
+	for _, maxRows := range []int{5, 6, 7, 8, 12} {
+		t.Run(fmt.Sprint(maxRows), func(t *testing.T) {
+			d := newApprovalDialog(&a, &km, mocha())
+			d.move(2)
+			d.paste("one\ntwo\nthree\nfour\nfive")
+			rows := plainRows(approvalRows(d, &a, 40, 3, maxRows, mocha()))
+			assert.LessOrEqual(t, len(rows), maxRows)
+			at := slices.Index(rows, "  1. Yes")
+			require.GreaterOrEqual(t, at, 0, "%q", rows)
+			assert.Equal(t, []string{"  1. Yes", "  2. Yes, allow all edits this session", "❭ 3. No (esc)"}, rows[at:at+3])
+			field := rows[at+3 : len(rows)-1]
+			assert.NotEmpty(t, field)
+			assert.LessOrEqual(t, len(field), 3)
+			assert.Equal(t, "  five", field[len(field)-1])
+			assert.Equal(t, rule40, rows[len(rows)-1])
+		})
+	}
+
+	d := newApprovalDialog(&a, &km, mocha())
+	d.move(2)
+	d.paste("one\ntwo")
+	assert.Equal(t, []string{"❭ 3. No (esc)", "  two", rule40}, plainRows(approvalRows(d, &a, 40, 3, 3, mocha())), "too few rows for the options cuts the top")
+}
+
+func TestApprovalRowsDropAnUnselectedFieldBeforeAnOption(t *testing.T) {
+	a := event.ApprovalRequested{Title: "Edit a.go", Preview: []tool.PreviewLine{{Kind: tool.Added, Text: "x"}}, Edits: true}
+	km := newKeyMap(config.DefaultKeys())
+	for _, tt := range []struct{ width, maxPreview, maxRows int }{{60, 2, 4}, {30, 3, 5}} {
+		t.Run(fmt.Sprint(tt.width), func(t *testing.T) {
+			rule := strings.Repeat("─", tt.width)
+			d := newApprovalDialog(&a, &km, mocha())
+			d.move(2)
+			d.paste("one\ntwo\nthree")
+			d.move(0)
+			rows := plainRows(approvalRows(d, &a, tt.width, tt.maxPreview, tt.maxRows, mocha()))
+			assert.LessOrEqual(t, len(rows), tt.maxRows)
+			assert.Equal(t, "❭ 1. Yes", rows[0], "%q", rows)
+			assert.Equal(t, []string{"  3. No (esc)", rule}, rows[len(rows)-2:])
+			for _, line := range []string{"one", "two", "three"} {
+				assert.NotContains(t, rows, "  "+line)
+			}
+
+			d.move(2)
+			rows = plainRows(approvalRows(d, &a, tt.width, tt.maxPreview, tt.maxRows, mocha()))
+			assert.Equal(t, []string{"❭ 3. No (esc)", "  three", rule}, rows[len(rows)-3:], "the selected field keeps one row")
+		})
+	}
 }
 
 func TestPreviewRowsWrappedBudget(t *testing.T) {
@@ -148,7 +213,7 @@ func BenchmarkPreviewRowsHugeLine(b *testing.B) {
 
 func TestApprovalRowsNameTheRuleOnlyWhenSet(t *testing.T) {
 	a := event.ApprovalRequested{Title: "Edit .git/config", Rule: "Edit(.git) (built-in)"}
-	assert.Equal(t, "asked by Edit(.git) (built-in)", plainApprovalRows(a, 0, 10)[1])
+	assert.Equal(t, "  asked by Edit(.git) (built-in)", plainApprovalRows(a, 0, 10)[2])
 
 	a.Rule = ""
 	assert.NotContains(t, strings.Join(plainApprovalRows(a, 0, 10), "\n"), "asked by")

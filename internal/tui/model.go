@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -84,10 +83,10 @@ type model struct {
 	pickVerb  func() verb
 	// verb is the running or last turn's.
 	verb verb
-	// approval is the call awaiting an answer, nil when none; choice is the
-	// selected option and prompt its rows, drawn in place of the composer.
+	// approval is the call awaiting an answer, nil when none; dialog is its
+	// prompt and prompt the dialog's rows, drawn in place of the composer.
 	approval *event.ApprovalRequested
-	choice   int
+	dialog   *dialog
 	prompt   []string
 	menu     menu
 	// seen is the draft and cursor syncInput last reconciled.
@@ -162,11 +161,23 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case tea.KeyPressMsg:
 		defer m.refreshPending()
 		return m.key(msg)
-	case tea.PasteMsg:
-		if m.approval != nil {
+	case clipboardTextMsg:
+		defer m.refreshPending()
+		if msg.field != nil {
+			if m.dialog != nil && m.dialog.field() == msg.field {
+				return m.dialog.paste(msg.text)
+			}
 			return nil
 		}
+		if m.approval == nil {
+			return m.paste(msg.text)
+		}
+		return nil
+	case tea.PasteMsg:
 		defer m.refreshPending()
+		if m.dialog != nil {
+			return m.dialog.paste(msg.Content)
+		}
 		return m.paste(msg.Content)
 	case imagePastedMsg:
 		defer m.refreshPending()
@@ -202,8 +213,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		m.exitArmed, m.flashText = false, ""
 	}
 	if m.approval != nil {
-		m.approvalKey(msg)
-		return nil
+		return m.approvalKey(msg)
 	}
 	if m.menuHeight() > 0 {
 		if cmd, ok := m.menuKey(msg); ok {
@@ -245,26 +255,28 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	return m.composer.update(msg)
 }
 
-// approvalKey moves the prompt's cursor or answers it; every other key is
+// approvalKey goes to the prompt, which answers when an option is picked;
+// interrupt rejects without a reason. Keys the prompt has no use for are
 // swallowed. The prompt stays until its ApprovalEnded arrives.
-func (m *model) approvalKey(msg tea.KeyPressMsg) {
-	opts := approvalOptions(m.approval, &m.keys)
+func (m *model) approvalKey(msg tea.KeyPressMsg) tea.Cmd {
 	token := m.approval.Token
-	switch s := msg.String(); {
+	switch {
 	case key.Matches(msg, m.keys.interrupt):
-		m.c.Answer(token, policy.Reject)
-	case key.Matches(msg, m.keys.menuUp):
-		m.choice = max(0, m.choice-1)
-	case key.Matches(msg, m.keys.menuDown):
-		m.choice = min(len(opts)-1, m.choice+1)
-	case key.Matches(msg, m.keys.submit):
-		m.c.Answer(token, opts[m.choice].answer)
-	default:
-		if n, err := strconv.Atoi(s); err == nil && n >= 1 && n <= len(opts) {
-			m.c.Answer(token, opts[n-1].answer)
-		}
+		m.c.Answer(token, policy.Decision{})
+		return nil
+	case key.Matches(msg, m.keys.paste) && m.dialog.field() != nil:
+		return readClipboardText(m.clip, m.dialog.field())
 	}
+	picked, cmd := m.dialog.key(msg, &m.keys)
+	if picked {
+		opts := approvalOptions(m.approval, &m.keys)
+		m.c.Answer(token, policy.Decision{Answer: opts[m.dialog.sel].answer, Reason: m.dialog.text()})
+	}
+	return cmd
 }
+
+// endApproval drops the pending call and its prompt.
+func (m *model) endApproval() { m.approval, m.dialog = nil, nil }
 
 // cancel is the cancel key and SIGINT: it interrupts a running turn, else
 // clears the draft, else takes two in a row to quit.
@@ -376,17 +388,17 @@ func (m *model) apply(ev event.Event) {
 		m.clearSelection()
 		m.follow = true
 		m.queued = nil
-		m.approval = nil
+		m.endApproval()
 		return
 	case event.QueueChanged:
 		m.queued = ev.Pending
 		return
 	case event.ApprovalRequested:
-		m.approval, m.choice = &ev, 0
+		m.approval, m.dialog = &ev, newApprovalDialog(&ev, &m.keys, m.th)
 		return
 	case event.ApprovalEnded:
 		if m.approval != nil && m.approval.Token == ev.Token {
-			m.approval = nil
+			m.endApproval()
 		}
 		return
 	case event.TurnStart:
@@ -401,7 +413,7 @@ func (m *model) apply(ev event.Event) {
 			m.folds.verbs[blocks[len(blocks)-1].Key()] = m.verb
 		}
 		m.busy = false
-		m.approval = nil
+		m.endApproval()
 		m.composer.restore(ev.Unsent)
 		return
 	}
@@ -464,7 +476,7 @@ func (m *model) refreshPending() {
 		if m.busy {
 			maxRows -= busyRows
 		}
-		m.prompt = approvalRows(m.approval, m.choice, &m.keys, m.width, max(2, m.height/3), maxRows, m.th)
+		m.prompt = approvalRows(m.dialog, m.approval, m.width, max(2, m.height/3), maxRows, m.th)
 	}
 	budget := m.height - m.inputHeight() - chromeRows
 	if m.busy {
@@ -546,7 +558,11 @@ func (m *model) View() tea.View {
 	rows = append(rows, "")
 	rows = append(rows, m.pending...)
 	if m.busy {
-		rows = append(rows, workingRow(&m.spinner, m.verb, formatDuration(time.Since(m.turnStart)), m.th), "")
+		text := m.verb.ing + "… " + formatDuration(time.Since(m.turnStart))
+		if m.approval != nil {
+			text = "Waiting for you…"
+		}
+		rows = append(rows, workingRow(&m.spinner, text, m.th), "")
 	}
 	if m.approval != nil {
 		rows = append(rows, m.prompt...)
