@@ -466,7 +466,7 @@ func (m *model) refreshPending() {
 		}
 		m.prompt = approvalRows(m.approval, m.choice, &m.keys, m.width, max(2, m.height/3), maxRows, m.th)
 	}
-	budget := m.height - m.inputHeight() - chromeRows
+	budget := m.height - m.inputHeight() - chromeRows - m.menuHeight()
 	if m.busy {
 		budget -= busyRows
 	}
@@ -474,7 +474,7 @@ func (m *model) refreshPending() {
 }
 
 func (m *model) transcriptHeight() int {
-	h := m.height - m.inputHeight() - chromeRows - len(m.pending)
+	h := m.height - m.inputHeight() - chromeRows - len(m.pending) - m.menuHeight()
 	if m.busy {
 		h -= busyRows
 	}
@@ -551,8 +551,8 @@ func (m *model) View() tea.View {
 	if m.approval != nil {
 		rows = append(rows, m.prompt...)
 	} else {
-		copy(rows[len(rows)-m.menuHeight():], m.menuRows())
 		rows = append(rows, m.composer.view(m.width, m.th)...)
+		rows = append(rows, m.menuRows()...)
 	}
 	rows = append(rows, statusLine(m.status, m.layout, m.flashText, m.width, m.th))
 	v.SetContent(strings.Join(rows, "\n"))

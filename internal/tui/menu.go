@@ -44,6 +44,7 @@ type candidatesMsg struct {
 
 // followMenu opens, refilters or closes the menu for the token at the cursor.
 func (m *model) followMenu() tea.Cmd {
+	defer m.refreshPending()
 	mn := &m.menu
 	q, ok := app.QueryAt(m.composer.value(), m.composer.ta.Line(), m.composer.ta.Column())
 	if !ok || m.composer.browsing() {
@@ -104,22 +105,30 @@ func (m *model) loaded(msg candidatesMsg) {
 	}
 	m.menu.items = msg.cs
 	m.rematch()
+	m.refreshPending()
 }
 
-// menuHeight is the rows the menu covers directly above the composer: none
-// unless it is open with a candidate to show and at least one row is above the
-// composer.
+// menuHeight is the rows the menu takes: none unless it is open with a
+// candidate to show and at least one row fits above the status line.
 func (m *model) menuHeight() int {
 	mn := &m.menu
 	if !mn.open || len(mn.shown) == 0 || m.approval != nil {
+		return 0
+	}
+	// Hidden during a composer drag, as in Codex, so the composer stays where
+	// the press found it.
+	if m.drag.region == regionComposer && m.drag.moved {
 		return 0
 	}
 	h := min(len(mn.shown), menuMax)
 	if len(mn.shown) > h {
 		h++
 	}
-	// The composer's shaded top row is at composerTop()-1.
-	return max(0, min(h, m.composerTop()-1))
+	avail := m.height - m.composer.height() - chromeRows
+	if m.busy {
+		avail -= busyRows
+	}
+	return max(0, min(h, avail))
 }
 
 // menuRows draws the menu: a window of candidates around the selection, then,
