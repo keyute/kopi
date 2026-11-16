@@ -31,6 +31,61 @@ func TestListHonoursNestedGitignore(t *testing.T) {
 	}, got)
 }
 
+func TestListKeepsAncestorPatternsSeparateBetweenSiblings(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".gitignore"), "*.log\n*.tmp\n*.bak\n")
+	for _, name := range []string{"a", "b"} {
+		keep, deep := "keep.log", "deep.log"
+		if name == "b" {
+			keep, deep = "keep.tmp", "deep.tmp"
+		}
+		writeFile(t, filepath.Join(dir, name, ".gitignore"), "!"+keep+"\n")
+		writeFile(t, filepath.Join(dir, name, "deep", ".gitignore"), "!"+deep+"\n")
+		for _, sub := range []string{"", "deep", "deep/leaf"} {
+			for _, file := range []string{"keep.log", "keep.tmp", "deep.log", "deep.tmp", "drop.bak"} {
+				writeFile(t, filepath.Join(dir, name, sub, file), "")
+			}
+		}
+	}
+	ws := newWorkspace(t, dir, nil)
+
+	got, err := ws.List(100)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		".gitignore", "a/", "b/",
+		"a/.gitignore", "a/deep/", "a/keep.log",
+		"b/.gitignore", "b/deep/", "b/keep.tmp",
+		"a/deep/.gitignore", "a/deep/deep.log", "a/deep/keep.log", "a/deep/leaf/",
+		"b/deep/.gitignore", "b/deep/deep.tmp", "b/deep/keep.tmp", "b/deep/leaf/",
+		"a/deep/leaf/deep.log", "a/deep/leaf/keep.log",
+		"b/deep/leaf/deep.tmp", "b/deep/leaf/keep.tmp",
+	}, got)
+}
+
+func TestListDoesNotApplySymlinkedGitignore(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "ignore-rules"), "hidden.txt\n")
+	writeFile(t, filepath.Join(dir, "hidden.txt"), "")
+	require.NoError(t, os.Symlink("ignore-rules", filepath.Join(dir, ".gitignore")))
+	ws := newWorkspace(t, dir, nil)
+
+	got, err := ws.List(100)
+	require.NoError(t, err)
+	assert.Equal(t, []string{".gitignore", "hidden.txt", "ignore-rules"}, got)
+}
+
+func TestListSkipsGitFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".git"), "gitdir: elsewhere\n")
+	writeFile(t, filepath.Join(dir, "sub", ".git"), "gitdir: elsewhere\n")
+	writeFile(t, filepath.Join(dir, "sub", "keep.txt"), "")
+	ws := newWorkspace(t, dir, nil)
+
+	got, err := ws.List(100)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"sub/", "sub/keep.txt"}, got)
+}
+
 func TestListSkipsGitAndListsHiddenShallowFirst(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".git", "HEAD"), "ref: refs/heads/main\n")

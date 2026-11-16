@@ -26,43 +26,14 @@ type Span struct {
 	Kind             Kind
 }
 
-// rules are applied in order; an earlier rule wins an overlap.
-var rules = []func(text string) []Span{commandSpans, referenceSpans}
-
-// Spans returns the input's highlighted runs, sorted; an earlier rule wins an overlap.
+// Spans returns the input's highlighted runs in line and rune-offset order.
 func Spans(text string) []Span {
-	var kept []Span
-	for _, rule := range rules {
-		for _, s := range rule(text) {
-			overlaps := slices.ContainsFunc(kept, func(k Span) bool {
-				return k.Line == s.Line && k.Start < s.End && s.Start < k.End
-			})
-			if !overlaps {
-				kept = append(kept, s)
-			}
+	if line, col, ok := commandAt(text); ok {
+		name, _, _ := parse(text)
+		if !slices.ContainsFunc(commandTable(), func(c command) bool { return c.Name == name }) {
+			return nil
 		}
-	}
-	slices.SortFunc(kept, func(a, b Span) int {
-		return cmp.Or(cmp.Compare(a.Line, b.Line), cmp.Compare(a.Start, b.Start))
-	})
-	return kept
-}
-
-func commandSpans(text string) []Span {
-	line, col, ok := commandAt(text)
-	if !ok {
-		return nil
-	}
-	name, _, _ := parse(text)
-	if !slices.ContainsFunc(commandTable(), func(c command) bool { return c.Name == name }) {
-		return nil
-	}
-	return []Span{{Line: line, Start: col, End: col + 1 + utf8.RuneCountInString(name), Kind: KindCommand}}
-}
-
-func referenceSpans(text string) []Span {
-	if _, _, ok := parse(text); ok {
-		return nil
+		return []Span{{Line: line, Start: col, End: col + 1 + utf8.RuneCountInString(name), Kind: KindCommand}}
 	}
 	var spans []Span
 	for i, l := range strings.Split(text, "\n") {

@@ -173,11 +173,10 @@ func (c *composer) replace(from, to int, s string) tea.Cmd {
 	c.stopBrowsing()
 	c.lastPaste = ""
 	c.ta.ClearSelection()
-	col := c.ta.Column()
-	del := c.repeat(tea.KeyPressMsg{Code: tea.KeyDelete}, to-col)
-	back := c.repeat(tea.KeyPressMsg{Code: tea.KeyBackspace}, col-from)
+	c.ta.SetCursorColumn(to)
+	back := c.repeat(tea.KeyPressMsg{Code: tea.KeyBackspace}, to-from)
 	c.ta.InsertString(s)
-	return tea.Batch(del, back)
+	return back
 }
 
 // press handles the n-th quick press at (x, y), relative to the textarea's

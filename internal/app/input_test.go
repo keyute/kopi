@@ -1,6 +1,7 @@
 package app
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -55,6 +56,8 @@ func TestSpans(t *testing.T) {
 		{text: "@a and @b", want: []Span{{Start: 0, End: 2, Kind: KindReference}, {Start: 7, End: 9, Kind: KindReference}}},
 		{text: "/resume @x", want: []Span{{Start: 0, End: 7, Kind: KindCommand}}},
 		{text: "/nope @x"},
+		{text: "\n\u3000/plan @x\n@y", want: []Span{{Line: 1, Start: 1, End: 6, Kind: KindCommand}}},
+		{text: "\n\u3000/nope @x\n@y"},
 		{text: "hi\nsee @a\\ b", want: []Span{{Line: 1, Start: 4, End: 9, Kind: KindReference}}},
 		{text: "a @ b"},
 	} {
@@ -62,6 +65,18 @@ func TestSpans(t *testing.T) {
 			assert.Equal(t, tc.want, Spans(tc.text))
 		})
 	}
+}
+
+func TestSpansManyReferences(t *testing.T) {
+	text := strings.Repeat("界 "+strings.Repeat("@é ", 16)+"\n", 16)
+	var want []Span
+	for line := 0; line < 16; line++ {
+		for ref := 0; ref < 16; ref++ {
+			start := 2 + 3*ref
+			want = append(want, Span{Line: line, Start: start, End: start + 2, Kind: KindReference})
+		}
+	}
+	assert.Equal(t, want, Spans(text))
 }
 
 func TestMatch(t *testing.T) {

@@ -34,6 +34,28 @@ func linesOf(n int) string {
 	return strings.Join(ls, "\n")
 }
 
+func TestComposerReplaceUsesRuneRange(t *testing.T) {
+	for _, col := range []int{2, 3, 4} {
+		t.Run(fmt.Sprintf("cursor=%d", col), func(t *testing.T) {
+			m, _ := newTestModel(t, 60, 30)
+			c := &m.composer
+			c.ta.SetValue("é @界尾\nkeep")
+			c.selectRange(selection{anchor: point{0, 1}, head: point{0, col}})
+			c.hist.back = 1
+			c.lastPaste = "previous"
+
+			c.replace(2, 4, "猫 ")
+
+			assert.Equal(t, "é 猫 尾\nkeep", c.value())
+			assert.Equal(t, 0, c.ta.Line())
+			assert.Equal(t, 4, c.ta.Column())
+			assert.False(t, c.ta.HasSelection())
+			assert.False(t, c.browsing())
+			assert.Empty(t, c.lastPaste)
+		})
+	}
+}
+
 func TestPasteCollapsesOverTheLimits(t *testing.T) {
 	for _, tc := range []struct {
 		name, text, want string

@@ -29,7 +29,8 @@ func (w *Workspace) List(limit int) ([]string, error) {
 		return nil, err
 	}
 	type queued struct {
-		dir string
+		dir      string
+		patterns []gitignore.Pattern
 		// vetted is the identity dir had when its parent was listed; nil for ".".
 		vetted fs.FileInfo
 	}
@@ -38,7 +39,6 @@ func (w *Workspace) List(limit int) ([]string, error) {
 	// patterns are loaded before its children's. Each pattern is scoped to its
 	// directory, and later patterns take priority, as in git.
 	queue := []queued{{dir: "."}}
-	var patterns []gitignore.Pattern
 	for len(queue) > 0 {
 		q := queue[0]
 		queue = queue[1:]
@@ -46,6 +46,8 @@ func (w *Workspace) List(limit int) ([]string, error) {
 		if q.dir != "." {
 			domain = strings.Split(q.dir, "/")
 		}
+		// Appending must not overwrite patterns shared by queued siblings.
+		patterns := q.patterns[:len(q.patterns):len(q.patterns)]
 		patterns = append(patterns, w.gitignore(q.dir, domain)...)
 		m := gitignore.NewMatcher(patterns)
 		entries, err := w.readDir(q.dir, q.vetted)
@@ -57,7 +59,7 @@ func (w *Workspace) List(limit int) ([]string, error) {
 		}
 		for _, d := range entries {
 			p := path.Join(q.dir, d.Name())
-			if d.IsDir() && d.Name() == ".git" {
+			if d.Name() == ".git" {
 				continue
 			}
 			info, err := d.Info()
@@ -69,7 +71,7 @@ func (w *Workspace) List(limit int) ([]string, error) {
 			}
 			if d.IsDir() {
 				out = append(out, p+"/")
-				queue = append(queue, queued{dir: p, vetted: info})
+				queue = append(queue, queued{dir: p, patterns: patterns, vetted: info})
 			} else {
 				out = append(out, p)
 			}
@@ -82,9 +84,14 @@ func (w *Workspace) List(limit int) ([]string, error) {
 }
 
 // gitignore returns the patterns of dir's .gitignore, none if it cannot be read.
-// It goes through Open so that a .gitignore linking into a store is not read.
+// Symlinks are ignored; Open also checks for protected file identities.
 func (w *Workspace) gitignore(dir string, domain []string) []gitignore.Pattern {
-	f, err := w.Open(path.Join(dir, ".gitignore"))
+	name := path.Join(dir, ".gitignore")
+	info, err := w.root.Lstat(name)
+	if err != nil || info.Mode()&fs.ModeSymlink != 0 {
+		return nil
+	}
+	f, err := w.Open(name)
 	if err != nil {
 		return nil
 	}

@@ -197,6 +197,23 @@ func TestReferenceMenu(t *testing.T) {
 	})
 }
 
+func TestMidTokenReferenceCompletionKeepsFollowingLine(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newMenuModel(t, 60, 30)
+		m.composer.ta.SetValue("see @a\nkeep")
+		m.composer.selectRange(selection{anchor: point{0, 5}, head: point{0, 5}})
+		settle(m, m.followMenu())
+		require.Equal(t, "❭ a.go", menuText(m)[0])
+
+		press(m, enter)
+
+		assert.Equal(t, "see @a.go \nkeep", m.composer.value())
+		assert.Equal(t, 0, m.composer.ta.Line())
+		assert.Equal(t, 10, m.composer.ta.Column())
+		assert.Empty(t, c.submitted)
+	})
+}
+
 func TestEscClosesMenuBeforeInterrupting(t *testing.T) {
 	m, c := newMenuModel(t, 60, 30)
 	c.running = true
