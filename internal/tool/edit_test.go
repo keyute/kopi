@@ -28,7 +28,7 @@ func runEdit(t *testing.T, tool Tool, path, oldString, newString string, replace
 		"file_path": path, "old_string": oldString, "new_string": newString, "replace_all": replaceAll,
 	})
 	require.NoError(t, err)
-	return tool.Run(context.Background(), args)
+	return tool.Run(context.Background(), args, allowTarget)
 }
 
 func readContent(t *testing.T, path string) string {
@@ -140,7 +140,7 @@ func TestEditRejectsInvalidArgs(t *testing.T) {
 		{"replace_all wrong type", `{"file_path":"a.txt","old_string":"a","new_string":"b","replace_all":"yes"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := tool.Run(context.Background(), json.RawMessage(tc.args))
+			_, err := tool.Run(context.Background(), json.RawMessage(tc.args), allowTarget)
 			require.ErrorIs(t, err, ErrInvalidArgs)
 		})
 	}
@@ -153,7 +153,7 @@ func TestEditStopsWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := tool.Run(ctx, json.RawMessage(`{"file_path":"a.txt","old_string":"alpha","new_string":"beta"}`))
+	_, err := tool.Run(ctx, json.RawMessage(`{"file_path":"a.txt","old_string":"alpha","new_string":"beta"}`), allowTarget)
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, "alpha", readContent(t, filepath.Join(dir, "a.txt")))
 }

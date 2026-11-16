@@ -27,10 +27,14 @@ func (a agentTool) Schema() ai.ToolSchema {
 // PiG runs every hook of a parallel batch before executing any call, so the
 // mode may have changed in between.
 func (a agentTool) Execute(ctx context.Context, toolCallID string, params json.RawMessage, _ agent.ToolUpdateCallback) (agent.AgentToolResult, error) {
-	if err := a.gate.Admit(toolCallID, a.tool.Name); err != nil {
-		return errorResult(err), nil
-	}
-	out, err := a.tool.Run(ctx, params)
+	defer a.gate.Finish(toolCallID)
+	out, err := a.tool.Run(ctx, params, func(target policy.Target) error {
+		var path *policy.Target
+		if a.tool.Target != nil {
+			path = &target
+		}
+		return a.gate.Admit(toolCallID, a.tool.Name, params, path)
+	})
 	if err != nil {
 		return errorResult(err), nil
 	}

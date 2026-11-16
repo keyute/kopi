@@ -25,7 +25,7 @@ func newReadTool(t *testing.T) (Tool, string) {
 
 func runRead(t *testing.T, tool Tool, args string) (string, error) {
 	t.Helper()
-	return tool.Run(context.Background(), json.RawMessage(args))
+	return tool.Run(context.Background(), json.RawMessage(args), allowTarget)
 }
 
 func numberedLines(n int) string {
@@ -253,7 +253,7 @@ func TestReadReturnsContextErrorWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := tool.Run(ctx, json.RawMessage(`{"file_path":"a.txt"}`))
+	_, err := tool.Run(ctx, json.RawMessage(`{"file_path":"a.txt"}`), allowTarget)
 	require.ErrorIs(t, err, context.Canceled)
 }
 
@@ -280,4 +280,60 @@ func TestReadTarget(t *testing.T) {
 	assert.Equal(t, filepath.Join(other, "b.txt"), got.Path)
 	_, err = tool.Target(json.RawMessage(`{}`))
 	require.ErrorIs(t, err, ErrInvalidArgs)
+}
+
+func allowTarget(policy.Target) error { return nil }
+
+func TestToolsDoNotReadContentBeforeAdmission(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "binary"), "secret\x00")
+	ws := newWorkspace(t, dir, nil)
+	for _, tool := range []Tool{NewRead(ws), NewEdit(ws)} {
+		t.Run(tool.Name, func(t *testing.T) {
+			raw := json.RawMessage(`{"file_path":"binary","old_string":"secret","new_string":"new"}`)
+			if tool.Name == "Read" {
+				raw = json.RawMessage(`{"file_path":"binary"}`)
+			}
+			out, err := tool.Run(t.Context(), raw, func(policy.Target) error { return policy.ErrDenied })
+			require.ErrorIs(t, err, policy.ErrDenied)
+			assert.Empty(t, out)
+			assert.Equal(t, "secret\x00", readContent(t, filepath.Join(dir, "binary")))
+		})
+	}
+}
+
+func TestToolsUseAdmittedHandlesAfterParentRetarget(t *testing.T) {
+	for _, name := range []string{"Read", "Write", "Edit"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, filepath.Join(dir, "allowed", "file"), "alpha")
+			writeFile(t, filepath.Join(dir, "denied", "file"), "secret")
+			ws := newWorkspace(t, dir, nil)
+			tools := map[string]Tool{"Read": NewRead(ws), "Write": NewWrite(ws), "Edit": NewEdit(ws)}
+			args := map[string]string{"file_path": "allowed/file"}
+			if name == "Write" {
+				args["content"] = "updated"
+			}
+			if name == "Edit" {
+				args["old_string"], args["new_string"] = "alpha", "updated"
+			}
+			raw, err := json.Marshal(args)
+			require.NoError(t, err)
+			out, err := tools[name].Run(t.Context(), raw, func(target policy.Target) error {
+				assert.Equal(t, filepath.Join(ws.realDir, "allowed", "file"), target.Real)
+				require.NoError(t, os.Rename(filepath.Join(dir, "allowed"), filepath.Join(dir, "pinned")))
+				require.NoError(t, os.Symlink("denied", filepath.Join(dir, "allowed")))
+				return nil
+			})
+			require.NoError(t, err)
+			if name == "Read" {
+				assert.Contains(t, out, "alpha")
+				assert.NotContains(t, out, "secret")
+			} else {
+				assert.Equal(t, "updated", readContent(t, filepath.Join(dir, "pinned", "file")))
+			}
+			assert.Equal(t, "secret", readContent(t, filepath.Join(dir, "denied", "file")))
+			assert.Equal(t, []string{"file"}, listDir(t, filepath.Join(dir, "pinned")))
+		})
+	}
 }

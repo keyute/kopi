@@ -3,9 +3,13 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -43,7 +47,7 @@ func TestWriteCreatesFileAndReports(t *testing.T) {
 		{"empty", `{"file_path":"c.txt","content":""}`, "c.txt", "", "wrote 0 lines to c.txt", "0 lines"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out, err := tool.Run(context.Background(), json.RawMessage(tc.args))
+			out, err := tool.Run(context.Background(), json.RawMessage(tc.args), allowTarget)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, out)
 			assert.Equal(t, tc.summary, tool.Display.Summary(out))
@@ -69,7 +73,7 @@ func TestWriteRejectsInvalidArgs(t *testing.T) {
 		{"content wrong type", `{"file_path":"a.txt","content":1}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := tool.Run(context.Background(), json.RawMessage(tc.args))
+			_, err := tool.Run(context.Background(), json.RawMessage(tc.args), allowTarget)
 			require.ErrorIs(t, err, ErrInvalidArgs)
 		})
 	}
@@ -120,7 +124,76 @@ func TestWriteStopsWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := tool.Run(ctx, json.RawMessage(`{"file_path":"sub/a.txt","content":"x"}`))
+	_, err := tool.Run(ctx, json.RawMessage(`{"file_path":"sub/a.txt","content":"x"}`), allowTarget)
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Empty(t, listDir(t, dir))
+}
+
+func TestWriteAndEditLongBasename(t *testing.T) {
+	dir := t.TempDir()
+	name := strings.Repeat("b", 240)
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("probe"), 0o600); errors.Is(err, syscall.ENAMETOOLONG) {
+		t.Skip("filesystem does not support 240-byte basenames")
+	} else {
+		require.NoError(t, err)
+	}
+	require.NoError(t, os.Remove(path))
+	ws := newWorkspace(t, dir, nil)
+	write := NewWrite(ws)
+	for _, content := range []string{"created", "replaced"} {
+		raw, err := json.Marshal(map[string]string{"file_path": name, "content": content})
+		require.NoError(t, err)
+		_, err = write.Run(t.Context(), raw, allowTarget)
+		require.NoError(t, err)
+		assert.Equal(t, content, readContent(t, path))
+		require.NoError(t, os.Chmod(path, 0o640))
+	}
+	_, err := runEdit(t, NewEdit(ws), name, "replaced", "edited", false)
+	require.NoError(t, err)
+	assert.Equal(t, "edited", readContent(t, path))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, fs.FileMode(0o640), info.Mode().Perm())
+	assert.Equal(t, []string{name}, listDir(t, dir))
+}
+
+func TestPreviewLineBoundaries(t *testing.T) {
+	for _, text := range []string{"", "\n", "\n\n", "x\n\n", "a\r\nb\r\n", numberedLines(9), numberedLines(10), numberedLines(11), strings.Repeat("\n", 100000)} {
+		t.Run(fmt.Sprintf("%d bytes", len(text)), func(t *testing.T) {
+			lines := []string(nil)
+			if text != "" {
+				lines = strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+			}
+			assert.Equal(t, len(lines), countLines(text))
+			for _, kind := range []PreviewKind{Added, Removed} {
+				preview := previewLines(kind, text)
+				wantLen := min(len(lines), 10)
+				if len(lines) > 10 {
+					wantLen++
+				}
+				require.Len(t, preview, wantLen)
+				for i := range min(len(lines), 10) {
+					assert.Equal(t, PreviewLine{Kind: kind, Text: lines[i]}, preview[i])
+				}
+				if len(lines) > 10 {
+					want := fmt.Sprintf("… %d more lines", len(lines)-10)
+					if len(lines) == 11 {
+						want = "… 1 more line"
+					}
+					assert.Equal(t, PreviewLine{Kind: Context, Text: want}, preview[len(preview)-1])
+				}
+			}
+			writeRaw, err := json.Marshal(map[string]string{"content": text})
+			require.NoError(t, err)
+			write := writePreview(writeRaw)
+			assert.Equal(t, PreviewLine{Kind: Context, Text: lineCount(len(lines))}, write[0])
+			assert.Equal(t, previewLines(Added, text), write[1:])
+			editRaw, err := json.Marshal(map[string]string{"old_string": text, "new_string": text})
+			require.NoError(t, err)
+			assert.Equal(t, append(previewLines(Removed, text), previewLines(Added, text)...), editPreview(editRaw))
+		})
+	}
+	assert.Equal(t, []PreviewLine{{Kind: Context, Text: "0 lines"}}, writePreview(json.RawMessage(`{"content":`)))
+	assert.Empty(t, editPreview(json.RawMessage(`{"old_string":`)))
 }

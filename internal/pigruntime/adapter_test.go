@@ -3,6 +3,8 @@ package pigruntime
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
@@ -32,7 +34,10 @@ func execTool(ran *atomic.Int32) tool.Tool {
 		Description: "Test-only tool that needs execute mode.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 		Capability:  policy.Exec,
-		Run: func(context.Context, json.RawMessage) (string, error) {
+		Run: func(_ context.Context, _ json.RawMessage, admit func(policy.Target) error) (string, error) {
+			if err := admit(policy.Target{}); err != nil {
+				return "", err
+			}
 			ran.Add(1)
 			return execOutput, nil
 		},
@@ -338,4 +343,95 @@ func TestInterruptTurnRejectsBeforeCancellationForwarding(t *testing.T) {
 	assert.Equal(t, event.Completed, next.res.Outcome.Status)
 	assert.Equal(t, int32(1), ran.Load())
 	assert.Contains(t, toolResultTexts(<-requests)[0], policy.ErrRejected.Error())
+}
+
+func TestRealToolsRejectApprovalRetarget(t *testing.T) {
+	for _, name := range []string{"Read", "Write", "Edit"} {
+		for _, phase := range []string{"pending approval", "before execution"} {
+			t.Run(name+"/"+phase, func(t *testing.T) {
+				dir := t.TempDir()
+				for _, sub := range []string{"allowed", "denied"} {
+					require.NoError(t, os.Mkdir(filepath.Join(dir, sub), 0o755))
+					require.NoError(t, os.WriteFile(filepath.Join(dir, sub, "file"), []byte(sub+"-secret"), 0o600))
+				}
+				link := filepath.Join(dir, "link")
+				require.NoError(t, os.Symlink("allowed", link))
+				ws, err := tool.NewWorkspace(dir, nil)
+				require.NoError(t, err)
+				defer ws.Close()
+				tools := map[string]tool.Tool{"Read": tool.NewRead(ws), "Write": tool.NewWrite(ws), "Edit": tool.NewEdit(ws)}
+				realTool := tools[name]
+				args := map[string]any{"file_path": "link/file"}
+				switch name {
+				case "Write":
+					args["content"] = "new"
+				case "Edit":
+					args["old_string"], args["new_string"] = "allowed", "updated"
+				}
+				raw, err := json.Marshal(args)
+				require.NoError(t, err)
+				rules, err := policy.NewRules(dir, t.TempDir(), []string{name}, policy.Source{Name: "test", Ask: []string{name}, Deny: []string{name + "(denied/**)"}})
+				require.NoError(t, err)
+				authority := policy.NewAuthority()
+				authority.EnterExecute()
+				waiting, answer := make(chan struct{}), make(chan struct{})
+				gate := policy.NewGate(authority, map[string]policy.ToolSpec{name: {Capability: realTool.Capability, Target: realTool.Target}}, rules,
+					func(context.Context, policy.Request) (policy.Answer, error) {
+						close(waiting)
+						<-answer
+						return policy.Allow, nil
+					})
+				done := make(chan error, 1)
+				go func() { done <- gate.Before(t.Context(), "call", name, raw) }()
+				<-waiting
+				retarget := func() {
+					require.NoError(t, os.Remove(link))
+					require.NoError(t, os.Symlink("denied", link))
+				}
+				if phase == "pending approval" {
+					retarget()
+				}
+				close(answer)
+				require.NoError(t, <-done)
+				if phase == "before execution" {
+					retarget()
+				}
+				result, err := (agentTool{tool: realTool, gate: gate}).Execute(t.Context(), "call", raw, nil)
+				require.NoError(t, err)
+				require.True(t, result.IsError)
+				text := toolResultContentText(result.Content)
+				assert.Contains(t, text, policy.ErrChangedCall.Error())
+				assert.NotContains(t, text, "denied-secret")
+				for _, sub := range []string{"allowed", "denied"} {
+					data, err := os.ReadFile(filepath.Join(dir, sub, "file"))
+					require.NoError(t, err)
+					assert.Equal(t, sub+"-secret", string(data))
+				}
+				assert.ErrorIs(t, gate.Before(t.Context(), "new-call", name, raw), policy.ErrDenied)
+				result, err = (agentTool{tool: realTool, gate: gate}).Execute(t.Context(), "call", raw, nil)
+				require.NoError(t, err)
+				assert.Contains(t, toolResultContentText(result.Content), policy.ErrNoGrant.Error())
+			})
+		}
+	}
+}
+
+func TestFailedPreparationConsumesGrant(t *testing.T) {
+	dir := t.TempDir()
+	ws, err := tool.NewWorkspace(dir, nil)
+	require.NoError(t, err)
+	defer ws.Close()
+	read := tool.NewRead(ws)
+	authority := policy.NewAuthority()
+	gate := policy.NewGate(authority, map[string]policy.ToolSpec{"Read": {Capability: policy.Read, Target: read.Target}}, nil, nil)
+	raw := json.RawMessage(`{"file_path":"missing"}`)
+	require.NoError(t, gate.Before(t.Context(), "call", "Read", raw))
+	result, err := (agentTool{tool: read, gate: gate}).Execute(t.Context(), "call", raw, nil)
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "missing"), []byte("now exists"), 0o600))
+	result, err = (agentTool{tool: read, gate: gate}).Execute(t.Context(), "call", raw, nil)
+	require.NoError(t, err)
+	assert.Contains(t, toolResultContentText(result.Content), policy.ErrNoGrant.Error())
+	assert.NotContains(t, toolResultContentText(result.Content), "now exists")
 }

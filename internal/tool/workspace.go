@@ -1,9 +1,11 @@
 package tool
 
 import (
+	"bytes"
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -120,31 +122,7 @@ func (w *Workspace) Target(path string) (policy.Target, error) {
 // A directory moved after validation still carries its handle, including if
 // another process moves it into a protected store.
 func (w *Workspace) WriteFile(path string, data []byte) error {
-	rel, err := w.relative(path)
-	if err != nil {
-		return err
-	}
-	target, protected, err := w.resolve(rel)
-	if err != nil {
-		return err
-	}
-	if protected {
-		return fmt.Errorf("%w: %s", ErrProtected, path)
-	}
-	// resolve compares identities, so it cannot see a store that does not
-	// exist yet and that this write would create.
-	inStore, err := w.inProtectedPath(target)
-	if err != nil {
-		return err
-	}
-	if inStore {
-		return fmt.Errorf("%w: %s", ErrProtected, path)
-	}
-	rel, err = filepath.Rel(w.realDir, target)
-	if err != nil || !filepath.IsLocal(rel) {
-		return fmt.Errorf("%w: %s", ErrOutsideWorkspace, path)
-	}
-	dest, err := w.prepareWrite(rel, path)
+	dest, err := w.prepare(path)
 	if err != nil {
 		return err
 	}
@@ -152,7 +130,49 @@ func (w *Workspace) WriteFile(path string, data []byte) error {
 	return dest.write(w, data)
 }
 
+// prepare resolves once, then pins the canonical parent without following any
+// newly installed symlinks in that traversal.
+func (w *Workspace) prepare(path string) (*writeDestination, error) {
+	rel, err := w.relative(path)
+	if err != nil {
+		return nil, err
+	}
+	target, protected, err := w.resolve(rel)
+	if err != nil {
+		return nil, err
+	}
+	if protected {
+		return nil, fmt.Errorf("%w: %s", ErrProtected, path)
+	}
+	// resolve compares identities, so it cannot see a store that does not
+	// exist yet and that this write would create.
+	inStore, err := w.inProtectedPath(target)
+	if err != nil {
+		return nil, err
+	}
+	if inStore {
+		return nil, fmt.Errorf("%w: %s", ErrProtected, path)
+	}
+	rel, err = filepath.Rel(w.realDir, target)
+	if err != nil || !filepath.IsLocal(rel) {
+		return nil, fmt.Errorf("%w: %s", ErrOutsideWorkspace, path)
+	}
+	dest, err := w.prepareWrite(rel, path)
+	if err != nil {
+		return nil, err
+	}
+	targetPath := path
+	if !filepath.IsAbs(path) {
+		targetPath = filepath.Join(w.given, path)
+	}
+	dest.target = policy.Target{Path: filepath.Clean(targetPath), Real: target}
+	return dest, nil
+}
+
 type writeDestination struct {
+	target          policy.Target
+	original        os.FileInfo
+	content         []byte
 	parent          *os.Root
 	rel, path, leaf string
 	missing         []string
@@ -181,6 +201,15 @@ func (w *Workspace) prepareWrite(rel, path string) (*writeDestination, error) {
 		}
 		prefix = filepath.Join(prefix, name)
 		err = w.checkParent(child, prefix, path)
+		if err == nil {
+			before, lerr := parent.Lstat(name)
+			opened, serr := child.Stat(".")
+			if lerr != nil || serr != nil || !before.IsDir() || !os.SameFile(before, opened) {
+				child.Close()
+				parent.Close()
+				return nil, fmt.Errorf("%w: %s", ErrTargetChanged, path)
+			}
+		}
 		parent.Close()
 		if err != nil {
 			child.Close()
@@ -244,8 +273,9 @@ func (d *writeDestination) write(w *Workspace, data []byte) error {
 		if err := d.checkDestination(w, append(slices.Clone(d.missing[i:]), d.leaf)); err != nil {
 			return err
 		}
-		if err := d.parent.Mkdir(name, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
-			return fmt.Errorf("failed to create parent of %s: %w", d.path, err)
+		mkdirErr := d.parent.Mkdir(name, 0o755)
+		if mkdirErr != nil && !errors.Is(mkdirErr, fs.ErrExist) {
+			return fmt.Errorf("failed to create parent of %s: %w", d.path, mkdirErr)
 		}
 		child, err := d.parent.OpenRoot(name)
 		if err != nil {
@@ -258,6 +288,17 @@ func (d *writeDestination) write(w *Workspace, data []byte) error {
 			child.Close()
 			return err
 		}
+		candidate := &writeDestination{parent: child, path: d.path}
+		if err := candidate.checkDestination(w, append(slices.Clone(d.missing[i+1:]), d.leaf)); err != nil {
+			child.Close()
+			return err
+		}
+		before, lerr := d.parent.Lstat(name)
+		opened, serr := child.Stat(".")
+		if mkdirErr != nil || lerr != nil || serr != nil || !before.IsDir() || !os.SameFile(before, opened) {
+			child.Close()
+			return fmt.Errorf("%w: %s", ErrTargetChanged, d.path)
+		}
 		d.parent.Close()
 		d.parent = child
 	}
@@ -265,6 +306,10 @@ func (d *writeDestination) write(w *Workspace, data []byte) error {
 	// A nil mode leaves a new file with the umask applied to 0o666.
 	var mode *fs.FileMode
 	info, err := d.parent.Lstat(d.leaf)
+	if d.original != nil && (err != nil || !os.SameFile(d.original, info)) {
+		return fmt.Errorf("%w: %s", ErrEditConflict, path)
+	}
+
 	switch {
 	case err == nil && info.IsDir():
 		return fmt.Errorf("%w: %s", ErrIsDirectory, path)
@@ -276,7 +321,7 @@ func (d *writeDestination) write(w *Workspace, data []byte) error {
 	case !errors.Is(err, fs.ErrNotExist):
 		return fmt.Errorf("failed to stat %s: %w", path, err)
 	}
-	tmp := "." + d.leaf + "." + rand.Text() + ".tmp"
+	tmp := ".kopi-" + rand.Text() + ".tmp"
 	tempMode := fs.FileMode(0o666)
 	if mode != nil {
 		// Keep replacement data private until the original mode is restored.
@@ -296,6 +341,12 @@ func (d *writeDestination) write(w *Workspace, data []byte) error {
 	if err := d.checkDestination(w, []string{d.leaf}); err != nil {
 		_ = d.parent.Remove(tmp)
 		return err
+	}
+	if d.original != nil {
+		if err := d.checkUnchanged(); err != nil {
+			_ = d.parent.Remove(tmp)
+			return err
+		}
 	}
 	if err := d.parent.Rename(tmp, d.leaf); err != nil {
 		_ = d.parent.Remove(tmp)
@@ -533,4 +584,63 @@ func (w *Workspace) statProtected() ([]os.FileInfo, error) {
 		stores = append(stores, info)
 	}
 	return stores, nil
+}
+
+// open acquires the leaf without reading content, and binds its identity to the
+// non-symlink entry in the pinned parent.
+func (d *writeDestination) open() (*os.File, error) {
+	if len(d.missing) != 0 {
+		return nil, fmt.Errorf("failed to open %s: %w", d.path, fs.ErrNotExist)
+	}
+	f, err := d.parent.OpenFile(d.leaf, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open %s: %w", d.path, err)
+	}
+	opened, err := f.Stat()
+	entry, lerr := d.parent.Lstat(d.leaf)
+	if err != nil || lerr != nil || !os.SameFile(opened, entry) || entry.Mode()&fs.ModeSymlink != 0 {
+		f.Close()
+		return nil, fmt.Errorf("%w: %s", ErrTargetChanged, d.path)
+	}
+	if !opened.Mode().IsRegular() && !opened.IsDir() {
+		f.Close()
+		return nil, fmt.Errorf("%w: %s", ErrNotRegular, d.path)
+	}
+	return f, nil
+}
+
+func (d *writeDestination) checkUnchanged() error {
+	f, err := d.open()
+	if err != nil {
+		return fmt.Errorf("%w: %s", ErrEditConflict, d.path)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !os.SameFile(d.original, info) {
+		return fmt.Errorf("%w: %s", ErrEditConflict, d.path)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxEditBytes+1))
+	if err != nil {
+		return fmt.Errorf("failed to check %s: %w", d.path, err)
+	}
+	if !bytes.Equal(data, d.content) {
+		return fmt.Errorf("%w: %s", ErrEditConflict, d.path)
+	}
+	return nil
+}
+
+// checkRead retains os.Root's traversal restrictions on the original path,
+// while content is read only from the prepared leaf handle.
+func (w *Workspace) checkRead(f *os.File, path string) error {
+	rel, err := w.relative(path)
+	if err != nil {
+		return err
+	}
+	if err := w.check(f, rel, path); err != nil {
+		return err
+	}
+	if _, err := w.root.Stat(rel); err != nil {
+		return fmt.Errorf("failed to stat %s: %w", path, err)
+	}
+	return nil
 }

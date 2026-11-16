@@ -134,7 +134,12 @@ func testTool(name string, c policy.Capability, run func(context.Context, json.R
 		Description: "Test-only tool.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 		Capability:  c,
-		Run:         run,
+		Run: func(ctx context.Context, args json.RawMessage, admit func(policy.Target) error) (string, error) {
+			if err := admit(policy.Target{}); err != nil {
+				return "", err
+			}
+			return run(ctx, args)
+		},
 	}
 }
 

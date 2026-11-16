@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"unicode/utf8"
 
@@ -62,12 +63,31 @@ func NewRead(ws *Workspace) Tool {
 		},
 		Capability: policy.Read,
 		Target:     pathTarget(ws),
-		Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) error) (string, error) {
 			args, err := decodeReadArgs(raw)
 			if err != nil {
 				return "", err
 			}
-			return read(ctx, ws, args)
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			dest, err := ws.prepare(args.FilePath)
+			if err != nil {
+				return "", err
+			}
+			defer func() { dest.parent.Close() }()
+			f, err := dest.open()
+			if err != nil {
+				return "", err
+			}
+			defer f.Close()
+			if err := ws.checkRead(f, args.FilePath); err != nil {
+				return "", err
+			}
+			if err := admit(dest.target); err != nil {
+				return "", err
+			}
+			return read(ctx, f, args)
 		},
 		Display: Display{
 			Title:   readTitle,
@@ -155,7 +175,7 @@ func decodeReadArgs(raw json.RawMessage) (readArgs, error) {
 	return args, nil
 }
 
-func read(ctx context.Context, ws *Workspace, args readArgs) (string, error) {
+func read(ctx context.Context, f *os.File, args readArgs) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -167,11 +187,6 @@ func read(ctx context.Context, ws *Workspace, args readArgs) (string, error) {
 		limit = min(*args.Limit, maxReadLines)
 	}
 
-	f, err := ws.Open(args.FilePath)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
 		return "", fmt.Errorf("failed to stat %s: %w", args.FilePath, err)

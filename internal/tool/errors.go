@@ -3,6 +3,8 @@ package tool
 import "errors"
 
 var (
+	ErrEditConflict     = errors.New("file changed during edit")
+	ErrTargetChanged    = errors.New("workspace traversal changed")
 	ErrOutsideWorkspace = errors.New("path is outside the workspace")
 	ErrProtected        = errors.New("path is protected")
 	ErrBinary           = errors.New("file is binary")

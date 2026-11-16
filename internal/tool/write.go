@@ -41,7 +41,7 @@ func NewWrite(ws *Workspace) Tool {
 		},
 		Capability: policy.Write,
 		Target:     pathTarget(ws),
-		Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) error) (string, error) {
 			args, err := decodeWriteArgs(raw)
 			if err != nil {
 				return "", err
@@ -49,10 +49,18 @@ func NewWrite(ws *Workspace) Tool {
 			if err := ctx.Err(); err != nil {
 				return "", err
 			}
-			if err := ws.WriteFile(args.FilePath, []byte(*args.Content)); err != nil {
+			dest, err := ws.prepare(args.FilePath)
+			if err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("wrote %s to %s", lineCount(len(splitLines(*args.Content))), args.FilePath), nil
+			defer func() { dest.parent.Close() }()
+			if err := admit(dest.target); err != nil {
+				return "", err
+			}
+			if err := dest.write(ws, []byte(*args.Content)); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("wrote %s to %s", lineCount(countLines(*args.Content)), args.FilePath), nil
 		},
 		Display: Display{
 			Title: pathTitle("Write"),
@@ -87,8 +95,7 @@ func writePreview(raw json.RawMessage) []PreviewLine {
 		Content string `json:"content"`
 	}
 	_ = json.Unmarshal(raw, &args)
-	lines := splitLines(args.Content)
-	return append([]PreviewLine{{Kind: Context, Text: lineCount(len(lines))}}, previewLines(Added, lines)...)
+	return append([]PreviewLine{{Kind: Context, Text: lineCount(countLines(args.Content))}}, previewLines(Added, args.Content)...)
 }
 
 // pathTitle returns a Display.Title naming the call by its file_path. It runs
@@ -108,12 +115,16 @@ func pathTitle(verb string) func(json.RawMessage) string {
 
 // previewLines shows up to maxPreviewLines of lines as kind, then a marker
 // counting the rest.
-func previewLines(kind PreviewKind, lines []string) []PreviewLine {
-	var out []PreviewLine
-	for _, l := range lines[:min(len(lines), maxPreviewLines)] {
-		out = append(out, PreviewLine{Kind: kind, Text: l})
+func previewLines(kind PreviewKind, text string) []PreviewLine {
+	n := countLines(text)
+	out := make([]PreviewLine, 0, min(n, maxPreviewLines)+1)
+	restText := strings.TrimSuffix(text, "\n")
+	for range min(n, maxPreviewLines) {
+		line, rest, _ := strings.Cut(restText, "\n")
+		out = append(out, PreviewLine{Kind: kind, Text: line})
+		restText = rest
 	}
-	switch rest := len(lines) - maxPreviewLines; {
+	switch rest := n - maxPreviewLines; {
 	case rest == 1:
 		out = append(out, PreviewLine{Kind: Context, Text: "… 1 more line"})
 	case rest > 1:
@@ -122,13 +133,12 @@ func previewLines(kind PreviewKind, lines []string) []PreviewLine {
 	return out
 }
 
-// splitLines treats a final newline as ending the last line, not starting
-// another.
-func splitLines(s string) []string {
+// A final newline ends the last line rather than starting another.
+func countLines(s string) int {
 	if s == "" {
-		return nil
+		return 0
 	}
-	return strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+	return strings.Count(strings.TrimSuffix(s, "\n"), "\n") + 1
 }
 
 func lineCount(n int) string {

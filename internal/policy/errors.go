@@ -3,6 +3,7 @@ package policy
 import "errors"
 
 var (
+	ErrChangedCall = errors.New("approved call changed")
 	ErrUnknownTool = errors.New("unknown tool")
 	ErrDenied      = errors.New("denied by policy")
 	ErrRevoked     = errors.New("authority revoked")

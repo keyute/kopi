@@ -1,10 +1,12 @@
 package tool
 
 import (
+	"errors"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -781,4 +783,114 @@ func TestTargetFollowsWorkspaceAfterItsSymlinkIsRepointed(t *testing.T) {
 	require.NoError(t, ws.WriteFile(path, []byte("written")))
 	assert.Equal(t, "written", readContent(t, got.Real))
 	assert.Empty(t, listDir(t, filepath.Join(parent, "other")))
+}
+
+func TestPreparedWriteRejectsNewTraversal(t *testing.T) {
+	for _, replacement := range []string{"directory", "symlink"} {
+		t.Run(replacement, func(t *testing.T) {
+			dir := t.TempDir()
+			ws := newWorkspace(t, dir, nil)
+			require.NoError(t, os.Mkdir(filepath.Join(dir, "denied"), 0o755))
+			dest, err := ws.prepare("missing/deep/file")
+			require.NoError(t, err)
+			defer func() { dest.parent.Close() }()
+			if replacement == "directory" {
+				require.NoError(t, os.Mkdir(filepath.Join(dir, "missing"), 0o755))
+			} else {
+				require.NoError(t, os.Symlink("denied", filepath.Join(dir, "missing")))
+			}
+			require.ErrorIs(t, dest.write(ws, []byte("new")), ErrTargetChanged)
+			assert.Empty(t, listDir(t, filepath.Join(dir, "denied")))
+		})
+	}
+}
+
+func TestPrepareWriteRejectsUnprotectedSymlinkAfterResolution(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "allowed", "file"), "allowed")
+	writeFile(t, filepath.Join(dir, "denied", "file"), "denied")
+	ws := newWorkspace(t, dir, nil)
+	target, err := ws.Target("allowed/file")
+	require.NoError(t, err)
+	require.NoError(t, os.Rename(filepath.Join(dir, "allowed"), filepath.Join(dir, "pinned")))
+	require.NoError(t, os.Symlink("denied", filepath.Join(dir, "allowed")))
+	rel, err := filepath.Rel(ws.realDir, target.Real)
+	require.NoError(t, err)
+	dest, err := ws.prepareWrite(rel, "allowed/file")
+	require.ErrorIs(t, err, ErrTargetChanged)
+	assert.Nil(t, dest)
+	assert.Equal(t, "denied", readContent(t, filepath.Join(dir, "denied", "file")))
+}
+
+func TestPreparedEditDetectsConflicts(t *testing.T) {
+	for _, change := range []string{"unchanged", "same-size", "rename-over", "deletion", "symlink"} {
+		t.Run(change, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "file")
+			writeFile(t, path, "alpha")
+			writeFile(t, filepath.Join(dir, "other"), "alpha")
+			require.NoError(t, os.Chmod(path, 0o640))
+			ws := newWorkspace(t, dir, nil)
+			dest, err := ws.prepare("file")
+			require.NoError(t, err)
+			defer func() { dest.parent.Close() }()
+			f, err := dest.open()
+			require.NoError(t, err)
+			defer f.Close()
+			content, err := readForEdit(f, "file")
+			require.NoError(t, err)
+			dest.content = []byte(content)
+			dest.original, err = f.Stat()
+			require.NoError(t, err)
+			switch change {
+			case "same-size":
+				require.NoError(t, os.WriteFile(path, []byte("bravo"), 0o600))
+			case "rename-over":
+				require.NoError(t, os.Rename(filepath.Join(dir, "other"), path))
+			case "deletion":
+				require.NoError(t, os.Remove(path))
+			case "symlink":
+				require.NoError(t, os.Remove(path))
+				require.NoError(t, os.Symlink("other", path))
+			}
+			err = dest.write(ws, []byte("updated"))
+			if change == "unchanged" {
+				require.NoError(t, err)
+				assert.Equal(t, "updated", readContent(t, path))
+				info, err := os.Stat(path)
+				require.NoError(t, err)
+				assert.Equal(t, fs.FileMode(0o640), info.Mode().Perm())
+			} else {
+				require.ErrorIs(t, err, ErrEditConflict)
+				if change == "same-size" {
+					assert.Equal(t, "bravo", readContent(t, path))
+				}
+			}
+			for _, name := range listDir(t, dir) {
+				assert.NotContains(t, name, ".kopi-")
+			}
+		})
+	}
+}
+
+func TestWriteFileLongBasename(t *testing.T) {
+	dir := t.TempDir()
+	name := strings.Repeat("a", 240)
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("probe"), 0o600); errors.Is(err, syscall.ENAMETOOLONG) {
+		t.Skip("filesystem does not support 240-byte basenames")
+	} else {
+		require.NoError(t, err)
+	}
+	require.NoError(t, os.Remove(path))
+	ws := newWorkspace(t, dir, nil)
+	require.NoError(t, ws.WriteFile(name, []byte("created")))
+	assert.Equal(t, "created", readContent(t, path))
+	require.NoError(t, os.Chmod(path, 0o640))
+	require.NoError(t, ws.WriteFile(name, []byte("replaced")))
+	assert.Equal(t, "replaced", readContent(t, path))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, fs.FileMode(0o640), info.Mode().Perm())
+	assert.Equal(t, []string{name}, listDir(t, dir))
 }

@@ -54,10 +54,10 @@ func TestUnknownToolIsDenied(t *testing.T) {
 func TestReadIsAllowedInBothModes(t *testing.T) {
 	a, g := newTestGate(nil, nil)
 	require.NoError(t, g.Before(t.Context(), "c1", "Read", pathArgs("/x")))
-	require.NoError(t, g.Admit("c1", "Read"))
+	require.NoError(t, admitApproved(g, "c1", "Read"))
 	a.EnterExecute()
 	require.NoError(t, g.Before(t.Context(), "c2", "Read", pathArgs("/x")))
-	require.NoError(t, g.Admit("c2", "Read"))
+	require.NoError(t, admitApproved(g, "c2", "Read"))
 }
 
 func TestReadGrantSurvivesModeChanges(t *testing.T) {
@@ -65,7 +65,7 @@ func TestReadGrantSurvivesModeChanges(t *testing.T) {
 	require.NoError(t, g.Before(t.Context(), "c1", "Read", pathArgs("/x")))
 	a.EnterExecute()
 	a.EnterPlan()
-	assert.NoError(t, g.Admit("c1", "Read"))
+	assert.NoError(t, admitApproved(g, "c1", "Read"))
 }
 
 func TestPlanDeniesNonReadBeforeRules(t *testing.T) {
@@ -85,7 +85,7 @@ func TestExecuteAdmitsEveryCapabilityOnceApproved(t *testing.T) {
 	a.EnterExecute()
 	for _, tool := range []string{"Read", "Edit", "Bash"} {
 		require.NoError(t, g.Before(t.Context(), "c-"+tool, tool, pathArgs("/x")), tool)
-		assert.NoError(t, g.Admit("c-"+tool, tool), tool)
+		assert.NoError(t, admitApproved(g, "c-"+tool, tool), tool)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestExecGrantIsRevokedOnReturnToPlan(t *testing.T) {
 	a.EnterExecute()
 	require.NoError(t, g.Before(t.Context(), "c1", "Bash", nil))
 	a.EnterPlan()
-	assert.ErrorIs(t, g.Admit("c1", "Bash"), ErrRevoked)
+	assert.ErrorIs(t, admitApproved(g, "c1", "Bash"), ErrRevoked)
 }
 
 func TestStaleExecGrantIsRevokedAfterReturningToExecute(t *testing.T) {
@@ -103,7 +103,7 @@ func TestStaleExecGrantIsRevokedAfterReturningToExecute(t *testing.T) {
 	require.NoError(t, g.Before(t.Context(), "c1", "Bash", nil))
 	a.EnterPlan()
 	a.EnterExecute()
-	assert.ErrorIs(t, g.Admit("c1", "Bash"), ErrRevoked)
+	assert.ErrorIs(t, admitApproved(g, "c1", "Bash"), ErrRevoked)
 }
 
 func TestDenyRuleNamesRuleAndSource(t *testing.T) {
@@ -115,7 +115,7 @@ func TestDenyRuleNamesRuleAndSource(t *testing.T) {
 	require.ErrorIs(t, err, ErrDenied)
 	assert.Contains(t, err.Error(), "Edit(secret) (config)")
 	assert.Empty(t, f.reqs)
-	assert.ErrorIs(t, g.Admit("c1", "Edit"), ErrNoGrant)
+	assert.ErrorIs(t, admitApproved(g, "c1", "Edit"), ErrNoGrant)
 }
 
 func TestDefaultAsks(t *testing.T) {
@@ -129,7 +129,7 @@ func TestDefaultAsks(t *testing.T) {
 		args := pathArgs("/x")
 		require.NoError(t, g.Before(t.Context(), "c1", tc.tool, args))
 		assert.Equal(t, []Request{{CallID: "c1", Tool: tc.tool, Args: args, Edits: tc.edits}}, f.reqs)
-		assert.NoError(t, g.Admit("c1", tc.tool))
+		assert.NoError(t, admitApproved(g, "c1", tc.tool))
 	}
 }
 
@@ -156,7 +156,7 @@ func TestAllowRuleSkipsApproval(t *testing.T) {
 	a, g := newTestGate(d.rules(t, Source{Name: "config", Allow: []string{"Edit(docs/**)"}}), nil)
 	a.EnterExecute()
 	require.NoError(t, g.Before(t.Context(), "c1", "Edit", pathArgs(filepath.Join(d.ws, "docs/a.md"))))
-	assert.NoError(t, g.Admit("c1", "Edit"))
+	assert.NoError(t, admitApproved(g, "c1", "Edit"))
 }
 
 func TestRejectedCallIsRefused(t *testing.T) {
@@ -165,7 +165,7 @@ func TestRejectedCallIsRefused(t *testing.T) {
 	err := g.Before(t.Context(), "c1", "Edit", pathArgs("/x"))
 	require.ErrorIs(t, err, ErrRejected)
 	assert.Contains(t, err.Error(), "stop and wait for their instructions")
-	assert.ErrorIs(t, g.Admit("c1", "Edit"), ErrNoGrant)
+	assert.ErrorIs(t, admitApproved(g, "c1", "Edit"), ErrNoGrant)
 }
 
 func TestAllowEditsSkipsLaterDefaultEditAsksOnly(t *testing.T) {
@@ -205,14 +205,14 @@ func TestBuiltInGitAskSurvivesAllEditsInsideGitWorkspace(t *testing.T) {
 			}, d.rules(t), f.approve)
 			a.EnterExecute()
 			require.NoError(t, g.Before(t.Context(), "initial", "Edit", pathArgs(ordinary)))
-			require.NoError(t, g.Admit("initial", "Edit"))
+			require.NoError(t, admitApproved(g, "initial", "Edit"))
 			require.Len(t, f.reqs, 1)
 			require.True(t, f.reqs[0].Edits)
 			f.answer = Reject
 			for _, tool := range []string{"Edit", "Write"} {
 				err := g.Before(t.Context(), tool, tool, pathArgs(filepath.Join(d.ws, "pre-commit")))
 				require.ErrorIs(t, err, ErrRejected)
-				assert.ErrorIs(t, g.Admit(tool, tool), ErrNoGrant)
+				assert.ErrorIs(t, admitApproved(g, tool, tool), ErrNoGrant)
 			}
 			require.Len(t, f.reqs, 3)
 			assert.Equal(t, "Edit(.git) (built-in)", f.reqs[1].Rule)
@@ -248,7 +248,7 @@ func TestCancelledApprovalRefuses(t *testing.T) {
 	err := <-done
 	require.ErrorIs(t, err, context.Canceled)
 	assert.NotErrorIs(t, err, ErrRejected)
-	assert.ErrorIs(t, g.Admit("c1", "Edit"), ErrNoGrant)
+	assert.ErrorIs(t, admitApproved(g, "c1", "Edit"), ErrNoGrant)
 }
 
 func TestNoApproverDeniesNamingTheAllowRule(t *testing.T) {
@@ -286,7 +286,7 @@ func TestModeChangeDuringApprovalRevokes(t *testing.T) {
 	})
 	a.EnterExecute()
 	require.NoError(t, g.Before(t.Context(), "c1", "Edit", pathArgs("/x")))
-	assert.ErrorIs(t, g.Admit("c1", "Edit"), ErrRevoked)
+	assert.ErrorIs(t, admitApproved(g, "c1", "Edit"), ErrRevoked)
 }
 
 func TestTargetErrorRefuses(t *testing.T) {
@@ -297,26 +297,26 @@ func TestTargetErrorRefuses(t *testing.T) {
 	var syntax *json.SyntaxError
 	require.ErrorAs(t, err, &syntax)
 	assert.Empty(t, f.reqs)
-	assert.ErrorIs(t, g.Admit("c1", "Edit"), ErrNoGrant)
+	assert.ErrorIs(t, admitApproved(g, "c1", "Edit"), ErrNoGrant)
 }
 
 func TestAdmitWithoutBeforeHasNoGrant(t *testing.T) {
 	_, g := newTestGate(nil, nil)
-	assert.ErrorIs(t, g.Admit("c1", "Read"), ErrNoGrant)
+	assert.ErrorIs(t, admitApproved(g, "c1", "Read"), ErrNoGrant)
 }
 
 func TestGrantIsConsumedOnce(t *testing.T) {
 	_, g := newTestGate(nil, nil)
 	require.NoError(t, g.Before(t.Context(), "c1", "Read", pathArgs("/x")))
-	require.NoError(t, g.Admit("c1", "Read"))
-	assert.ErrorIs(t, g.Admit("c1", "Read"), ErrNoGrant)
+	require.NoError(t, admitApproved(g, "c1", "Read"))
+	assert.ErrorIs(t, admitApproved(g, "c1", "Read"), ErrNoGrant)
 }
 
 func TestGrantForOneToolIsNotAdmittedForAnother(t *testing.T) {
 	a, g := newTestGate(nil, nil)
 	a.EnterExecute()
 	require.NoError(t, g.Before(t.Context(), "c1", "Read", pathArgs("/x")))
-	assert.ErrorIs(t, g.Admit("c1", "Bash"), ErrNoGrant)
+	assert.ErrorIs(t, admitApproved(g, "c1", "Bash"), ErrNoGrant)
 }
 
 func TestNewGateCopiesTools(t *testing.T) {
@@ -326,4 +326,61 @@ func TestNewGateCopiesTools(t *testing.T) {
 	tools["Bash"] = ToolSpec{Capability: Read}
 	assert.NoError(t, g.Before(t.Context(), "c1", "Read", nil))
 	assert.ErrorIs(t, g.Before(t.Context(), "c2", "Bash", nil), ErrUnknownTool)
+}
+
+func admitApproved(g *Gate, id, tool string) error {
+	gr := g.grants[id]
+	return g.Admit(id, tool, gr.args, gr.target)
+}
+
+func TestGrantBindsArgumentsAndTarget(t *testing.T) {
+	for _, change := range []string{"arguments", "target", "missing target"} {
+		t.Run(change, func(t *testing.T) {
+			a, g := newTestGate(nil, (&approver{answer: Allow}).approve)
+			a.EnterExecute()
+			args := pathArgs("/allowed")
+			require.NoError(t, g.Before(t.Context(), "call", "Edit", args))
+			target := &Target{Path: "/allowed", Real: "/allowed"}
+			switch change {
+			case "arguments":
+				args = pathArgs("/other")
+			case "target":
+				target.Real = "/denied"
+			case "missing target":
+				target = nil
+			}
+			assert.ErrorIs(t, g.Admit("call", "Edit", args, target), ErrChangedCall)
+			assert.ErrorIs(t, g.Admit("call", "Edit", pathArgs("/allowed"), &Target{Path: "/allowed", Real: "/allowed"}), ErrNoGrant)
+		})
+	}
+}
+
+func TestPendingApprovalBindsOriginalTarget(t *testing.T) {
+	waiting, answer := make(chan struct{}), make(chan struct{})
+	target := Target{Path: "/link", Real: "/allowed"}
+	a := NewAuthority()
+	a.EnterExecute()
+	g := NewGate(a, map[string]ToolSpec{"Edit": {Capability: Write, Target: func(json.RawMessage) (Target, error) { return target, nil }}}, nil,
+		func(context.Context, Request) (Answer, error) { close(waiting); <-answer; return Allow, nil })
+	args := pathArgs("/link")
+	done := make(chan error, 1)
+	go func() { done <- g.Before(t.Context(), "call", "Edit", args) }()
+	<-waiting
+	target.Real = "/denied"
+	close(answer)
+	require.NoError(t, <-done)
+	assert.ErrorIs(t, g.Admit("call", "Edit", args, &target), ErrChangedCall)
+}
+
+func TestGrantCopiesArgumentsBeforeApproval(t *testing.T) {
+	a, g := newTestGate(nil, func(_ context.Context, r Request) (Answer, error) {
+		copy(r.Args, pathArgs("/changed"))
+		return Allow, nil
+	})
+	a.EnterExecute()
+	args := pathArgs("/allowed")
+	require.NoError(t, g.Before(t.Context(), "call", "Edit", args))
+	original := append(json.RawMessage(nil), args...)
+	copy(args, pathArgs("/changed"))
+	assert.NoError(t, g.Admit("call", "Edit", original, &Target{Path: "/allowed", Real: "/allowed"}))
 }

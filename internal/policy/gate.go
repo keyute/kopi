@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -43,6 +44,8 @@ type Request struct {
 type Approver func(ctx context.Context, r Request) (Answer, error)
 
 type grant struct {
+	args       json.RawMessage
+	target     *Target
 	tool       string
 	generation uint64
 }
@@ -70,6 +73,7 @@ func NewGate(a *Authority, tools map[string]ToolSpec, rules *Rules, approve Appr
 }
 
 func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMessage) error {
+	args = bytes.Clone(args)
 	spec, ok := g.tools[tool]
 	if !ok {
 		return fmt.Errorf("tool %q: %w", tool, ErrUnknownTool)
@@ -87,7 +91,7 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 		}
 		target = &t
 	}
-	req := Request{CallID: callID, Tool: tool, Args: args}
+	req := Request{CallID: callID, Tool: tool, Args: bytes.Clone(args)}
 	switch eff, rule, src := g.rules.decide(tool, target); eff {
 	case effectDeny:
 		return fmt.Errorf("tool %q is denied by rule %s (%s): %w", tool, rule, src, ErrDenied)
@@ -111,7 +115,7 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.grants[callID] = grant{tool: tool, generation: gen}
+	g.grants[callID] = grant{tool: tool, generation: gen, args: args, target: target}
 	return nil
 }
 
@@ -147,7 +151,9 @@ func (g *Gate) ask(ctx context.Context, r Request, allow string) error {
 	}
 }
 
-func (g *Gate) Admit(callID, tool string) error {
+// Admit consumes the grant and compares the execution arguments and the
+// target bound to the tool's prepared operation with the approved call.
+func (g *Gate) Admit(callID, tool string, args json.RawMessage, target *Target) error {
 	g.mu.Lock()
 	gr, ok := g.grants[callID]
 	delete(g.grants, callID)
@@ -155,10 +161,20 @@ func (g *Gate) Admit(callID, tool string) error {
 	if !ok || gr.tool != tool {
 		return fmt.Errorf("tool %q: %w", tool, ErrNoGrant)
 	}
+	if !bytes.Equal(gr.args, args) || (gr.target == nil) != (target == nil) || (target != nil && *gr.target != *target) {
+		return fmt.Errorf("tool %q: arguments or target changed; make a new call: %w", tool, ErrChangedCall)
+	}
 	c := g.tools[tool].Capability
 	gen, ok := g.authority.Permits(c)
 	if !ok || (c.NeedsExecute() && gen != gr.generation) {
 		return fmt.Errorf("tool %q: the session mode changed after the call was approved: %w", tool, ErrRevoked)
 	}
 	return nil
+}
+
+// Finish discards any unused grant when execution fails before admission.
+func (g *Gate) Finish(callID string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.grants, callID)
 }

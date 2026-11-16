@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/keyute/kopi/internal/policy"
@@ -53,12 +54,12 @@ func NewEdit(ws *Workspace) Tool {
 		},
 		Capability: policy.Write,
 		Target:     pathTarget(ws),
-		Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) error) (string, error) {
 			args, err := decodeEditArgs(raw)
 			if err != nil {
 				return "", err
 			}
-			return edit(ctx, ws, args)
+			return edit(ctx, ws, args, admit)
 		},
 		Display: Display{
 			Title: pathTitle("Edit"),
@@ -91,14 +92,35 @@ func decodeEditArgs(raw json.RawMessage) (editArgs, error) {
 	return args, nil
 }
 
-func edit(ctx context.Context, ws *Workspace, args editArgs) (string, error) {
+func edit(ctx context.Context, ws *Workspace, args editArgs, admit func(policy.Target) error) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	content, err := readForEdit(ws, args.FilePath)
+	dest, err := ws.prepare(args.FilePath)
 	if err != nil {
 		return "", err
 	}
+	defer func() { dest.parent.Close() }()
+	f, err := dest.open()
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if err := ws.checkRead(f, args.FilePath); err != nil {
+		return "", err
+	}
+	if err := admit(dest.target); err != nil {
+		return "", err
+	}
+	content, err := readForEdit(f, args.FilePath)
+	if err != nil {
+		return "", err
+	}
+	dest.original, err = f.Stat()
+	if err != nil {
+		return "", fmt.Errorf("failed to stat %s: %w", args.FilePath, err)
+	}
+	dest.content = []byte(content)
 	n := strings.Count(content, args.OldString)
 	switch {
 	case n == 0:
@@ -114,7 +136,7 @@ func edit(ctx context.Context, ws *Workspace, args editArgs) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if err := ws.WriteFile(args.FilePath, []byte(updated)); err != nil {
+	if err := dest.write(ws, []byte(updated)); err != nil {
 		return "", err
 	}
 	if n == 1 {
@@ -123,12 +145,7 @@ func edit(ctx context.Context, ws *Workspace, args editArgs) (string, error) {
 	return fmt.Sprintf("replaced %d occurrences in %s", n, args.FilePath), nil
 }
 
-func readForEdit(ws *Workspace, path string) (string, error) {
-	f, err := ws.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
+func readForEdit(f *os.File, path string) (string, error) {
 	info, err := f.Stat()
 	if err != nil {
 		return "", fmt.Errorf("failed to stat %s: %w", path, err)
@@ -156,5 +173,5 @@ func editPreview(raw json.RawMessage) []PreviewLine {
 		NewString string `json:"new_string"`
 	}
 	_ = json.Unmarshal(raw, &args)
-	return append(previewLines(Removed, splitLines(args.OldString)), previewLines(Added, splitLines(args.NewString))...)
+	return append(previewLines(Removed, args.OldString), previewLines(Added, args.NewString)...)
 }
