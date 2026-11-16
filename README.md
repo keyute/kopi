@@ -86,7 +86,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 `mode` is the mode sessions start in: `plan` (default) or `execute`.
 
-`keys` maps each fullscreen action to a list of key strings, and `statusline` lists the status line's `left` and `right` segments from `model`, `context`, `branch`, `mode` and `notice`, which shows transient hints such as `Copied` (default left `model, context, branch`, right `notice, mode`):
+`keys` maps each fullscreen action to a list of key strings, and `statusline` lists the status line's `left` and `right` segments from `model`, `context`, `branch`, `mode`, `notice`, which shows transient hints such as `Copied`, and `sandbox`, which shows `sandboxed` or `unsandboxed` when Bash is available (default left `model, context, branch`, right `notice, sandbox, mode`):
 
 ```json
 {
@@ -172,7 +172,7 @@ Permission rules in `config.json` allow, ask about or deny calls:
 - `--allowed-tools` and `--disallowed-tools` add allow and deny rules to the config's; each is repeatable and takes comma-separated rules (commas inside `()` or `{}` do not split).
 - A rule's path counts as a match on either the path as written or its resolved target when it denies, asks or exempts from an allow, and only on both when it allows or exempts from a deny or ask.
 
-The fullscreen interface asks before a call that needs approval, showing the change or the command, and for `Bash` without the sandbox that it runs without the OS sandbox: `Yes`, `Yes, allow all edits this session` (for `Write` and `Edit` when no rule asked), or `No`, which takes an optional reason typed on its row. While it waits, the working row reads `Waiting for you…`. `No` with a reason refuses the call, gives the model the reason and lets the turn go on; a blank `No` stops the turn. The `menu-up` and `menu-down` keys choose and `submit` answers; a digit answers with that option, or moves to `No` to type the reason; `interrupt` answers `No` without a reason. In the reason, `newline` starts a line, `paste` and terminal paste insert text, and digits are text. Allowing all edits never overrides a deny or ask rule, never covers `Bash`, and lasts until the session ends. Print mode cannot ask, so it denies those calls, and the refusal says to add an allow rule, such as `--allowed-tools Bash`.
+The fullscreen interface asks before a call that needs approval, showing the change or the command (the status line's `sandbox` segment shows whether `Bash` runs sandboxed): `Yes`, `Yes, allow all edits this session` (for `Write` and `Edit` when no rule asked), or `No`, which takes an optional reason typed on its row. While it waits, the working row reads `Waiting for you…`. `No` with a reason refuses the call, gives the model the reason and lets the turn go on; a blank `No` stops the turn. The `menu-up` and `menu-down` keys choose and `submit` answers; a digit answers with that option, or moves to `No` to type the reason; `interrupt` answers `No` without a reason. In the reason, `newline` starts a line, `paste` and terminal paste insert text, and digits are text. Allowing all edits never overrides a deny or ask rule, never covers `Bash`, and lasts until the session ends. Print mode cannot ask, so it denies those calls, and the refusal says to add an allow rule, such as `--allowed-tools Bash`.
 
 ## Limitations
 

@@ -143,6 +143,20 @@ func TestDialogFieldLayout(t *testing.T) {
 	assert.Equal(t, []string{"  1. Yes", "❭ 2. No", "  " + fits, "  z"}, plainRows(optionRows(d, width)), "a newline moves it below")
 }
 
+func TestDialogRowsRecordFieldAreas(t *testing.T) {
+	d := fieldDialog()
+	d.rows(30, 100, 5, mocha())
+	f := d.options[1].field
+	// "  2. No  " takes 9 cells.
+	assert.Equal(t, []fieldArea{{c: f, x: 9, y: 4, h: 1}}, d.areas, "beside its label")
+
+	d.move(1)
+	d.paste("a\nb")
+	rows := plainRows(d.rows(30, 100, 5, mocha()))
+	require.Equal(t, "❭ 2. No", rows[4])
+	assert.Equal(t, []fieldArea{{c: f, x: 2, y: 5, h: 2}}, d.areas, "below its label")
+}
+
 func TestDialogFieldNarrowStacks(t *testing.T) {
 	d := fieldDialog()
 	d.move(1)
