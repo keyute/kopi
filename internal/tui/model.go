@@ -558,7 +558,11 @@ func (m *model) View() tea.View {
 	rows = append(rows, "")
 	rows = append(rows, m.pending...)
 	if m.busy {
-		rows = append(rows, workingRow(&m.spinner, m.verb, formatDuration(time.Since(m.turnStart)), m.th), "")
+		text := m.verb.ing + "… " + formatDuration(time.Since(m.turnStart))
+		if m.approval != nil {
+			text = "Waiting for you…"
+		}
+		rows = append(rows, workingRow(&m.spinner, text, m.th), "")
 	}
 	if m.approval != nil {
 		rows = append(rows, m.prompt...)

@@ -1173,6 +1173,20 @@ func TestTurnEndAndSessionChangedClearTheApproval(t *testing.T) {
 	}
 }
 
+func TestWorkingRowWaitsDuringApproval(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 60, 30)
+		ask := editApproval()
+		send(m, event.TurnStart{}, ask)
+		assert.Contains(t, screen(m), "⠋ Waiting for you…")
+		assert.NotContains(t, screen(m), "⠋ Working… 0s")
+
+		send(m, event.ApprovalEnded{Token: ask.Token})
+		assert.Contains(t, screen(m), "⠋ Working… 0s")
+		assert.NotContains(t, screen(m), "⠋ Waiting for you…")
+	})
+}
+
 func TestCancelInterruptsDuringApproval(t *testing.T) {
 	m, c := newTestModel(t, 60, 30)
 	c.running = true
