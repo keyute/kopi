@@ -532,10 +532,6 @@ func (m *model) place() {
 	free -= input + m.geo.menu
 	m.pending = m.pendingCache.rows(m.queued, &m.keys, m.width, max(2, m.height/3), free, m.th)
 	m.geo.transcript = max(0, free-len(m.pending))
-	m.geo.composerTop = m.geo.transcript + 2 + len(m.pending)
-	if m.busy {
-		m.geo.composerTop += busyRows
-	}
 
 	rows := append([]string{""}, m.pending...)
 	if m.busy {
@@ -546,6 +542,8 @@ func (m *model) place() {
 		m.geo.working = len(rows)
 		rows = append(rows, workingRow(&m.spinner, text, m.th), "")
 	}
+	// The +1 is the shaded top row that the composer and the prompt both draw.
+	m.geo.composerTop = m.geo.transcript + len(rows) + 1
 	if m.approval != nil {
 		rows = append(rows, m.prompt...)
 		if len(m.prompt) > 0 {
