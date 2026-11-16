@@ -19,6 +19,8 @@ const sandboxExec = "/usr/bin/sandbox-exec"
 var (
 	//go:embed codex/base.sbpl
 	basePolicy string
+	//go:embed codex/preferences.sbpl
+	preferencesPolicy string
 	//go:embed codex/network.sbpl
 	networkPolicy string
 	//go:embed codex/deny.sbpl
@@ -66,6 +68,9 @@ func seatbeltPrefix(p Policy) []string {
 
 	var b strings.Builder
 	b.WriteString(basePolicy)
+	if len(p.DenyRead) == 0 {
+		b.WriteString(preferencesPolicy)
+	}
 	b.WriteString("\n(allow file-read*)\n")
 	rule(&b, "deny file-read*", denyRead, exact)
 	rule(&b, "allow file-write*", write, subpath)

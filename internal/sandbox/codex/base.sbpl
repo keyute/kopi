@@ -1,9 +1,8 @@
-; Adapted from codex-rs/sandboxing/src/seatbelt_base_policy.sbpl and
-; codex-rs/sandboxing/src/seatbelt_preferences_policy.sbpl of OpenAI Codex,
+; Adapted from codex-rs/sandboxing/src/seatbelt_base_policy.sbpl of OpenAI Codex,
 ; https://github.com/openai/codex at commit 0184dfa6a48f0110dd9c6835522492908e5abcf3.
 ; Copyright 2025 OpenAI
 ; Licensed under the Apache License, Version 2.0; see LICENSE in this directory.
-; Modified by the Kopi authors: dropped the PTY rules, added the standard stream devices, appended the preferences rules.
+; Modified by the Kopi authors: dropped the PTY rules, added the standard stream devices.
 
 (version 1)
 
@@ -118,12 +117,3 @@
 (allow mach-lookup
   (global-name "com.apple.PowerManagement.control")
 )
-
-; Preferences IPC can expose data outside the filesystem read roots.
-; Include this policy only when filesystem reads are unrestricted.
-(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))
-(allow mach-lookup
-  (global-name "com.apple.cfprefsd.daemon")
-  (global-name "com.apple.cfprefsd.agent")
-  (local-name "com.apple.cfprefsd.agent"))
-(allow user-preference-read)

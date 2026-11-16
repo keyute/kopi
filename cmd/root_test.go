@@ -726,6 +726,25 @@ func TestRootSandboxedBashRunsWithoutAllowRule(t *testing.T) {
 	assert.Equal(t, "hi\n", result)
 }
 
+func TestRootSandboxedBashRefusesKopiHomeRead(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	e := newTestEnv(t)
+	secret := filepath.Join(e.kopiHome, "secret's.txt")
+	const sentinel = "synthetic kopi Bash secret"
+	e.writeFile(t, secret, sentinel+"\n")
+	quoted := "'" + strings.ReplaceAll(secret, "'", "'\"'\"'") + "'"
+	command := `IFS= read -r secret < ` + quoted + ` && printf '%s\n' "$secret"`
+
+	result, stderr := printBash(t, e, command, "--mode", "execute")
+
+	assert.Contains(t, result, tool.ErrExitStatus.Error())
+	assert.Contains(t, result, "exit code")
+	assert.NotContains(t, result, "needs approval")
+	assert.NotContains(t, result+stderr, sentinel)
+}
+
 func TestSandboxPolicy(t *testing.T) {
 	home, kopiHome := t.TempDir(), t.TempDir()
 	cfg := config.Sandbox{

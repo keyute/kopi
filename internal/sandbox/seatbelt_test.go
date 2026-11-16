@@ -101,6 +101,23 @@ func TestSeatbeltOmitsRulesWithoutFilters(t *testing.T) {
 	assert.NotContains(t, onlyDenyWrite, "(deny file-read*")
 }
 
+func TestSeatbeltPreferences(t *testing.T) {
+	restricted, _ := profileOf(t, seatbeltPrefix(fullPolicy()))
+	unrestricted, _ := profileOf(t, seatbeltPrefix(Policy{}))
+	for _, rule := range []string{
+		`(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))`,
+		`(global-name "com.apple.cfprefsd.daemon")`,
+		`(global-name "com.apple.cfprefsd.agent")`,
+		`(local-name "com.apple.cfprefsd.agent")`,
+		`(allow user-preference-read)`,
+	} {
+		assert.NotContains(t, restricted, rule)
+		assert.Contains(t, unrestricted, rule)
+	}
+	assert.NotContains(t, restricted, preferencesPolicy)
+	assert.True(t, strings.HasPrefix(unrestricted, basePolicy+preferencesPolicy))
+}
+
 func TestSeatbeltNetwork(t *testing.T) {
 	off, _ := profileOf(t, seatbeltPrefix(Policy{}))
 	on, _ := profileOf(t, seatbeltPrefix(Policy{Network: true}))
