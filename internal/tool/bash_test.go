@@ -77,6 +77,27 @@ func TestBashDoesNotRunWithoutAdmission(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(dir, "marker"))
 }
 
+func TestBashDoesNotStartWhenAdmissionCancels(t *testing.T) {
+	sh := NewShell(t.TempDir(), nil)
+	// A Start attempt must fail differently from cancellation.
+	sh.shell = filepath.Join(sh.dir, "missing-shell")
+	tool := NewBash(sh)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	admitted := false
+
+	out, err := tool.Run(ctx, json.RawMessage(`{"command":"echo unexpected"}`), func(policy.Target) error {
+		admitted = true
+		cancel()
+		return nil
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, context.Canceled.Error(), err.Error())
+	assert.Empty(t, out)
+	assert.True(t, admitted)
+}
+
 func TestBashDisplayTitle(t *testing.T) {
 	tool, _ := newBashTool(t)
 

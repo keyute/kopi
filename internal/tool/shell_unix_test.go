@@ -4,6 +4,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,6 +16,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/keyute/kopi/internal/sandbox"
 )
 
 // waitLimit only guards against a hung test; no test relies on it elapsing.
@@ -23,9 +26,9 @@ const waitLimit = 30 * time.Second
 // holdFIFO returns a command whose background grandchild holds the write end
 // of a FIFO, and channels closed once that grandchild has opened it and once
 // every writer has gone, which proves the grandchild died.
-func holdFIFO(t *testing.T) (command string, started, dead <-chan struct{}) {
+func holdFIFO(t *testing.T, dir string) (command string, started, dead <-chan struct{}) {
 	t.Helper()
-	fifo := filepath.Join(t.TempDir(), "fifo")
+	fifo := filepath.Join(dir, "fifo")
 	require.NoError(t, syscall.Mkfifo(fifo, 0o600))
 	startedCh, deadCh := make(chan struct{}), make(chan struct{})
 	go func() {
@@ -64,19 +67,39 @@ func TestShellTimeoutStopsCommand(t *testing.T) {
 	require.ErrorIs(t, err, ErrTimedOut)
 }
 
+func lifecycleShell(t *testing.T, dir string, sandboxed bool) *Shell {
+	t.Helper()
+	var sb *sandbox.Sandbox
+	if sandboxed {
+		var err error
+		sb, err = sandbox.New(t.Context(), sandbox.Policy{Write: []string{dir}})
+		if errors.Is(err, sandbox.ErrUnavailable) {
+			t.Skip(err)
+		}
+		require.NoError(t, err)
+	}
+	return NewShell(dir, sb)
+}
+
 func TestShellCancelKillsProcessGroup(t *testing.T) {
-	sh := NewShell(t.TempDir(), nil)
-	command, started, dead := holdFIFO(t)
-	ctx, cancel := context.WithCancel(t.Context())
-	go func() {
-		<-started
-		cancel()
-	}()
+	for _, name := range []string{"unsandboxed", "sandboxed"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			sh := lifecycleShell(t, dir, name == "sandboxed")
+			command, started, dead := holdFIFO(t, dir)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			go func() {
+				<-started
+				cancel()
+			}()
 
-	_, err := sh.Run(ctx, command, testTimeout)
+			_, err := sh.Run(ctx, command, testTimeout)
 
-	require.ErrorIs(t, err, context.Canceled)
-	waitFor(t, dead, "the grandchild to die")
+			require.ErrorIs(t, err, context.Canceled)
+			waitFor(t, dead, "the grandchild to die")
+		})
+	}
 }
 
 func mkfifo(t *testing.T, dir, name string) string {
@@ -90,9 +113,8 @@ func mkfifo(t *testing.T, dir, name string) string {
 // inherits its output, then exits. exited delivers the shell's PID once the
 // shell has exited, and dead closes once the child has died. The child is
 // killed at cleanup if it is still alive.
-func orphan(t *testing.T) (command string, exited <-chan int, dead <-chan struct{}) {
+func orphan(t *testing.T, dir string) (command string, exited <-chan int, dead <-chan struct{}) {
 	t.Helper()
-	dir := t.TempDir()
 	deadFIFO, exitedFIFO := mkfifo(t, dir, "dead"), mkfifo(t, dir, "exited")
 	exitedCh, deadCh := make(chan int, 1), make(chan struct{})
 	childPID := make(chan int, 1)
@@ -143,31 +165,37 @@ func orphan(t *testing.T) (command string, exited <-chan int, dead <-chan struct
 }
 
 func TestShellCancelAfterShellExitKillsProcessGroup(t *testing.T) {
-	sh := NewShell(t.TempDir(), nil)
-	command, exited, dead := orphan(t)
-	ctx, cancel := context.WithCancel(t.Context())
-	go func() {
-		// EOF on fd 4 can come before the exit is observable, so wait for
-		// it the way Run does, without reaping.
-		if pid := <-exited; pid > 0 {
-			if err := awaitExit(pid); err != nil {
-				t.Errorf("failed to await shell exit: %v", err)
-			}
-		} else {
-			t.Errorf("failed to read the shell's pid")
-		}
-		cancel()
-	}()
+	for _, name := range []string{"unsandboxed", "sandboxed"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			sh := lifecycleShell(t, dir, name == "sandboxed")
+			command, exited, dead := orphan(t, dir)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			go func() {
+				// EOF on fd 4 can come before the exit is observable, so wait for
+				// it the way Run does, without reaping.
+				if pid := <-exited; pid > 0 {
+					if err := awaitExit(pid); err != nil {
+						t.Errorf("failed to await shell exit: %v", err)
+					}
+				} else {
+					t.Errorf("failed to read the shell's pid")
+				}
+				cancel()
+			}()
 
-	_, err := sh.Run(ctx, command, testTimeout)
+			_, err := sh.Run(ctx, command, testTimeout)
 
-	require.ErrorIs(t, err, context.Canceled)
-	waitFor(t, dead, "the child to die")
+			require.ErrorIs(t, err, context.Canceled)
+			waitFor(t, dead, "the child to die")
+		})
+	}
 }
 
 func TestShellTimeoutAfterShellExitKillsProcessGroup(t *testing.T) {
 	sh := NewShell(t.TempDir(), nil)
-	command, _, dead := orphan(t)
+	command, _, dead := orphan(t, t.TempDir())
 
 	_, err := sh.Run(t.Context(), command, waitDelay/2)
 

@@ -1,7 +1,9 @@
 package tool
 
 import (
+	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,46 @@ const testTimeout = time.Minute
 func runShell(t *testing.T, sh *Shell, command string) (string, error) {
 	t.Helper()
 	return sh.Run(t.Context(), command, testTimeout)
+}
+
+func TestShellDoesNotStartCanceledRun(t *testing.T) {
+	for _, deadline := range []bool{false, true} {
+		name := "canceled"
+		if deadline {
+			name = "parent deadline"
+		}
+		t.Run(name, func(t *testing.T) {
+			sh := NewShell(t.TempDir(), nil)
+			// A Start attempt must fail differently from cancellation.
+			sh.shell = filepath.Join(sh.dir, "missing-shell")
+			var ctx context.Context
+			var cancel context.CancelFunc
+			if deadline {
+				ctx, cancel = context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+			} else {
+				ctx, cancel = context.WithCancel(t.Context())
+			}
+			defer cancel()
+			cancel()
+
+			out, err := sh.Run(ctx, "echo unexpected", testTimeout)
+
+			require.ErrorIs(t, err, ctx.Err())
+			assert.Equal(t, ctx.Err().Error(), err.Error())
+			assert.Empty(t, out)
+		})
+	}
+}
+
+func TestShellDoesNotStartExpiredRun(t *testing.T) {
+	sh := NewShell(t.TempDir(), nil)
+	sh.shell = filepath.Join(sh.dir, "missing-shell")
+
+	out, err := sh.Run(t.Context(), "echo unexpected", -time.Second)
+
+	require.ErrorIs(t, err, ErrTimedOut)
+	assert.Equal(t, fmt.Sprintf("%s\n%s after -1s", noOutputNotice, ErrTimedOut), err.Error())
+	assert.Empty(t, out)
 }
 
 func TestShellCombinesOutputInOrder(t *testing.T) {

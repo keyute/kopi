@@ -64,6 +64,14 @@ func (s *Shell) Run(ctx context.Context, command string, timeout time.Duration) 
 	// interleaved in order.
 	cmd.Stdout, cmd.Stderr = w, w
 	newSession(cmd)
+	if runCtx.Err() != nil {
+		_ = w.Close()
+		_ = r.Close()
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("%s\n%w after %v", noOutputNotice, ErrTimedOut, timeout)
+	}
 	err = cmd.Start()
 	_ = w.Close()
 	if err != nil {
