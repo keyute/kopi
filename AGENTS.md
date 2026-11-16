@@ -2,7 +2,7 @@
 
 ## Workflow
 
-- You must always use Taskfile to build, test, lint and format: `task build`, `task test`, `task lint`, `task fmt`. Tests run with `-race`.
+- You must always use Taskfile to build, test, lint and format: `task build`, `task test`, `task lint`, `task fmt`. Tests run with `-race`; `task test:norace` runs them without it, for allocation checks the race detector distorts.
 - Never commit, tag or push.
 
 ## Layout

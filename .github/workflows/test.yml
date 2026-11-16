@@ -7,7 +7,12 @@ on:
 permissions: {}
 jobs:
   test:
+    name: ${{ matrix.race && 'test (race)' || 'test (no race)' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        race: [true, false]
     permissions:
       contents: read
     steps:
@@ -25,9 +30,14 @@ jobs:
       - name: Run Go tests
         uses: robherley/go-test-action@2f859e0c8769d755d3174eecb9af8f64660827f3 # v1.1.0
         with:
-          testArguments: './... -race'
+          testArguments: ${{ matrix.race && './... -race' || './...' }}
   test-macos:
+    name: ${{ matrix.race && 'test-macos (race)' || 'test-macos (no race)' }}
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        race: [true, false]
     permissions:
       contents: read
     steps:
@@ -44,7 +54,7 @@ jobs:
       - name: Install Task
         run: go install github.com/go-task/task/v3/cmd/task@v3.44.1
       - name: Run Go tests
-        run: task test
+        run: task ${{ matrix.race && 'test' || 'test:norace' }}
   ci:
     if: always()
     needs: [test, test-macos]
