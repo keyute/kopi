@@ -17,8 +17,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/headless"
+	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/tool"
 )
@@ -212,7 +214,7 @@ func TestRootWithoutCredentialSuggestsLogin(t *testing.T) {
 	assert.Equal(t, `no credential for provider "openai-codex": run "kopi login openai-codex"`, err.Error())
 }
 
-func TestRootWithoutCredentialForProviderWithoutLogin(t *testing.T) {
+func TestRootWithoutCredentialSuggestsLoginOrAPIKey(t *testing.T) {
 	newTestEnv(t)
 	t.Setenv("MISTRAL_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
@@ -221,10 +223,15 @@ func TestRootWithoutCredentialForProviderWithoutLogin(t *testing.T) {
 		_, _, err := execute(t, "", "--model", builtinModel(t, provider), "-p", "hi")
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), fmt.Sprintf("no credential for provider %q", provider))
-		assert.Contains(t, err.Error(), "API key in the environment")
-		assert.NotContains(t, err.Error(), "login")
+		assert.Equal(t, fmt.Sprintf(`no credential for provider %q: run "kopi login %s" or set its API key in the environment`, provider, provider), err.Error())
 	}
+}
+
+func TestDiagnoseProviderWithoutLogin(t *testing.T) {
+	err := diagnose(fmt.Errorf("failed to open session: %w", pigruntime.ErrNoCredential), "ambient/model-1", "flags", config.Paths{}, app.OpenRequest{},
+		[]pigruntime.Provider{{ID: "ambient"}})
+
+	assert.Equal(t, `no credential for provider "ambient": supply its credential in the environment`, err.Error())
 }
 
 func TestRootUnknownModelNamesWhereItIsSet(t *testing.T) {
@@ -273,8 +280,8 @@ func (e testEnv) writeMockModels(t *testing.T, baseURL string) {
 }
 
 type mockRequest struct {
-	path, authorization string
-	body                map[string]any
+	path, authorization, userAgent string
+	body                           map[string]any
 }
 
 // newMockProvider serves chat completions with respond and records each
@@ -287,7 +294,7 @@ func newMockProvider(t *testing.T, respond func(http.ResponseWriter)) *mockServe
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Errorf("failed to decode request: %v", err)
 		}
-		m.requests <- mockRequest{path: r.URL.Path, authorization: r.Header.Get("Authorization"), body: body}
+		m.requests <- mockRequest{path: r.URL.Path, authorization: r.Header.Get("Authorization"), userAgent: r.Header.Get("User-Agent"), body: body}
 		respond(w)
 	}))
 	t.Cleanup(m.Close)
@@ -357,6 +364,7 @@ func TestRootStreamsTurnFromMockServer(t *testing.T) {
 	req := server.next(t)
 	assert.Equal(t, "/v1/chat/completions", req.path)
 	assert.Equal(t, "Bearer "+syntheticKey, req.authorization)
+	assert.True(t, strings.HasPrefix(req.userAgent, "kopi/"), req.userAgent)
 	var tools []string
 	for _, tl := range req.body["tools"].([]any) {
 		tools = append(tools, tl.(map[string]any)["function"].(map[string]any)["name"].(string))

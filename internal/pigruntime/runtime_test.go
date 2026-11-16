@@ -3,6 +3,7 @@ package pigruntime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -117,9 +118,10 @@ func snapshot(t *testing.T, roots ...string) map[string]fileStamp {
 
 func newTestRuntime(t *testing.T, sb sandbox) (*Runtime, *ai.FauxProviderHandle) {
 	t.Helper()
-	r, err := New(t.Context(), Options{Home: sb.kopiHome, AgentDir: sb.agentDir, CWD: sb.ws})
+	r, err := New(t.Context(), Options{Home: sb.kopiHome, AgentDir: sb.agentDir, CWD: sb.ws, Version: "v0.0.0-test"})
 	require.NoError(t, err)
 	t.Cleanup(r.Close)
+	r.openURL = func(string) error { return errors.New("tests open no browser") }
 	faux := ai.NewFauxProvider(ai.FauxConfig{ProviderID: fauxProvider, Model: "faux-1"})
 	require.NoError(t, r.RegisterProvider(faux.Provider()))
 	return r, faux

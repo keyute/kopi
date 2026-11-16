@@ -6,60 +6,178 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net/url"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/MichaelKinsy/PiG/ai"
 	"golang.org/x/term"
 )
 
-// unsupportedLogins are providers whose OAuth login PiG cannot complete
-// without a stable installation device ID (ai.LoginOptions.GetDeviceID: Sign
-// in with ChatGPT on "openai"), which Kopi does not keep yet. PiG exposes no
-// way to tell which flows need one, so the id is named here.
-var unsupportedLogins = []string{"openai"}
+// signInNames are the names Kopi introduces itself with during a provider's
+// sign-in where the default does not fit: OpenAI shows the Sign in with
+// ChatGPT name on its consent screen. The default matches the originator Kopi
+// sends on requests.
+var signInNames = map[string]string{"openai": "Kopi"}
 
-// OAuthProviders returns the sorted ids of the providers whose OAuth login
-// Kopi can run.
-func (r *Runtime) OAuthProviders() []string {
-	var ids []string
-	for _, p := range r.svcs.ModelRuntime().GetProviders() {
-		if p.Auth.OAuth != nil && !slices.Contains(unsupportedLogins, p.ID) {
-			ids = append(ids, p.ID)
-		}
-	}
-	slices.Sort(ids)
-	return ids
+const defaultSignInName = "kopi"
+
+// signInNotices are printed after a sign-in to the provider's account, not
+// after storing an API key.
+var signInNotices = map[string]string{
+	"anthropic": "Anthropic bills third-party tools per token as extra usage, not from your Claude plan limits.",
 }
 
-// Login runs the provider's OAuth flow, answering its prompts from in and
-// printing its instructions to out. PiG persists the credential in the agent
-// dir's auth.json; Kopi never sees it written or printed, and no browser is
-// opened.
+type Provider struct {
+	ID string
+	// SignIn names the provider's account sign-in, such as "OpenAI (ChatGPT Plus/Pro)"; empty when it has none.
+	SignIn string
+	// APIKey reports that Kopi can store an API key for it.
+	APIKey bool
+	// LoggedIn reports a credential in Kopi's store; credentials in the environment are not counted.
+	LoggedIn bool
+}
+
+// Providers lists every provider sorted by id, with the logins it offers.
+func (r *Runtime) Providers(ctx context.Context) ([]Provider, error) {
+	creds, err := r.svcs.ModelRuntime().ListCredentials(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list credentials: %w", err)
+	}
+	var out []Provider
+	for _, p := range r.svcs.ModelRuntime().GetProviders() {
+		info := Provider{ID: p.ID, APIKey: storesAPIKey(p)}
+		if p.Auth.OAuth != nil {
+			info.SignIn = p.Auth.OAuth.Name
+		}
+		info.LoggedIn = slices.ContainsFunc(creds, func(c ai.CredentialInfo) bool { return c.ProviderID == p.ID })
+		out = append(out, info)
+	}
+	slices.SortFunc(out, func(a, b Provider) int { return strings.Compare(a.ID, b.ID) })
+	return out, nil
+}
+
+// storesAPIKey is PiG's rule for an API-key login: an API-key method without
+// a Login is ambient-only (environment, cloud credential chain).
+func storesAPIKey(p *ai.ModelsProvider) bool {
+	return p.Auth.APIKey != nil && p.Auth.APIKey.Login != nil
+}
+
+// storedCredential reports the type of the provider's credential in Kopi's
+// store, if it has one.
+func (r *Runtime) storedCredential(ctx context.Context, provider string) (ai.CredentialType, bool, error) {
+	creds, err := r.svcs.ModelRuntime().ListCredentials(ctx)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to list credentials: %w", err)
+	}
+	i := slices.IndexFunc(creds, func(c ai.CredentialInfo) bool { return c.ProviderID == provider })
+	if i < 0 {
+		return "", false, nil
+	}
+	return creds[i].Type, true, nil
+}
+
+// Login signs in to the provider's account or stores an API key for it,
+// asking which when it offers both, answering the flow's prompts from in and
+// printing its instructions to out. A sign-in URL is also opened in the
+// browser. PiG persists the credential in the agent dir's auth.json; Kopi
+// never sees it written or printed.
 func (r *Runtime) Login(ctx context.Context, provider string, in io.Reader, out io.Writer) error {
 	p := r.svcs.ModelRuntime().GetProvider(provider)
 	if p == nil {
 		return fmt.Errorf("failed to log in to %q: %w", provider, ErrUnknownProvider)
 	}
-	if p.Auth.OAuth == nil {
-		return fmt.Errorf("failed to log in to %q: %w", provider, ErrNoOAuth)
+	signIn, apiKey := p.Auth.OAuth != nil, storesAPIKey(p)
+	if !signIn && !apiKey {
+		return fmt.Errorf("failed to log in to %q: %w", provider, ErrNoLogin)
 	}
-	if slices.Contains(unsupportedLogins, provider) {
-		return fmt.Errorf("failed to log in to %q: Kopi does not support this provider's login yet", provider)
+	// term.ReadPassword restores echo only through its own defer, which an
+	// interrupt at the hidden prompt skips.
+	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		state, err := term.GetState(int(f.Fd()))
+		if err != nil {
+			return fmt.Errorf("failed to read terminal state: %w", err)
+		}
+		defer func() { _ = term.Restore(int(f.Fd()), state) }()
 	}
-	l := &loginIO{in: in, lines: bufio.NewReader(in), out: out}
-	if _, err := r.svcs.ModelRuntime().Login(ctx, provider, ai.CredentialOAuth, ai.AuthInteraction{Prompt: l.prompt, Notify: l.notify}); err != nil {
-		return fmt.Errorf("failed to log in to %q: %w", provider, err)
+	l := &loginIO{in: in, lines: bufio.NewReader(in), out: out, openURL: r.openURL}
+	kind := ai.CredentialOAuth
+	switch {
+	case signIn && apiKey:
+		choice, err := l.selectOption(ctx, ai.AuthSelectPrompt{Message: fmt.Sprintf("Log in to %s with:", provider), Options: []ai.AuthSelectOption{
+			{ID: string(ai.CredentialOAuth), Label: p.Auth.OAuth.Name},
+			{ID: string(ai.CredentialAPIKey), Label: "API key"},
+		}})
+		if err != nil {
+			return fmt.Errorf("failed to log in to %q: %w", provider, err)
+		}
+		kind = ai.CredentialType(choice)
+	case apiKey:
+		kind = ai.CredentialAPIKey
+	}
+	name := defaultSignInName
+	if n, ok := signInNames[provider]; ok {
+		name = n
+	}
+	// PiG turns an empty device ID into its own generic error, so the cause is
+	// kept to report instead.
+	var idMu sync.Mutex
+	var idErr error
+	opts := ai.LoginOptions{AgentName: &name, GetDeviceID: func() string {
+		id, err := installationID(r.installationFile)
+		if err != nil {
+			idMu.Lock()
+			idErr = err
+			idMu.Unlock()
+		}
+		return id
+	}}
+	_, err := r.svcs.ModelRuntime().Login(ctx, provider, kind, ai.AuthInteraction{Prompt: l.prompt, Notify: l.notify}, opts)
+	idMu.Lock()
+	deviceErr := idErr
+	idMu.Unlock()
+	if deviceErr != nil {
+		return fmt.Errorf("failed to log in to %q: %w", provider, deviceErr)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to log in to %q: %w", provider, reword(err))
+	}
+	if notice, ok := signInNotices[provider]; ok && kind == ai.CredentialOAuth {
+		if _, err := fmt.Fprintln(out, notice); err != nil {
+			return fmt.Errorf("failed to print login notice: %w", err)
+		}
+	}
+	return nil
+}
+
+// Logout deletes the provider's credential from Kopi's store. PiG's logout
+// deletes without checking, so the credential is looked up first.
+func (r *Runtime) Logout(ctx context.Context, provider string) error {
+	_, ok, err := r.storedCredential(ctx, provider)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		if r.svcs.ModelRuntime().GetProvider(provider) == nil {
+			return fmt.Errorf("failed to log out of %q: %w", provider, ErrUnknownProvider)
+		}
+		return fmt.Errorf("failed to log out of %q: %w", provider, ErrNotLoggedIn)
+	}
+	if err := r.svcs.ModelRuntime().Logout(ctx, provider); err != nil {
+		return fmt.Errorf("failed to log out of %q: %w", provider, reword(err))
 	}
 	return nil
 }
 
 type loginIO struct {
-	in    io.Reader
-	lines *bufio.Reader
-	out   io.Writer
+	in      io.Reader
+	lines   *bufio.Reader
+	out     io.Writer
+	openURL func(string) error
 	// pending is the read still in flight after its prompt's ctx ended; the
 	// next prompt takes its answer instead of starting a concurrent read.
 	// PiG joins a cancelled prompt before issuing the next, so prompts never
@@ -82,7 +200,11 @@ func (l *loginIO) prompt(ctx context.Context, p ai.AuthPrompt) (string, error) {
 		return l.read(ctx, l.readLine)
 	case ai.AuthSecretPrompt:
 		l.ask(p.Message, p.Placeholder)
-		return l.read(ctx, l.readSecret)
+		secret, err := l.read(ctx, l.readSecret)
+		if err == nil && secret == "" {
+			return "", errors.New("failed to read login input: empty answer")
+		}
+		return secret, err
 	case ai.AuthSelectPrompt:
 		return l.selectOption(ctx, p)
 	}
@@ -96,6 +218,7 @@ func (l *loginIO) notify(e ai.AuthEvent) {
 		if e.Instructions != "" {
 			fmt.Fprintln(l.out, e.Instructions)
 		}
+		l.open(e.URL)
 	case ai.AuthDeviceCodeEvent:
 		fmt.Fprintf(l.out, "Visit %s and enter the code %s\n", e.VerificationURI, e.UserCode)
 	case ai.AuthProgressEvent:
@@ -106,6 +229,20 @@ func (l *loginIO) notify(e ai.AuthEvent) {
 			fmt.Fprintf(l.out, "  %s\n", link.URL)
 		}
 	}
+}
+
+// open runs off the flow's goroutine because the opener waits for the
+// browser's launcher; the printed URL is the fallback when it fails.
+func (l *loginIO) open(rawURL string) {
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return
+	}
+	go func() {
+		if err := l.openURL(rawURL); err != nil {
+			slog.Debug("failed to open browser", "error", err)
+		}
+	}()
 }
 
 func (l *loginIO) ask(message, placeholder string) {

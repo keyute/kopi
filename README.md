@@ -10,6 +10,7 @@ Needs Go (version in `go.mod`) and [Task](https://taskfile.dev/) to build; the b
 ```sh
 task build
 bin/kopi login <provider>          # list providers with: bin/kopi login
+bin/kopi logout <provider>
 bin/kopi --model provider/id
 bin/kopi --model provider/id -c    # continue the latest session in this directory
 bin/kopi --model provider/id -r <id>
@@ -82,6 +83,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - The fullscreen interface logs to `kopi.log` in the home; print mode logs to stderr.
 - `history.jsonl` holds input history per working directory, written by the fullscreen interface; the last 100 entries are recalled.
 - `images/` holds pasted clipboard images, removed after a day.
+- `installation_id` holds the installation's UUID, created the first time a sign-in asks for it.
 - `agent/` is PiG's agent directory, created on first run: its credential file (`auth.json`), session logs (`sessions/`), other PiG state and an optional `models.json`.
 
 `mode` is the mode sessions start in: `plan` (default) or `execute`.
@@ -116,6 +118,21 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 - Setting one action replaces that action's list and leaves the others at their defaults.
 - An unknown action or segment, an empty list or a blank key string is rejected at start; a key string that names no real key never matches.
+
+## Providers
+
+- `kopi login` lists the providers that offer a login, with their methods and the ones Kopi holds a credential for; `kopi login <provider>` runs one.
+- A provider offers an account sign-in, a stored API key or both; with both, Kopi asks which. An API key is read hidden on a terminal, or as a line from piped stdin.
+- A sign-in prints its URL and opens it in the browser; when the browser does not open, use the printed URL.
+- `kopi logout <provider>` removes the provider's credential from `agent/auth.json`.
+- A credential in the environment works without a login; `kopi login` marks only stored credentials as logged in.
+- After an `anthropic` account sign-in Kopi notes that Anthropic bills third-party tools per token as extra usage, not from Claude plan limits.
+- Sign-in introduces the app as `Kopi` to OpenAI's Sign in with ChatGPT (`openai`), which also receives `installation_id`, and as `kopi` to other sign-ins that take a name.
+- Requests send `User-Agent: kopi/<version> (<os>; <arch>)`, add `originator: kopi` for Codex-API models, and carry no PiG attribution headers.
+- `anthropic` requests keep the `User-Agent` PiG sends for them: Claude Code's with an account sign-in, PiG's with an API key.
+- `github-copilot` requests keep GitHub Copilot Chat's `User-Agent`, which PiG's Copilot models set.
+- A `User-Agent` in a provider's `headers` in `agent/models.json` is replaced by Kopi's, except for `anthropic`; one in a model's `headers` is kept.
+- Still PiG's: the page a browser sign-in returns to shows pi's logo, and xAI's sign-in sends `referrer: pig`.
 
 ## Modes and tools
 
@@ -160,7 +177,6 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - PiG's built-in providers still use ambient credentials: API keys in the environment, Google application-default credentials and the AWS profile and credential chain.
 - Importing PiG changes the TLS settings of Go's process-wide default HTTP transport.
 - `agent/models.json` is trusted configuration: PiG reads it, and its `apiKey` can run a shell command.
-- Provider requests identify as PiG, not Kopi.
 
 ## Development
 
@@ -172,11 +188,11 @@ task fmt
 
 Tests are mock-backed (PiG's faux provider and a local HTTP mock server); none use a live provider.
 
-Manual live check: `kopi login openai-codex`, run with a model, ask it to read a file, then try `/execute`, `/plan`, Ctrl+C and `--continue`; then `kopi -p` with an argument and with piped input.
+Manual live check: `kopi login openai-codex`, run with a model, ask it to read a file, then try `/execute`, `/plan`, Ctrl+C and `--continue`; then `kopi -p` with an argument and with piped input. For sign-in, with a scratch `KOPI_HOME`: `kopi login` lists `openai` and `openai-codex`; `kopi login openai-codex` opens the browser with `originator=kopi` in the URL; `kopi login openai` has `agent_name_hint=Kopi` and `ext_agent_host_id=urn:uuid:<installation_id>` in the URL and OpenAI's consent screen names Kopi; `kopi logout openai-codex`, then a run suggests `kopi login`.
 
 ## Not implemented
 
-Project-level config and trust, loading project instruction files, a sandboxed shell, saved approvals, a `/permissions` command, approval classification, delegation and workflows, background jobs, MCP, a Kopi provider identity, release packaging and self-update, and login for providers that need an installation device ID (`openai`).
+Project-level config and trust, loading project instruction files, a sandboxed shell, saved approvals, a `/permissions` command, approval classification, delegation and workflows, background jobs, MCP, and release packaging and self-update.
 
 Recalled history and re-edited queued messages show their full text rather than paste blocks.
 

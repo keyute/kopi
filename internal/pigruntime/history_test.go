@@ -167,6 +167,23 @@ func TestHistoryEndsFailedAndInterruptedTurns(t *testing.T) {
 		}, resume(t, r, sess.ID()).History())
 	})
 
+	t.Run("failed with PiG's text", func(t *testing.T) {
+		sb := newSandbox(t)
+		r, faux := newTestRuntime(t, sb)
+		faux.SetResponses([]ai.FauxResponseStep{
+			ai.FauxAssistantMessage(ai.FauxContentString(""), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonError), ErrorMessage: "not logged in (run `pig login github-copilot`)"}),
+		})
+		sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, Authority: policy.NewAuthority()})
+		require.NoError(t, err)
+		res, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil)
+		require.NoError(t, err)
+		require.NoError(t, sess.Close(t.Context()))
+
+		want := event.Outcome{Status: event.Failed, Message: "not logged in (run `kopi login github-copilot`)"}
+		assert.Equal(t, want, res.Outcome)
+		assert.Equal(t, []event.Event{event.TurnStart{Prompt: "go"}, event.TurnEnd{Outcome: want}}, resume(t, r, sess.ID()).History())
+	})
+
 	t.Run("interrupted during a tool", func(t *testing.T) {
 		sb := newSandbox(t)
 		r, faux := newTestRuntime(t, sb)
