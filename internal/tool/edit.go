@@ -62,7 +62,17 @@ func NewEdit(ws *Workspace) Tool {
 			return edit(ctx, ws, args, admit)
 		},
 		Display: Display{
-			Title: pathTitle("Edit"),
+			Title: func(raw json.RawMessage) string {
+				var args struct {
+					ReplaceAll bool `json:"replace_all"`
+				}
+				_ = json.Unmarshal(raw, &args)
+				title := pathTitle("Edit")(raw)
+				if args.ReplaceAll {
+					title += " (replace all)"
+				}
+				return title
+			},
 			// Relies on edit's output shape: "replaced N occurrences in P".
 			Summary: func(output string) string {
 				n, _, _ := strings.Cut(strings.TrimPrefix(output, "replaced "), " in ")

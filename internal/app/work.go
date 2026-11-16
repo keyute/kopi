@@ -18,8 +18,9 @@ type Work struct {
 
 	// The fields below are guarded by Controller.queue.
 
-	// cancel stops the running send only.
-	cancel context.CancelFunc
+	// sendCtx and cancel belong to the running send, not the whole Work.
+	sendCtx context.Context
+	cancel  context.CancelFunc
 	// stopped is set by Interrupt, a session switch or Close; queued input is
 	// then no longer handed to this Work, and input given afterwards starts the
 	// next turn.

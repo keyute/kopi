@@ -16,8 +16,12 @@ type pendingApproval struct {
 	work  *Work
 	ctx   context.Context
 	emit  func(event.Event)
+	// PiG forwards send cancellation asynchronously; retain the originating
+	// send even when the Work continues with a new context.
+	sendCtx context.Context
 	// answer has room for the one answer, so Answer never blocks.
-	answer chan policy.Answer
+	answer  chan policy.Answer
+	claimed bool // guarded by Controller.mu; cancellation must wait for a claimed answer
 }
 
 // approver returns the Approver for a session displayed by d; nil when no
@@ -28,29 +32,43 @@ func (c *Controller) approver(d *display) policy.Approver {
 	}
 	return func(ctx context.Context, r policy.Request) (policy.Answer, error) {
 		p := &pendingApproval{answer: make(chan policy.Answer, 1)}
+		c.queue.Lock()
 		c.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			c.mu.Unlock()
+			c.queue.Unlock()
+			return policy.Reject, err
+		}
+		if c.turn == nil || c.turn.stopped || c.turn.sendCtx.Err() != nil {
+			c.mu.Unlock()
+			c.queue.Unlock()
+			return policy.Reject, context.Canceled
+		}
 		c.approvalSeq++
 		p.token = c.approvalSeq
 		// The approver runs only during a send on the current session.
-		p.work, p.ctx, p.emit = c.turn, ctx, c.emit
+		p.work, p.ctx, p.sendCtx, p.emit = c.turn, ctx, c.turn.sendCtx, c.emit
 		c.approval = p
 		emit := p.emit
 		c.mu.Unlock()
 		req := d.approval(r)
 		req.Token = p.token
 		emit(req)
+		c.queue.Unlock()
 		defer emit(event.ApprovalEnded{Token: p.token})
 		select {
 		case a := <-p.answer:
 			return a, nil
 		case <-ctx.Done():
+			c.queue.Lock()
 			c.mu.Lock()
-			unanswered := c.approval == p
-			if unanswered {
+			claimed := p.claimed
+			if c.approval == p {
 				c.approval = nil
 			}
 			c.mu.Unlock()
-			if unanswered {
+			c.queue.Unlock()
+			if !claimed {
 				return policy.Reject, ctx.Err()
 			}
 			// Answer claimed the slot first and its answer is on the way; a
@@ -74,6 +92,13 @@ func (c *Controller) Answer(token uint64, a policy.Answer) bool {
 		c.queue.Unlock()
 		return false
 	}
+	if p.work.stopped || p.sendCtx.Err() != nil || p.ctx.Err() != nil {
+		c.approval = nil
+		c.mu.Unlock()
+		c.queue.Unlock()
+		return false
+	}
+	p.claimed = true
 	c.approval = nil
 	c.mu.Unlock()
 	if a == policy.Reject {

@@ -336,6 +336,11 @@ func (c *Controller) Interrupt() bool {
 func (c *Controller) stop(w *Work, emit func(event.Event)) {
 	w.handBack = append(w.handBack, c.take(emit)...)
 	w.stopped = true
+	c.mu.Lock()
+	if c.approval != nil && c.approval.work == w {
+		c.approval = nil
+	}
+	c.mu.Unlock()
 	w.cancel()
 }
 
@@ -444,7 +449,7 @@ func (c *Controller) startTurn(ctx context.Context, parts []pigruntime.Prompt) *
 	base := context.WithoutCancel(ctx)
 	sendCtx, cancel := context.WithCancel(base)
 	c.turnSeq++
-	w := &Work{id: fmt.Sprintf("turn-%d", c.turnSeq), cancel: cancel, done: make(chan struct{})}
+	w := &Work{id: fmt.Sprintf("turn-%d", c.turnSeq), sendCtx: sendCtx, cancel: cancel, done: make(chan struct{})}
 	c.turn = w
 	c.mu.Unlock()
 
@@ -477,6 +482,7 @@ func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session
 		}
 		if len(next) > 0 {
 			ctx, w.cancel = context.WithCancel(base)
+			w.sendCtx = ctx
 			parts = next
 			emit(event.TurnEnd{WorkID: w.id, Outcome: res.Outcome, Elapsed: elapsed})
 			emit(event.TurnStart{WorkID: w.id, Prompt: joined(parts).Text})

@@ -51,6 +51,27 @@ func TestEditDescribesItself(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestEditDisplayTitle(t *testing.T) {
+	tool, _ := newEditTool(t)
+
+	for _, tc := range []struct {
+		name, args, want string
+	}{
+		{"omitted", `{}`, "Edit"},
+		{"false", `{"replace_all":false}`, "Edit"},
+		{"true", `{"replace_all":true}`, "Edit (replace all)"},
+		{"path omitted", `{"file_path":"a.txt"}`, "Edit a.txt"},
+		{"path false", `{"file_path":"a.txt","replace_all":false}`, "Edit a.txt"},
+		{"path true", `{"file_path":"a.txt","replace_all":true}`, "Edit a.txt (replace all)"},
+		{"wrong type", `{"file_path":"a.txt","replace_all":"yes"}`, "Edit a.txt"},
+		{"invalid json", `{"file_path":`, "Edit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tool.Display.Title(json.RawMessage(tc.args)))
+		})
+	}
+}
+
 func TestEditReplacesSingleMatch(t *testing.T) {
 	tool, dir := newEditTool(t)
 	writeFile(t, filepath.Join(dir, "a.txt"), "alpha\nbeta\ngamma\n")

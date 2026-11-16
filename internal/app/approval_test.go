@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
@@ -133,7 +135,7 @@ func TestApprovalClaimedAnswerSurvivesCancellation(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		rec := &recorder{}
-		c := &Controller{turn: &Work{cancel: cancel}, emit: rec.add}
+		c := &Controller{turn: &Work{sendCtx: ctx, cancel: cancel}, emit: rec.add}
 		approve := c.approver(newDisplay(nil))
 		done := make(chan struct{})
 		var answer policy.Answer
@@ -146,11 +148,14 @@ func TestApprovalClaimedAnswerSurvivesCancellation(t *testing.T) {
 		synctest.Wait()
 		requests := ofType[event.ApprovalRequested](rec.all())
 		require.Len(t, requests, 1)
+		c.queue.Lock()
 		c.mu.Lock()
 		p := c.approval
+		require.NotNil(t, p)
+		p.claimed = true
 		c.approval = nil
 		c.mu.Unlock()
-		require.NotNil(t, p)
+		c.queue.Unlock()
 		// Hold delivery after Answer claims the slot, forcing cancellation to
 		// reach the approver before the buffered answer is available.
 		defer close(p.answer)
@@ -169,6 +174,196 @@ func TestApprovalClaimedAnswerSurvivesCancellation(t *testing.T) {
 		require.Equal(t, policy.Reject, answer)
 		assert.Equal(t, []event.ApprovalEnded{{Token: requests[0].Token}}, ofType[event.ApprovalEnded](rec.all()))
 	})
+}
+
+func TestApprovalCancellationBeforeAnswer(t *testing.T) {
+	for _, interrupt := range []bool{false, true} {
+		for _, a := range []policy.Answer{policy.Allow, policy.AllowEdits, policy.Reject} {
+			t.Run(fmt.Sprintf("interrupt=%t/answer=%d", interrupt, a), func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					ctx, cancel := context.WithCancel(t.Context())
+					defer cancel()
+					rec := &recorder{}
+					c := &Controller{turn: &Work{sendCtx: ctx, cancel: cancel}, emit: rec.add}
+					done := make(chan struct{})
+					go func() {
+						answer, err := c.approver(newDisplay(nil))(ctx, policy.Request{Tool: "Edit"})
+						assert.Equal(t, policy.Reject, answer)
+						assert.ErrorIs(t, err, context.Canceled)
+						close(done)
+					}()
+					synctest.Wait()
+					requests := ofType[event.ApprovalRequested](rec.all())
+					require.Len(t, requests, 1)
+					if interrupt {
+						require.True(t, c.Interrupt())
+					} else {
+						cancel()
+					}
+					// Do not yield to the approver's cancellation cleanup before answering.
+					assert.False(t, c.Answer(requests[0].Token, a))
+					synctest.Wait()
+					<-done
+					assert.Equal(t, []event.ApprovalEnded{{Token: requests[0].Token}}, ofType[event.ApprovalEnded](rec.all()))
+				})
+			})
+		}
+	}
+}
+
+func TestApprovalRegistrationAfterCancellation(t *testing.T) {
+	for _, stopped := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stopped=%t", stopped), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			rec := &recorder{}
+			c := &Controller{turn: &Work{sendCtx: ctx, cancel: func() {}}, emit: rec.add}
+			if stopped {
+				require.True(t, c.Interrupt())
+			} else {
+				cancel()
+			}
+			answer, err := c.approver(newDisplay(nil))(ctx, policy.Request{Tool: "Edit"})
+			assert.Equal(t, policy.Reject, answer)
+			assert.ErrorIs(t, err, context.Canceled)
+			assert.Empty(t, rec.all())
+			assert.Nil(t, c.approval)
+		})
+	}
+}
+
+func TestApprovalAnswerBeforeCancellation(t *testing.T) {
+	for _, a := range []policy.Answer{policy.Allow, policy.AllowEdits, policy.Reject} {
+		t.Run(fmt.Sprintf("answer=%d", a), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				rec := &recorder{}
+				c := &Controller{turn: &Work{sendCtx: ctx, cancel: cancel}, emit: rec.add}
+				done := make(chan struct{})
+				go func() {
+					answer, err := c.approver(newDisplay(nil))(ctx, policy.Request{Tool: "Edit"})
+					assert.Equal(t, a, answer)
+					assert.NoError(t, err)
+					close(done)
+				}()
+				synctest.Wait()
+				requests := ofType[event.ApprovalRequested](rec.all())
+				require.Len(t, requests, 1)
+				require.True(t, c.Answer(requests[0].Token, a))
+				cancel()
+				synctest.Wait()
+				<-done
+			})
+		})
+	}
+}
+
+func TestApprovalSendCancellationBeforeForwarding(t *testing.T) {
+	for _, sendNow := range []bool{false, true} {
+		for _, registerLate := range []bool{false, true} {
+			t.Run(fmt.Sprintf("sendNow=%t/registerLate=%t", sendNow, registerLate), func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					parentCtx, cancelParent := context.WithCancel(t.Context())
+					defer cancelParent()
+					sendCtx, cancelSend := context.WithCancel(parentCtx)
+					defer cancelSend()
+					approvalCtx, cancelApproval := context.WithCancel(t.Context())
+					defer cancelApproval()
+					rec := &recorder{}
+					w := &Work{sendCtx: sendCtx, cancel: cancelSend}
+					c := &Controller{sess: &pigruntime.Session{}, turn: w, emit: rec.add}
+					approve := c.approver(newDisplay(nil))
+					cancel := func() {
+						if sendNow {
+							require.NoError(t, c.SendNow(t.Context(), "continue"))
+							assert.False(t, w.stopped)
+							assert.Equal(t, w, c.turn)
+						} else {
+							cancelParent()
+						}
+						require.ErrorIs(t, sendCtx.Err(), context.Canceled)
+						require.NoError(t, approvalCtx.Err(), "PiG has not forwarded cancellation")
+					}
+					if registerLate {
+						cancel()
+						answer, err := approve(approvalCtx, policy.Request{Tool: "Edit"})
+						assert.Equal(t, policy.Reject, answer)
+						assert.ErrorIs(t, err, context.Canceled)
+						assert.Empty(t, ofType[event.ApprovalRequested](rec.all()))
+						assert.Nil(t, c.approval)
+						return
+					}
+					done := make(chan struct{})
+					go func() {
+						answer, err := approve(approvalCtx, policy.Request{Tool: "Edit"})
+						assert.Equal(t, policy.Reject, answer)
+						assert.ErrorIs(t, err, context.Canceled)
+						close(done)
+					}()
+					synctest.Wait()
+					requests := ofType[event.ApprovalRequested](rec.all())
+					require.Len(t, requests, 1)
+					cancel()
+					assert.False(t, c.Answer(requests[0].Token, policy.AllowEdits))
+					assert.False(t, c.Answer(requests[0].Token, policy.Allow))
+					assert.False(t, c.Answer(requests[0].Token, policy.Reject))
+					cancelApproval()
+					synctest.Wait()
+					<-done
+				})
+			})
+		}
+	}
+}
+
+func TestApprovalSendNowStillAsksOnFollowingSend(t *testing.T) {
+	h, sb := editHarness(t, Config{})
+	approvals := subscribeTo[event.ApprovalRequested](h.c)
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(editCall("call-1", "a.txt")),
+		pigruntimetest.ToolCalls(editCall("call-2", "b.txt")),
+		pigruntimetest.Text("done"),
+	})
+	w, err := h.c.Submit(t.Context(), "edit a.txt")
+	require.NoError(t, err)
+	first := receiveEvent(t, approvals)
+	require.NoError(t, h.c.SendNow(t.Context(), "edit b.txt instead"))
+	assert.False(t, h.c.Answer(first.Token, policy.AllowEdits))
+	second := receiveEvent(t, approvals)
+	assert.Equal(t, "call-2", second.CallID)
+	assert.Greater(t, second.Token, first.Token)
+	require.True(t, h.c.Answer(second.Token, policy.Allow))
+	wait(t, w.Done())
+	assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
+	assert.Equal(t, "alpha\n", fileText(t, sb, "a.txt"))
+	assert.Equal(t, "beta\n", fileText(t, sb, "b.txt"))
+	starts := ofType[event.TurnStart](h.rec.all())
+	require.Len(t, starts, 2)
+	assert.Equal(t, w.ID(), starts[0].WorkID)
+	assert.Equal(t, w.ID(), starts[1].WorkID)
+}
+
+func TestApprovalCancelledAllowEditsDoesNotSkipNextTurn(t *testing.T) {
+	h, sb := editHarness(t, Config{})
+	approvals := subscribeTo[event.ApprovalRequested](h.c)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(editCall("call-1", "a.txt"))})
+	w, err := h.c.Submit(t.Context(), "edit a.txt")
+	require.NoError(t, err)
+	first := receiveEvent(t, approvals)
+	require.True(t, h.c.Interrupt())
+	assert.False(t, h.c.Answer(first.Token, policy.AllowEdits))
+	wait(t, w.Done())
+	assert.Equal(t, "alpha\n", fileText(t, sb, "a.txt"))
+
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(editCall("call-2", "b.txt")), pigruntimetest.Text("done")})
+	w, err = h.c.Submit(t.Context(), "edit b.txt")
+	require.NoError(t, err)
+	second := receiveEvent(t, approvals)
+	assert.Equal(t, "call-2", second.CallID)
+	require.True(t, h.c.Answer(second.Token, policy.Allow))
+	wait(t, w.Done())
+	assert.Equal(t, "beta\n", fileText(t, sb, "b.txt"))
 }
 
 func TestApprovalCancelledByInterruptEnds(t *testing.T) {
