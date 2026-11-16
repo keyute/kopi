@@ -9,6 +9,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/go-viper/mapstructure/v2"
@@ -35,6 +36,7 @@ type Config struct {
 	Keys        map[string][]string `koanf:"keys"`
 	StatusLine  StatusLine          `koanf:"statusline"`
 	Permissions Permissions         `koanf:"permissions"`
+	Sandbox     Sandbox             `koanf:"sandbox"`
 }
 
 // Permissions holds rule strings checked only for syntax here; a later layer's
@@ -43,6 +45,13 @@ type Permissions struct {
 	Allow []string `koanf:"allow"`
 	Ask   []string `koanf:"ask"`
 	Deny  []string `koanf:"deny"`
+}
+
+type Sandbox struct {
+	Enabled    *bool    `koanf:"enabled"` // nil: use the sandbox when it is available
+	AllowWrite []string `koanf:"allowWrite"`
+	DenyRead   []string `koanf:"denyRead"`
+	Network    bool     `koanf:"network"`
 }
 
 type Layer struct {
@@ -56,6 +65,7 @@ func Defaults() Layer {
 	values["version"] = Version
 	values["mode"] = policy.Plan.String()
 	values["permissions"] = map[string]any{"allow": []string{}, "ask": []string{}, "deny": []string{}}
+	values["sandbox"] = map[string]any{"allowWrite": []string{}, "denyRead": []string{}, "network": false}
 	return Map("default", values)
 }
 
@@ -115,6 +125,9 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 		if err := validatePermissions(c.Permissions); err != nil {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
+		if err := validateSandbox(c.Sandbox); err != nil {
+			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
+		}
 		for _, key := range k.Keys() {
 			origins[key] = l.Name
 		}
@@ -160,7 +173,8 @@ func decode(k *koanf.Koanf, c *Config) error {
 
 // rejectWrongShape exists because mapstructure reports a scalar where a list or
 // object belongs as an untyped error, which decode would misfile as an unknown
-// key. DecodeNil routes JSON null here too, so null cannot wipe a block.
+// key. DecodeNil routes JSON null here too, so null cannot wipe a block or
+// reset an optional value to unset.
 func rejectWrongShape(from, to reflect.Type, data any) (any, error) {
 	v := reflect.ValueOf(data)
 	switch to.Kind() {
@@ -171,6 +185,10 @@ func rejectWrongShape(from, to reflect.Type, data any) (any, error) {
 	case reflect.Map, reflect.Struct:
 		if from.Kind() != reflect.Map || v.IsNil() {
 			return nil, fmt.Errorf("%w: %v is not an object", ErrInvalidValue, data)
+		}
+	case reflect.Pointer:
+		if from.Kind() == reflect.Pointer && v.IsNil() {
+			return nil, fmt.Errorf("%w: null is not a value", ErrInvalidValue)
 		}
 	}
 	return data, nil
@@ -199,6 +217,20 @@ func validatePermissions(p Permissions) error {
 	return nil
 }
 
+func validateSandbox(s Sandbox) error {
+	for _, list := range []struct {
+		key   string
+		paths []string
+	}{{"allowWrite", s.AllowWrite}, {"denyRead", s.DenyRead}} {
+		for i, p := range list.paths {
+			if p == "" {
+				return fmt.Errorf("%w: sandbox.%s[%d]: empty path", ErrInvalidValue, list.key, i)
+			}
+		}
+	}
+	return nil
+}
+
 func originOf(origins map[string]string, key string) string {
 	if o, ok := origins[key]; ok {
 		return o
@@ -213,14 +245,18 @@ type Entry struct{ Key, Value, Origin string }
 func (r *Resolved) Entries() []Entry {
 	c := r.Config
 	values := map[string]any{
-		"model":             c.Model,
-		"mode":              c.Mode,
-		"version":           c.Version,
-		"statusline.left":   c.StatusLine.Left,
-		"statusline.right":  c.StatusLine.Right,
-		"permissions.allow": c.Permissions.Allow,
-		"permissions.ask":   c.Permissions.Ask,
-		"permissions.deny":  c.Permissions.Deny,
+		"model":              c.Model,
+		"mode":               c.Mode,
+		"version":            c.Version,
+		"statusline.left":    c.StatusLine.Left,
+		"statusline.right":   c.StatusLine.Right,
+		"permissions.allow":  c.Permissions.Allow,
+		"permissions.ask":    c.Permissions.Ask,
+		"permissions.deny":   c.Permissions.Deny,
+		"sandbox.enabled":    c.Sandbox.Enabled,
+		"sandbox.allowWrite": c.Sandbox.AllowWrite,
+		"sandbox.denyRead":   c.Sandbox.DenyRead,
+		"sandbox.network":    c.Sandbox.Network,
 	}
 	for _, action := range KeyActions {
 		values["keys."+action] = c.Keys[action]
@@ -241,6 +277,9 @@ func formatValue(v any) string {
 	if list, ok := v.([]string); ok {
 		b, _ := encjson.Marshal(list) // a []string always marshals
 		return string(b)
+	}
+	if b, ok := v.(*bool); ok {
+		return strconv.FormatBool(*b)
 	}
 	return fmt.Sprint(v)
 }

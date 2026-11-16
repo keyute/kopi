@@ -181,7 +181,7 @@ func TestRefusalTextReachesModel(t *testing.T) {
 		{
 			name: "denied by rule",
 			opts: func(t *testing.T) OpenOptions {
-				rules, err := policy.NewRules(t.TempDir(), t.TempDir(), []string{"Exec"}, policy.Source{Name: "config", Deny: []string{"Exec"}})
+				rules, err := policy.NewRules(t.TempDir(), t.TempDir(), map[string]policy.ToolSpec{"Exec": {}}, policy.Source{Name: "config", Deny: []string{"Exec"}})
 				require.NoError(t, err)
 				return OpenOptions{Rules: rules, Approve: allowAll}
 			},
@@ -284,7 +284,7 @@ func TestInterruptTurnRejectsBeforeCancellationForwarding(t *testing.T) {
 	reject := make(chan struct{})
 	authority := policy.NewAuthority()
 	authority.EnterExecute()
-	rules, err := policy.NewRules(sb.ws, sb.kopiHome, []string{"Exec", "Probe"}, policy.Source{Name: "test", Allow: []string{"Probe"}})
+	rules, err := policy.NewRules(sb.ws, sb.kopiHome, map[string]policy.ToolSpec{"Exec": {}, "Probe": {}}, policy.Source{Name: "test", Allow: []string{"Probe"}})
 	require.NoError(t, err)
 	sess, err := r.Open(t.Context(), OpenOptions{
 		Model: fauxModel, Authority: authority, Rules: rules,
@@ -383,12 +383,13 @@ func TestRealToolsRejectApprovalRetarget(t *testing.T) {
 				}
 				raw, err := json.Marshal(args)
 				require.NoError(t, err)
-				rules, err := policy.NewRules(dir, t.TempDir(), []string{name}, policy.Source{Name: "test", Ask: []string{name}, Deny: []string{name + "(denied/**)"}})
+				specs := map[string]policy.ToolSpec{name: {Capability: realTool.Capability, Target: realTool.Target}}
+				rules, err := policy.NewRules(dir, t.TempDir(), specs, policy.Source{Name: "test", Ask: []string{name}, Deny: []string{name + "(denied/**)"}})
 				require.NoError(t, err)
 				authority := policy.NewAuthority()
 				authority.EnterExecute()
 				waiting, answer := make(chan struct{}), make(chan struct{})
-				gate := policy.NewGate(authority, map[string]policy.ToolSpec{name: {Capability: realTool.Capability, Target: realTool.Target}}, rules,
+				gate := policy.NewGate(authority, specs, rules,
 					func(context.Context, policy.Request) (policy.Decision, error) {
 						close(waiting)
 						<-answer

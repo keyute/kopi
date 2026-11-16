@@ -96,9 +96,10 @@ func balanced(s string) bool {
 	return depth == 0
 }
 
-// NewRules parses every source's rules; a rule name must be * or one of tools.
-// Workspace and home must be absolute.
-func NewRules(workspace, home string, tools []string, sources ...Source) (*Rules, error) {
+// NewRules parses every source's rules; a rule name must be * or one of tools,
+// and a rule with a path must name * or a tool that acts on a path. Workspace
+// and home must be absolute.
+func NewRules(workspace, home string, tools map[string]ToolSpec, sources ...Source) (*Rules, error) {
 	for _, d := range []struct{ name, dir string }{{"workspace", workspace}, {"home", home}} {
 		if _, err := filepath.EvalSymlinks(d.dir); err != nil {
 			return nil, fmt.Errorf("failed to resolve %s: %w", d.name, err)
@@ -117,8 +118,14 @@ func NewRules(workspace, home string, tools []string, sources ...Source) (*Rules
 				if err != nil {
 					return nil, fmt.Errorf("%s: %w", src.Name, err)
 				}
-				if name != "*" && !slices.Contains(tools, name) {
-					return nil, fmt.Errorf("%s: rule %q: unknown tool %q: %w", src.Name, text, name, ErrInvalidRule)
+				if name != "*" {
+					ts, ok := tools[name]
+					if !ok {
+						return nil, fmt.Errorf("%s: rule %q: unknown tool %q: %w", src.Name, text, name, ErrInvalidRule)
+					}
+					if ts.Target == nil && spec != "" {
+						return nil, fmt.Errorf("%s: rule %q: tool %q takes no path: %w", src.Name, text, name, ErrInvalidRule)
+					}
 				}
 				ru := rule{text: text, name: name, except: except}
 				if spec != "" {
@@ -164,10 +171,10 @@ func expand(spec, ws, home string) string {
 // here; one created or changed later is not seen.
 func forms(pat string) []string {
 	dir, tail := splitLiteral(pat)
-	resolved := filepath.ToSlash(resolve(filepath.FromSlash(dir)))
+	resolved := filepath.ToSlash(Resolve(filepath.FromSlash(dir)))
 	realPattern := path.Join(escape(resolved), tail)
 	cleanDir := path.Clean(dir)
-	if filepath.ToSlash(resolve(filepath.FromSlash(cleanDir))) != resolved {
+	if filepath.ToSlash(Resolve(filepath.FromSlash(cleanDir))) != resolved {
 		return []string{realPattern}
 	}
 	lexical := path.Clean(pat)
@@ -205,9 +212,9 @@ func splitLiteral(pat string) (dir, tail string) {
 	return lit.String(), ""
 }
 
-// resolve resolves the symlinks of p's deepest ancestor that can be resolved
-// and appends the rest of p unchanged.
-func resolve(p string) string {
+// Resolve resolves the symlinks of p's deepest ancestor that can be resolved
+// and appends the rest of p unchanged, so p need not exist.
+func Resolve(p string) string {
 	var rest []string
 	for {
 		for len(p) > len(filepath.VolumeName(p))+1 && os.IsPathSeparator(p[len(p)-1]) {

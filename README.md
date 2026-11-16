@@ -1,7 +1,7 @@
 # Kopi
 
 Kopi is a coding-agent CLI built on [PiG](https://github.com/MichaelKinsy/PiG).
-It is early: tools to read, write and edit files, a fullscreen terminal interface, and a print mode that answers one prompt.
+It is early: tools to read, write and edit files and to run commands, a fullscreen terminal interface, and a print mode that answers one prompt.
 
 ## Build and run
 
@@ -117,13 +117,38 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - Setting one action replaces that action's list and leaves the others at their defaults.
 - An unknown action or segment, an empty list or a blank key string is rejected at start; a key string that names no real key never matches.
 
+`sandbox` configures the OS sandbox `Bash` runs in (see Modes and tools):
+
+```json
+{
+  "version": 1,
+  "sandbox": {
+    "allowWrite": ["~/Library/Caches/go-build"],
+    "denyRead": ["~/.ssh"],
+    "network": false
+  }
+}
+```
+
+- `sandbox.enabled`: `true` refuses to start when the sandbox is unavailable; `false` runs `Bash` without it; unset uses it when available and otherwise logs a warning and runs `Bash` without it.
+- `sandbox.allowWrite` and `sandbox.denyRead` take plain paths, no globs: `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory, so `.env` means only `<start directory>/.env`, unlike in a rule.
+- A later layer's `sandbox.allowWrite` or `sandbox.denyRead` replaces an earlier one's whole.
+- `sandbox.network` (default `false`) allows IP networking in the sandbox.
+
 ## Modes and tools
 
 - Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab. Plan mode allows only `Read`.
 - Sessions start and resume in the configured `mode` (default plan), including ones opened with `/new` and `/resume`; `--mode` overrides the config file.
 - `Read` reads text files inside the start directory: up to 2000 lines, 2000 characters per line and 100 KiB per call; binary files and directories are refused.
 - `Write` creates a file or replaces its whole content; `Edit` replaces a string that must match exactly once unless `replace_all` is set, in a text file of up to 10 MiB. Both work inside the start directory, replace the file atomically and keep its mode.
-- All three refuse Kopi's home, including paths there that do not exist yet.
+- `Read`, `Write` and `Edit` refuse Kopi's home, including paths there that do not exist yet.
+- `Bash` runs a command with `bash -c` (`/bin/sh` when `bash` is not on `PATH`) in the start directory, with Kopi's environment. Every call is a fresh shell with no input; `cd` and variables do not carry over.
+- `Bash`'s `timeout` is in milliseconds, default 120000, at most 600000. On timeout or interrupt the command's whole process group is killed (on Windows, only the shell).
+- `Bash` returns stdout and stderr combined, keeping the first and last 15,000 bytes. A non-zero exit is an error reporting the exit code.
+- On macOS `Bash` runs inside an OS sandbox (`sandbox-exec`), configured with `sandbox` (see Configuration).
+- In the sandbox a command can write only in the start directory, `/tmp`, the temp directory and the `sandbox.allowWrite` paths, and never the files of the start directory's `.git` that choose git's config and hooks (`hooks`, `config`, `config.worktree`, `commondir`, `worktrees`, `modules`); when the start directory has no `.git`, a command cannot write `HEAD` in it.
+- In the sandbox a command can read everything except Kopi's home and the `sandbox.denyRead` paths, which it also cannot write, rename or remove.
+- In the sandbox a command has no network unless `sandbox.network` is true, which opens IP networking only; Unix sockets stay blocked.
 
 Permission rules in `config.json` allow, ask about or deny calls:
 
@@ -137,25 +162,39 @@ Permission rules in `config.json` allow, ask about or deny calls:
 }
 ```
 
-- A rule is `Name` or `Name(path)`. The name is a tool name (`Read`, `Write`, `Edit`) or `*` for every tool; an unknown name or a malformed rule is rejected at start.
+- A rule is `Name` or `Name(path)`. The name is a tool name (`Read`, `Write`, `Edit`, `Bash`) or `*` for every tool; an unknown name or a malformed rule is rejected at start.
 - `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory. `*` and `**` glob. A name with no slash (`.env`) matches at any depth, and a directory covers everything in it. Paths match case-insensitively on macOS and Windows.
 - `Name(!path)` exempts the calls it matches from the other rules in its own list, from the same config layer or flag; it never reaches rules from anywhere else.
 - A bare `Name` in `deny` removes the tool from the model.
-- Deny beats ask, and ask beats allow. With no rule matching, `Read` is allowed and any other call asks.
+- `Bash` takes no path: only a bare `Bash` or `*` rule applies to it, `Bash(path)` is rejected at start, and path rules such as `*(~/.ssh)` never apply to `Bash`. `"ask": ["Bash"]` makes every command ask.
+- Deny beats ask, and ask beats allow. With no rule matching, `Read` and sandboxed `Bash` are allowed and any other call asks, including every `Bash` command without the sandbox.
 - Built in: `Edit` and `Write` under any `.git` directory always ask.
 - `--allowed-tools` and `--disallowed-tools` add allow and deny rules to the config's; each is repeatable and takes comma-separated rules (commas inside `()` or `{}` do not split).
 - A rule's path counts as a match on either the path as written or its resolved target when it denies, asks or exempts from an allow, and only on both when it allows or exempts from a deny or ask.
 
-The fullscreen interface asks before a call that needs approval, showing the change: `Yes`, `Yes, allow all edits this session` (for `Write` and `Edit` when no rule asked), or `No`, which takes an optional reason typed on its row. While it waits, the working row reads `Waiting for you…`. `No` with a reason refuses the call, gives the model the reason and lets the turn go on; a blank `No` stops the turn. The `menu-up` and `menu-down` keys choose and `submit` answers; a digit answers with that option, or moves to `No` to type the reason; `interrupt` answers `No` without a reason. In the reason, `newline` starts a line, `paste` and terminal paste insert text, and digits are text. Allowing all edits never overrides a deny or ask rule and lasts until the session ends. Print mode cannot ask, so it denies those calls, and the refusal says to add an allow rule.
+The fullscreen interface asks before a call that needs approval, showing the change or the command, and for `Bash` without the sandbox that it runs without the OS sandbox: `Yes`, `Yes, allow all edits this session` (for `Write` and `Edit` when no rule asked), or `No`, which takes an optional reason typed on its row. While it waits, the working row reads `Waiting for you…`. `No` with a reason refuses the call, gives the model the reason and lets the turn go on; a blank `No` stops the turn. The `menu-up` and `menu-down` keys choose and `submit` answers; a digit answers with that option, or moves to `No` to type the reason; `interrupt` answers `No` without a reason. In the reason, `newline` starts a line, `paste` and terminal paste insert text, and digits are text. Allowing all edits never overrides a deny or ask rule, never covers `Bash`, and lasts until the session ends. Print mode cannot ask, so it denies those calls, and the refusal says to add an allow rule, such as `--allowed-tools Bash`.
 
 ## Limitations
 
-- Kopi is not an OS sandbox, and permission rules are not an OS boundary: they match the path a call names.
-- Symlinks in rule paths, the start directory and the home directory are resolved once, at start.
+- Permission rules are not an OS boundary: they match the path a call names. Only `Bash` runs under the OS sandbox.
+- The sandbox exists only on macOS; elsewhere it is unavailable.
+- The sandbox is unavailable when Kopi itself runs inside a Seatbelt sandbox, because profiles do not nest; for the same reason tools that apply their own sandbox (`swift build`, `xcodebuild` packages) fail inside it.
+- Sandboxed commands inherit Kopi's environment, including provider API keys, and can read any file outside Kopi's home and `sandbox.denyRead`.
+- With `sandbox.network` true, commands reach the network without asking.
+- Tools that write outside the start directory and temp directories, such as Go's build cache and package-manager caches, fail in the sandbox until those paths are in `sandbox.allowWrite`.
+- In the sandbox, `git init` in the start directory, `git config` writes, `git worktree add`, commits in a linked worktree (its git directory is outside the start directory), commits inside a submodule and commit signing through an agent socket fail.
+- The sandbox does not protect the config and hooks of repositories nested inside the start directory, or of the start directory itself when it is a bare repository or a git directory.
+- Sandboxed commands can write anything else in the start directory, so starting Kopi in a directory holding files other programs run, such as the home directory, lets commands change them.
+- `ps`, `pgrep` and `top` do not work in the sandbox.
+- Unix sockets (ssh-agent, Docker) are unreachable from the sandbox, even with `sandbox.network` true.
+- A background process a command leaves running (`cmd &`) can outlive the call. A running command keeps running if Kopi is killed.
+- `sandbox-exec` is deprecated by Apple.
+- Kopi builds for macOS, Linux and Windows only.
+- Symlinks in rule paths, sandbox paths, the start directory and the home directory are resolved once, at start.
 - `Edit` detects identity or content changes at its pinned destination immediately before replacement and refuses detected conflicts. This is best-effort, not atomic compare-and-swap: reads can race and another writer can change the file between the check and rename. `Write` replaces unconditionally.
 - `Write` and `Edit` pin and check parent-directory handles before making changes, so replacing a parent name with a symlink cannot redirect those changes. Another process can still move a checked directory, including into Kopi's home; later changes follow its handle. Permission checks and these protections are not an OS boundary.
 - `Read` protection is by file identity, re-checked on every read: a hard link into Kopi's home or a credential copied elsewhere is readable, whether Kopi's home exists is observable, and if Kopi's home cannot be inspected all reads are refused.
-- Kopi refuses no credential locations outside its home; deny them with rules, such as `*(~/.ssh)`.
+- Kopi refuses no credential locations outside its home; deny them with rules, such as `*(~/.ssh)`, and to `Bash` with `sandbox.denyRead`.
 - `Read` detects binary files from their first 8 KiB and refuses absolute symlinks, even ones pointing inside the start directory.
 - PiG's built-in providers still use ambient credentials: API keys in the environment, Google application-default credentials and the AWS profile and credential chain.
 - Importing PiG changes the TLS settings of Go's process-wide default HTTP transport.
@@ -176,7 +215,7 @@ Manual live check: `kopi login openai-codex`, run with a model, ask it to read a
 
 ## Not implemented
 
-Project-level config and trust, loading project instruction files, a sandboxed shell, saved approvals, a `/permissions` command, approval classification, delegation and workflows, background jobs, MCP, a Kopi provider identity, release packaging and self-update, and login for providers that need an installation device ID (`openai`).
+Project-level config and trust, loading project instruction files, a Linux sandbox, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approval classification, delegation and workflows, background jobs, MCP, a Kopi provider identity, release packaging and self-update, and login for providers that need an installation device ID (`openai`).
 
 Recalled history and re-edited queued messages show their full text rather than paste blocks.
 
@@ -187,6 +226,8 @@ Kopi is opinionated and built around how I work, so I don't accept feature reque
 ## Credits
 
 Built on [PiG](https://github.com/MichaelKinsy/PiG) by Michael Kinsy (MIT). Other dependencies are listed in `go.mod`.
+
+The Seatbelt policy in `internal/sandbox/codex/` is adapted from [OpenAI Codex](https://github.com/openai/codex) (Apache-2.0); its `LICENSE` and `NOTICE` are in that directory.
 
 ## License
 
