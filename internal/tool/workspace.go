@@ -521,9 +521,11 @@ func walk(dir, path string, stop func(os.FileInfo) bool) (string, bool, error) {
 	sep := string(filepath.Separator)
 	dest := dir
 	parts := strings.Split(path, sep)
+	mustBeDir := false
 	for links := 0; len(parts) > 0; {
 		name := parts[0]
 		parts = parts[1:]
+		mustBeDir = name == "" || name == "." || name == ".."
 		switch name {
 		case "", ".":
 			continue
@@ -561,6 +563,17 @@ func walk(dir, path string, stop func(os.FileInfo) bool) (string, bool, error) {
 		}
 		if len(parts) > 0 && !info.IsDir() {
 			return "", false, fmt.Errorf("failed to resolve %s: %w", path, syscall.ENOTDIR)
+		}
+	}
+	// Terminal separators and dot components require a directory even when
+	// missing components were walked as parents that WriteFile could create.
+	if mustBeDir {
+		info, err := os.Stat(dest)
+		if errors.Is(err, fs.ErrNotExist) || err == nil && !info.IsDir() {
+			err = syscall.ENOTDIR
+		}
+		if err != nil {
+			return "", false, fmt.Errorf("failed to resolve %s: %w", path, err)
 		}
 	}
 	return dest, false, nil

@@ -82,17 +82,17 @@ func rootCmd() *cobra.Command {
 	return cmd
 }
 
-// splitRules splits each value on the commas outside parentheses and braces,
-// so a glob like Edit(src/{a,b}/**) stays one rule.
+// splitRules splits each value on commas outside parentheses, which enclose
+// path globs like Edit(src/{a,b}/**).
 func splitRules(values []string) []string {
 	var rules []string
 	for _, v := range values {
 		depth, start := 0, 0
 		for i, r := range v {
 			switch r {
-			case '(', '{':
+			case '(':
 				depth++
-			case ')', '}':
+			case ')':
 				depth--
 			case ',':
 				if depth == 0 {

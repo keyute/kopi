@@ -129,6 +129,31 @@ func TestWriteStopsWhenCancelled(t *testing.T) {
 	assert.Empty(t, listDir(t, dir))
 }
 
+func TestWriteRevokedBeforeRunLeavesWorkspaceUnchanged(t *testing.T) {
+	tool, dir := newWriteTool(t)
+	authority := policy.NewAuthority()
+	authority.EnterExecute()
+	gate := policy.NewGate(authority, map[string]policy.ToolSpec{
+		tool.Name: {Capability: tool.Capability, Target: tool.Target},
+	}, nil, func(context.Context, policy.Request) (policy.Answer, error) {
+		return policy.Allow, nil
+	})
+	args := json.RawMessage(`{"file_path":"missing/deep/file","content":"x"}`)
+	require.Empty(t, listDir(t, dir))
+	require.NoError(t, gate.Before(t.Context(), "call-1", tool.Name, args))
+	defer gate.Finish("call-1")
+	authority.EnterPlan()
+
+	admitted := false
+	_, err := tool.Run(t.Context(), args, func(target policy.Target) error {
+		admitted = true
+		return gate.Admit("call-1", tool.Name, args, &target)
+	})
+	assert.True(t, admitted, "Run must reach the admission callback")
+	assert.ErrorIs(t, err, policy.ErrRevoked)
+	assert.Empty(t, listDir(t, dir))
+}
+
 func TestWriteAndEditLongBasename(t *testing.T) {
 	dir := t.TempDir()
 	name := strings.Repeat("b", 240)

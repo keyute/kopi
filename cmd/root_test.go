@@ -133,9 +133,36 @@ func TestRootRejectsInvalidMode(t *testing.T) {
 }
 
 func TestSplitRules(t *testing.T) {
-	got := splitRules([]string{"Read, Edit(src/{a,b}/**)", "Write(x,y)", "*(.env*)"})
-
-	assert.Equal(t, []string{"Read", "Edit(src/{a,b}/**)", "Write(x,y)", "*(.env*)"}, got)
+	for _, tc := range []struct {
+		name   string
+		values []string
+		want   []string
+	}{
+		{
+			name:   "repeated values and embedded commas",
+			values: []string{"Read, Edit(src/{a,b}/**)", "Write(x,y)", "*(.env*)"},
+			want:   []string{"Read", "Edit(src/{a,b}/**)", "Write(x,y)", "*(.env*)"},
+		},
+		{
+			name:   "opening brace in character class",
+			values: []string{"Read(file[{]),Edit"},
+			want:   []string{"Read(file[{])", "Edit"},
+		},
+		{
+			name:   "closing brace in character class",
+			values: []string{"Read(file[}]),Edit"},
+			want:   []string{"Read(file[}])", "Edit"},
+		},
+		{
+			name:   "escaped braces",
+			values: []string{`Read(file\{),Edit`, `Read(file\}),Write`},
+			want:   []string{`Read(file\{)`, "Edit", `Read(file\})`, "Write"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, splitRules(tc.values))
+		})
+	}
 }
 
 func TestRootRejectsInvalidRuleInFlag(t *testing.T) {

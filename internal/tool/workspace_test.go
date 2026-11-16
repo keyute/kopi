@@ -2,6 +2,7 @@ package tool
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -644,6 +645,38 @@ func TestWorkspaceRejectsNonDirectoryTraversal(t *testing.T) {
 					assert.ErrorIs(t, ws.WriteFile(path, []byte("changed")), syscall.ENOTDIR)
 					assert.Equal(t, "unchanged", readContent(t, filepath.Join(dir, "victim")))
 					assert.Equal(t, before, listDir(t, dir))
+				})
+			}
+		}
+	}
+}
+
+func TestWorkspaceRejectsMissingTerminalDirectory(t *testing.T) {
+	for _, spelling := range []string{"new/", "new/.", "missing/new/", "missing/new/.", "new//.//", "new/child/.."} {
+		for _, absolute := range []bool{false, true} {
+			for _, symlink := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/absolute=%t/symlink=%t", spelling, absolute, symlink), func(t *testing.T) {
+					dir := t.TempDir()
+					ws := newWorkspace(t, dir, nil)
+					path := spelling
+					if absolute {
+						path = dir + "/" + path
+					}
+					if symlink {
+						require.NoError(t, os.Symlink(path, filepath.Join(dir, "link")))
+						path = "link"
+					}
+					before := listDir(t, dir)
+
+					_, err := ws.Target(path)
+					assert.ErrorIs(t, err, syscall.ENOTDIR)
+					assert.ErrorIs(t, ws.WriteFile(path, []byte("changed")), syscall.ENOTDIR)
+					assert.Equal(t, before, listDir(t, dir))
+					if symlink {
+						info, err := os.Lstat(filepath.Join(dir, "link"))
+						require.NoError(t, err)
+						assert.NotZero(t, info.Mode()&fs.ModeSymlink)
+					}
 				})
 			}
 		}
