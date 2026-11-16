@@ -119,7 +119,7 @@ func Snapshot(t testing.TB, roots ...string) map[string]FileStamp {
 // NewRuntime opens a runtime over the sandbox and closes it in cleanup.
 func NewRuntime(t testing.TB, sb Sandbox) *pigruntime.Runtime {
 	t.Helper()
-	r, err := pigruntime.New(t.Context(), pigruntime.Options{Home: sb.KopiHome, AgentDir: sb.AgentDir, CWD: sb.Workspace, Version: "v0.0.0-test"})
+	r, err := pigruntime.New(t.Context(), pigruntime.Options{Home: sb.KopiHome, AgentDir: sb.AgentDir, CWD: sb.Workspace})
 	require.NoError(t, err)
 	t.Cleanup(r.Close)
 	return r

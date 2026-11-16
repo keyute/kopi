@@ -128,11 +128,8 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - A credential in the environment works without a login; `kopi login` marks only stored credentials as logged in.
 - After an `anthropic` account sign-in Kopi notes that Anthropic bills third-party tools per token as extra usage, not from Claude plan limits.
 - Sign-in introduces the app as `Kopi` to OpenAI's Sign in with ChatGPT (`openai`), which also receives `installation_id`, and as `kopi` to other sign-ins that take a name.
-- Requests send `User-Agent: kopi/<version> (<os>; <arch>)`, add `originator: kopi` for Codex-API models, and carry no PiG attribution headers.
-- `anthropic` requests keep the `User-Agent` PiG sends for them: Claude Code's with an account sign-in, PiG's with an API key.
-- `github-copilot` requests keep GitHub Copilot Chat's `User-Agent`, which PiG's Copilot models set.
-- Provider and model `headers` in `agent/models.json` override Kopi's defaults, including `User-Agent` and `originator`.
-- Still PiG's: the page a browser sign-in returns to shows pi's logo, and xAI's sign-in sends `referrer: pig`.
+- Requests carry no PiG attribution headers.
+- Still PiG's: the page a browser sign-in returns to shows pi's logo, the `radius` sign-in URL names `pi-gateway` on `radius.pi.dev`, and xAI's sign-in sends `referrer: pig`.
 
 ## Modes and tools
 
@@ -177,6 +174,7 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - PiG's built-in providers still use ambient credentials: API keys in the environment, Google application-default credentials and the AWS profile and credential chain.
 - Importing PiG changes the TLS settings of Go's process-wide default HTTP transport.
 - `agent/models.json` is trusted configuration: PiG reads it, and its `apiKey` can run a shell command.
+- Provider requests identify as PiG, not Kopi.
 
 ## Development
 
@@ -192,7 +190,7 @@ Manual live check: `kopi login openai-codex`, run with a model, ask it to read a
 
 ## Not implemented
 
-Project-level config and trust, loading project instruction files, a sandboxed shell, saved approvals, a `/permissions` command, approval classification, delegation and workflows, background jobs, MCP, and release packaging and self-update.
+Project-level config and trust, loading project instruction files, a sandboxed shell, saved approvals, a `/permissions` command, approval classification, delegation and workflows, background jobs, MCP, a Kopi provider identity, and release packaging and self-update.
 
 Recalled history and re-edited queued messages show their full text rather than paste blocks.
 

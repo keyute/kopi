@@ -122,7 +122,7 @@ func snapshot(t *testing.T, roots ...string) map[string]fileStamp {
 
 func newTestRuntime(t *testing.T, sb sandbox) (*Runtime, *ai.FauxProviderHandle) {
 	t.Helper()
-	r, err := New(t.Context(), Options{Home: sb.kopiHome, AgentDir: sb.agentDir, CWD: sb.ws, Version: "v0.0.0-test"})
+	r, err := New(t.Context(), Options{Home: sb.kopiHome, AgentDir: sb.agentDir, CWD: sb.ws})
 	require.NoError(t, err)
 	t.Cleanup(r.Close)
 	r.openURL = func(string) error { return errors.New("tests open no browser") }
@@ -259,6 +259,12 @@ func TestSeamOpenStreamsFauxTurnWithZeroAmbient(t *testing.T) {
 	assert.Equal(t, before, snapshot(t, sb.home, sb.ws))
 }
 
+func writeAgentFile(t *testing.T, sb sandbox, name, content string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(sb.agentDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(sb.agentDir, name), []byte(content), 0o600))
+}
+
 func TestRuntimeOmitsPiGAttribution(t *testing.T) {
 	sb := newSandbox(t)
 	t.Setenv("PI_TELEMETRY", "1")
@@ -270,7 +276,7 @@ func TestRuntimeOmitsPiGAttribution(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	writeAgentFile(t, sb, "models.json", fmt.Sprintf(`{"providers":{"openrouter":{"baseUrl":%q,"api":"openai-completions","apiKey":"synthetic-key","models":[{"id":"attribution-test"}]}}}`, server.URL))
-	r, err := New(t.Context(), Options{Home: sb.kopiHome, AgentDir: sb.agentDir, CWD: sb.ws, Version: "v0.0.0-test"})
+	r, err := New(t.Context(), Options{Home: sb.kopiHome, AgentDir: sb.agentDir, CWD: sb.ws})
 	require.NoError(t, err)
 	t.Cleanup(r.Close)
 	sess, err := r.Open(t.Context(), OpenOptions{

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -292,8 +291,8 @@ func (e testEnv) writeMockModels(t *testing.T, baseURL string) {
 }
 
 type mockRequest struct {
-	path, authorization, userAgent string
-	body                           map[string]any
+	path, authorization string
+	body                map[string]any
 }
 
 // newMockProvider serves chat completions with respond and records each
@@ -306,7 +305,7 @@ func newMockProvider(t *testing.T, respond func(http.ResponseWriter)) *mockServe
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Errorf("failed to decode request: %v", err)
 		}
-		m.requests <- mockRequest{path: r.URL.Path, authorization: r.Header.Get("Authorization"), userAgent: r.Header.Get("User-Agent"), body: body}
+		m.requests <- mockRequest{path: r.URL.Path, authorization: r.Header.Get("Authorization"), body: body}
 		respond(w)
 	}))
 	t.Cleanup(m.Close)
@@ -376,7 +375,6 @@ func TestRootStreamsTurnFromMockServer(t *testing.T) {
 	req := server.next(t)
 	assert.Equal(t, "/v1/chat/completions", req.path)
 	assert.Equal(t, "Bearer "+syntheticKey, req.authorization)
-	assert.True(t, strings.HasPrefix(req.userAgent, "kopi/"), req.userAgent)
 	var tools []string
 	for _, tl := range req.body["tools"].([]any) {
 		tools = append(tools, tl.(map[string]any)["function"].(map[string]any)["name"].(string))
@@ -388,99 +386,6 @@ func TestRootStreamsTurnFromMockServer(t *testing.T) {
 	assert.Contains(t, first["content"], "You are Kopi, a coding agent working in")
 	assert.NotContains(t, stdout+stderr, syntheticKey)
 	assert.NoFileExists(t, filepath.Join(e.kopiHome, "history.jsonl"), "headless runs record no prompt history")
-}
-
-// A provider-level header in models.json beats Kopi's identity, whatever its
-// casing; a value that does not resolve fails the request as it would in PiG.
-func TestRootProviderHeaderOverridesIdentityCaseInsensitively(t *testing.T) {
-	t.Setenv("KOPI_UNSET_IDENTITY_TEST", "")
-	require.NoError(t, os.Unsetenv("KOPI_UNSET_IDENTITY_TEST"))
-	for _, tc := range []struct {
-		headers  string
-		resolves bool
-	}{
-		{`"user-agent":"provider-agent"`, true},
-		{`"uSeR-aGeNt":"provider-agent"`, true},
-		{`"user-agent":"$KOPI_UNSET_IDENTITY_TEST"`, false},
-		{`"user-agent":"!exit 73"`, false},
-		{`"User-Agent":"$KOPI_UNSET_IDENTITY_TEST","user-agent":"!exit 73"`, false},
-		{`"user-agent":"!exit 73","User-Agent":"$KOPI_UNSET_IDENTITY_TEST"`, false},
-	} {
-		t.Run(tc.headers, func(t *testing.T) {
-			e := newTestEnv(t)
-			server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
-			e.writeFile(t, filepath.Join(e.agentDir, "models.json"), fmt.Sprintf(`{"providers":{"kopi-mock":{"baseUrl":%q,"api":"openai-completions","apiKey":%q,"headers":{%s},"models":[{"id":"mock-1"}]}}}`, server.URL+"/v1", syntheticKey, tc.headers))
-			_, _, err := execute(t, "", "--model", mockModel, "-p", "hello")
-			if !tc.resolves {
-				require.ErrorContains(t, err, "Failed to resolve provider")
-				assert.Empty(t, server.requests)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, "provider-agent", server.next(t).userAgent)
-		})
-	}
-}
-
-func TestRootCodexProviderHeadersOverrideIdentityCaseInsensitively(t *testing.T) {
-	t.Setenv("KOPI_UNSET_IDENTITY_TEST", "")
-	require.NoError(t, os.Unsetenv("KOPI_UNSET_IDENTITY_TEST"))
-	for _, tc := range []struct {
-		headers  string
-		resolves bool
-		// agent and origin are expected without model headers; empty expects Kopi's own identity.
-		agent, origin string
-	}{
-		{headers: ``, resolves: true},
-		{headers: `"user-agent":"provider-agent","Originator":"provider-origin"`, resolves: true, agent: "provider-agent", origin: "provider-origin"},
-		{headers: `"user-agent":"$KOPI_UNSET_IDENTITY_TEST","Originator":"$KOPI_UNSET_IDENTITY_TEST"`},
-		{headers: `"user-agent":"!exit 73","Originator":"!exit 74"`},
-		{headers: `"User-Agent":"$KOPI_UNSET_IDENTITY_TEST","user-agent":"!exit 73","originator":"!exit 74","Originator":"$KOPI_UNSET_IDENTITY_TEST"`},
-		{headers: `"user-agent":"!exit 73","User-Agent":"$KOPI_UNSET_IDENTITY_TEST","Originator":"$KOPI_UNSET_IDENTITY_TEST","originator":"!exit 74"`},
-	} {
-		for _, explicit := range []bool{false, true} {
-			t.Run(fmt.Sprint(explicit)+tc.headers, func(t *testing.T) {
-				e := newTestEnv(t)
-				requests := make(chan http.Header, 16)
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-					requests <- req.Header.Clone()
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusBadRequest)
-					fmt.Fprint(w, `{"error":{"message":"identity probe complete"}}`)
-				}))
-				t.Cleanup(server.Close)
-				token := "synthetic." + base64.RawURLEncoding.EncodeToString([]byte(`{"https://api.openai.com/auth":{"chatgpt_account_id":"kopi-test-account"}}`)) + ".signature"
-				modelHeaders := `{}`
-				if explicit {
-					modelHeaders = `{"USER-agent":"model-agent","ORIGINATOR":"model-origin"}`
-				}
-				e.writeFile(t, filepath.Join(e.agentDir, "models.json"), fmt.Sprintf(`{"providers":{"kopi-mock":{"baseUrl":%q,"api":"openai-codex-responses","apiKey":%q,"headers":{%s},"models":[{"id":"mock-1","headers":%s}]}}}`, server.URL, token, tc.headers, modelHeaders))
-				_, _, err := execute(t, "", "--model", mockModel, "-p", "hello")
-				require.ErrorIs(t, err, headless.ErrFailed)
-				if !tc.resolves {
-					require.ErrorContains(t, err, "Failed to resolve provider")
-					assert.Empty(t, requests)
-					return
-				}
-				require.Contains(t, err.Error(), "identity probe complete")
-				require.NotEmpty(t, requests)
-				for len(requests) > 0 {
-					headers := <-requests
-					switch {
-					case explicit:
-						assert.Equal(t, "model-agent", headers.Get("User-Agent"))
-						assert.Equal(t, "model-origin", headers.Get("Originator"))
-					case tc.origin == "":
-						assert.Equal(t, "kopi", headers.Get("Originator"))
-						assert.True(t, strings.HasPrefix(headers.Get("User-Agent"), "kopi/"), headers.Get("User-Agent"))
-					default:
-						assert.Equal(t, tc.agent, headers.Get("User-Agent"))
-						assert.Equal(t, tc.origin, headers.Get("Originator"))
-					}
-				}
-			})
-		}
-	}
 }
 
 func TestRootReportsProviderFailure(t *testing.T) {

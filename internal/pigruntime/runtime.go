@@ -29,14 +29,11 @@ const pigSettings = `{"retry":{"enabled":true},"compaction":{"enabled":true},"ca
 type Options struct {
 	// Home is Kopi's home; PiG's own home is pinned beneath it.
 	Home, AgentDir, CWD string
-	// Version is Kopi's version, sent to providers in the User-Agent.
-	Version string
 }
 
 type Runtime struct {
 	svcs             *coding.AgentSessionServices
 	rt               *coding.Runtime
-	version          string
 	installationFile string
 	// openURL opens a sign-in URL in the user's browser.
 	openURL func(string) error
@@ -75,7 +72,6 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	return &Runtime{
 		svcs:             svcs,
 		rt:               rt,
-		version:          opts.Version,
 		installationFile: filepath.Join(opts.Home, "installation_id"),
 		openURL:          browser.OpenURL,
 	}, nil
@@ -139,11 +135,6 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 		return nil, errors.New("failed to open session: resume id and continue are mutually exclusive")
 	}
 	provider, id, _ := strings.Cut(o.Model, "/")
-	if r.svcs.ModelRuntime().GetProvider(provider) != nil {
-		if err := r.identify(provider); err != nil {
-			return nil, err
-		}
-	}
 	model := r.svcs.ModelRuntime().GetModel(provider, id)
 	if model == nil {
 		return nil, fmt.Errorf("failed to open session with model %q: %w", o.Model, ErrUnknownModel)

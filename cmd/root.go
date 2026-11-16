@@ -203,7 +203,7 @@ func resolveConfig(cmd *cobra.Command, paths config.Paths) (*config.Resolved, er
 }
 
 func openRuntime(ctx context.Context, paths config.Paths, cwd string) (*pigruntime.Runtime, error) {
-	return pigruntime.New(ctx, pigruntime.Options{Home: paths.Home, AgentDir: paths.AgentDir, CWD: cwd, Version: kopiVersion()})
+	return pigruntime.New(ctx, pigruntime.Options{Home: paths.Home, AgentDir: paths.AgentDir, CWD: cwd})
 }
 
 // readPrompt joins piped stdin and the argument, in that order.

@@ -21,8 +21,8 @@ import (
 
 // signInNames are the names Kopi introduces itself with during a provider's
 // sign-in where the default does not fit: OpenAI shows the Sign in with
-// ChatGPT name on its consent screen. The default matches the originator Kopi
-// sends on requests.
+// ChatGPT name on its consent screen. The default is what Kopi sends as the
+// Codex originator in the sign-in URL.
 var signInNames = map[string]string{"openai": "Kopi"}
 
 const defaultSignInName = "kopi"

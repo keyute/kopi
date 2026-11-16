@@ -9,6 +9,8 @@ var pigTexts = strings.NewReplacer(
 	"run `pig login github-copilot`", "run `kopi login github-copilot`",
 	"Run `/login meta`", "Run `kopi login meta`",
 	"another pi session", "another Kopi session",
+	"Run '/login ", "Run 'kopi login ",
+	"Use /login to log into a provider", "Use `kopi login <provider>` to log into a provider",
 )
 
 // rewordedError shows err's text through pigTexts and keeps err for
