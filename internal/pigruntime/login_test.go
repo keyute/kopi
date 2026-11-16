@@ -98,6 +98,25 @@ func TestLoginOpensSignInURLInBrowser(t *testing.T) {
 	assert.Contains(t, out.String(), loginURL, "the printed URL is the fallback")
 }
 
+func TestLoginOpensDeviceVerificationURLInBrowser(t *testing.T) {
+	opened := make(chan string, 1)
+	var out strings.Builder
+	l := &loginIO{out: &out, openURL: func(u string) error {
+		opened <- u
+		return nil
+	}}
+	l.notify(ai.AuthDeviceCodeEvent{VerificationURI: loginURL, UserCode: "TEST-CODE"})
+
+	assert.Contains(t, out.String(), loginURL)
+	assert.Contains(t, out.String(), "TEST-CODE")
+	select {
+	case u := <-opened:
+		assert.Equal(t, loginURL, u)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for browser opener")
+	}
+}
+
 // loginCall is what a recording provider's sign-in received.
 type loginCall struct {
 	opts     ai.LoginOptions

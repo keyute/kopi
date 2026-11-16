@@ -26,6 +26,54 @@ func TestInstallationIDIsCreatedOnceAndKept(t *testing.T) {
 	assert.Equal(t, id, again)
 }
 
+func TestInstallationIDConcurrentFirstUse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "installation_id")
+	const callers = 32
+	type result struct {
+		id  string
+		err error
+	}
+	ready := make(chan struct{}, callers)
+	start := make(chan struct{})
+	results := make(chan result, callers)
+	for range callers {
+		go func() {
+			ready <- struct{}{}
+			<-start
+			id, err := installationID(path)
+			results <- result{id: id, err: err}
+		}()
+	}
+	for range callers {
+		<-ready
+	}
+	close(start)
+
+	var id string
+	for range callers {
+		result := <-results
+		require.NoError(t, result.err)
+		parsed, err := uuid.Parse(result.id)
+		require.NoError(t, err)
+		assert.Equal(t, parsed.String(), result.id)
+		if id == "" {
+			id = result.id
+		}
+		assert.Equal(t, id, result.id)
+	}
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, id, string(content))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "temporary files are removed")
+	assert.Equal(t, "installation_id", entries[0].Name())
+}
+
 func TestInstallationIDIsReturnedHyphenated(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "installation_id")
 	require.NoError(t, os.WriteFile(path, []byte("urn:uuid:6BA7B810-9DAD-11D1-80B4-00C04FD430C8\n"), 0o600))

@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/MichaelKinsy/PiG/ai"
+	"github.com/muesli/cancelreader"
 	"golang.org/x/term"
 )
 
@@ -94,15 +95,6 @@ func (r *Runtime) Login(ctx context.Context, provider string, in io.Reader, out 
 	signIn, apiKey := p.Auth.OAuth != nil, storesAPIKey(p)
 	if !signIn && !apiKey {
 		return fmt.Errorf("failed to log in to %q: %w", provider, ErrNoLogin)
-	}
-	// term.ReadPassword restores echo only through its own defer, which an
-	// interrupt at the hidden prompt skips.
-	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		state, err := term.GetState(int(f.Fd()))
-		if err != nil {
-			return fmt.Errorf("failed to read terminal state: %w", err)
-		}
-		defer func() { _ = term.Restore(int(f.Fd()), state) }()
 	}
 	l := &loginIO{in: in, lines: bufio.NewReader(in), out: out, openURL: r.openURL}
 	kind := ai.CredentialOAuth
@@ -199,8 +191,7 @@ func (l *loginIO) prompt(ctx context.Context, p ai.AuthPrompt) (string, error) {
 		l.ask(p.Message, p.Placeholder)
 		return l.read(ctx, l.readLine)
 	case ai.AuthSecretPrompt:
-		l.ask(p.Message, p.Placeholder)
-		secret, err := l.read(ctx, l.readSecret)
+		secret, err := l.readSecret(ctx, p)
 		if err == nil && secret == "" {
 			return "", errors.New("failed to read login input: empty answer")
 		}
@@ -221,6 +212,7 @@ func (l *loginIO) notify(e ai.AuthEvent) {
 		l.open(e.URL)
 	case ai.AuthDeviceCodeEvent:
 		fmt.Fprintf(l.out, "Visit %s and enter the code %s\n", e.VerificationURI, e.UserCode)
+		l.open(e.VerificationURI)
 	case ai.AuthProgressEvent:
 		fmt.Fprintln(l.out, e.Message)
 	case ai.AuthInfoEvent:
@@ -304,15 +296,48 @@ func (l *loginIO) readLine() (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
-func (l *loginIO) readSecret() (string, error) {
+func (l *loginIO) readSecret(ctx context.Context, p ai.AuthSecretPrompt) (string, error) {
 	f, ok := l.in.(*os.File)
 	if !ok || !term.IsTerminal(int(f.Fd())) {
-		return l.readLine()
+		l.ask(p.Message, p.Placeholder)
+		return l.read(ctx, l.readLine)
 	}
-	secret, err := term.ReadPassword(int(f.Fd()))
-	fmt.Fprintln(l.out)
+	if err := context.Cause(ctx); err != nil {
+		return "", err
+	}
+	reader, err := cancelreader.NewReader(f)
 	if err != nil {
-		return "", fmt.Errorf("failed to read login input: %w", err)
+		return "", fmt.Errorf("failed to create login input reader: %w", err)
 	}
-	return string(secret), nil
+	defer func() { _ = reader.Close() }()
+	state, err := term.MakeRaw(int(f.Fd()))
+	if err != nil {
+		return "", fmt.Errorf("failed to set terminal state: %w", err)
+	}
+	defer func() { _ = term.Restore(int(f.Fd()), state) }()
+	terminal := term.NewTerminal(struct {
+		io.Reader
+		io.Writer
+	}{reader, l.out}, "")
+	prompt := p.Message
+	if p.Placeholder != "" {
+		prompt += " [" + p.Placeholder + "]"
+	}
+	done := make(chan readResult, 1)
+	go func() {
+		text, err := terminal.ReadPassword(prompt + " ")
+		done <- readResult{text: text, err: err}
+	}()
+	select {
+	case res := <-done:
+		if res.err != nil {
+			return "", fmt.Errorf("failed to read login input: %w", res.err)
+		}
+		return res.text, nil
+	case <-ctx.Done():
+		// The editor must stop writing before the caller regains the terminal.
+		reader.Cancel()
+		<-done
+		return "", context.Cause(ctx)
+	}
 }
