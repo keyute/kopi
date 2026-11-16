@@ -272,6 +272,80 @@ func TestServersWaitHonoursContext(t *testing.T) {
 	<-stuck.Closed()
 }
 
+func TestServersWaitAfterStartupCancellation(t *testing.T) {
+	for _, method := range []string{"initialize", "notifications/initialized", "tools/list"} {
+		t.Run(method, func(t *testing.T) {
+			entered := make(chan struct{})
+			fake := &mcpfake.Server{Tools: []map[string]any{echoTool("t")}}
+			dial := scriptedHTTP(t, fake, func(r *http.Request) (*http.Response, error) {
+				if r.Method != http.MethodPost {
+					return nil, nil
+				}
+				raw, err := io.ReadAll(r.Body)
+				if err != nil {
+					return nil, err
+				}
+				r.Body = io.NopCloser(strings.NewReader(string(raw)))
+				msg, err := mcp.ParseJSONRPCMessage(raw)
+				if err != nil {
+					return nil, err
+				}
+				if msg.Method == method {
+					close(entered)
+					<-r.Context().Done()
+					return nil, r.Context().Err()
+				}
+				return nil, nil
+			})
+			t.Setenv("KOPI_TEST_URL_KEY", "synthetic-secret")
+			s, cancel := startWith(t, map[string]config.MCPServer{
+				"srv": {Type: "http", URL: "https://example.invalid/${KOPI_TEST_URL_KEY}"},
+			}, dial)
+			<-entered
+			cancel()
+			<-s.servers[0].done
+			require.ErrorIs(t, s.servers[0].status.Err, context.Canceled)
+			var redacted *redactedError
+			require.ErrorAs(t, s.servers[0].status.Err, &redacted)
+
+			statuses := s.Wait(t.Context())
+			require.Len(t, statuses, 1)
+			assert.Equal(t, "srv", statuses[0].Name)
+			require.ErrorIs(t, statuses[0].Err, ErrServerStartTimeout)
+			assert.NotErrorIs(t, statuses[0].Err, context.Canceled)
+			assert.Same(t, &statuses[0], &s.Wait(t.Context())[0])
+		})
+	}
+}
+
+func TestServersWaitPreservesSettledStatusAfterCancellation(t *testing.T) {
+	failure := errors.New("refused")
+	fake := &mcpfake.Server{Tools: []map[string]any{echoTool("t")}, Reply: echo}
+	s, cancel := startWith(t, map[string]config.MCPServer{
+		"bad": {Command: "fake"}, "good": {Command: "fake"},
+	}, func(name string, _ config.MCPServer) (mcp.Transport, error) {
+		if name == "bad" {
+			return nil, failure
+		}
+		return fake.Connect(), nil
+	})
+	for _, srv := range s.servers {
+		<-srv.done
+	}
+	cancel()
+
+	statuses := s.Wait(t.Context())
+	require.Len(t, statuses, 2)
+	require.ErrorIs(t, statuses[0].Err, failure)
+	assert.NotErrorIs(t, statuses[0].Err, ErrServerStartTimeout)
+	require.NoError(t, statuses[1].Err)
+	assert.Equal(t, []string{"mcp__good__t"}, toolNames(statuses[1]))
+	out, err := call(t, statuses[1].Tools[0], `{"after":"cancellation"}`)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"after":"cancellation"}`, out)
+	assert.Same(t, &statuses[0], &s.Wait(t.Context())[0])
+}
+
 func TestServersReconnectAfterDeath(t *testing.T) {
 	fake := &mcpfake.Server{Tools: []map[string]any{echoTool("t")}, Reply: echo}
 	dials := 0

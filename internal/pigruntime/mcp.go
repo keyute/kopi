@@ -170,6 +170,9 @@ func (s *Servers) Wait(ctx context.Context) []ServerStatus {
 			select {
 			case <-srv.done:
 				out[i] = srv.status
+				if err := s.startup.Err(); err != nil && errors.Is(out[i].Err, err) {
+					out[i].Err = fmt.Errorf("failed to start: %w", ErrServerStartTimeout)
+				}
 			default:
 				out[i] = ServerStatus{Name: srv.name, Err: fmt.Errorf("failed to start: %w", ErrServerStartTimeout)}
 				srv.close()
@@ -217,6 +220,10 @@ func (s *server) start(ctx context.Context) {
 	if init.Capabilities.Tools != nil {
 		listed, err := c.ListTools(ctx, mcp.RequestOptions{})
 		if err != nil {
+			var abort *mcp.McpAbortError
+			if ctx.Err() != nil && errors.As(err, &abort) {
+				err = ctx.Err()
+			}
 			s.status.Err = s.redact(fmt.Errorf("failed to list tools: %w", err))
 			s.close()
 			return
