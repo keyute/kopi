@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -146,28 +147,34 @@ func escape(s string) string {
 func expand(spec, ws, home string) string {
 	switch {
 	case strings.HasPrefix(spec, "/"):
-		return path.Clean(spec)
+		return spec
 	case spec == "~" || strings.HasPrefix(spec, "~/"):
-		return path.Join(home, strings.TrimPrefix(spec, "~"))
+		return home + strings.TrimPrefix(spec, "~")
 	case !strings.Contains(strings.TrimRight(spec, "/"), "/"):
 		// As in .gitignore, a name with at most a trailing slash matches at any depth.
-		return path.Join(ws, "**", spec)
+		return ws + "/**/" + spec
 	default:
-		return path.Join(ws, spec)
+		return ws + "/" + spec
 	}
 }
 
-// forms returns pat and, if its literal leading directory resolves elsewhere
-// through symlinks, the same glob under the resolved directory, so a call
-// naming either side of a link meets the rule. Links are resolved once, here:
-// one created or changed later is not seen.
+// forms resolves the literal prefix before cleaning it. A cleaned lexical
+// alias is kept only if it still names the same target: cleaning link/.. can
+// otherwise introduce a rule for an unrelated path. Links are resolved once,
+// here; one created or changed later is not seen.
 func forms(pat string) []string {
 	dir, tail := splitLiteral(pat)
 	resolved := filepath.ToSlash(resolve(filepath.FromSlash(dir)))
-	if resolved == dir {
-		return []string{pat}
+	realPattern := path.Join(escape(resolved), tail)
+	cleanDir := path.Clean(dir)
+	if filepath.ToSlash(resolve(filepath.FromSlash(cleanDir))) != resolved {
+		return []string{realPattern}
 	}
-	return []string{pat, path.Join(escape(resolved), tail)}
+	lexical := path.Clean(pat)
+	if lexical == realPattern {
+		return []string{lexical}
+	}
+	return []string{lexical, realPattern}
 }
 
 // splitLiteral splits pat at the last slash before its first unescaped glob
@@ -203,14 +210,19 @@ func splitLiteral(pat string) (dir, tail string) {
 func resolve(p string) string {
 	var rest []string
 	for {
+		for len(p) > len(filepath.VolumeName(p))+1 && os.IsPathSeparator(p[len(p)-1]) {
+			p = p[:len(p)-1]
+		}
 		if r, err := filepath.EvalSymlinks(p); err == nil {
 			return filepath.Join(append([]string{r}, rest...)...)
 		}
-		parent := filepath.Dir(p)
-		if parent == p {
+		// filepath.Dir would clean away a symlink followed by .. before
+		// the next attempt to resolve the remaining prefix.
+		parent, base := filepath.Split(p)
+		if parent == p || parent == "" {
 			return p
 		}
-		rest = append([]string{filepath.Base(p)}, rest...)
+		rest = append([]string{base}, rest...)
 		p = parent
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -54,6 +55,32 @@ func TestOpenReadsAbsolutePathInside(t *testing.T) {
 
 	assert.Equal(t, "hello", readAll(t, ws, filepath.Join(dir, "a.txt")))
 	assert.Equal(t, "hello", readAll(t, ws, filepath.Join(realDir, "a.txt")))
+}
+
+func TestOpenAbsoluteWorkspaceRootSpellings(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "data")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	alias := filepath.Join(parent, "alias")
+	require.NoError(t, os.Symlink("data", alias))
+	ws := newWorkspace(t, alias, nil)
+	want, err := os.Stat(dir)
+	require.NoError(t, err)
+
+	for _, base := range []string{ws.given, ws.realDir} {
+		for _, suffix := range []string{"", "/", "///", "/.", "//.//"} {
+			path := base + suffix
+			t.Run(path, func(t *testing.T) {
+				f, err := ws.Open(path)
+				require.NoError(t, err)
+				defer f.Close()
+				got, err := f.Stat()
+				require.NoError(t, err)
+				assert.True(t, got.IsDir())
+				assert.True(t, os.SameFile(want, got))
+			})
+		}
+	}
 }
 
 func TestOpenRefusesPathsOutsideWorkspace(t *testing.T) {
@@ -239,6 +266,8 @@ func TestOpenSkipsProtectedPathUnderRegularFile(t *testing.T) {
 	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
 
 	assert.Equal(t, "hello", readAll(t, ws, "notes.txt"))
+	require.NoError(t, ws.WriteFile("notes.txt", []byte("updated")))
+	assert.Equal(t, "updated", readAll(t, ws, "notes.txt"))
 	_, err := ws.Open(".ssh/id_x")
 	require.ErrorIs(t, err, ErrProtected)
 }
@@ -474,6 +503,149 @@ func TestWriteFileWritesThroughSymlink(t *testing.T) {
 		assert.NotZero(t, info.Mode()&fs.ModeSymlink, link)
 	}
 	assert.ElementsMatch(t, []string{"a.txt", "new.txt"}, listDir(t, filepath.Join(dir, "sub")))
+}
+
+func TestPreparedWritePinsParentAcrossSymlinkReplacement(t *testing.T) {
+	for _, suffix := range []string{"file", "missing/deep/file"} {
+		t.Run(suffix, func(t *testing.T) {
+			home, kopiHome := syntheticHome(t)
+			require.NoError(t, os.Mkdir(filepath.Join(home, "ordinary"), 0o755))
+			ws := newWorkspace(t, home, []string{kopiHome})
+			dest, err := ws.prepareWrite("ordinary/"+suffix, "ordinary/"+suffix)
+			require.NoError(t, err)
+			defer func() { dest.parent.Close() }()
+			before := listDir(t, kopiHome)
+			start, done := make(chan struct{}), make(chan error)
+			go func() {
+				<-start
+				if err := os.Rename(filepath.Join(home, "ordinary"), filepath.Join(home, "pinned")); err != nil {
+					done <- err
+					return
+				}
+				done <- os.Symlink("kopi-home", filepath.Join(home, "ordinary"))
+			}()
+			close(start)
+			require.NoError(t, <-done)
+			err = dest.write(ws, []byte("new"))
+			if suffix == "file" {
+				require.NoError(t, err)
+				assert.Equal(t, "new", readContent(t, filepath.Join(home, "pinned", "file")))
+			} else {
+				require.ErrorIs(t, err, ErrProtected)
+				assert.Equal(t, []string{"missing"}, listDir(t, filepath.Join(home, "pinned")))
+				assert.Empty(t, listDir(t, filepath.Join(home, "pinned", "missing")))
+			}
+			assert.Equal(t, before, listDir(t, kopiHome))
+			assert.Equal(t, "{}", readContent(t, filepath.Join(kopiHome, "config.json")))
+		})
+	}
+}
+
+func TestPrepareWriteRejectsReplacementBeforeAcquisition(t *testing.T) {
+	home, kopiHome := syntheticHome(t)
+	require.NoError(t, os.Mkdir(filepath.Join(home, "ordinary"), 0o755))
+	ws := newWorkspace(t, home, []string{kopiHome})
+	target, protected, err := ws.resolve("ordinary/missing/file")
+	require.NoError(t, err)
+	require.False(t, protected)
+	require.NoError(t, os.Rename(filepath.Join(home, "ordinary"), filepath.Join(home, "pinned")))
+	require.NoError(t, os.Symlink("kopi-home", filepath.Join(home, "ordinary")))
+	rel, err := filepath.Rel(ws.realDir, target)
+	require.NoError(t, err)
+	dest, err := ws.prepareWrite(rel, rel)
+	require.ErrorIs(t, err, ErrProtected)
+	assert.Nil(t, dest)
+	assert.Equal(t, []string{"config.json"}, listDir(t, kopiHome))
+}
+
+func TestPreparedWriteVetsExistingMissingChild(t *testing.T) {
+	dir := t.TempDir()
+	store := filepath.Join(dir, "ordinary", "store")
+	writeFile(t, filepath.Join(store, "config.json"), "{}")
+	ws := newWorkspace(t, dir, []string{store})
+	dest, err := ws.prepareWrite("ordinary/missing/deep/file", "ordinary/missing/deep/file")
+	require.NoError(t, err)
+	defer func() { dest.parent.Close() }()
+	require.NoError(t, os.Symlink("store", filepath.Join(dir, "ordinary", "missing")))
+	require.ErrorIs(t, dest.write(ws, []byte("new")), ErrProtected)
+	assert.Equal(t, []string{"config.json"}, listDir(t, store))
+}
+
+func TestPreparedWriteRefusesAbsentStoreThroughInstalledSymlink(t *testing.T) {
+	for _, suffix := range []string{"home", "home/config.json"} {
+		t.Run(suffix, func(t *testing.T) {
+			dir := t.TempDir()
+			store := filepath.Join(dir, "ordinary", "store")
+			require.NoError(t, os.MkdirAll(store, 0o755))
+			ws := newWorkspace(t, dir, []string{filepath.Join(store, "home")})
+			path := "ordinary/missing/" + suffix
+			dest, err := ws.prepareWrite(path, path)
+			require.NoError(t, err)
+			defer func() { dest.parent.Close() }()
+			require.NoError(t, os.Symlink("store", filepath.Join(dir, "ordinary", "missing")))
+
+			assert.ErrorIs(t, dest.write(ws, []byte("new")), ErrProtected)
+			assert.Empty(t, listDir(t, store))
+		})
+	}
+}
+
+func TestWorkspaceAcceptsRedundantAbsoluteSeparators(t *testing.T) {
+	dir, realDir := symlinkDotDotLayout(t)
+	ws := newWorkspace(t, dir, nil)
+	for _, base := range []string{ws.given, ws.realDir} {
+		for _, suffix := range []string{"//secrets/key", "///./secrets/key", "//docs/link/../key"} {
+			path := base + suffix
+			t.Run(path, func(t *testing.T) {
+				f, err := ws.Open(path)
+				require.NoError(t, err)
+				require.NoError(t, f.Close())
+				target, err := ws.Target(path)
+				require.NoError(t, err)
+				assert.Equal(t, filepath.Join(realDir, "secrets", "key"), target.Real)
+				require.NoError(t, ws.WriteFile(path, []byte("updated")))
+				assert.Equal(t, "updated", readAll(t, ws, path))
+			})
+		}
+	}
+	for _, suffix := range []string{"//secrets/", "///./secrets/."} {
+		path := dir + suffix
+		f, err := ws.Open(path)
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+		target, err := ws.Target(path)
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(realDir, "secrets"), target.Real)
+		assert.ErrorIs(t, ws.WriteFile(path, nil), ErrIsDirectory)
+	}
+}
+
+func TestWorkspaceRejectsNonDirectoryTraversal(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "a.txt"), "file")
+	writeFile(t, filepath.Join(dir, "victim"), "unchanged")
+	require.NoError(t, os.Symlink("a.txt", filepath.Join(dir, "link")))
+	ws := newWorkspace(t, dir, nil)
+	before := listDir(t, dir)
+	for _, name := range []string{"a.txt", "link"} {
+		for _, suffix := range []string{"/../victim", "/child/../../victim", "/.", "/", "/child"} {
+			for _, prefix := range []string{"", dir + "/", dir + "//", dir + "///./"} {
+				path := prefix + name + suffix
+				t.Run(path, func(t *testing.T) {
+					_, err := ws.Target(path)
+					assert.ErrorIs(t, err, syscall.ENOTDIR)
+					f, err := ws.Open(path)
+					assert.ErrorIs(t, err, syscall.ENOTDIR)
+					if f != nil {
+						f.Close()
+					}
+					assert.ErrorIs(t, ws.WriteFile(path, []byte("changed")), syscall.ENOTDIR)
+					assert.Equal(t, "unchanged", readContent(t, filepath.Join(dir, "victim")))
+					assert.Equal(t, before, listDir(t, dir))
+				})
+			}
+		}
+	}
 }
 
 func TestTargetResolvesPaths(t *testing.T) {

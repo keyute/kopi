@@ -116,10 +116,9 @@ func (w *Workspace) Target(path string) (policy.Target, error) {
 // WriteFile creates path, or replaces it atomically, with data. A symlink is
 // written through: its target is replaced, not the link.
 //
-// The checks run before the temp file is renamed over the target, so a
-// directory swapped for a symlink in between can still redirect the rename,
-// within the workspace only (os.Root confines it). Kopi runs write calls one
-// at a time, so only another process could race them.
+// Parent handles prevent name replacements from redirecting filesystem effects.
+// A directory moved after validation still carries its handle, including if
+// another process moves it into a protected store.
 func (w *Workspace) WriteFile(path string, data []byte) error {
 	rel, err := w.relative(path)
 	if err != nil {
@@ -141,15 +140,131 @@ func (w *Workspace) WriteFile(path string, data []byte) error {
 	if inStore {
 		return fmt.Errorf("%w: %s", ErrProtected, path)
 	}
-	// Every root call uses the resolved path, so what was checked is what is
-	// written.
 	rel, err = filepath.Rel(w.realDir, target)
 	if err != nil || !filepath.IsLocal(rel) {
 		return fmt.Errorf("%w: %s", ErrOutsideWorkspace, path)
 	}
+	dest, err := w.prepareWrite(rel, path)
+	if err != nil {
+		return err
+	}
+	defer func() { dest.parent.Close() }()
+	return dest.write(w, data)
+}
+
+type writeDestination struct {
+	parent          *os.Root
+	rel, path, leaf string
+	missing         []string
+}
+
+// prepareWrite pins the existing parent prefix without modifying the filesystem.
+func (w *Workspace) prepareWrite(rel, path string) (*writeDestination, error) {
+	parent, err := w.root.OpenRoot(".")
+	if err != nil {
+		return nil, fmt.Errorf("failed to open parent of %s: %w", path, err)
+	}
+	prefix := "."
+	if err := w.checkParent(parent, prefix, path); err != nil {
+		parent.Close()
+		return nil, err
+	}
+	parts := components(filepath.Dir(rel))
+	for i, name := range parts {
+		child, err := parent.OpenRoot(name)
+		if errors.Is(err, fs.ErrNotExist) {
+			return &writeDestination{parent: parent, rel: prefix, path: path, leaf: filepath.Base(rel), missing: parts[i:]}, nil
+		}
+		if err != nil {
+			parent.Close()
+			return nil, fmt.Errorf("failed to open parent of %s: %w", path, err)
+		}
+		prefix = filepath.Join(prefix, name)
+		err = w.checkParent(child, prefix, path)
+		parent.Close()
+		if err != nil {
+			child.Close()
+			return nil, err
+		}
+		parent = child
+	}
+	return &writeDestination{parent: parent, rel: prefix, path: path, leaf: filepath.Base(rel)}, nil
+}
+
+func (w *Workspace) checkParent(parent *os.Root, rel, path string) error {
+	f, err := parent.Open(".")
+	if err != nil {
+		return fmt.Errorf("failed to open parent of %s: %w", path, err)
+	}
+	defer f.Close()
+	return w.check(f, rel, path)
+}
+
+// checkDestination binds absent-store protection to the pinned parent, not its
+// original name: an EEXIST child may have followed a newly installed symlink.
+func (d *writeDestination) checkDestination(w *Workspace, remaining []string) error {
+	parent, err := d.parent.Stat(".")
+	if err != nil {
+		return fmt.Errorf("failed to stat parent of %s: %w", d.path, err)
+	}
+	for _, p := range w.protected {
+		store, _, err := walk(string(filepath.Separator), p, nil)
+		if errors.Is(err, syscall.ENOTDIR) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		for ancestor := store; ; ancestor = filepath.Dir(ancestor) {
+			info, err := os.Stat(ancestor)
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return fmt.Errorf("failed to check protected path: %w", err)
+			}
+			if err == nil && os.SameFile(parent, info) {
+				target := filepath.Join(append([]string{ancestor}, remaining...)...)
+				protected := store
+				if runtime.GOOS == "darwin" {
+					protected, target = strings.ToLower(protected), strings.ToLower(target)
+				}
+				if rel, err := filepath.Rel(protected, target); err == nil && filepath.IsLocal(rel) {
+					return fmt.Errorf("%w: %s", ErrProtected, d.path)
+				}
+				break
+			}
+			if filepath.Dir(ancestor) == ancestor {
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func (d *writeDestination) write(w *Workspace, data []byte) error {
+	for i, name := range d.missing {
+		if err := d.checkDestination(w, append(slices.Clone(d.missing[i:]), d.leaf)); err != nil {
+			return err
+		}
+		if err := d.parent.Mkdir(name, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("failed to create parent of %s: %w", d.path, err)
+		}
+		child, err := d.parent.OpenRoot(name)
+		if err != nil {
+			return fmt.Errorf("failed to open parent of %s: %w", d.path, err)
+		}
+		d.rel = filepath.Join(d.rel, name)
+		// EEXIST may mean a symlink was installed; vet the opened child
+		// before making any further changes through it.
+		if err := w.checkParent(child, d.rel, d.path); err != nil {
+			child.Close()
+			return err
+		}
+		d.parent.Close()
+		d.parent = child
+	}
+	path := d.path
 	// A nil mode leaves a new file with the umask applied to 0o666.
 	var mode *fs.FileMode
-	info, err := w.root.Lstat(rel)
+	info, err := d.parent.Lstat(d.leaf)
 	switch {
 	case err == nil && info.IsDir():
 		return fmt.Errorf("%w: %s", ErrIsDirectory, path)
@@ -161,38 +276,39 @@ func (w *Workspace) WriteFile(path string, data []byte) error {
 	case !errors.Is(err, fs.ErrNotExist):
 		return fmt.Errorf("failed to stat %s: %w", path, err)
 	}
-	if err := w.root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
-		return fmt.Errorf("failed to create parent of %s: %w", path, err)
-	}
-	tmp := filepath.Join(filepath.Dir(rel), "."+filepath.Base(rel)+"."+rand.Text()+".tmp")
+	tmp := "." + d.leaf + "." + rand.Text() + ".tmp"
 	tempMode := fs.FileMode(0o666)
 	if mode != nil {
 		// Keep replacement data private until the original mode is restored.
 		tempMode = 0o600
 	}
-	f, err := w.root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, tempMode)
+	if err := d.checkDestination(w, []string{d.leaf}); err != nil {
+		return err
+	}
+	f, err := d.parent.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, tempMode)
 	if err != nil {
 		return fmt.Errorf("failed to create temp file for %s: %w", path, err)
 	}
-	if err := w.fillTemp(f, tmp, path, data, mode); err != nil {
-		_ = w.root.Remove(tmp)
+	if err := fillTemp(f, path, data, mode); err != nil {
+		_ = d.parent.Remove(tmp)
 		return err
 	}
-	if err := w.root.Rename(tmp, rel); err != nil {
-		_ = w.root.Remove(tmp)
+	if err := d.checkDestination(w, []string{d.leaf}); err != nil {
+		_ = d.parent.Remove(tmp)
+		return err
+	}
+	if err := d.parent.Rename(tmp, d.leaf); err != nil {
+		_ = d.parent.Remove(tmp)
 		return fmt.Errorf("failed to replace %s: %w", path, err)
 	}
 	return nil
 }
 
-// fillTemp writes data to the temp file f and closes it. check binds the temp
-// file's identity to its resolved path, as it does for a read.
-func (w *Workspace) fillTemp(f *os.File, tmp, path string, data []byte, mode *fs.FileMode) error {
-	err := w.check(f, tmp, path)
-	if err == nil {
-		if _, werr := f.Write(data); werr != nil {
-			err = fmt.Errorf("failed to write %s: %w", path, werr)
-		}
+// fillTemp writes data to the temp file f and closes it.
+func fillTemp(f *os.File, path string, data []byte, mode *fs.FileMode) error {
+	var err error
+	if _, werr := f.Write(data); werr != nil {
+		err = fmt.Errorf("failed to write %s: %w", path, werr)
 	}
 	if err == nil {
 		if serr := f.Sync(); serr != nil {
@@ -216,6 +332,9 @@ func (w *Workspace) fillTemp(f *os.File, tmp, path string, data []byte, mode *fs
 func (w *Workspace) inProtectedPath(target string) (bool, error) {
 	for _, p := range w.protected {
 		store, _, err := walk(string(filepath.Separator), p, nil)
+		if errors.Is(err, syscall.ENOTDIR) {
+			continue
+		}
 		if err != nil {
 			return false, err
 		}
@@ -234,16 +353,33 @@ func (w *Workspace) relative(path string) (string, error) {
 		return path, nil
 	}
 	// filepath.Rel would clean the path, applying a ".." before the symlink it
-	// follows has been expanded; only no-op components are dropped here, and
-	// os.Root walks the rest.
+	// follows has been expanded. Preserve the suffix, including dot components
+	// and trailing separators that require the preceding name to be a directory.
 	parts := components(path)
 	for _, base := range []string{w.given, w.realDir} {
 		prefix := components(base)
 		if len(parts) >= len(prefix) && slices.Equal(parts[:len(prefix)], prefix) {
-			if rest := parts[len(prefix):]; len(rest) > 0 {
-				return strings.Join(rest, string(filepath.Separator)), nil
+			if len(prefix) == 0 {
+				if rest := strings.TrimLeft(path, string(filepath.Separator)); rest != "" {
+					return rest, nil
+				}
+				return ".", nil
 			}
-			return ".", nil
+			raw := strings.Split(path, string(filepath.Separator))
+			matched := 0
+			for i, name := range raw {
+				if name == "" || name == "." {
+					continue
+				}
+				matched++
+				if matched == len(prefix) {
+					rest := strings.TrimLeft(strings.Join(raw[i+1:], string(filepath.Separator)), string(filepath.Separator))
+					if len(components(rest)) == 0 {
+						return ".", nil
+					}
+					return rest, nil
+				}
+			}
 		}
 	}
 	return "", fmt.Errorf("%w: %s", ErrOutsideWorkspace, path)
@@ -347,7 +483,7 @@ func walk(dir, path string, stop func(os.FileInfo) bool) (string, bool, error) {
 		next := filepath.Join(dest, name)
 		info, err := os.Lstat(next)
 		switch {
-		case errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR):
+		case errors.Is(err, fs.ErrNotExist):
 			dest = next
 			continue
 		case err != nil:
@@ -371,6 +507,9 @@ func walk(dir, path string, stop func(os.FileInfo) bool) (string, bool, error) {
 		dest = next
 		if stop != nil && stop(info) {
 			return dest, true, nil
+		}
+		if len(parts) > 0 && !info.IsDir() {
+			return "", false, fmt.Errorf("failed to resolve %s: %w", path, syscall.ENOTDIR)
 		}
 	}
 	return dest, false, nil

@@ -2,8 +2,11 @@ package tui
 
 import (
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
@@ -69,10 +72,12 @@ func previewRows(p []tool.PreviewLine, limit, width int, th theme) []string {
 	}
 	var rows []string
 	for i, l := range p {
-		rs := previewLine(l, width, th)
-		last := i == len(p)-1
-		if len(rows)+len(rs) < limit || (last && len(rows)+len(rs) == limit) {
-			rows = append(rows, rs...)
+		budget := limit - len(rows)
+		if i != len(p)-1 {
+			budget--
+		}
+		if previewFits(l.Text, width-2, budget) {
+			rows = append(rows, previewLine(l, width, th)...)
 			continue
 		}
 		more := fmt.Sprintf("… %d more lines", len(p)-i)
@@ -82,6 +87,42 @@ func previewRows(p []tool.PreviewLine, limit, width int, th theme) []string {
 		return append(rows, hang("  ", fg(th.dim), more, fg(th.dim), width)[0])
 	}
 	return rows
+}
+
+// previewFits probes geometrically growing prefixes before wrapping the whole
+// line. Overflow is irreversible at a complete, sanitized grapheme boundary;
+// leave the last cluster out because the unseen suffix may still extend it.
+// Invisible text and discarded whitespace may require reading the whole input.
+func previewFits(text string, width, budget int) bool {
+	if budget < 1 {
+		return false
+	}
+	for end := 256; end < len(text); {
+		cut := end
+		for cut > 0 && !utf8.RuneStart(text[cut]) {
+			cut--
+		}
+		prefix := strings.Map(func(r rune) rune {
+			if (r < 0x20 && r != '\n' && r != '\t') || (r >= 0x7f && r <= 0x9f) {
+				return -1
+			}
+			return r
+		}, ansi.Strip(text[:cut]))
+		last := 0
+		for pos := 0; pos < len(prefix); {
+			last = pos
+			cluster, _ := ansi.FirstGraphemeCluster(prefix[pos:], ansi.GraphemeWidth)
+			pos += len(cluster)
+		}
+		if len(wrap(prefix[:last], width)) > budget {
+			return false
+		}
+		if end > len(text)/2 {
+			break
+		}
+		end *= 2
+	}
+	return len(wrap(text, width)) <= budget
 }
 
 func previewLine(l tool.PreviewLine, width int, th theme) []string {

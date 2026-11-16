@@ -369,6 +369,111 @@ func TestRelativeSpecWithSymlinkedLeadingDirectory(t *testing.T) {
 	assert.Equal(t, effectNone, eff)
 }
 
+func TestSymlinkBeforeParentComponent(t *testing.T) {
+	for _, form := range []string{"absolute", "relative", "home"} {
+		for _, leaf := range []string{"secret", "missing", "missing/", "missing//", "missing//child///", "secret/*.txt", "missing/*.txt"} {
+			t.Run(form+"/"+leaf, func(t *testing.T) {
+				d := newDirs(t)
+				base := d.ws
+				if form == "home" {
+					base = d.home
+				}
+				require.NoError(t, os.MkdirAll(filepath.Join(base, "private/sub"), 0o755))
+				require.NoError(t, os.Mkdir(filepath.Join(base, "private/secret"), 0o755))
+				require.NoError(t, os.Symlink("private/sub", filepath.Join(base, "link")))
+				spec := "./link/../" + leaf
+				switch form {
+				case "absolute":
+					spec = escape(filepath.ToSlash(base)) + "/link/../" + leaf
+				case "home":
+					spec = "~/link/../" + leaf
+				}
+				name := leaf
+				if leaf == "secret/*.txt" {
+					name = "secret/file.txt"
+				}
+				if leaf == "missing/*.txt" {
+					name = "missing/file.txt"
+				}
+				realBase, err := filepath.EvalSymlinks(base)
+				require.NoError(t, err)
+				intended := at(filepath.Join(realBase, "private", name))
+				unintended := at(filepath.Join(realBase, name))
+				text := "Read(" + spec + ")"
+				for _, tc := range []struct {
+					source Source
+					want   effect
+				}{
+					{Source{Name: "deny", Deny: []string{text}}, effectDeny},
+					{Source{Name: "allow", Allow: []string{text}}, effectAllow},
+				} {
+					r := d.rules(t, tc.source)
+					eff, _, _ := r.decide("Read", intended)
+					assert.Equal(t, tc.want, eff, tc.source.Name+" intended")
+					eff, _, _ = r.decide("Read", unintended)
+					assert.Equal(t, effectNone, eff, tc.source.Name+" unintended")
+					eff, _, _ = r.decide("Read", &Target{Path: unintended.Path, Real: intended.Real})
+					want := effectNone
+					if tc.want == effectDeny {
+						want = effectDeny
+					}
+					assert.Equal(t, want, eff, tc.source.Name+" mixed target")
+				}
+			})
+		}
+	}
+}
+
+func TestMissingLeafUnderSymlinkWithTrailingSlash(t *testing.T) {
+	for _, form := range []string{"absolute", "relative", "home"} {
+		for _, leaf := range []string{"missing/", "missing//", "missing//child///"} {
+			t.Run(form+"/"+leaf, func(t *testing.T) {
+				d := newDirs(t)
+				base := d.ws
+				if form == "home" {
+					base = d.home
+				}
+				require.NoError(t, os.Mkdir(filepath.Join(base, "realdocs"), 0o755))
+				require.NoError(t, os.Symlink("realdocs", filepath.Join(base, "docs")))
+				spec := "./docs/" + leaf
+				switch form {
+				case "absolute":
+					spec = escape(filepath.ToSlash(base)) + "/docs/" + leaf
+				case "home":
+					spec = "~/docs/" + leaf
+				}
+				realBase, err := filepath.EvalSymlinks(base)
+				require.NoError(t, err)
+				lexical := filepath.Join(base, "docs", leaf)
+				resolved := filepath.Join(realBase, "realdocs", leaf)
+				other := filepath.Join(realBase, "other", leaf)
+				text := "Read(" + spec + ")"
+				for _, tc := range []struct {
+					source Source
+					want   effect
+				}{
+					{Source{Name: "deny", Deny: []string{text}}, effectDeny},
+					{Source{Name: "allow", Allow: []string{text}}, effectAllow},
+				} {
+					r := d.rules(t, tc.source)
+					for _, target := range []*Target{at(lexical), at(resolved), {Path: lexical, Real: resolved}} {
+						eff, _, _ := r.decide("Read", target)
+						assert.Equal(t, tc.want, eff, tc.source.Name+" intended")
+					}
+					eff, _, _ := r.decide("Read", at(other))
+					assert.Equal(t, effectNone, eff, tc.source.Name+" unintended")
+					eff, _, _ = r.decide("Read", &Target{Path: lexical, Real: other})
+					want := effectNone
+					if tc.want == effectDeny {
+						want = effectDeny
+					}
+					assert.Equal(t, want, eff, tc.source.Name+" mixed target")
+				}
+			})
+		}
+	}
+}
+
 func TestWorkspaceWithGlobMetacharacters(t *testing.T) {
 	ws := filepath.Join(t.TempDir(), "p[1]{x}*")
 	require.NoError(t, os.Mkdir(ws, 0o755))

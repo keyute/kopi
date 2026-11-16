@@ -152,7 +152,7 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 
 - Kopi is not an OS sandbox, and permission rules are not an OS boundary: they match the path a call names.
 - Symlinks in rule paths, the start directory and the home directory are resolved once, at start.
-- `Write` and `Edit` check the target before renaming the new file over it, so another process that swaps a directory for a symlink in between can redirect the write, within the start directory only.
+- `Write` and `Edit` pin and check parent-directory handles before making changes, so replacing a parent name with a symlink cannot redirect those changes. Another process can still move a checked directory, including into Kopi's home; later changes follow its handle. Permission checks and these protections are not an OS boundary.
 - `Read` protection is by file identity, re-checked on every read: a hard link into Kopi's home or a credential copied elsewhere is readable, whether Kopi's home exists is observable, and if Kopi's home cannot be inspected all reads are refused.
 - Kopi refuses no credential locations outside its home; deny them with rules, such as `*(~/.ssh)`.
 - `Read` detects binary files from their first 8 KiB and refuses absolute symlinks, even ones pointing inside the start directory.
