@@ -140,7 +140,7 @@ func TestApprovalHidesMenuUntilItEnds(t *testing.T) {
 	assert.Zero(t, m.menuHeight())
 	assert.Empty(t, menuText(m))
 	assert.NotContains(t, screen(m), "❭ /plan       switch to plan mode")
-	assert.Contains(t, screen(m), "❯ 1. Yes")
+	assert.Contains(t, screen(m), "❭ 1. Yes")
 
 	send(m, event.ApprovalEnded{Token: 1})
 	assert.Equal(t, "❭ /plan       switch to plan mode", menuText(m)[0])

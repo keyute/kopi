@@ -25,15 +25,16 @@ var testSpecs = map[string]ToolSpec{
 	"Bash": {Capability: Exec},
 }
 
-// approver answers every request with answer and records it.
+// approver answers every request with answer and reason and records it.
 type approver struct {
 	answer Answer
+	reason string
 	reqs   []Request
 }
 
-func (f *approver) approve(_ context.Context, r Request) (Answer, error) {
+func (f *approver) approve(_ context.Context, r Request) (Decision, error) {
 	f.reqs = append(f.reqs, r)
-	return f.answer, nil
+	return Decision{Answer: f.answer, Reason: f.reason}, nil
 }
 
 func newTestGate(rules *Rules, approve Approver) (*Authority, *Gate) {
@@ -168,6 +169,37 @@ func TestRejectedCallIsRefused(t *testing.T) {
 	assert.ErrorIs(t, admitApproved(g, "c1", "Edit"), ErrNoGrant)
 }
 
+func TestRejectedCallWithReasonCarriesIt(t *testing.T) {
+	a, g := newTestGate(nil, (&approver{answer: Reject, reason: "use b.go"}).approve)
+	a.EnterExecute()
+	err := g.Before(t.Context(), "c1", "Edit", pathArgs("/x"))
+	require.ErrorIs(t, err, ErrRejected)
+	assert.Equal(t, "tool \"Edit\": rejected by the user, with this feedback:\nuse b.go", err.Error())
+	assert.NotContains(t, err.Error(), "stop and wait")
+	assert.ErrorIs(t, admitApproved(g, "c1", "Edit"), ErrNoGrant)
+}
+
+func TestReasonOnAllowIsIgnored(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		answer Answer
+	}{{"allow", Allow}, {"allow edits", AllowEdits}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &approver{answer: tc.answer, reason: "ignored"}
+			a, g := newTestGate(nil, f.approve)
+			a.EnterExecute()
+			require.NoError(t, g.Before(t.Context(), "c1", "Edit", pathArgs("/x")))
+			require.Len(t, f.reqs, 1)
+			require.True(t, f.reqs[0].Edits)
+			assert.NoError(t, admitApproved(g, "c1", "Edit"))
+			if tc.answer == AllowEdits {
+				require.NoError(t, g.Before(t.Context(), "c2", "Edit", pathArgs("/y")))
+				assert.Len(t, f.reqs, 1)
+			}
+		})
+	}
+}
+
 func TestAllowEditsSkipsLaterDefaultEditAsksOnly(t *testing.T) {
 	d := newDirs(t)
 	f := &approver{answer: AllowEdits}
@@ -234,10 +266,10 @@ func TestAllowEditsNotOfferedGrantsOnlyTheCall(t *testing.T) {
 
 func TestCancelledApprovalRefuses(t *testing.T) {
 	waiting := make(chan struct{})
-	a, g := newTestGate(nil, func(ctx context.Context, _ Request) (Answer, error) {
+	a, g := newTestGate(nil, func(ctx context.Context, _ Request) (Decision, error) {
 		close(waiting)
 		<-ctx.Done()
-		return Reject, ctx.Err()
+		return Decision{}, ctx.Err()
 	})
 	a.EnterExecute()
 	ctx, cancel := context.WithCancel(t.Context())
@@ -279,10 +311,10 @@ func TestNoApproverDeniesNamingTheAskRule(t *testing.T) {
 
 func TestModeChangeDuringApprovalRevokes(t *testing.T) {
 	var a *Authority
-	a, g := newTestGate(nil, func(context.Context, Request) (Answer, error) {
+	a, g := newTestGate(nil, func(context.Context, Request) (Decision, error) {
 		a.EnterPlan()
 		a.EnterExecute()
-		return Allow, nil
+		return Decision{Answer: Allow}, nil
 	})
 	a.EnterExecute()
 	require.NoError(t, g.Before(t.Context(), "c1", "Edit", pathArgs("/x")))
@@ -361,7 +393,11 @@ func TestPendingApprovalBindsOriginalTarget(t *testing.T) {
 	a := NewAuthority()
 	a.EnterExecute()
 	g := NewGate(a, map[string]ToolSpec{"Edit": {Capability: Write, Target: func(json.RawMessage) (Target, error) { return target, nil }}}, nil,
-		func(context.Context, Request) (Answer, error) { close(waiting); <-answer; return Allow, nil })
+		func(context.Context, Request) (Decision, error) {
+			close(waiting)
+			<-answer
+			return Decision{Answer: Allow}, nil
+		})
 	args := pathArgs("/link")
 	done := make(chan error, 1)
 	go func() { done <- g.Before(t.Context(), "call", "Edit", args) }()
@@ -373,9 +409,9 @@ func TestPendingApprovalBindsOriginalTarget(t *testing.T) {
 }
 
 func TestGrantCopiesArgumentsBeforeApproval(t *testing.T) {
-	a, g := newTestGate(nil, func(_ context.Context, r Request) (Answer, error) {
+	a, g := newTestGate(nil, func(_ context.Context, r Request) (Decision, error) {
 		copy(r.Args, pathArgs("/changed"))
-		return Allow, nil
+		return Decision{Answer: Allow}, nil
 	})
 	a.EnterExecute()
 	args := pathArgs("/allowed")
