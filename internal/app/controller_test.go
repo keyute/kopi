@@ -134,8 +134,8 @@ func testTool(name string, c policy.Capability, run func(context.Context, json.R
 		Description: "Test-only tool.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 		Capability:  c,
-		Run: func(ctx context.Context, args json.RawMessage, admit func(policy.Target) error) (string, error) {
-			if err := admit(policy.Target{}); err != nil {
+		Run: func(ctx context.Context, args json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+			if _, err := admit(policy.Target{}); err != nil {
 				return "", err
 			}
 			return run(ctx, args)
@@ -336,6 +336,24 @@ func TestExecToolFollowsMode(t *testing.T) {
 	assert.Len(t, ofType[event.ApprovalRequested](h.rec.all()), 1, "plan mode refuses before asking")
 
 	assert.Equal(t, []event.ModeChanged{{Mode: policy.Execute}, {Mode: policy.Plan}}, ofType[event.ModeChanged](h.rec.all()))
+}
+
+func TestPlanSandboxedExecToolRunsInPlanWithoutAsking(t *testing.T) {
+	var ran atomic.Int32
+	exec := execTool(&ran)
+	exec.Sandboxed, exec.PlanSandboxed = true, true
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{exec}})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Exec", "call-1")), pigruntimetest.Capture(t, requests, "ok")})
+
+	h.turn(t, "run it")
+
+	req := receive(t, requests)
+	require.NotEmpty(t, req.ToolResults)
+	assert.Equal(t, execOutput, req.ToolResults[len(req.ToolResults)-1])
+	assert.Equal(t, int32(1), ran.Load())
+	assert.Equal(t, policy.Plan, h.c.Status().Mode)
+	assert.Empty(t, ofType[event.ApprovalRequested](h.rec.all()))
 }
 
 // PiG runs a batch containing a sequential (non-Read) tool one call at a
@@ -1736,6 +1754,8 @@ func TestPromptMentionsExecuteModeOnlyWhenNonReadToolAvailable(t *testing.T) {
 
 	assert.Contains(t, systemPrompt(sb.Workspace, []tool.Tool{read, edit}), sentence)
 	assert.Contains(t, systemPrompt(sb.Workspace, []tool.Tool{read, {Name: "Probe", Capability: policy.Exec}}), sentence)
+	assert.Contains(t, systemPrompt(sb.Workspace, []tool.Tool{read, {Name: "Probe", Capability: policy.Exec, PlanSandboxed: true}}),
+		"Tools other than Read work only in execute mode and may need the user's approval; in plan mode Probe runs too, but cannot write the workspace.")
 	rules, err := policy.NewRules(sb.Workspace, sb.Home, map[string]policy.ToolSpec{"Read": {}, "Write": {}, "Edit": {}}, policy.Source{Name: "test", Deny: []string{"Write", "Edit"}})
 	require.NoError(t, err)
 	h := newHarness(t, sb, Config{Tools: []tool.Tool{read, write, edit}, Rules: rules})

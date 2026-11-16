@@ -145,7 +145,7 @@ func TestWriteRevokedBeforeRunLeavesWorkspaceUnchanged(t *testing.T) {
 	authority.EnterPlan()
 
 	admitted := false
-	_, err := tool.Run(t.Context(), args, func(target policy.Target) error {
+	_, err := tool.Run(t.Context(), args, func(target policy.Target) (policy.Mode, error) {
 		admitted = true
 		return gate.Admit("call-1", tool.Name, args, &target)
 	})

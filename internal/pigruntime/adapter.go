@@ -28,7 +28,7 @@ func (a agentTool) Schema() ai.ToolSchema {
 // mode may have changed in between.
 func (a agentTool) Execute(ctx context.Context, toolCallID string, params json.RawMessage, _ agent.ToolUpdateCallback) (agent.AgentToolResult, error) {
 	defer a.gate.Finish(toolCallID)
-	out, err := a.tool.Run(ctx, params, func(target policy.Target) error {
+	out, err := a.tool.Run(ctx, params, func(target policy.Target) (policy.Mode, error) {
 		var path *policy.Target
 		if a.tool.Target != nil {
 			path = &target

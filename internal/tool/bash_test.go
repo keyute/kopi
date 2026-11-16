@@ -19,7 +19,7 @@ import (
 func newBashTool(t *testing.T) (Tool, string) {
 	t.Helper()
 	dir := t.TempDir()
-	return NewBash(NewShell(dir, nil)), dir
+	return NewBash(NewShell(dir, nil), nil), dir
 }
 
 func TestBashDescribesItself(t *testing.T) {
@@ -29,12 +29,18 @@ func TestBashDescribesItself(t *testing.T) {
 	assert.Equal(t, policy.Exec, tool.Capability)
 	assert.Nil(t, tool.Target)
 	assert.False(t, tool.Sandboxed)
+	assert.False(t, tool.PlanSandboxed)
+	assert.NotContains(t, tool.Description, "sandbox")
 	assert.Equal(t, []string{"command"}, tool.Parameters["required"])
 	assert.Equal(t, false, tool.Parameters["additionalProperties"])
 	assert.Equal(t, Action{Verb: "Ran", One: "command", Many: "commands"}, tool.Display.Action)
 	_, err := json.Marshal(tool.Parameters)
 	require.NoError(t, err)
-	assert.True(t, NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{})).Sandboxed)
+	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), &sandbox.Sandbox{}))
+	assert.True(t, sandboxed.Sandboxed)
+	assert.True(t, sandboxed.PlanSandboxed)
+	assert.Contains(t, sandboxed.Description, "in execute mode, the workspace")
+	assert.False(t, NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), nil)).PlanSandboxed)
 }
 
 func TestBashRunsCommand(t *testing.T) {
@@ -80,7 +86,7 @@ func TestBashDoesNotRunWithoutAdmission(t *testing.T) {
 	tool, dir := newBashTool(t)
 	refused := errors.New("refused")
 
-	_, err := tool.Run(context.Background(), json.RawMessage(`{"command":"touch marker"}`), func(policy.Target) error { return refused })
+	_, err := tool.Run(context.Background(), json.RawMessage(`{"command":"touch marker"}`), func(policy.Target) (policy.Mode, error) { return policy.Plan, refused })
 
 	require.ErrorIs(t, err, refused)
 	assert.NoFileExists(t, filepath.Join(dir, "marker"))
@@ -90,21 +96,74 @@ func TestBashDoesNotStartWhenAdmissionCancels(t *testing.T) {
 	sh := NewShell(t.TempDir(), nil)
 	// A Start attempt must fail differently from cancellation.
 	sh.shell = filepath.Join(sh.dir, "missing-shell")
-	tool := NewBash(sh)
+	tool := NewBash(sh, nil)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	admitted := false
 
-	out, err := tool.Run(ctx, json.RawMessage(`{"command":"echo unexpected"}`), func(policy.Target) error {
+	out, err := tool.Run(ctx, json.RawMessage(`{"command":"echo unexpected"}`), func(policy.Target) (policy.Mode, error) {
 		admitted = true
 		cancel()
-		return nil
+		return policy.Execute, nil
 	})
 
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, context.Canceled.Error(), err.Error())
 	assert.Empty(t, out)
 	assert.True(t, admitted)
+}
+
+func TestBashRunsInTheShellOfTheAdmittedMode(t *testing.T) {
+	execDir, planDir := t.TempDir(), t.TempDir()
+	tool := NewBash(NewShell(execDir, &sandbox.Sandbox{}), NewShell(planDir, &sandbox.Sandbox{}))
+	for _, tc := range []struct {
+		file string
+		mode policy.Mode
+	}{
+		{"plan", policy.Plan},
+		{"execute", policy.Execute},
+		{"unknown", policy.Mode(7)},
+	} {
+		_, err := tool.Run(t.Context(), json.RawMessage(`{"command":"touch `+tc.file+`"}`), func(policy.Target) (policy.Mode, error) {
+			return tc.mode, nil
+		})
+		require.NoError(t, err, tc.file)
+	}
+	assert.Equal(t, []string{"plan", "unknown"}, listDir(t, planDir))
+	assert.Equal(t, []string{"execute"}, listDir(t, execDir))
+}
+
+func TestBashRefusesPlanModeWithoutPlanSandbox(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		sandboxed, plan bool
+	}{
+		{"unsandboxed, no plan shell", false, false},
+		{"sandboxed, no plan shell", true, false},
+		{"sandboxed, unsandboxed plan shell", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			execDir, planDir := t.TempDir(), t.TempDir()
+			var sb *sandbox.Sandbox
+			if tc.sandboxed {
+				sb = &sandbox.Sandbox{}
+			}
+			var plan *Shell
+			if tc.plan {
+				plan = NewShell(planDir, nil)
+			}
+			tool := NewBash(NewShell(execDir, sb), plan)
+
+			_, err := tool.Run(t.Context(), json.RawMessage(`{"command":"touch marker"}`), func(policy.Target) (policy.Mode, error) {
+				return policy.Plan, nil
+			})
+
+			require.ErrorIs(t, err, policy.ErrDenied)
+			assert.False(t, tool.PlanSandboxed)
+			assert.NoFileExists(t, filepath.Join(execDir, "marker"))
+			assert.NoFileExists(t, filepath.Join(planDir, "marker"))
+		})
+	}
 }
 
 func TestBashDisplayTitle(t *testing.T) {
@@ -136,7 +195,7 @@ func TestBashDisplaySummary(t *testing.T) {
 
 func TestBashDisplayPreview(t *testing.T) {
 	unsandboxed, _ := newBashTool(t)
-	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}))
+	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), nil)
 	noSandbox := PreviewLine{Kind: Context, Text: "runs without the OS sandbox"}
 	oneLine := json.RawMessage(`{"command":"ls"}`)
 	twoLines := json.RawMessage(`{"command":"cd a\nls\n"}`)

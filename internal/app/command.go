@@ -22,7 +22,7 @@ type command struct {
 
 func commandTable() []command {
 	return []command{
-		{Command: Command{Name: "plan", Summary: "switch to plan mode (read-only tools)"}, run: func(c *Controller, _ context.Context, _ string) error {
+		{Command: Command{Name: "plan", Summary: "switch to plan mode (workspace read-only)"}, run: func(c *Controller, _ context.Context, _ string) error {
 			c.EnterPlan()
 			return nil
 		}},

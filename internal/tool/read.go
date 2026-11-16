@@ -63,7 +63,7 @@ func NewRead(ws *Workspace) Tool {
 		},
 		Capability: policy.Read,
 		Target:     pathTarget(ws),
-		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) error) (string, error) {
+		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
 			args, err := decodeReadArgs(raw)
 			if err != nil {
 				return "", err
@@ -84,7 +84,7 @@ func NewRead(ws *Workspace) Tool {
 			if err := ws.checkRead(f, args.FilePath); err != nil {
 				return "", err
 			}
-			if err := admit(dest.target); err != nil {
+			if _, err := admit(dest.target); err != nil {
 				return "", err
 			}
 			return read(ctx, f, args)

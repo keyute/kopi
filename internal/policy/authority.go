@@ -78,8 +78,8 @@ func (a *Authority) enter(m Mode) uint64 {
 	return a.generation
 }
 
-func (a *Authority) Permits(c Capability) (uint64, bool) {
+func (a *Authority) Permits(s ToolSpec) (Mode, uint64, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.generation, !c.NeedsExecute() || a.mode == Execute
+	return a.mode, a.generation, !s.Capability.NeedsExecute() || s.PlanSandboxed || a.mode == Execute
 }

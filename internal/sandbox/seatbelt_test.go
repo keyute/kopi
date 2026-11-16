@@ -288,6 +288,41 @@ func TestSeatbeltDenyWriteGit(t *testing.T) {
 	assert.DirExists(t, git)
 }
 
+func TestSeatbeltDenyWriteInsideWriteRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "root")
+	ws := filepath.Join(root, "ws")
+	writeFile(t, filepath.Join(ws, "f"))
+	require.NoError(t, os.Mkdir(filepath.Join(root, "scratch"), 0o700))
+	sb := newSandbox(t, Policy{Write: []string{root}, DenyWrite: []string{ws}})
+	env := []string{"ROOT=" + root, "WS=" + ws}
+
+	for _, script := range []string{
+		`cat "$WS/f"`,
+		`ls "$WS"`,
+		`echo x >"$ROOT/scratch/new"`,
+	} {
+		require.NoError(t, bash(t, sb, script, env...), script)
+	}
+	for _, script := range []string{
+		`echo y >"$WS/f"`,
+		`rm "$WS/f"`,
+		`touch "$WS/new"`,
+		`mkdir "$WS/d"`,
+		`mv "$WS/f" "$ROOT/scratch/moved"`,
+		`mv "$WS" "$ROOT/moved"`,
+	} {
+		assert.Error(t, bash(t, sb, script, env...), script)
+	}
+	// Either the link or the write through it must fail.
+	_ = bash(t, sb, `ln "$WS/f" "$ROOT/scratch/link" && echo y >"$ROOT/scratch/link"`, env...)
+	got, err := os.ReadFile(filepath.Join(ws, "f"))
+	require.NoError(t, err)
+	assert.Equal(t, "x", string(got))
+	assert.NoFileExists(t, filepath.Join(ws, "new"))
+	assert.NoDirExists(t, filepath.Join(ws, "d"))
+	assert.NoDirExists(t, filepath.Join(root, "moved"))
+}
+
 func TestSeatbeltWriteRootCannotBeRenamed(t *testing.T) {
 	outer := filepath.Join(t.TempDir(), "outer")
 	inner := filepath.Join(outer, "inner")
