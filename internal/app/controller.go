@@ -25,7 +25,11 @@ type Config struct {
 	JoinTimeout time.Duration
 	// History records human input; nil disables it.
 	History *history.Store
+	// Files lists the entries that @ references complete to; nil offers none.
+	Files *tool.Workspace
 }
+
+const maxReferenceEntries = 10000
 
 // Controller holds all frontend-neutral behaviour: frontends pass input in
 // and render the events they subscribe to.
@@ -207,6 +211,22 @@ func (c *Controller) History() []string {
 		return nil
 	}
 	return c.cfg.History.Texts()
+}
+
+// Files returns the workspace entries @ references complete to; nil when disabled.
+func (c *Controller) Files() ([]Candidate, error) {
+	if c.cfg.Files == nil {
+		return nil, nil
+	}
+	paths, err := c.cfg.Files.List(maxReferenceEntries)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list files: %w", err)
+	}
+	out := make([]Candidate, 0, len(paths))
+	for _, p := range paths {
+		out = append(out, Candidate{Value: p})
+	}
+	return out, nil
 }
 
 // submitPrompt starts a turn with p or queues p for the running one. It never

@@ -235,7 +235,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, req app.OpenRequest)
 		}
 	}()
 
-	cfg := app.Config{Model: model, Workspace: cwd, Tools: []tool.Tool{tool.NewRead(ws)}, JoinTimeout: joinTimeout}
+	cfg := app.Config{Model: model, Workspace: cwd, Tools: []tool.Tool{tool.NewRead(ws)}, JoinTimeout: joinTimeout, Files: ws}
 	// Only the fullscreen interface records prompts.
 	if fullscreen {
 		store, err := history.Open(paths.HistoryFile, cwd, historyLimit)

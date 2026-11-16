@@ -3,10 +3,12 @@ package app
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/pigruntime"
 )
 
 type Command struct {
@@ -15,34 +17,35 @@ type Command struct {
 
 type command struct {
 	Command
-	run func(c *Controller, ctx context.Context, args string) error
+	run  func(c *Controller, ctx context.Context, args string) error
+	args func(c *Controller) ([]Candidate, error)
 }
 
 // commandTable is a function rather than a package variable because /help
 // reads the table back, which would be an initialization cycle.
 func commandTable() []command {
 	return []command{
-		{Command{"plan", "/plan", "switch to plan mode (read-only tools)"}, func(c *Controller, _ context.Context, _ string) error {
+		{Command: Command{"plan", "/plan", "switch to plan mode (read-only tools)"}, run: func(c *Controller, _ context.Context, _ string) error {
 			c.EnterPlan()
 			return nil
 		}},
-		{Command{"execute", "/execute", "switch to execute mode"}, func(c *Controller, _ context.Context, _ string) error {
+		{Command: Command{"execute", "/execute", "switch to execute mode"}, run: func(c *Controller, _ context.Context, _ string) error {
 			c.EnterExecute()
 			return nil
 		}},
-		{Command{"status", "/status", "show mode, model, session, running work and tools"}, func(c *Controller, _ context.Context, _ string) error {
+		{Command: Command{"status", "/status", "show mode, model, session, running work and tools"}, run: func(c *Controller, _ context.Context, _ string) error {
 			c.notice(renderStatus(c.Status()))
 			return nil
 		}},
-		{Command{"new", "/new", "start a new session"}, func(c *Controller, ctx context.Context, _ string) error {
+		{Command: Command{"new", "/new", "start a new session"}, run: func(c *Controller, ctx context.Context, _ string) error {
 			return c.switchTo(ctx, OpenRequest{})
 		}},
-		{Command{"resume", "/resume [id]", "resume a session, or list sessions without an id"}, (*Controller).resumeCommand},
-		{Command{"help", "/help", "list commands"}, func(c *Controller, _ context.Context, _ string) error {
+		{Command: Command{"resume", "/resume [id]", "resume a session, or list sessions without an id"}, run: (*Controller).resumeCommand, args: (*Controller).sessionCandidates},
+		{Command: Command{"help", "/help", "list commands"}, run: func(c *Controller, _ context.Context, _ string) error {
 			c.notice(renderHelp(c.Commands()))
 			return nil
 		}},
-		{Command{"quit", "/quit", "exit kopi"}, func(*Controller, context.Context, string) error {
+		{Command: Command{"quit", "/quit", "exit kopi"}, run: func(*Controller, context.Context, string) error {
 			return ErrQuit
 		}},
 	}
@@ -93,11 +96,47 @@ func (c *Controller) listSessions() error {
 	var b strings.Builder
 	b.WriteString("sessions (newest first):")
 	for _, s := range sessions {
-		first, _, _ := strings.Cut(s.FirstMessage, "\n")
-		fmt.Fprintf(&b, "\n  %s  %s  %s", s.ID, s.Modified.Local().Format(time.DateTime), first)
+		fmt.Fprintf(&b, "\n  %s  %s", s.ID, describeSession(s))
 	}
 	c.notice(b.String())
 	return nil
+}
+
+// Arguments returns the candidates for command name's argument; nil when it takes
+// none. It may read every session file, so frontends call it off their event loop.
+func (c *Controller) Arguments(name string) ([]Candidate, error) {
+	cmds := commandTable()
+	i := slices.IndexFunc(cmds, func(cmd command) bool { return cmd.Name == name })
+	if i < 0 || cmds[i].args == nil {
+		return nil, nil
+	}
+	// Held so that it cannot touch the runtime after Close.
+	c.life.Lock()
+	defer c.life.Unlock()
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return nil, nil
+	}
+	return cmds[i].args(c)
+}
+
+func (c *Controller) sessionCandidates() ([]Candidate, error) {
+	sessions, err := c.Sessions()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Candidate, 0, len(sessions))
+	for _, s := range sessions {
+		out = append(out, Candidate{Value: s.ID, Description: describeSession(s)})
+	}
+	return out, nil
+}
+
+func describeSession(s pigruntime.SessionInfo) string {
+	first, _, _ := strings.Cut(s.FirstMessage, "\n")
+	return s.Modified.Local().Format(time.DateTime) + "  " + first
 }
 
 func renderHelp(cmds []Command) string {

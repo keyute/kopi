@@ -1373,6 +1373,25 @@ func TestHistoryIsNilWithoutStore(t *testing.T) {
 	assert.Nil(t, h.c.History())
 }
 
+func TestFilesListsWorkspaceEntries(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "src"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src", "main.go"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), nil, 0o600))
+	ws, err := tool.NewWorkspace(dir, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Files: ws})
+
+	cs, err := h.c.Files()
+	require.NoError(t, err)
+	assert.Equal(t, []Candidate{{Value: "notes.txt"}, {Value: "src/"}, {Value: "src/main.go"}}, cs)
+
+	cs, err = newHarness(t, pigruntimetest.NewSandbox(t), Config{}).c.Files()
+	require.NoError(t, err)
+	assert.Nil(t, cs)
+}
+
 func TestUnknownCommandNeverReachesProvider(t *testing.T) {
 	h, _ := openHarness(t, Config{})
 	requests := make(chan pigruntimetest.Request, 1)

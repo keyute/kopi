@@ -26,6 +26,10 @@ type Controller interface {
 	ToggleMode()
 	History() []string
 	Status() app.Status
+	Commands() []app.Command
+	// Arguments and Files may read many files; call them off the event loop.
+	Arguments(name string) ([]app.Candidate, error)
+	Files() ([]app.Candidate, error)
 }
 
 // Options are the frontend's settings. Keys maps action names to key
