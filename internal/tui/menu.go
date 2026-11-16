@@ -44,7 +44,6 @@ type candidatesMsg struct {
 
 // followMenu opens, refilters or closes the menu for the token at the cursor.
 func (m *model) followMenu() tea.Cmd {
-	defer m.refreshPending()
 	mn := &m.menu
 	q, ok := app.QueryAt(m.composer.value(), m.composer.ta.Line(), m.composer.ta.Column())
 	if !ok || m.composer.browsing() {
@@ -104,24 +103,14 @@ func (m *model) loaded(msg candidatesMsg) {
 		return
 	}
 	m.menu.items = msg.cs
-	m.rematch()
-	m.refreshPending()
+	if !m.holding() {
+		m.rematch()
+	}
 }
 
-// menuHeight includes blank space reserved by a composer drag; otherwise it
-// counts candidates that fit above the status line.
-func (m *model) menuHeight() int {
-	if m.approval != nil {
-		return 0
-	}
-	avail := m.height - m.composer.height() - chromeRows
-	if m.busy {
-		avail -= busyRows
-	}
-	if m.drag.region == regionComposer && m.drag.moved {
-		return max(0, min(m.drag.menuHeight, avail))
-	}
-	mn := &m.menu
+// want is the rows the menu would take with room for all of them: its
+// candidates up to menuMax, plus a position row when some are left out.
+func (mn *menu) want() int {
 	if !mn.open || len(mn.shown) == 0 {
 		return 0
 	}
@@ -129,8 +118,10 @@ func (m *model) menuHeight() int {
 	if len(mn.shown) > h {
 		h++
 	}
-	return max(0, min(h, avail))
+	return h
 }
+
+func (m *model) menuHeight() int { return m.geo.menu }
 
 // menuRows draws the menu: a window of candidates around the selection, then,
 // when some are left out, a row giving the selection's position.
@@ -138,9 +129,6 @@ func (m *model) menuRows() []string {
 	h := m.menuHeight()
 	if h == 0 {
 		return nil
-	}
-	if m.drag.region == regionComposer && m.drag.moved {
-		return make([]string, h)
 	}
 	mn, th := &m.menu, m.th
 	n := min(h, len(mn.shown), menuMax)

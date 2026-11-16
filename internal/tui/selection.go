@@ -15,8 +15,9 @@ const multiClick = 400 * time.Millisecond
 
 // point is a place in the text. In the transcript it is an index into
 // model.lines and a cell column; indices rather than screen rows keep a
-// selection on its text while the view scrolls. In the composer it is a
-// logical line and a rune index into it.
+// selection on its text while the view scrolls. In the lower rows it is an
+// index into model.below and a cell column. In the composer it is a logical
+// line and a rune index into it.
 type point struct{ line, col int }
 
 func (p point) before(q point) bool {
@@ -26,9 +27,9 @@ func (p point) before(q point) bool {
 	return p.col < q.col
 }
 
-// selection is the transcript text from anchor to head, half-open in cells:
-// the cell at the later point is not included. It is empty when they are
-// equal.
+// selection is the transcript's or the lower rows' text from anchor to head,
+// half-open in cells: the cell at the later point is not included. It is empty
+// when they are equal.
 type selection struct{ anchor, head point }
 
 func (s selection) ordered() (from, to point) {
@@ -52,6 +53,20 @@ func stretch(unit, under selection) selection {
 		return selection{anchor: unit.anchor, head: under.head}
 	}
 	return unit
+}
+
+// unitAt is what an n-th press at p selects in lines: the point itself, its
+// word or its line.
+func unitAt(lines []line, p point, n int) selection {
+	if n == 1 || p.line >= len(lines) {
+		return selection{anchor: p, head: p}
+	}
+	text := lines[p.line].text
+	if n == 2 {
+		from, to := wordAt(text, p.col)
+		return selection{anchor: point{p.line, from}, head: point{p.line, to}}
+	}
+	return selection{anchor: point{p.line, 0}, head: point{p.line, ansi.StringWidth(text)}}
 }
 
 // span is the cells [from, to) that s covers of line i, width cells wide;

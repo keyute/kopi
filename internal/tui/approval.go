@@ -52,7 +52,8 @@ func newApprovalDialog(a *event.ApprovalRequested, km *keyMap, th theme) *dialog
 // preview capped at maxPreview rows, the rule that asked, a blank row, and
 // the options. The reason field grows to maxPreview rows within what maxRows
 // leaves after the other rows, and the preview fits into what is left after
-// it. Past maxRows the top is cut so the options stay visible.
+// it. Past maxRows the top is cut so the options stay visible, along with
+// any field area the cut reaches.
 func approvalRows(d *dialog, a *event.ApprovalRequested, width, maxPreview, maxRows int, th theme) []string {
 	if maxRows <= 0 {
 		return nil
@@ -62,7 +63,16 @@ func approvalRows(d *dialog, a *event.ApprovalRequested, width, maxPreview, maxR
 	d.body = nil
 	d.body = previewRows(a.Preview, min(maxPreview, maxRows-len(d.rows(width, maxRows, fieldCap, th))), width-2, th)
 	rows := d.rows(width, maxRows, fieldCap, th)
-	return rows[max(0, len(rows)-maxRows):]
+	cut := max(0, len(rows)-maxRows)
+	var areas []fieldArea
+	for _, fa := range d.areas {
+		if fa.y >= cut {
+			fa.y -= cut
+			areas = append(areas, fa)
+		}
+	}
+	d.areas = areas
+	return rows[cut:]
 }
 
 // previewRows draws whole preview lines within limit rows; when they do not
