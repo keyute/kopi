@@ -203,7 +203,7 @@ func editRun(t *testing.T, mode policy.Mode, rules ...policy.Source) (result, co
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
 	edit := tool.NewEdit(ws)
-	r, err := policy.NewRules(sb.Workspace, sb.Home, []string{edit.Name}, rules...)
+	r, err := policy.NewRules(sb.Workspace, sb.Home, map[string]policy.ToolSpec{edit.Name: {Capability: edit.Capability, Target: edit.Target}}, rules...)
 	require.NoError(t, err)
 	requests := make(chan pigruntimetest.Request, 1)
 	steps := []ai.FauxResponseStep{

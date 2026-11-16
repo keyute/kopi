@@ -1,0 +1,46 @@
+; Adapted from codex-rs/sandboxing/src/seatbelt_network_policy.sbpl of OpenAI Codex,
+; https://github.com/openai/codex at commit 0184dfa6a48f0110dd9c6835522492908e5abcf3.
+; Copyright 2025 OpenAI
+; Licensed under the Apache License, Version 2.0; see LICENSE in this directory.
+; Modified by the Kopi authors: dropped the proxy comment, added the TLS trust service, IP-only socket rules and the DNS socket.
+
+; when network access is enabled, these policies are added after those in seatbelt_base_policy.sbpl
+; Ref https://source.chromium.org/chromium/chromium/src/+/main:sandbox/policy/mac/network.sb;drc=f8f264d5e4e7509c913f4c60c2639d15905a07e4
+
+; allow only safe AF_SYSTEM sockets used for local platform services.
+(allow system-socket
+  (require-all
+    (socket-domain AF_SYSTEM)
+    (socket-protocol 2)
+  )
+)
+
+(allow mach-lookup
+    ; Used by platform helpers that resolve user directory locations.
+    (global-name "com.apple.bsd.dirhelper")
+    (global-name "com.apple.system.opendirectoryd.membership")
+
+    ; Communicate with the security server for TLS certificate information.
+    (global-name "com.apple.SecurityServer")
+    (global-name "com.apple.networkd")
+    (global-name "com.apple.ocspd")
+    (global-name "com.apple.trustd.agent")
+
+    ; Read network configuration.
+    (global-name "com.apple.SystemConfiguration.DNSConfiguration")
+    (global-name "com.apple.SystemConfiguration.configd")
+)
+
+(allow sysctl-read
+  (sysctl-name-regex #"^net.routetable")
+)
+
+; Kopi addition: system libcurl needs this service for TLS.
+(allow mach-lookup (global-name "com.apple.TrustEvaluationAgent"))
+
+; Kopi addition: IP networking only. Unix sockets (Docker, ssh-agent) stay
+; unreachable, apart from the one DNS resolution needs.
+(allow network-bind (local ip "*:*"))
+(allow network-inbound (local ip "*:*"))
+(allow network-outbound (remote ip "*:*"))
+(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))

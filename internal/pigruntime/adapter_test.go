@@ -44,7 +44,9 @@ func execTool(ran *atomic.Int32) tool.Tool {
 	}
 }
 
-func allowAll(context.Context, policy.Request) (policy.Answer, error) { return policy.Allow, nil }
+func allowAll(context.Context, policy.Request) (policy.Decision, error) {
+	return policy.Decision{Answer: policy.Allow}, nil
+}
 
 func lastToolResult(t *testing.T, msgs []ai.Message) string {
 	t.Helper()
@@ -135,9 +137,9 @@ func TestHookPassesArgsToGate(t *testing.T) {
 	authority.EnterExecute()
 	sess, err := r.Open(t.Context(), OpenOptions{
 		Model: fauxModel, Tools: []tool.Tool{execTool(&ran)}, Authority: authority,
-		Approve: func(_ context.Context, req policy.Request) (policy.Answer, error) {
+		Approve: func(_ context.Context, req policy.Request) (policy.Decision, error) {
 			asked <- req
-			return policy.Allow, nil
+			return policy.Decision{Answer: policy.Allow}, nil
 		},
 	})
 	require.NoError(t, err)
@@ -161,14 +163,25 @@ func TestRefusalTextReachesModel(t *testing.T) {
 		{
 			name: "rejected",
 			opts: func(*testing.T) OpenOptions {
-				return OpenOptions{Approve: func(context.Context, policy.Request) (policy.Answer, error) { return policy.Reject, nil }}
+				return OpenOptions{Approve: func(context.Context, policy.Request) (policy.Decision, error) {
+					return policy.Decision{Answer: policy.Reject}, nil
+				}}
 			},
 			reasons: []string{policy.ErrRejected.Error(), "stop and wait for their instructions"},
 		},
 		{
+			name: "rejected with feedback",
+			opts: func(*testing.T) OpenOptions {
+				return OpenOptions{Approve: func(context.Context, policy.Request) (policy.Decision, error) {
+					return policy.Decision{Answer: policy.Reject, Reason: "use b.txt"}, nil
+				}}
+			},
+			reasons: []string{policy.ErrRejected.Error(), "with this feedback:\nuse b.txt"},
+		},
+		{
 			name: "denied by rule",
 			opts: func(t *testing.T) OpenOptions {
-				rules, err := policy.NewRules(t.TempDir(), t.TempDir(), []string{"Exec"}, policy.Source{Name: "config", Deny: []string{"Exec"}})
+				rules, err := policy.NewRules(t.TempDir(), t.TempDir(), map[string]policy.ToolSpec{"Exec": {}}, policy.Source{Name: "config", Deny: []string{"Exec"}})
 				require.NoError(t, err)
 				return OpenOptions{Rules: rules, Approve: allowAll}
 			},
@@ -212,11 +225,11 @@ func TestCancellingSendUnblocksPendingApproval(t *testing.T) {
 	authority.EnterExecute()
 	sess, err := r.Open(t.Context(), OpenOptions{
 		Model: fauxModel, Tools: []tool.Tool{execTool(&ran)}, Authority: authority,
-		Approve: func(ctx context.Context, _ policy.Request) (policy.Answer, error) {
+		Approve: func(ctx context.Context, _ policy.Request) (policy.Decision, error) {
 			defer close(returned)
 			close(waiting)
 			<-ctx.Done()
-			return policy.Reject, ctx.Err()
+			return policy.Decision{}, ctx.Err()
 		},
 	})
 	require.NoError(t, err)
@@ -271,7 +284,7 @@ func TestInterruptTurnRejectsBeforeCancellationForwarding(t *testing.T) {
 	reject := make(chan struct{})
 	authority := policy.NewAuthority()
 	authority.EnterExecute()
-	rules, err := policy.NewRules(sb.ws, sb.kopiHome, []string{"Exec", "Probe"}, policy.Source{Name: "test", Allow: []string{"Probe"}})
+	rules, err := policy.NewRules(sb.ws, sb.kopiHome, map[string]policy.ToolSpec{"Exec": {}, "Probe": {}}, policy.Source{Name: "test", Allow: []string{"Probe"}})
 	require.NoError(t, err)
 	sess, err := r.Open(t.Context(), OpenOptions{
 		Model: fauxModel, Authority: authority, Rules: rules,
@@ -279,10 +292,10 @@ func TestInterruptTurnRejectsBeforeCancellationForwarding(t *testing.T) {
 			ran.Add(1)
 			return toolOutput, nil
 		})},
-		Approve: func(ctx context.Context, _ policy.Request) (policy.Answer, error) {
+		Approve: func(ctx context.Context, _ policy.Request) (policy.Decision, error) {
 			hooks <- ctx
 			<-reject
-			return policy.Reject, nil
+			return policy.Decision{Answer: policy.Reject}, nil
 		},
 	})
 	require.NoError(t, err)
@@ -370,16 +383,17 @@ func TestRealToolsRejectApprovalRetarget(t *testing.T) {
 				}
 				raw, err := json.Marshal(args)
 				require.NoError(t, err)
-				rules, err := policy.NewRules(dir, t.TempDir(), []string{name}, policy.Source{Name: "test", Ask: []string{name}, Deny: []string{name + "(denied/**)"}})
+				specs := map[string]policy.ToolSpec{name: {Capability: realTool.Capability, Target: realTool.Target}}
+				rules, err := policy.NewRules(dir, t.TempDir(), specs, policy.Source{Name: "test", Ask: []string{name}, Deny: []string{name + "(denied/**)"}})
 				require.NoError(t, err)
 				authority := policy.NewAuthority()
 				authority.EnterExecute()
 				waiting, answer := make(chan struct{}), make(chan struct{})
-				gate := policy.NewGate(authority, map[string]policy.ToolSpec{name: {Capability: realTool.Capability, Target: realTool.Target}}, rules,
-					func(context.Context, policy.Request) (policy.Answer, error) {
+				gate := policy.NewGate(authority, specs, rules,
+					func(context.Context, policy.Request) (policy.Decision, error) {
 						close(waiting)
 						<-answer
-						return policy.Allow, nil
+						return policy.Decision{Answer: policy.Allow}, nil
 					})
 				done := make(chan error, 1)
 				go func() { done <- gate.Before(t.Context(), "call", name, raw) }()

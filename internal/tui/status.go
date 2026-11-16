@@ -54,6 +54,12 @@ var segments = map[string]segment{
 	"notice": func(s statusInput, th theme) (string, bool) {
 		return fg(th.dim).Render(s.notice), s.notice != ""
 	},
+	"sandbox": func(s statusInput, th theme) (string, bool) {
+		if s.Sandboxed {
+			return fg(th.dim).Render("sandboxed"), s.Shell
+		}
+		return fg(th.warning).Render("unsandboxed"), s.Shell
+	},
 }
 
 // statusLayout names the segments on each side of the status line.

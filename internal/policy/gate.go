@@ -18,6 +18,9 @@ type ToolSpec struct {
 	Capability Capability
 	// Target is nil for a tool that acts on no path.
 	Target func(args json.RawMessage) (Target, error)
+	// Sandboxed reports that the OS confines what a call can do, so a call no
+	// rule matches runs without asking.
+	Sandboxed bool
 }
 
 type Answer int
@@ -40,8 +43,15 @@ type Request struct {
 	Edits bool
 }
 
+// Decision is a human's answer to a Request.
+type Decision struct {
+	Answer Answer
+	// Reason is the human's feedback on a Reject; with one, the turn goes on.
+	Reason string
+}
+
 // Approver asks a human about a call. It must return once ctx is done.
-type Approver func(ctx context.Context, r Request) (Answer, error)
+type Approver func(ctx context.Context, r Request) (Decision, error)
 
 type grant struct {
 	args       json.RawMessage
@@ -102,7 +112,7 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 		}
 	case effectAllow:
 	default:
-		if spec.Capability != Read && (spec.Capability != Write || !g.editsGranted()) {
+		if spec.Capability != Read && !spec.Sandboxed && (spec.Capability != Write || !g.editsGranted()) {
 			req.Edits = spec.Capability == Write
 			allow := tool
 			if target != nil {
@@ -134,18 +144,20 @@ func (g *Gate) ask(ctx context.Context, r Request, allow string) error {
 		}
 		return fmt.Errorf("tool %q needs approval and this run cannot ask for it; add an allow rule to permissions.allow in config.json or pass --allowed-tools, such as %s: %w", r.Tool, allow, ErrDenied)
 	}
-	a, err := g.approve(ctx, r)
+	d, err := g.approve(ctx, r)
 	if err != nil {
 		return fmt.Errorf("failed to get approval for tool %q: %w", r.Tool, err)
 	}
 	switch {
-	case a == AllowEdits && r.Edits:
+	case d.Answer == AllowEdits && r.Edits:
 		g.mu.Lock()
 		g.edits = true
 		g.mu.Unlock()
 		return nil
-	case a == Allow || a == AllowEdits:
+	case d.Answer == Allow || d.Answer == AllowEdits:
 		return nil
+	case d.Reason != "":
+		return fmt.Errorf("tool %q: %w, with this feedback:\n%s", r.Tool, ErrRejected, d.Reason)
 	default:
 		return fmt.Errorf("tool %q: the user rejected this call; stop and wait for their instructions: %w", r.Tool, ErrRejected)
 	}

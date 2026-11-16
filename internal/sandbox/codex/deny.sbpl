@@ -1,0 +1,11 @@
+; Adapted from codex-rs/sandboxing/src/seatbelt.rs of OpenAI Codex,
+; https://github.com/openai/codex at commit 0184dfa6a48f0110dd9c6835522492908e5abcf3.
+; Copyright 2025 OpenAI
+; Licensed under the Apache License, Version 2.0; see LICENSE in this directory.
+; Modified by the Kopi authors: extracted the rules from Rust string literals and wrote the XPC comment.
+
+; XPC services run outside this sandbox.
+(deny mach-lookup (xpc-service-name-prefix ""))
+; These fcntls mutate files through read-only descriptors, bypassing file-write*
+; and file-ioctl. F_MAKECOMPRESSED = 80, F_TRANSFEREXTENTS = 110.
+(deny system-fcntl (fcntl-command 80 110))

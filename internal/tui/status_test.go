@@ -44,6 +44,9 @@ func TestStatusLine(t *testing.T) {
 		{"layout without notice", full, custom, "hello", 30, "  main" + strings.Repeat(" ", 10) + "18.0% · plan  "},
 		{"notice on the left", full, noticeLeft, "hello", 30, "  hello · main" + strings.Repeat(" ", 10) + "plan  "},
 		{"long notice drops left", full, defaultLayout, "ctrl+c again to exit", 40, "  claude-x ctrl+c again to exit · plan  "},
+		{"sandboxed shell", app.Status{Model: "a/b", Shell: true, Sandboxed: true}, defaultLayout, "", 30, "  b" + strings.Repeat(" ", 9) + "sandboxed · plan  "},
+		{"unsandboxed shell", app.Status{Model: "a/b", Shell: true}, defaultLayout, "", 30, "  b" + strings.Repeat(" ", 7) + "unsandboxed · plan  "},
+		{"no shell", app.Status{Model: "a/b", Sandboxed: true}, defaultLayout, "", 30, "  b" + strings.Repeat(" ", 21) + "plan  "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, ansi.Strip(statusLine(tc.s, tc.layout, tc.notice, tc.width, mocha())))
@@ -78,4 +81,13 @@ func TestStatusLineWarnsFromNinetyPercent(t *testing.T) {
 
 	s.ContextTokens = 900
 	assert.Contains(t, statusLine(s, defaultLayout, "", 40, th), fg(th.warning).Render("90.0%"))
+}
+
+func TestStatusLineWarnsWhenUnsandboxed(t *testing.T) {
+	th := mocha()
+	s := app.Status{Model: "a/b", Shell: true, Sandboxed: true}
+	assert.Contains(t, statusLine(s, defaultLayout, "", 40, th), fg(th.dim).Render("sandboxed"))
+
+	s.Sandboxed = false
+	assert.Contains(t, statusLine(s, defaultLayout, "", 40, th), fg(th.warning).Render("unsandboxed"))
 }

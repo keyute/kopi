@@ -393,6 +393,12 @@ func (c *Controller) Status() Status {
 			s.ContextTokens, s.ContextWindow = tokens, window
 		}
 	}
+	for _, t := range c.cfg.Tools {
+		if t.Capability == policy.Exec {
+			s.Shell, s.Sandboxed = true, t.Sandboxed
+			break
+		}
+	}
 	return s
 }
 

@@ -28,6 +28,10 @@ func TestConfigShowsOrigins(t *testing.T) {
 	for _, key := range []string{"allow", "ask", "deny"} {
 		assert.Regexp(t, `permissions\.`+key+`\s+= \[\]\s+\(default\)`, stdout)
 	}
+	assert.Regexp(t, `sandbox\.enabled\s+=\s+\(unset\)`, stdout)
+	assert.Regexp(t, `sandbox\.allowWrite\s+= \[\]\s+\(default\)`, stdout)
+	assert.Regexp(t, `sandbox\.denyRead\s+= \[\]\s+\(default\)`, stdout)
+	assert.Regexp(t, `sandbox\.network\s+= false\s+\(default\)`, stdout)
 	assert.Regexp(t, `model\s+= global/model-1\s+`+regexp.QuoteMeta("(global ("+configFile+"))"), stdout)
 
 	stdout, _, err = execute(t, "", "config", "--model", "flag/model-2")

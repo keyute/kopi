@@ -13,6 +13,8 @@ type theme struct {
 	// Chroma style for fenced code.
 	heading, link, code color.Color
 	codeTheme           string
+	// frame colours a dialog's rules.
+	frame color.Color
 }
 
 func mocha() theme {
@@ -29,6 +31,7 @@ func mocha() theme {
 		link:          lipgloss.Color("#89b4fa"),
 		code:          lipgloss.Color("#94e2d5"),
 		codeTheme:     "catppuccin-mocha",
+		frame:         lipgloss.Color("#89b4fa"),
 	}
 }
 
@@ -46,6 +49,7 @@ func latte() theme {
 		link:          lipgloss.Color("#1e66f5"),
 		code:          lipgloss.Color("#179299"),
 		codeTheme:     "catppuccin-latte",
+		frame:         lipgloss.Color("#1e66f5"),
 	}
 }
 

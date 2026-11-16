@@ -121,11 +121,7 @@ type OpenOptions struct {
 }
 
 func (r *Runtime) Open(ctx context.Context, o OpenOptions) (*Session, error) {
-	specs := make(map[string]policy.ToolSpec, len(o.Tools))
-	for _, t := range o.Tools {
-		specs[t.Name] = policy.ToolSpec{Capability: t.Capability, Target: t.Target}
-	}
-	return r.open(ctx, o, policy.NewGate(o.Authority, specs, o.Rules, o.Approve))
+	return r.open(ctx, o, policy.NewGate(o.Authority, tool.Specs(o.Tools), o.Rules, o.Approve))
 }
 
 // open takes the gate separately so a test can install one that does not

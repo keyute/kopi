@@ -51,11 +51,11 @@ type fakeController struct {
 
 type answer struct {
 	token uint64
-	a     policy.Answer
+	d     policy.Decision
 }
 
-func (f *fakeController) Answer(token uint64, a policy.Answer) bool {
-	f.answers = append(f.answers, answer{token, a})
+func (f *fakeController) Answer(token uint64, d policy.Decision) bool {
+	f.answers = append(f.answers, answer{token, d})
 	return true
 }
 
@@ -139,6 +139,7 @@ func press(m *model, k tea.KeyPressMsg) tea.Cmd {
 // typeText enters s as typing would, so it never collapses into a block.
 func typeText(m *model, s string) {
 	m.composer.update(tea.PasteMsg{Content: s})
+	m.arrange()
 }
 
 // pasteText delivers s as a terminal paste.
@@ -903,7 +904,7 @@ func TestApprovalCapturesKeys(t *testing.T) {
 	assert.Empty(t, m.composer.value())
 	assert.Zero(t, c.toggles)
 	assert.Empty(t, c.answers)
-	assert.Contains(t, screen(m), "❯ 1. Yes")
+	assert.Contains(t, screen(m), "❭ 1. Yes")
 }
 
 func TestApprovalEnterAnswersTheSelectedOption(t *testing.T) {
@@ -917,8 +918,8 @@ func TestApprovalEnterAnswersTheSelectedOption(t *testing.T) {
 	press(m, up)
 	press(m, enter)
 
-	assert.Equal(t, []answer{{1, policy.AllowEdits}}, c.answers)
-	assert.Contains(t, screen(m), "❯ 2. Yes, allow all edits this session", "the prompt stays until it ends")
+	assert.Equal(t, []answer{{1, policy.Decision{Answer: policy.AllowEdits}}}, c.answers)
+	assert.Contains(t, screen(m), "❭ 2. Yes, allow all edits this session", "the prompt stays until it ends")
 }
 
 func TestApprovalFollowsReboundMenuKeys(t *testing.T) {
@@ -931,14 +932,14 @@ func TestApprovalFollowsReboundMenuKeys(t *testing.T) {
 	press(m, tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
 	press(m, tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
 	press(m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	assert.Contains(t, screen(m), "❯ 2. Yes, allow all edits this session")
+	assert.Contains(t, screen(m), "❭ 2. Yes, allow all edits this session")
 
 	press(m, down)
 	press(m, up)
 	press(m, up)
-	assert.Contains(t, screen(m), "❯ 2. Yes, allow all edits this session", "the arrow keys are unbound")
+	assert.Contains(t, screen(m), "❭ 2. Yes, allow all edits this session", "the arrow keys are unbound")
 	press(m, enter)
-	assert.Equal(t, []answer{{1, policy.AllowEdits}}, c.answers)
+	assert.Equal(t, []answer{{1, policy.Decision{Answer: policy.AllowEdits}}}, c.answers)
 }
 
 func TestApprovalDigitAnswersDirectly(t *testing.T) {
@@ -946,20 +947,187 @@ func TestApprovalDigitAnswersDirectly(t *testing.T) {
 	send(m, editApproval())
 
 	press(m, digit('4'))
-	press(m, digit('3'))
 	press(m, digit('1'))
+	assert.Equal(t, []answer{{1, policy.Decision{Answer: policy.Allow}}}, c.answers)
 
-	assert.Equal(t, []answer{{1, policy.Reject}, {1, policy.Allow}}, c.answers)
+	press(m, digit('3'))
+	assert.Contains(t, screen(m), "❭ 3. No (esc)  What should change?", "the No digit moves to its field")
+	press(m, digit('1'))
+	assert.Contains(t, screen(m), "❭ 3. No (esc)  1", "digits in the field are text")
+	assert.Len(t, c.answers, 1)
 }
 
 func TestApprovalEscRejects(t *testing.T) {
 	m, c := newTestModel(t, 60, 30)
 	send(m, editApproval())
+	press(m, digit('3'))
+	keys(m, "draft")
 
 	press(m, escape)
 
-	assert.Equal(t, []answer{{1, policy.Reject}}, c.answers)
+	assert.Equal(t, []answer{{1, policy.Decision{}}}, c.answers, "esc drops the draft")
 	assert.Zero(t, c.interrupts, "the controller interrupts on a rejection")
+}
+
+func TestApprovalNoSendsTheReason(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	send(m, editApproval())
+	press(m, down)
+	press(m, down)
+	keys(m, "use b.go")
+	assert.Contains(t, screen(m), "❭ 3. No (esc)  use b.go")
+
+	press(m, enter)
+
+	assert.Equal(t, []answer{{1, policy.Decision{Answer: policy.Reject, Reason: "use b.go"}}}, c.answers)
+}
+
+func TestApprovalPasteReachesTheField(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	m.clip = &fakeClipboard{text: " from\r\nclipboard"}
+	send(m, editApproval())
+	press(m, digit('3'))
+	big := strings.Repeat("line\r\n", 20)
+	pasteText(m, big)
+	assert.Contains(t, screen(m), "❭ 3. No (esc)  [paste #1 +20 lines]")
+
+	cmd := press(m, ctrlV)
+	require.NotNil(t, cmd)
+	m.Update(cmd())
+	press(m, enter)
+
+	want := strings.ReplaceAll(big, "\r\n", "\n") + " from\nclipboard"
+	assert.Equal(t, []answer{{1, policy.Decision{Answer: policy.Reject, Reason: want}}}, c.answers)
+	assert.Empty(t, m.composer.value())
+}
+
+func TestApprovalClipboardCompletionAfterTransitionIsDiscarded(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ev   event.Event
+	}{
+		{"approval ended", event.ApprovalEnded{Token: 1}},
+		{"turn ended", event.TurnEnd{}},
+		{"session changed", event.SessionChanged{SessionID: "s2"}},
+		{"replacement approval", event.ApprovalRequested{Token: 2, Title: "Edit b.go", Edits: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newTestModel(t, 60, 30)
+			m.clip = &fakeClipboard{text: "stale clipboard"}
+			typeText(m, "composer draft")
+			send(m, editApproval())
+			press(m, digit('3'))
+			keys(m, "feedback")
+			oldField := m.dialog.field()
+			cmd := press(m, ctrlV)
+			require.NotNil(t, cmd)
+
+			send(m, tc.ev)
+			if m.approval != nil {
+				press(m, digit('3'))
+				keys(m, "replacement feedback")
+			}
+			m.Update(cmd())
+
+			assert.Equal(t, "composer draft", m.composer.value())
+			assert.Equal(t, "feedback", oldField.value())
+			if m.approval != nil {
+				assert.Equal(t, "replacement feedback", m.dialog.text())
+			}
+		})
+	}
+}
+
+func TestApprovalClipboardCompletionAfterLeavingFieldIsDiscarded(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	m.clip = &fakeClipboard{text: "stale clipboard"}
+	send(m, editApproval())
+	press(m, digit('3'))
+	keys(m, "feedback")
+	field := m.dialog.field()
+	cmd := press(m, ctrlV)
+	require.NotNil(t, cmd)
+
+	press(m, up)
+	m.Update(cmd())
+
+	assert.Equal(t, "feedback", field.value())
+	assert.Empty(t, m.composer.value())
+}
+
+func TestApprovalFieldGrowsWithinTheScreen(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	send(m, editApproval())
+	press(m, digit('3'))
+	before := len(m.prompt)
+	for i, r := range "abcdefghijk" {
+		if i > 0 {
+			press(m, tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+		}
+		press(m, digit(r))
+	}
+
+	s := screen(m)
+	assert.Len(t, s, 30)
+	assert.Greater(t, len(m.prompt), before)
+	want := []string{"❭ 3. No (esc)"}
+	for _, r := range "bcdefghijk" {
+		want = append(want, "  "+string(r))
+	}
+	want = append(want, strings.Repeat("─", 60))
+	assert.Equal(t, want, s[len(s)-len(want)-1:len(s)-1], "the field grows to a third of the screen, then scrolls")
+}
+
+func TestApprovalTallDraftKeepsOptionsOnASmallScreen(t *testing.T) {
+	m, c := newTestModel(t, 60, 10)
+	send(m, event.TurnStart{}, editApproval())
+	press(m, digit('3'))
+	keys(m, "a")
+	press(m, tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	keys(m, "b")
+	press(m, tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	keys(m, "c")
+	for range 4 {
+		press(m, up)
+	}
+
+	s := screen(m)
+	assert.Len(t, s, 10)
+	assert.Contains(t, s, "❭ 1. Yes")
+	assert.Contains(t, s, "  2. Yes, allow all edits this session")
+	assert.Contains(t, s, "  3. No (esc)")
+	press(m, enter)
+	assert.Equal(t, []answer{{1, policy.Decision{Answer: policy.Allow}}}, c.answers)
+}
+
+func TestApprovalPasteKeyLeavesAnImageOut(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	m.imageDir = t.TempDir()
+	m.clip = &fakeClipboard{image: []byte("png bytes")}
+	send(m, editApproval())
+	press(m, digit('3'))
+
+	cmd := press(m, ctrlV)
+	require.NotNil(t, cmd)
+	m.Update(cmd())
+
+	assert.Empty(t, m.dialog.options[2].field.value())
+	assert.Empty(t, m.composer.value())
+}
+
+func TestApprovalUpLeavesTheFieldKeepingTheDraft(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	send(m, editApproval())
+	press(m, digit('3'))
+	keys(m, "draft")
+
+	press(m, up)
+	assert.Contains(t, screen(m), "❭ 2. Yes, allow all edits this session")
+	assert.Contains(t, screen(m), "  3. No (esc)  draft")
+	press(m, down)
+	press(m, enter)
+
+	assert.Equal(t, []answer{{1, policy.Decision{Answer: policy.Reject, Reason: "draft"}}}, c.answers)
 }
 
 func TestApprovalEndedRestoresTheComposerWithItsDraft(t *testing.T) {
@@ -969,11 +1137,11 @@ func TestApprovalEndedRestoresTheComposerWithItsDraft(t *testing.T) {
 	assert.NotContains(t, screen(m), "❯ draft")
 
 	send(m, event.ApprovalEnded{Token: 2})
-	assert.Contains(t, screen(m), "❯ 1. Yes", "another call's end leaves the prompt")
+	assert.Contains(t, screen(m), "❭ 1. Yes", "another call's end leaves the prompt")
 
 	send(m, event.ApprovalEnded{Token: 1})
 	assert.Contains(t, screen(m), "❯ draft")
-	assert.NotContains(t, screen(m), "❯ 1. Yes")
+	assert.NotContains(t, screen(m), "❭ 1. Yes")
 	assert.Len(t, screen(m), 30)
 }
 
@@ -988,9 +1156,9 @@ func TestStaleApprovalEndedCannotDismissReusedCallID(t *testing.T) {
 
 	require.NotNil(t, m.approval)
 	assert.Equal(t, second, *m.approval)
-	assert.Contains(t, screen(m), "Edit b.go")
+	assert.Contains(t, screen(m), "  Edit b.go")
 	press(m, enter)
-	assert.Equal(t, []answer{{second.Token, policy.Allow}}, c.answers)
+	assert.Equal(t, []answer{{second.Token, policy.Decision{Answer: policy.Allow}}}, c.answers)
 	send(m, event.ApprovalEnded{Token: second.Token})
 	assert.Nil(t, m.approval)
 }
@@ -1002,8 +1170,22 @@ func TestTurnEndAndSessionChangedClearTheApproval(t *testing.T) {
 		send(m, ev)
 		assert.Nil(t, m.approval)
 		assert.Contains(t, screen(m), "❯")
-		assert.NotContains(t, screen(m), "❯ 1. Yes")
+		assert.NotContains(t, screen(m), "❭ 1. Yes")
 	}
+}
+
+func TestWorkingRowWaitsDuringApproval(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 60, 30)
+		ask := editApproval()
+		send(m, event.TurnStart{}, ask)
+		assert.Contains(t, screen(m), "⠋ Waiting for you…")
+		assert.NotContains(t, screen(m), "⠋ Working… 0s")
+
+		send(m, event.ApprovalEnded{Token: ask.Token})
+		assert.Contains(t, screen(m), "⠋ Working… 0s")
+		assert.NotContains(t, screen(m), "⠋ Waiting for you…")
+	})
 }
 
 func TestCancelInterruptsDuringApproval(t *testing.T) {
@@ -1036,13 +1218,13 @@ func TestApprovalSurvivesTinyTerminalResizes(t *testing.T) {
 	assert.Equal(t, prompt, m.prompt)
 	s := screen(m)
 	assert.Len(t, s, 30)
-	assert.Contains(t, s, "Edit a.go")
-	assert.Contains(t, s, "- old")
-	assert.Contains(t, s, "+ new")
-	assert.Equal(t, []string{"  1. Yes", "❯ 2. Yes, allow all edits this session", "  3. No (esc)", ""}, s[len(s)-5:len(s)-1])
+	assert.Contains(t, s, "  Edit a.go")
+	assert.Contains(t, s, "  - old")
+	assert.Contains(t, s, "  + new")
+	assert.Equal(t, []string{"  1. Yes", "❭ 2. Yes, allow all edits this session", "  3. No (esc)  What should change?", strings.Repeat("─", 60)}, s[len(s)-5:len(s)-1])
 	assert.Empty(t, c.answers)
 	press(m, enter)
-	assert.Equal(t, []answer{{1, policy.AllowEdits}}, c.answers)
+	assert.Equal(t, []answer{{1, policy.Decision{Answer: policy.AllowEdits}}}, c.answers)
 }
 
 func TestApprovalWithLongPreviewFitsTheTerminal(t *testing.T) {
@@ -1055,7 +1237,60 @@ func TestApprovalWithLongPreviewFitsTheTerminal(t *testing.T) {
 
 	s := screen(m)
 	assert.Len(t, s, 20)
-	assert.Equal(t, []string{"❯ 1. Yes", "  2. Yes, allow all edits this session", "  3. No (esc)", ""}, s[len(s)-5:len(s)-1])
-	assert.Contains(t, s, "  … 47 more lines")
-	assert.Contains(t, s, "Edit a.go")
+	assert.Equal(t, []string{"❭ 1. Yes", "  2. Yes, allow all edits this session", "  3. No (esc)  What should change?", strings.Repeat("─", 40)}, s[len(s)-5:len(s)-1])
+	assert.Contains(t, s, "    … 47 more lines")
+	assert.Contains(t, s, "  Edit a.go")
+}
+
+func TestRowsFillTheScreenStatusLast(t *testing.T) {
+	shiftEnter := tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift}
+	for _, tc := range []struct {
+		name          string
+		width, height int
+		setup         func(m *model, c *fakeController)
+	}{
+		{"idle", 60, 30, func(*model, *fakeController) {}},
+		{"menu", 60, 30, func(m *model, _ *fakeController) { keys(m, "/") }},
+		{"menu and busy", 60, 30, func(m *model, _ *fakeController) {
+			send(m, event.TurnStart{Prompt: "go"})
+			keys(m, "/")
+		}},
+		{"short with queue and menu", 40, 10, func(m *model, c *fakeController) {
+			queueTwo(m, c)
+			keys(m, "/")
+		}},
+		{"approval over menu", 60, 30, func(m *model, _ *fakeController) {
+			keys(m, "/")
+			send(m, editApproval())
+		}},
+		{"approval with a tall reason", 60, 30, func(m *model, _ *fakeController) {
+			send(m, editApproval())
+			press(m, digit('3'))
+			for i, r := range "abcdef" {
+				if i > 0 {
+					press(m, shiftEnter)
+				}
+				press(m, digit(r))
+			}
+		}},
+		{"approval after a paste", 60, 30, func(m *model, _ *fakeController) {
+			send(m, editApproval())
+			press(m, digit('3'))
+			pasteText(m, "one\ntwo\nthree")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, c := newMenuModel(t, tc.width, tc.height)
+			tc.setup(m, c)
+
+			s := screen(m)
+			require.Len(t, s, m.height)
+			assert.Equal(t, m.height, m.transcriptHeight()+len(m.below))
+			status := strings.TrimRight(ansi.Strip(statusLine(m.status, m.layout, m.flashText, m.width, m.th)), " ")
+			assert.Equal(t, status, s[m.height-1])
+			if m.approval == nil {
+				assert.True(t, strings.HasPrefix(s[m.composerTop()], "❯"), "row %d: %q", m.composerTop(), s[m.composerTop()])
+			}
+		})
+	}
 }

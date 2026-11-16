@@ -28,6 +28,13 @@ type clipboard interface {
 	ReadImage(ctx context.Context) ([]byte, error)
 }
 
+// clipboardTextMsg keeps an asynchronous read separate from terminal paste.
+// A nil field identifies a read started by the composer.
+type clipboardTextMsg struct {
+	text  string
+	field *composer
+}
+
 type systemClipboard struct{}
 
 func (systemClipboard) ReadText() (string, error) {
@@ -138,14 +145,23 @@ func readClipboard(ctx context.Context, cb clipboard, dir string) tea.Cmd {
 			slog.Warn("failed to paste an image from the clipboard", "err", err)
 			return pasteFailedMsg{}
 		}
-		text, err := cb.ReadText()
-		if err != nil {
-			slog.Warn("failed to paste from the clipboard", "err", err)
-			return nil
-		}
-		if text == "" {
-			return nil
-		}
-		return tea.PasteMsg{Content: text}
+		return clipboardText(cb, nil)
 	}
+}
+
+// readClipboardText is readClipboard for input that takes no images.
+func readClipboardText(cb clipboard, field *composer) tea.Cmd {
+	return func() tea.Msg { return clipboardText(cb, field) }
+}
+
+func clipboardText(cb clipboard, field *composer) tea.Msg {
+	text, err := cb.ReadText()
+	if err != nil {
+		slog.Warn("failed to paste from the clipboard", "err", err)
+		return nil
+	}
+	if text == "" {
+		return nil
+	}
+	return clipboardTextMsg{text: text, field: field}
 }

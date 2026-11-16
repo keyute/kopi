@@ -62,11 +62,11 @@ func settle(m *model, cmd tea.Cmd) {
 	}
 }
 
-// menuText is the screen rows the menu covers, directly above the composer's
-// shaded top row.
+// menuText is the screen rows the menu takes, between the composer and the
+// status line.
 func menuText(m *model) []string {
-	end := m.composerTop() - 1
-	return screen(m)[end-m.menuHeight() : end]
+	s := screen(m)
+	return s[len(s)-1-m.menuHeight() : len(s)-1]
 }
 
 func TestSlashListsCommandsFiltersAndWraps(t *testing.T) {
@@ -81,8 +81,7 @@ func TestSlashListsCommandsFiltersAndWraps(t *testing.T) {
 		"  /resume     resume a session",
 		"  1 of 7",
 	}, menuText(m))
-	assert.Equal(t, "  1 of 7", screen(m)[m.composerTop()-2], "the menu is directly above the composer")
-	assert.Equal(t, "❯ /", screen(m)[m.composerTop()])
+	assert.Equal(t, "❯ /", screen(m)[len(screen(m))-9], "the menu is below the composer")
 
 	press(m, down)
 	assert.Equal(t, "❭ /execute    switch to execute mode", menuText(m)[1])
@@ -141,7 +140,7 @@ func TestApprovalHidesMenuUntilItEnds(t *testing.T) {
 	assert.Zero(t, m.menuHeight())
 	assert.Empty(t, menuText(m))
 	assert.NotContains(t, screen(m), "❭ /plan       switch to plan mode")
-	assert.Contains(t, screen(m), "❯ 1. Yes")
+	assert.Contains(t, screen(m), "❭ 1. Yes")
 
 	send(m, event.ApprovalEnded{Token: 1})
 	assert.Equal(t, "❭ /plan       switch to plan mode", menuText(m)[0])
@@ -322,59 +321,200 @@ func TestShortTerminalKeepsComposerAndStatusLine(t *testing.T) {
 	assert.Equal(t, statusText(m), s[9])
 	assert.Contains(t, s[9], "plan")
 	assert.Contains(t, s, "❯ /")
-	assert.Equal(t, []string{
-		"❭ /plan       switch to plan mode",
-		"  /execute    switch to execute mode",
-		"  /status     show status",
-		"  /new        start a new session",
-		"  /resume     resume a session",
-		"  1 of 7",
-	}, menuText(m), "the menu covers the pending and working rows")
+	assert.Equal(t, []string{"❭ /plan       switch to plan mode", "  /execute    switch to execute mode", "  1 of 7"}, menuText(m))
 
 	press(m, up)
 	assert.Zero(t, c.takes, "up moves the selection rather than editing the queue")
 	assert.Equal(t, "/", m.composer.value())
-	assert.Equal(t, "❭ /quit       exit kopi", menuText(m)[4])
+	assert.Equal(t, "❭ /quit       exit kopi", menuText(m)[1])
 }
 
-func TestComposerPressOpensAndClosesMenuWithoutMovingComposer(t *testing.T) {
+func TestComposerDragHoldsMenuUntilRelease(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, _ := newMenuModel(t, 60, 30)
-		m.Update(tea.PasteMsg{Content: "@ hi"})
+		m.Update(tea.PasteMsg{Content: "@ one\n@ two"})
 		require.Zero(t, m.menuHeight())
 		top := m.composerTop()
 
 		_, cmd := m.Update(tea.MouseClickMsg{X: 3, Y: top, Button: tea.MouseLeft})
 		settle(m, cmd)
 		assert.Equal(t, 1, m.composer.ta.Column(), "the press is inside the token")
-		assert.Positive(t, m.menuHeight())
-		assert.Equal(t, top, m.composerTop())
-		s := screen(m)
-		assert.Equal(t, "❭ a.go", menuText(m)[0])
-		assert.Equal(t, "❯ @ hi", s[top], "the composer is intact below the menu")
-		assert.Equal(t, statusText(m), s[len(s)-1])
+		assert.Zero(t, m.menuHeight(), "the menu holds while the button is down")
 
-		moveTo(m, 6, top)
-		assert.Equal(t, 4, m.composer.ta.Column(), "the drag maps to the composer row it is on")
-		assert.Zero(t, m.menuHeight(), "leaving the token closes the menu")
+		moveTo(m, 3, top+1)
+		assert.Zero(t, m.menuHeight())
 		assert.Equal(t, top, m.composerTop())
-		releaseAt(m, 6, top)
+		assert.Equal(t, 1, m.composer.ta.Line(), "the drag maps to the composer row under the pointer")
+		assert.Equal(t, 1, m.composer.ta.Column())
+
+		settle(m, releaseAt(m, 3, top+1))
+		s := screen(m)
+		assert.Equal(t, "❭ a.go", menuText(m)[0], "release shows the menu for the final token")
+		assert.Equal(t, "❯ @ one", s[m.composerTop()], "the menu is below the composer")
+		assert.Equal(t, statusText(m), s[len(s)-1])
 	})
 }
 
-func TestPressOnMenuIsIgnored(t *testing.T) {
+func TestComposerDragKeepsOpenMenu(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newMenuModel(t, 80, 14)
+		_, cmd := m.Update(tea.PasteMsg{Content: "@\n@"})
+		settle(m, cmd)
+		menu := menuText(m)
+		require.NotEmpty(t, menu)
+		top := m.composerTop()
+
+		_, cmd = m.Update(tea.MouseClickMsg{X: 2, Y: top, Button: tea.MouseLeft})
+		settle(m, cmd)
+		assert.Zero(t, m.composer.ta.Line())
+		assert.Zero(t, m.composer.ta.Column())
+		assert.Equal(t, menu, menuText(m))
+
+		settle(m, moveTo(m, 3, top+1))
+		assert.Equal(t, top, m.composerTop())
+		assert.Equal(t, 1, m.composer.ta.Line())
+		assert.Equal(t, 1, m.composer.ta.Column())
+		assert.True(t, m.composer.ta.HasSelection())
+		assert.Equal(t, "@\n@", m.composer.ta.SelectedText())
+		assert.Equal(t, menu, menuText(m), "the menu stays as it was at the press")
+		s := screen(m)
+		require.Len(t, s, 14)
+		assert.Equal(t, "❯ @", s[top])
+
+		assertCopied(t, m, releaseAt(m, 3, top+1), "@\n@")
+		assert.Equal(t, "❭ a.go", menuText(m)[0])
+		s = screen(m)
+		require.Len(t, s, 14)
+		assert.Equal(t, statusText(m), s[13])
+	})
+}
+
+func TestComposerDragHeldMenuTakesNoKeys(t *testing.T) {
+	for _, k := range []tea.KeyPressMsg{up, down, enter, tab} {
+		t.Run(k.String(), func(t *testing.T) {
+			m, c := newMenuModel(t, 60, 30)
+			draft := "/pl"
+			if k.Code == tea.KeyUp || k.Code == tea.KeyDown {
+				draft = "/"
+			}
+			keys(m, draft)
+			top := m.composerTop()
+			pressAt(m, 2, top)
+			moveTo(m, 2+len(draft), top)
+			require.True(t, m.holding())
+			require.Contains(t, menuText(m)[0], "❭ /plan", "the held menu stays visible")
+			if draft == "/" {
+				require.Greater(t, len(m.menu.shown), 1)
+			}
+			sel := m.menu.sel
+
+			press(m, k)
+
+			if k.Code == tea.KeyEnter {
+				assert.Equal(t, []string{draft}, c.submitted, "enter submits the draft")
+				return
+			}
+			assert.Empty(t, c.submitted)
+			require.Equal(t, draft, m.composer.value())
+			assert.Equal(t, sel, m.menu.sel, "held candidates cannot be navigated")
+
+			releaseAt(m, 2+len(draft), top)
+			require.False(t, m.holding())
+			require.Contains(t, menuText(m)[0], "❭ /plan")
+			press(m, tab)
+			assert.Equal(t, "/plan ", m.composer.value(), "release restores completion")
+		})
+	}
+}
+
+func TestComposerDragHeldBackLoadAppearsOnRelease(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newMenuModel(t, 60, 30)
+		_, load := m.Update(tea.PasteMsg{Content: "@\n@"})
+		require.True(t, m.menu.open)
+		require.Empty(t, m.menu.shown)
+		top := m.composerTop()
+
+		pressAt(m, 3, top)
+		settle(m, moveTo(m, 3, top+1))
+		require.True(t, m.holding())
+		require.Equal(t, 1, m.composer.ta.Line())
+		require.Equal(t, 1, m.composer.ta.Column())
+		before := screen(m)
+
+		settle(m, load)
+
+		assert.Equal(t, before, screen(m), "a load while held changes no rows")
+		assert.Zero(t, m.menuHeight())
+
+		releaseAt(m, 3, top+1)
+		assert.False(t, m.holding())
+		assert.Equal(t, "❭ a.go", menuText(m)[0])
+		s := screen(m)
+		require.Len(t, s, m.height)
+		assert.Equal(t, statusText(m), s[m.height-1])
+	})
+}
+
+func TestResizeCancelsComposerDrag(t *testing.T) {
 	m, _ := newMenuModel(t, 60, 30)
 	keys(m, "/")
-	h := m.menuHeight()
-	require.Positive(t, h)
-	y := m.composerTop() - 1 - h
-	require.Less(t, y, m.transcriptHeight(), "the menu covers transcript rows")
+	top := m.composerTop()
+	pressAt(m, 3, top)
+	moveTo(m, 2, top)
+	require.True(t, m.composer.ta.HasSelection())
+	require.Positive(t, m.menuHeight(), "the menu holds while the cursor is off the token")
 
-	pressAt(m, 2, y)
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 10})
+
+	assert.Equal(t, drag{}, m.drag)
+	assert.False(t, m.composer.ta.HasSelection())
 	assert.True(t, m.sel.empty())
-	assert.Equal(t, regionNone, m.drag.region)
-	moveTo(m, 8, y)
-	assert.Nil(t, releaseAt(m, 8, y))
-	assert.True(t, m.sel.empty())
+	assert.Zero(t, m.menuHeight(), "the menu follows the cursor once the hold ends")
+	s := screen(m)
+	require.Len(t, s, 10)
+	assert.Equal(t, statusText(m), s[9])
+	assert.Nil(t, moveTo(m, 3, m.composerTop()))
+	assert.Nil(t, releaseAt(m, 3, m.composerTop()))
+	assert.False(t, m.composer.ta.HasSelection())
+	assert.Empty(t, m.clip.(*fakeClipboard).written)
+	assert.NotContains(t, statusText(m), "Copied")
+}
+
+func TestLoadedMenuShrinksExhaustedPendingBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newMenuModel(t, 80, 14)
+		send(m, event.QueueChanged{Pending: []string{linesOf(8)}})
+		cmd := keys(m, "@")
+		require.False(t, m.busy)
+		require.Zero(t, m.menuHeight(), "the async load has not arrived")
+		pending := len(m.pending)
+		require.Positive(t, pending)
+		require.Equal(t, 14-m.composer.height()-chromeRows, pending, "the queue exhausts the available budget")
+		s := screen(m)
+		require.Len(t, s, 14)
+		assert.Equal(t, statusText(m), s[13])
+
+		settle(m, cmd)
+
+		require.Positive(t, m.menuHeight())
+		assert.Less(t, len(m.pending), pending)
+		s = screen(m)
+		require.Len(t, s, 14)
+		assert.Equal(t, statusText(m), s[13])
+	})
+}
+
+func TestMenuRowDragCopiesWithoutChangingMenu(t *testing.T) {
+	m, _ := newMenuModel(t, 60, 30)
+	keys(m, "/")
+	menu, sel := menuText(m), m.menu.sel
+	y := len(screen(m)) - 1 - m.menuHeight()
+
+	assertCopied(t, m, dragRow(m, 2, 7, y), "/plan")
+
+	assert.Equal(t, menu, menuText(m))
+	assert.Equal(t, sel, m.menu.sel)
 	assert.Equal(t, "/", m.composer.value())
+	assert.False(t, m.holding())
 }

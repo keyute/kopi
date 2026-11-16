@@ -45,6 +45,39 @@ func TestPasteKeyInsertsClipboardText(t *testing.T) {
 	assert.Equal(t, "> from clipboard", m.composer.value())
 }
 
+func TestComposerClipboardCompletionDuringApprovalIsDiscarded(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	m.clip = &fakeClipboard{text: "composer clipboard"}
+	typeText(m, "draft")
+	cmd := press(m, ctrlV)
+	require.NotNil(t, cmd)
+
+	send(m, editApproval())
+	press(m, digit('3'))
+	keys(m, "feedback")
+	m.Update(cmd())
+
+	assert.Equal(t, "draft", m.composer.value())
+	assert.Equal(t, "feedback", m.dialog.text())
+}
+
+func TestApprovalClipboardWithoutTextChangesNothing(t *testing.T) {
+	for _, cb := range []*fakeClipboard{{err: errors.New("no clipboard")}, {}} {
+		m, _ := newTestModel(t, 60, 30)
+		m.clip = cb
+		send(m, editApproval())
+		press(m, digit('3'))
+		keys(m, "feedback")
+
+		cmd := press(m, ctrlV)
+
+		require.NotNil(t, cmd)
+		assert.Nil(t, cmd())
+		assert.Equal(t, "feedback", m.dialog.text())
+		assert.Empty(t, m.composer.value())
+	}
+}
+
 func TestPasteKeyWithoutTextChangesNothing(t *testing.T) {
 	for _, cb := range []*fakeClipboard{{err: errors.New("no clipboard")}, {}} {
 		m, _ := newTestModel(t, 30, 20)
