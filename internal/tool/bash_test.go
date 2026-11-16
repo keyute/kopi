@@ -137,7 +137,6 @@ func TestBashDisplaySummary(t *testing.T) {
 func TestBashDisplayPreview(t *testing.T) {
 	unsandboxed, _ := newBashTool(t)
 	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}))
-	noSandbox := PreviewLine{Kind: Context, Text: "runs without the OS sandbox"}
 	oneLine := json.RawMessage(`{"command":"ls"}`)
 	twoLines := json.RawMessage(`{"command":"cd a\nls\n"}`)
 	long, err := json.Marshal(map[string]string{"command": strings.Repeat("echo\n", maxPreviewLines+5)})
@@ -146,15 +145,13 @@ func TestBashDisplayPreview(t *testing.T) {
 	wide, err := json.Marshal(map[string]string{"command": wideCommand})
 	require.NoError(t, err)
 
-	assert.Equal(t, []PreviewLine{noSandbox}, unsandboxed.Display.Preview(oneLine))
-	assert.Equal(t, []PreviewLine{noSandbox, {Kind: Context, Text: "cd a"}, {Kind: Context, Text: "ls"}},
-		unsandboxed.Display.Preview(twoLines))
-	longPreview := unsandboxed.Display.Preview(long)
-	require.NotEmpty(t, longPreview)
-	assert.Equal(t, noSandbox, longPreview[0])
-	assert.Empty(t, sandboxed.Display.Preview(oneLine))
-	assert.Equal(t, []PreviewLine{{Kind: Context, Text: "cd a"}, {Kind: Context, Text: "ls"}},
-		sandboxed.Display.Preview(twoLines))
-	assert.Equal(t, []PreviewLine{noSandbox, {Kind: Context, Text: wideCommand}}, unsandboxed.Display.Preview(wide))
-	assert.Equal(t, []PreviewLine{{Kind: Context, Text: wideCommand}}, sandboxed.Display.Preview(wide))
+	for _, bash := range []Tool{unsandboxed, sandboxed} {
+		assert.Empty(t, bash.Display.Preview(oneLine))
+		assert.Equal(t, []PreviewLine{{Kind: Context, Text: "cd a"}, {Kind: Context, Text: "ls"}},
+			bash.Display.Preview(twoLines))
+		longPreview := bash.Display.Preview(long)
+		require.NotEmpty(t, longPreview)
+		assert.Equal(t, PreviewLine{Kind: Context, Text: "echo"}, longPreview[0])
+		assert.Equal(t, []PreviewLine{{Kind: Context, Text: wideCommand}}, bash.Display.Preview(wide))
+	}
 }

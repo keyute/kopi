@@ -1726,6 +1726,23 @@ func TestBareDenyRemovesTool(t *testing.T) {
 	assert.NotContains(t, req.SystemPrompt, "Exec")
 }
 
+func TestStatusReportsShell(t *testing.T) {
+	var ran atomic.Int32
+	sb := pigruntimetest.NewSandbox(t)
+	exec := execTool(&ran)
+	exec.Sandboxed = true
+	h := newHarness(t, sb, Config{Tools: []tool.Tool{readTool(t, sb), exec}})
+	s := h.c.Status()
+	assert.True(t, s.Shell)
+	assert.True(t, s.Sandboxed)
+
+	denySB := pigruntimetest.NewSandbox(t)
+	rules, err := policy.NewRules(denySB.Workspace, denySB.Home, map[string]policy.ToolSpec{"Exec": {}}, policy.Source{Name: "test", Deny: []string{"Exec"}})
+	require.NoError(t, err)
+	denied := newHarness(t, denySB, Config{Tools: []tool.Tool{exec}, Rules: rules})
+	assert.False(t, denied.c.Status().Shell)
+}
+
 func TestPromptMentionsExecuteModeOnlyWhenNonReadToolAvailable(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	ws, err := tool.NewWorkspace(sb.Workspace, nil)

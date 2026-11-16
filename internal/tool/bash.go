@@ -76,7 +76,7 @@ func NewBash(sh *Shell) Tool {
 				}
 				return lineCount(countLines(output))
 			},
-			Preview: bashPreview(sh.Sandboxed()),
+			Preview: bashPreview,
 			Action:  Action{Verb: "Ran", One: "command", Many: "commands"},
 		},
 	}
@@ -131,17 +131,10 @@ func bashTitleLine(command string) (line string, whole bool) {
 	return first, rest == ""
 }
 
-func bashPreview(sandboxed bool) func(json.RawMessage) []PreviewLine {
-	return func(raw json.RawMessage) []PreviewLine {
-		// The notice comes first: the approval UI cuts long previews from the end.
-		var out []PreviewLine
-		if !sandboxed {
-			out = append(out, PreviewLine{Kind: Context, Text: "runs without the OS sandbox"})
-		}
-		command := bashCommand(raw)
-		if _, whole := bashTitleLine(command); !whole {
-			out = append(out, previewLines(Context, command)...)
-		}
-		return out
+func bashPreview(raw json.RawMessage) []PreviewLine {
+	command := bashCommand(raw)
+	if _, whole := bashTitleLine(command); whole {
+		return nil
 	}
+	return previewLines(Context, command)
 }
