@@ -194,7 +194,7 @@ func TestPendingCacheReusesRenderedQueue(t *testing.T) {
 func TestPendingCacheInvalidatesRenderedQueue(t *testing.T) {
 	for name, update := range map[string]func(*model){
 		"content":         func(m *model) { send(m, event.QueueChanged{Pending: []string{"changed"}}) },
-		"mutated content": func(m *model) { m.queued[0] = "changed"; m.refreshPending() },
+		"mutated content": func(m *model) { m.queued[0] = "changed"; m.arrange() },
 		"width":           func(m *model) { m.Update(tea.WindowSizeMsg{Width: 40, Height: 30}) },
 		"theme":           func(m *model) { m.Update(tea.BackgroundColorMsg{Color: color.White}) },
 	} {

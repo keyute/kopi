@@ -28,6 +28,9 @@ type dialog struct {
 	note    string
 	options []option
 	sel     int
+	// areas is where the last rows call drew each field, y counting from its
+	// first row.
+	areas []fieldArea
 }
 
 // rows draws d between two rules: the title, body and note two in, a blank
@@ -69,9 +72,14 @@ func (d *dialog) rows(width, budget, fieldCap int, th theme) []string {
 	}
 	rows = append(rows, rule)
 	room := min(fieldCap, budget-(len(rows)-len(d.body)))
-	for i := len(slots) - 1; i >= 0; i-- {
-		if s := slots[i]; room >= 1 || s.head != "" || s.selected {
-			rows = slices.Insert(rows, s.at, s.rows(width, max(1, room), th)...)
+	d.areas = nil
+	off := 0
+	for _, s := range slots {
+		if room >= 1 || s.head != "" || s.selected {
+			fr := s.rows(width, max(1, room), th)
+			rows = slices.Insert(rows, s.at+off, fr...)
+			d.areas = append(d.areas, fieldArea{c: s.f, x: s.indent, y: s.at + off, h: len(fr)})
+			off += len(fr)
 		}
 	}
 	return rows
@@ -146,12 +154,22 @@ func (d *dialog) key(msg tea.KeyPressMsg, km *keyMap) (picked bool, cmd tea.Cmd)
 	return false, nil
 }
 
+func (d *dialog) pick(f *composer) tea.Cmd {
+	for i, o := range d.options {
+		if o.field == f {
+			return d.move(i)
+		}
+	}
+	return nil
+}
+
 // move selects option i, moving the focus to its field.
 func (d *dialog) move(i int) tea.Cmd {
 	if i == d.sel {
 		return nil
 	}
 	if f := d.field(); f != nil {
+		f.ta.ClearSelection()
 		f.ta.Blur()
 	}
 	d.sel = i

@@ -139,6 +139,7 @@ func press(m *model, k tea.KeyPressMsg) tea.Cmd {
 // typeText enters s as typing would, so it never collapses into a block.
 func typeText(m *model, s string) {
 	m.composer.update(tea.PasteMsg{Content: s})
+	m.arrange()
 }
 
 // pasteText delivers s as a terminal paste.
@@ -1239,4 +1240,57 @@ func TestApprovalWithLongPreviewFitsTheTerminal(t *testing.T) {
 	assert.Equal(t, []string{"❭ 1. Yes", "  2. Yes, allow all edits this session", "  3. No (esc)  What should change?", strings.Repeat("─", 40)}, s[len(s)-5:len(s)-1])
 	assert.Contains(t, s, "    … 47 more lines")
 	assert.Contains(t, s, "  Edit a.go")
+}
+
+func TestRowsFillTheScreenStatusLast(t *testing.T) {
+	shiftEnter := tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift}
+	for _, tc := range []struct {
+		name          string
+		width, height int
+		setup         func(m *model, c *fakeController)
+	}{
+		{"idle", 60, 30, func(*model, *fakeController) {}},
+		{"menu", 60, 30, func(m *model, _ *fakeController) { keys(m, "/") }},
+		{"menu and busy", 60, 30, func(m *model, _ *fakeController) {
+			send(m, event.TurnStart{Prompt: "go"})
+			keys(m, "/")
+		}},
+		{"short with queue and menu", 40, 10, func(m *model, c *fakeController) {
+			queueTwo(m, c)
+			keys(m, "/")
+		}},
+		{"approval over menu", 60, 30, func(m *model, _ *fakeController) {
+			keys(m, "/")
+			send(m, editApproval())
+		}},
+		{"approval with a tall reason", 60, 30, func(m *model, _ *fakeController) {
+			send(m, editApproval())
+			press(m, digit('3'))
+			for i, r := range "abcdef" {
+				if i > 0 {
+					press(m, shiftEnter)
+				}
+				press(m, digit(r))
+			}
+		}},
+		{"approval after a paste", 60, 30, func(m *model, _ *fakeController) {
+			send(m, editApproval())
+			press(m, digit('3'))
+			pasteText(m, "one\ntwo\nthree")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, c := newMenuModel(t, tc.width, tc.height)
+			tc.setup(m, c)
+
+			s := screen(m)
+			require.Len(t, s, m.height)
+			assert.Equal(t, m.height, m.transcriptHeight()+len(m.below))
+			status := strings.TrimRight(ansi.Strip(statusLine(m.status, m.layout, m.flashText, m.width, m.th)), " ")
+			assert.Equal(t, status, s[m.height-1])
+			if m.approval == nil {
+				assert.True(t, strings.HasPrefix(s[m.composerTop()], "❯"), "row %d: %q", m.composerTop(), s[m.composerTop()])
+			}
+		})
+	}
 }

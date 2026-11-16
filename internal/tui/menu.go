@@ -103,24 +103,25 @@ func (m *model) loaded(msg candidatesMsg) {
 		return
 	}
 	m.menu.items = msg.cs
-	m.rematch()
+	if !m.holding() {
+		m.rematch()
+	}
 }
 
-// menuHeight is the rows the menu covers directly above the composer: none
-// unless it is open with a candidate to show and at least one row is above the
-// composer.
-func (m *model) menuHeight() int {
-	mn := &m.menu
-	if !mn.open || len(mn.shown) == 0 || m.approval != nil {
+// want is the rows the menu would take with room for all of them: its
+// candidates up to menuMax, plus a position row when some are left out.
+func (mn *menu) want() int {
+	if !mn.open || len(mn.shown) == 0 {
 		return 0
 	}
 	h := min(len(mn.shown), menuMax)
 	if len(mn.shown) > h {
 		h++
 	}
-	// The composer's shaded top row is at composerTop()-1.
-	return max(0, min(h, m.composerTop()-1))
+	return h
 }
+
+func (m *model) menuHeight() int { return m.geo.menu }
 
 // menuRows draws the menu: a window of candidates around the selection, then,
 // when some are left out, a row giving the selection's position.

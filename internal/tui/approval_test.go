@@ -84,6 +84,26 @@ func TestApprovalRowsCutTheTopFirst(t *testing.T) {
 	assert.Equal(t, []string{"❭ 1. Yes", "  2. Yes, allow all edits this session", "  3. No (esc)  What should change?", rule40}, rows)
 }
 
+func TestApprovalRowsShiftAreasForTheCut(t *testing.T) {
+	a := event.ApprovalRequested{
+		Title:   "Edit a.go",
+		Preview: []tool.PreviewLine{{Kind: tool.Removed, Text: "old"}, {Kind: tool.Added, Text: "new"}},
+		Edits:   true,
+	}
+	km := newKeyMap(config.DefaultKeys())
+	d := newApprovalDialog(&a, &km, mocha())
+	f := d.options[2].field
+	// "  3. No (esc)  " takes 15 cells.
+	approvalRows(d, &a, 40, 10, 100, mocha())
+	assert.Equal(t, []fieldArea{{c: f, x: 15, y: 7, h: 1}}, d.areas)
+
+	approvalRows(d, &a, 40, 10, 4, mocha())
+	assert.Equal(t, []fieldArea{{c: f, x: 15, y: 2, h: 1}}, d.areas, "shifted by the cut")
+
+	require.Equal(t, []string{rule40}, plainRows(approvalRows(d, &a, 40, 10, 1, mocha())))
+	assert.Empty(t, d.areas, "a field the cut reaches is dropped")
+}
+
 func TestApprovalRowsKeepTheFieldWithATallDraft(t *testing.T) {
 	a := event.ApprovalRequested{Title: "Edit a.go", Preview: []tool.PreviewLine{{Kind: tool.Added, Text: "x"}}, Edits: true}
 	km := newKeyMap(config.DefaultKeys())
