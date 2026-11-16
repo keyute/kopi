@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -376,6 +377,75 @@ func TestRootStreamsTurnFromMockServer(t *testing.T) {
 	assert.Contains(t, first["content"], "You are Kopi, a coding agent working in")
 	assert.NotContains(t, stdout+stderr, syntheticKey)
 	assert.NoFileExists(t, filepath.Join(e.kopiHome, "history.jsonl"), "headless runs record no prompt history")
+}
+
+func TestRootIdentityOverridesProviderHeaderCasing(t *testing.T) {
+	t.Setenv("KOPI_UNSET_IDENTITY_TEST", "")
+	require.NoError(t, os.Unsetenv("KOPI_UNSET_IDENTITY_TEST"))
+	for _, headers := range []string{
+		`"user-agent":"provider-agent"`,
+		`"uSeR-aGeNt":"provider-agent"`,
+		`"user-agent":"$KOPI_UNSET_IDENTITY_TEST"`,
+		`"user-agent":"!exit 73"`,
+		`"User-Agent":"$KOPI_UNSET_IDENTITY_TEST","user-agent":"!exit 73"`,
+		`"user-agent":"!exit 73","User-Agent":"$KOPI_UNSET_IDENTITY_TEST"`,
+	} {
+		t.Run(headers, func(t *testing.T) {
+			e := newTestEnv(t)
+			server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+			e.writeFile(t, filepath.Join(e.agentDir, "models.json"), fmt.Sprintf(`{"providers":{"kopi-mock":{"baseUrl":%q,"api":"openai-completions","apiKey":%q,"headers":{%s},"models":[{"id":"mock-1"}]}}}`, server.URL+"/v1", syntheticKey, headers))
+			_, _, err := execute(t, "", "--model", mockModel, "-p", "hello")
+			require.NoError(t, err)
+			req := server.next(t)
+			assert.True(t, strings.HasPrefix(req.userAgent, "kopi/"), req.userAgent)
+		})
+	}
+}
+
+func TestRootCodexIdentityOverridesProviderHeaderCasing(t *testing.T) {
+	t.Setenv("KOPI_UNSET_IDENTITY_TEST", "")
+	require.NoError(t, os.Unsetenv("KOPI_UNSET_IDENTITY_TEST"))
+	for _, headers := range []string{
+		`"user-agent":"provider-agent","Originator":"provider-origin"`,
+		`"user-agent":"$KOPI_UNSET_IDENTITY_TEST","Originator":"$KOPI_UNSET_IDENTITY_TEST"`,
+		`"user-agent":"!exit 73","Originator":"!exit 74"`,
+		`"User-Agent":"$KOPI_UNSET_IDENTITY_TEST","user-agent":"!exit 73","originator":"!exit 74","Originator":"$KOPI_UNSET_IDENTITY_TEST"`,
+		`"user-agent":"!exit 73","User-Agent":"$KOPI_UNSET_IDENTITY_TEST","Originator":"$KOPI_UNSET_IDENTITY_TEST","originator":"!exit 74"`,
+	} {
+		for _, explicit := range []bool{false, true} {
+			t.Run(fmt.Sprint(explicit)+headers, func(t *testing.T) {
+				e := newTestEnv(t)
+				requests := make(chan http.Header, 16)
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+					requests <- req.Header.Clone()
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, `{"error":{"message":"identity probe complete"}}`)
+				}))
+				t.Cleanup(server.Close)
+				token := "synthetic." + base64.RawURLEncoding.EncodeToString([]byte(`{"https://api.openai.com/auth":{"chatgpt_account_id":"kopi-test-account"}}`)) + ".signature"
+				modelHeaders := `{}`
+				if explicit {
+					modelHeaders = `{"USER-agent":"model-agent","ORIGINATOR":"model-origin"}`
+				}
+				e.writeFile(t, filepath.Join(e.agentDir, "models.json"), fmt.Sprintf(`{"providers":{"kopi-mock":{"baseUrl":%q,"api":"openai-codex-responses","apiKey":%q,"headers":{%s},"models":[{"id":"mock-1","headers":%s}]}}}`, server.URL, token, headers, modelHeaders))
+				_, _, err := execute(t, "", "--model", mockModel, "-p", "hello")
+				require.ErrorIs(t, err, headless.ErrFailed)
+				require.Contains(t, err.Error(), "identity probe complete")
+				require.NotEmpty(t, requests)
+				for len(requests) > 0 {
+					headers := <-requests
+					if explicit {
+						assert.Equal(t, "model-agent", headers.Get("User-Agent"))
+						assert.Equal(t, "model-origin", headers.Get("Originator"))
+					} else {
+						assert.True(t, strings.HasPrefix(headers.Get("User-Agent"), "kopi/"), headers.Get("User-Agent"))
+						assert.Equal(t, "kopi", headers.Get("Originator"))
+					}
+				}
+			})
+		}
+	}
 }
 
 func TestRootReportsProviderFailure(t *testing.T) {

@@ -1,30 +1,24 @@
 package pigruntime
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 
 	"github.com/MichaelKinsy/PiG/ai"
 	"github.com/MichaelKinsy/PiG/coding"
 )
 
-// keepClientIdentity are providers whose subscription tokens work only under
-// the client identity PiG sends for them (Claude Code's User-Agent for an
-// anthropic OAuth token), which a provider header would replace. PiG picks
-// that identity from the token it resolves per request, which may come from
-// the environment or a pasted key, so Kopi cannot tell in advance and never
-// sets its User-Agent on them. github-copilot needs no
-// entry: every model PiG ships for it sets its own User-Agent, and model
-// headers outrank provider headers.
+// Anthropic subscription tokens require the client identity PiG selects from
+// the request's credential, even when that credential comes from the environment.
 var keepClientIdentity = []string{"anthropic"}
 
-// identify makes every request to provider name Kopi. PiG sets its own
-// User-Agent per request, ignores the agent's, and re-reads the session's
-// model from its catalog; provider headers reach every path (turns,
-// compaction, Codex SSE and WebSocket) and rank above PiG's own. A provider
-// registered natively is left alone: re-registering it with headers would
-// replace it.
+// identify registers provider defaults so model headers retain higher precedence.
+// Native providers must not be re-registered: that would replace them.
 func (r *Runtime) identify(provider string) error {
 	mr := r.svcs.ModelRuntime()
 	if mr.GetRegisteredNativeProvider(provider) != nil {
@@ -40,7 +34,35 @@ func (r *Runtime) identify(provider string) error {
 	if len(headers) == 0 {
 		return nil
 	}
-	if err := mr.RegisterProvider(provider, coding.ProviderConfigInput{Headers: headers}); err != nil {
+	// Read names only: resolving discarded header values could execute commands.
+	var configured struct {
+		Providers map[string]struct {
+			Headers map[string]json.RawMessage `json:"headers"`
+		} `json:"providers"`
+	}
+	data, err := os.ReadFile(filepath.Join(r.svcs.AgentDir(), "models.json"))
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to read provider header names: %w", err)
+	}
+	if err == nil {
+		if err := json.Unmarshal(data, &configured); err != nil {
+			return fmt.Errorf("failed to decode provider header names: %w", err)
+		}
+	}
+	registration := make(map[string]string, len(headers))
+	for name, value := range headers {
+		matched := false
+		for existing := range configured.Providers[provider].Headers {
+			if strings.EqualFold(existing, name) {
+				registration[existing] = value
+				matched = true
+			}
+		}
+		if !matched {
+			registration[name] = value
+		}
+	}
+	if err := mr.RegisterProvider(provider, coding.ProviderConfigInput{Headers: registration}); err != nil {
 		return fmt.Errorf("failed to set request identity for provider %q: %w", provider, err)
 	}
 	return nil
