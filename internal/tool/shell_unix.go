@@ -7,13 +7,26 @@ import (
 	"syscall"
 )
 
-// killGroup puts the shell in a new session so cancelling kills everything it
+// newSession puts the shell in a new session so a kill reaches everything it
 // started. A session rather than a process group: a child in a background
 // group that touched /dev/tty would stop or corrupt the fullscreen UI, while
 // one in its own session has no controlling terminal.
-func killGroup(cmd *exec.Cmd) {
+func newSession(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	cmd.Cancel = func() error {
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
+}
+
+// kill must run before the shell is reaped, while its PID still names the
+// group.
+func kill(cmd *exec.Cmd) error {
+	return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+}
+
+// watchExit reports the shell's exit without reaping it; reap then collects
+// its status. awaitExit exists only for Linux and macOS, so other Unix
+// systems deliberately fail to build rather than lose group kills.
+func watchExit(cmd *exec.Cmd) (exited <-chan error, reap func() error) {
+	ch := make(chan error, 1)
+	pid := cmd.Process.Pid
+	go func() { ch <- awaitExit(pid) }()
+	return ch, cmd.Wait
 }

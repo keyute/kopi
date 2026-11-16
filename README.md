@@ -189,6 +189,7 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - Unix sockets (ssh-agent, Docker) are unreachable from the sandbox, even with `sandbox.network` true.
 - A background process a command leaves running (`cmd &`) can outlive the call. A running command keeps running if Kopi is killed.
 - `sandbox-exec` is deprecated by Apple.
+- Kopi builds for macOS, Linux and Windows only.
 - Symlinks in rule paths, sandbox paths, the start directory and the home directory are resolved once, at start.
 - `Edit` detects identity or content changes at its pinned destination immediately before replacement and refuses detected conflicts. This is best-effort, not atomic compare-and-swap: reads can race and another writer can change the file between the check and rename. `Write` replaces unconditionally.
 - `Write` and `Edit` pin and check parent-directory handles before making changes, so replacing a parent name with a symlink cannot redirect those changes. Another process can still move a checked directory, including into Kopi's home; later changes follow its handle. Permission checks and these protections are not an OS boundary.

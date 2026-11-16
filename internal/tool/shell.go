@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -41,6 +43,9 @@ func (s *Shell) Sandboxed() bool { return s.sb != nil }
 
 // Run returns the command's combined output. The error of a command that
 // failed or timed out carries the output, then the reason on a final line.
+//
+// Every kill happens before the single reap: until then the shell's PID, which
+// is also its process group ID, cannot be reused, so killing the group is safe.
 func (s *Shell) Run(ctx context.Context, command string, timeout time.Duration) (string, error) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -48,30 +53,89 @@ func (s *Shell) Run(ctx context.Context, command string, timeout time.Duration) 
 	if s.sb != nil {
 		argv = s.sb.Wrap(argv)
 	}
-	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = s.dir
+	r, w, err := os.Pipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to create output pipe: %w", err)
+	}
+	// An *os.File goes to the shell as is, so exec starts no copy goroutine
+	// that Wait would drain, and one fd for both keeps the streams
+	// interleaved in order.
+	cmd.Stdout, cmd.Stderr = w, w
+	newSession(cmd)
+	err = cmd.Start()
+	_ = w.Close()
+	if err != nil {
+		_ = r.Close()
+		return "", fmt.Errorf("failed to run command: %w", err)
+	}
 	out := &outputBuffer{}
-	// One comparable writer for both makes exec share a single pipe, so the
-	// streams interleave in order.
-	cmd.Stdout, cmd.Stderr = out, out
-	cmd.WaitDelay = waitDelay
-	killGroup(cmd)
-	err := cmd.Run()
-	if err := ctx.Err(); err != nil {
-		return "", err
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		_, _ = io.Copy(out, r)
+	}()
+	exited, reap := watchExit(cmd)
+
+	var reason error
+	stop := func() {
+		reason = ErrTimedOut
+		if err := ctx.Err(); err != nil {
+			reason = err
+		}
+		_ = kill(cmd)
 	}
+	var exitErr error
+	select {
+	case exitErr = <-exited:
+	case <-runCtx.Done():
+		stop()
+		exitErr = <-exited
+	}
+	if exitErr != nil {
+		_ = kill(cmd)
+		_ = r.Close()
+		<-drained
+		_ = reap()
+		return "", fmt.Errorf("failed to wait for command: %w", exitErr)
+	}
+
+	timer := time.NewTimer(waitDelay)
+	defer timer.Stop()
+	done := runCtx.Done()
+	if reason != nil {
+		done = nil
+	}
+	select {
+	case <-drained:
+	case <-timer.C:
+	case <-done:
+		stop()
+		select {
+		case <-drained:
+		case <-timer.C:
+		}
+	}
+	_ = r.Close()
+	<-drained
+	err = reap()
+
 	text := out.String()
-	if runCtx.Err() != nil {
-		return "", fmt.Errorf("%s\n%w after %v", text, ErrTimedOut, timeout)
-	}
-	var exitErr *exec.ExitError
 	switch {
-	case err == nil || errors.Is(err, exec.ErrWaitDelay):
+	case errors.Is(reason, ErrTimedOut):
+		return "", fmt.Errorf("%s\n%w after %v", text, ErrTimedOut, timeout)
+	case reason != nil:
+		return "", reason
+	}
+	var exitStatus *exec.ExitError
+	switch {
+	case err == nil:
 		return text, nil
-	case errors.As(err, &exitErr):
-		status := fmt.Sprintf("exit code %d", exitErr.ExitCode())
-		if exitErr.ExitCode() == -1 {
-			status = exitErr.String()
+	case errors.As(err, &exitStatus):
+		status := fmt.Sprintf("exit code %d", exitStatus.ExitCode())
+		if exitStatus.ExitCode() == -1 {
+			status = exitStatus.String()
 		}
 		return "", fmt.Errorf("%s\n%w: %s", text, ErrExitStatus, status)
 	default:
