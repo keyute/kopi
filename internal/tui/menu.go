@@ -23,14 +23,11 @@ const (
 
 // menu is the completion menu for the token at the cursor.
 type menu struct {
-	q    app.Query
-	open bool
-	// kind and command are what items were loaded for.
-	kind    app.Kind
-	command string
-	items   []app.Candidate
-	shown   []app.Candidate
-	sel     int
+	q     app.Query
+	open  bool
+	items []app.Candidate
+	shown []app.Candidate
+	sel   int
 	// seq numbers the latest load; an older candidatesMsg is dropped.
 	seq int
 	// dismissed is the token, Text cleared, that the menu was closed on; it
@@ -47,7 +44,6 @@ type candidatesMsg struct {
 
 // followMenu opens, refilters or closes the menu for the token at the cursor.
 func (m *model) followMenu() tea.Cmd {
-	defer m.refreshPending()
 	mn := &m.menu
 	q, ok := app.QueryAt(m.composer.value(), m.composer.ta.Line(), m.composer.ta.Column())
 	if !ok || m.composer.browsing() {
@@ -61,11 +57,11 @@ func (m *model) followMenu() tea.Cmd {
 		return nil
 	}
 	mn.dismissed = app.Query{}
-	prev := mn.q.Text
+	prev := mn.q
 	mn.q = q
 	var cmd tea.Cmd
-	if !mn.open || q.Kind != mn.kind || q.Command != mn.command {
-		mn.kind, mn.command, mn.items, mn.sel = q.Kind, q.Command, nil, 0
+	if !mn.open || q.Kind != prev.Kind || q.Command != prev.Command {
+		mn.items, mn.sel = nil, 0
 		mn.seq++
 		seq, c := mn.seq, m.c
 		switch q.Kind {
@@ -84,7 +80,7 @@ func (m *model) followMenu() tea.Cmd {
 				return candidatesMsg{seq, cs, err}
 			}
 		}
-	} else if q.Text != prev {
+	} else if q.Text != prev.Text {
 		mn.sel = 0
 	}
 	mn.open = true
@@ -108,11 +104,11 @@ func (m *model) loaded(msg candidatesMsg) {
 	}
 	m.menu.items = msg.cs
 	m.rematch()
-	m.refreshPending()
 }
 
-// menuHeight is the rows the menu takes: none unless it is open with a
-// candidate to show and at least one row fits above the status line.
+// menuHeight is the rows the menu covers directly above the composer: none
+// unless it is open with a candidate to show and at least one row is above the
+// composer.
 func (m *model) menuHeight() int {
 	mn := &m.menu
 	if !mn.open || len(mn.shown) == 0 {
@@ -122,11 +118,8 @@ func (m *model) menuHeight() int {
 	if len(mn.shown) > h {
 		h++
 	}
-	avail := m.height - m.composer.height() - chromeRows
-	if m.busy {
-		avail -= busyRows
-	}
-	return max(0, min(h, avail))
+	// The composer's shaded top row is at composerTop()-1.
+	return max(0, min(h, m.composerTop()-1))
 }
 
 // menuRows draws the menu: a window of candidates around the selection, then,
@@ -149,7 +142,7 @@ func (m *model) menuRows() []string {
 	labelW, described := 0, false
 	for i, cd := range window {
 		labels[i] = oneLine(cd.Shown())
-		if mn.kind == app.KindCommand {
+		if mn.q.Kind == app.KindCommand {
 			labels[i] = "/" + labels[i]
 		}
 		labelW = max(labelW, ansi.StringWidth(labels[i]))

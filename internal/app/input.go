@@ -185,7 +185,7 @@ func references(line []rune) [][2]int {
 			continue
 		}
 		j := i + 1
-		for j < len(line) && (!unicode.IsSpace(line[j]) || line[j-1] == '\\') {
+		for j < len(line) && (!unicode.IsSpace(line[j]) || line[j-1] == '\\' && line[j] == ' ') {
 			j++
 		}
 		out = append(out, [2]int{i, j})

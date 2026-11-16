@@ -411,7 +411,7 @@ func (m *model) refreshPending() {
 		m.pending = nil
 		return
 	}
-	budget := m.height - m.composer.height() - chromeRows - m.menuHeight()
+	budget := m.height - m.composer.height() - chromeRows
 	if m.busy {
 		budget -= busyRows
 	}
@@ -419,7 +419,7 @@ func (m *model) refreshPending() {
 }
 
 func (m *model) transcriptHeight() int {
-	h := m.height - m.composer.height() - chromeRows - len(m.pending) - m.menuHeight()
+	h := m.height - m.composer.height() - chromeRows - len(m.pending)
 	if m.busy {
 		h -= busyRows
 	}
@@ -484,8 +484,8 @@ func (m *model) View() tea.View {
 	if m.busy {
 		rows = append(rows, workingRow(&m.spinner, m.verb, formatDuration(time.Since(m.turnStart)), m.th), "")
 	}
+	copy(rows[len(rows)-m.menuHeight():], m.menuRows())
 	rows = append(rows, m.composer.view(m.width, m.th)...)
-	rows = append(rows, m.menuRows()...)
 	rows = append(rows, statusLine(m.status, m.layout, m.flashText, m.width, m.th))
 	v.SetContent(strings.Join(rows, "\n"))
 	return v

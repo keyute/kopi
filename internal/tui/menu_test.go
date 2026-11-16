@@ -62,11 +62,11 @@ func settle(m *model, cmd tea.Cmd) {
 	}
 }
 
-// menuText is the screen rows the menu takes, between the composer and the
-// status line.
+// menuText is the screen rows the menu covers, directly above the composer's
+// shaded top row.
 func menuText(m *model) []string {
-	s := screen(m)
-	return s[len(s)-1-m.menuHeight() : len(s)-1]
+	end := m.composerTop() - 1
+	return screen(m)[end-m.menuHeight() : end]
 }
 
 func TestSlashListsCommandsFiltersAndWraps(t *testing.T) {
@@ -81,7 +81,8 @@ func TestSlashListsCommandsFiltersAndWraps(t *testing.T) {
 		"  /resume     resume a session",
 		"  1 of 7",
 	}, menuText(m))
-	assert.Equal(t, "❯ /", screen(m)[len(screen(m))-9], "the menu is below the composer")
+	assert.Equal(t, "  1 of 7", screen(m)[m.composerTop()-2], "the menu is directly above the composer")
+	assert.Equal(t, "❯ /", screen(m)[m.composerTop()])
 
 	press(m, down)
 	assert.Equal(t, "❭ /execute    switch to execute mode", menuText(m)[1])
@@ -306,5 +307,59 @@ func TestShortTerminalKeepsComposerAndStatusLine(t *testing.T) {
 	assert.Equal(t, statusText(m), s[9])
 	assert.Contains(t, s[9], "plan")
 	assert.Contains(t, s, "❯ /")
-	assert.Equal(t, []string{"❭ /plan       switch to plan mode", "  /execute    switch to execute mode", "  1 of 7"}, menuText(m))
+	assert.Equal(t, []string{
+		"❭ /plan       switch to plan mode",
+		"  /execute    switch to execute mode",
+		"  /status     show status",
+		"  /new        start a new session",
+		"  /resume     resume a session",
+		"  1 of 7",
+	}, menuText(m), "the menu covers the pending and working rows")
+
+	press(m, up)
+	assert.Zero(t, c.takes, "up moves the selection rather than editing the queue")
+	assert.Equal(t, "/", m.composer.value())
+	assert.Equal(t, "❭ /quit       exit kopi", menuText(m)[4])
+}
+
+func TestComposerPressOpensAndClosesMenuWithoutMovingComposer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newMenuModel(t, 60, 30)
+		m.Update(tea.PasteMsg{Content: "@ hi"})
+		require.Zero(t, m.menuHeight())
+		top := m.composerTop()
+
+		_, cmd := m.Update(tea.MouseClickMsg{X: 3, Y: top, Button: tea.MouseLeft})
+		settle(m, cmd)
+		assert.Equal(t, 1, m.composer.ta.Column(), "the press is inside the token")
+		assert.Positive(t, m.menuHeight())
+		assert.Equal(t, top, m.composerTop())
+		s := screen(m)
+		assert.Equal(t, "❭ a.go", menuText(m)[0])
+		assert.Equal(t, "❯ @ hi", s[top], "the composer is intact below the menu")
+		assert.Equal(t, statusText(m), s[len(s)-1])
+
+		moveTo(m, 6, top)
+		assert.Equal(t, 4, m.composer.ta.Column(), "the drag maps to the composer row it is on")
+		assert.Zero(t, m.menuHeight(), "leaving the token closes the menu")
+		assert.Equal(t, top, m.composerTop())
+		releaseAt(m, 6, top)
+	})
+}
+
+func TestPressOnMenuIsIgnored(t *testing.T) {
+	m, _ := newMenuModel(t, 60, 30)
+	keys(m, "/")
+	h := m.menuHeight()
+	require.Positive(t, h)
+	y := m.composerTop() - 1 - h
+	require.Less(t, y, m.transcriptHeight(), "the menu covers transcript rows")
+
+	pressAt(m, 2, y)
+	assert.True(t, m.sel.empty())
+	assert.Equal(t, regionNone, m.drag.region)
+	moveTo(m, 8, y)
+	assert.Nil(t, releaseAt(m, 8, y))
+	assert.True(t, m.sel.empty())
+	assert.Equal(t, "/", m.composer.value())
 }

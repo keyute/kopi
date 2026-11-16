@@ -545,7 +545,7 @@ func TestFailedResumeAsTurnFinishesKeepsSessionUsable(t *testing.T) {
 	assert.Equal(t, 2, h.faux.CallCount())
 }
 
-func TestPromptWhileBusyIsQueuedAndStatusWorks(t *testing.T) {
+func TestPromptWhileBusyIsQueuedAndCommandRuns(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
 	requests := make(chan pigruntimetest.Request, 1)
@@ -558,10 +558,11 @@ func TestPromptWhileBusyIsQueuedAndStatusWorks(t *testing.T) {
 	got, err := h.c.Submit(t.Context(), "another prompt")
 	require.NoError(t, err)
 	assert.Nil(t, got)
-	got, err = h.c.Submit(t.Context(), "/plan")
+	got, err = h.c.Submit(t.Context(), "/execute")
 	require.NoError(t, err)
 	assert.Nil(t, got)
 	assert.True(t, h.c.Status().Busy)
+	assert.Equal(t, policy.Execute, h.c.Status().Mode)
 
 	close(release)
 	wait(t, w.Done())
@@ -1833,6 +1834,9 @@ func assertInertAfterClose(t *testing.T, h *harness) {
 		_, err := h.c.Submit(t.Context(), cmd)
 		assert.ErrorIs(t, err, ErrNoSession, cmd)
 	}
+	cs, err := h.c.Arguments("resume")
+	require.NoError(t, err)
+	assert.Nil(t, cs)
 	h.c.EnterExecute()
 	h.c.EnterPlan()
 	gotMode, gotGen := h.c.authority.Snapshot()
