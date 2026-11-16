@@ -1645,21 +1645,16 @@ func TestResumeEntersPlan(t *testing.T) {
 	assert.Positive(t, status.MessageCount)
 }
 
-func TestResumeWithoutIDListsSessions(t *testing.T) {
+func TestResumeWithoutIDIsMissingArgument(t *testing.T) {
 	h, _ := openHarness(t, Config{})
-	notices := subscribeTo[event.Notice](h.c)
-	_, err := h.c.Submit(t.Context(), "/resume")
-	require.NoError(t, err)
-	assert.Equal(t, "no saved sessions for this workspace", receiveEvent(t, notices).Text)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("still here")})
+	id := h.c.Status().SessionID
 
-	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("answer")})
-	h.turn(t, "list me")
-	_, err = h.c.Submit(t.Context(), "/resume")
-	require.NoError(t, err)
-	notice := receiveEvent(t, notices).Text
-	assert.Contains(t, notice, h.c.Status().SessionID)
-	assert.Contains(t, notice, "list me")
-	assert.NotContains(t, notice, "messages")
+	_, err := h.c.Submit(t.Context(), "/resume")
+	require.ErrorIs(t, err, ErrMissingArgument)
+
+	assert.Equal(t, id, h.c.Status().SessionID)
+	assert.Equal(t, event.Outcome{Status: event.Completed}, h.turn(t, "after").Outcome())
 }
 
 func TestOpenErrorsPassThrough(t *testing.T) {

@@ -76,6 +76,15 @@ func TestMatch(t *testing.T) {
 
 	dirs := []Candidate{{Value: "src/"}, {Value: "src/a.go"}}
 	assert.Equal(t, []Candidate{{Value: "src/a.go"}}, Match(Query{Kind: KindReference, Text: "src/"}, dirs))
+
+	sessions := []Candidate{
+		{Value: "0a1b2c3d", Description: "2026-11-01 10:00:00  fix the parser"},
+		{Value: "4e5f6a7b", Description: "2026-11-02 11:00:00  add tests"},
+	}
+	assert.Equal(t, sessions[1:], Match(Query{Kind: KindArgument, Text: "tests"}, sessions))
+	assert.Equal(t, sessions[:1], Match(Query{Kind: KindArgument, Text: "parser"}, sessions))
+	assert.Equal(t, sessions[1:], Match(Query{Kind: KindArgument, Text: "4e5f"}, sessions))
+	assert.Empty(t, Match(Query{Kind: KindCommand, Text: "tests"}, sessions))
 }
 
 func TestReference(t *testing.T) {

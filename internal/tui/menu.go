@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -217,12 +218,16 @@ func (m *model) menuKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 }
 
 // accept puts the selected candidate in place of the token; with run it then
-// submits, except for a file reference, which is only ever filled in.
+// submits, except for a file reference or a command that takes an argument,
+// which are only ever filled in.
 func (m *model) accept(run bool) tea.Cmd {
 	q, cd := m.menu.q, m.menu.shown[m.menu.sel]
 	var ins string
 	switch q.Kind {
 	case app.KindCommand:
+		if slices.ContainsFunc(m.c.Commands(), func(c app.Command) bool { return c.Name == cd.Value && c.Argument }) {
+			run = false
+		}
 		ins = "/" + cd.Value
 		if !run {
 			ins += " "

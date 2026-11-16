@@ -138,11 +138,12 @@ func (c *Controller) Sessions() ([]pigruntime.SessionInfo, error) {
 }
 
 // Submit takes one message of human input with the paths of its images. A
-// control command is executed and returns (nil, nil), ErrQuit for /quit or
-// ErrUnknownCommand. /new and /resume return at once and report their result
-// through events. Anything else is a prompt: it starts a root turn or, while
-// one runs, is queued for that turn and returns (nil, nil). After Close every
-// input but a blank line returns ErrNoSession.
+// control command is executed and returns (nil, nil), ErrQuit for /quit,
+// ErrMissingArgument for /resume without an id or ErrUnknownCommand. /new and
+// /resume with an id return at once and report their result through events.
+// Anything else is a prompt: it starts a root turn or, while one runs, is
+// queued for that turn and returns (nil, nil). After Close every input but a
+// blank line returns ErrNoSession.
 func (c *Controller) Submit(ctx context.Context, text string, images ...string) (*Work, error) {
 	return c.input(ctx, text, images, false)
 }
@@ -298,7 +299,9 @@ func (c *Controller) Commands() []Command {
 	cmds := commandTable()
 	out := make([]Command, 0, len(cmds))
 	for _, cmd := range cmds {
-		out = append(out, cmd.Command)
+		cm := cmd.Command
+		cm.Argument = cmd.args != nil
+		out = append(out, cm)
 	}
 	return out
 }
@@ -713,8 +716,4 @@ func (c *Controller) releaseSwitch(w *Work, emit func(event.Event), committed bo
 		}
 		emit(end)
 	}
-}
-
-func (c *Controller) notice(text string) {
-	c.relay.emit(event.Notice{Text: text})
 }

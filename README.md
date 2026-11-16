@@ -24,7 +24,7 @@ Commands in the fullscreen interface:
 | `/plan` | Switch to plan mode |
 | `/execute` | Switch to execute mode |
 | `/new` | Start a new session |
-| `/resume [id]` | Resume a session, or list this directory's sessions |
+| `/resume <id>` | Resume a session |
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
 
@@ -40,9 +40,9 @@ Keys in the fullscreen interface (defaults, see Configuration):
 - Ctrl+Enter sends now: it stops the current response and continues the turn with the queued messages plus the draft.
 - Alt+Enter, Shift+Enter or Ctrl+J inserts a newline. Ctrl+Enter and Shift+Enter need a terminal that reports modified Enter.
 - Up at the top of the input pulls queued messages back into it for editing; with nothing queued it browses input history, and Down goes back.
-- `/` at the start of the input lists commands; a space after `/resume` lists this directory's sessions.
+- `/` at the start of the input lists commands; picking `/resume` from the menu lists this directory's sessions, which you filter by ID, date or first message.
 - `@` at the start of the input or after a space lists files and directories under the start directory, leaving out `.git`, anything `.gitignore` ignores and the protected paths.
-- While that menu shows, Up and Down choose, Tab fills in, Enter fills in and runs a command (a file reference is only filled in), and Esc closes the menu.
+- While that menu shows, Up and Down choose, Tab fills in, Enter fills in and runs a command (a command that takes an argument, or a file reference, is only filled in), and Esc closes the menu.
 - Known commands and `@` references are highlighted in the input. An `@path` is sent as written; a space in an inserted path is written `\ `.
 - Esc interrupts the running turn.
 - Ctrl+C interrupts the running turn, else clears the draft, else a second press within two seconds exits.

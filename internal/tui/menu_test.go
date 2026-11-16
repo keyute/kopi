@@ -23,7 +23,7 @@ func newMenuModel(t *testing.T, width, height int) (*model, *fakeController) {
 		{Name: "execute", Summary: "switch to execute mode"},
 		{Name: "status", Summary: "show status"},
 		{Name: "new", Summary: "start a new session"},
-		{Name: "resume", Summary: "resume a session"},
+		{Name: "resume", Summary: "resume a session", Argument: true},
 		{Name: "help", Summary: "list commands"},
 		{Name: "quit", Summary: "exit kopi"},
 	}
@@ -140,6 +140,19 @@ func TestEnterOnCommandRunsIt(t *testing.T) {
 	assert.Equal(t, []string{"/plan"}, c.submitted)
 	assert.Empty(t, m.composer.value())
 	assert.Zero(t, m.menuHeight())
+}
+
+func TestEnterOnCommandWithArgumentFillsItIn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newMenuModel(t, 60, 30)
+		keys(m, "/res")
+
+		settle(m, press(m, enter))
+
+		assert.Empty(t, c.submitted)
+		assert.Equal(t, "/resume ", m.composer.value())
+		assert.Equal(t, []string{"❭ abc123      2h ago  fix the bug", "  def456      1d ago  add tests"}, menuText(m))
+	})
 }
 
 func TestNoMenuWhereNothingCompletes(t *testing.T) {

@@ -2,6 +2,7 @@ package app
 
 import (
 	"cmp"
+	"maps"
 	"path"
 	"slices"
 	"strings"
@@ -118,6 +119,7 @@ func QueryAt(text string, line, col int) (Query, bool) {
 type Candidate struct{ Value, Description string }
 
 // Match is the candidates matching q.Text, best first; all of them in order when q.Text is empty.
+// An argument also matches on its description, ranked by the better of the two.
 // For a reference it leaves out the directory q.Text names exactly.
 func Match(q Query, cs []Candidate) []Candidate {
 	if q.Text == "" {
@@ -128,6 +130,23 @@ func Match(q Query, cs []Candidate) []Candidate {
 		values = append(values, c.Value)
 	}
 	matches := fuzzy.Find(q.Text, values)
+	if q.Kind == KindArgument {
+		descs := make([]string, 0, len(cs))
+		for _, c := range cs {
+			descs = append(descs, c.Description)
+		}
+		// Matched apart from the value: as one string the matcher would latch
+		// onto scattered characters of an ID.
+		best := map[int]fuzzy.Match{}
+		for _, m := range append(matches, fuzzy.Find(q.Text, descs)...) {
+			if b, ok := best[m.Index]; !ok || m.Score > b.Score {
+				best[m.Index] = m
+			}
+		}
+		matches = slices.SortedFunc(maps.Values(best), func(a, b fuzzy.Match) int {
+			return cmp.Or(cmp.Compare(b.Score, a.Score), cmp.Compare(a.Index, b.Index))
+		})
+	}
 	out := make([]Candidate, 0, len(matches))
 	for _, m := range matches {
 		// A directory already typed in full lists its entries, not itself.
