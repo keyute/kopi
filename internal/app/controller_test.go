@@ -840,7 +840,7 @@ func TestCloseDiscardsDeregisteredSwitchWorkBeforeDelayedStart(t *testing.T) {
 		<-start
 		h.c.life.Lock()
 		defer h.c.life.Unlock()
-		err := h.c.startSwitch(t.Context(), OpenRequest{ResumeID: "no-such-session"}, op, nil)
+		err := h.c.startSwitch(t.Context(), OpenRequest{ResumeID: "no-such-session"}, op)
 		if err != nil {
 			h.c.relay.emit(event.Error{Err: err})
 		}
@@ -1763,11 +1763,10 @@ func TestStatusReportsShell(t *testing.T) {
 	assert.False(t, s.Sandboxed)
 
 	denySB := pigruntimetest.NewSandbox(t)
-	mcp := testTool("mcp__s__t", policy.Exec, func(context.Context, json.RawMessage) (string, error) { return "", nil })
-	rules, err := policy.NewRules(denySB.Workspace, denySB.Home, map[string]policy.ToolSpec{"Exec": {}, mcp.Name: {}}, policy.Source{Name: "test", Deny: []string{"Exec"}})
+	rules, err := policy.NewRules(denySB.Workspace, denySB.Home, map[string]policy.ToolSpec{"Exec": {}}, policy.Source{Name: "test", Deny: []string{"Exec"}})
 	require.NoError(t, err)
-	denied := newHarness(t, denySB, Config{Tools: []tool.Tool{exec, mcp}, Rules: rules})
-	assert.False(t, denied.c.Status().Shell, "an MCP tool is not the shell")
+	denied := newHarness(t, denySB, Config{Tools: []tool.Tool{exec}, Rules: rules})
+	assert.False(t, denied.c.Status().Shell)
 }
 
 func TestOpenEmitsConfigErrorsAfterTheSession(t *testing.T) {
@@ -2050,6 +2049,40 @@ func TestStartReportsFailureAndKeepsQueuedInput(t *testing.T) {
 	assertSwitchDone(t, h)
 	assert.Equal(t, changed.SessionID, h.c.Status().SessionID)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, h.turn(t, "after").Outcome())
+}
+
+func TestStartupEventsWaitForTheFirstSessionThatOpens(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	prior := newHarness(t, sb, Config{})
+	require.NoError(t, prior.c.Open(t.Context(), OpenRequest{}))
+	prior.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("hi")})
+	prior.turn(t, "hi")
+	id := prior.c.Status().SessionID
+	require.NoError(t, prior.c.Close(t.Context()))
+
+	first, broken := errors.New("first"), errors.New("no such command")
+	srv := holdServers(pigruntime.ServerStatus{Name: "broken", Err: broken})
+	h := newHarness(t, sb, Config{Errors: []error{first}, Servers: srv.wait})
+	errs := subscribeTo[event.Error](h.c)
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{ResumeID: id}))
+	// The session passes the check, then is gone by the time it is opened.
+	require.NoError(t, os.RemoveAll(filepath.Join(sb.AgentDir, "sessions")))
+	close(srv.release)
+	require.ErrorIs(t, receiveEvent(t, errs).Err, pigruntime.ErrSessionNotFound)
+	assertSwitchDone(t, h)
+	require.Len(t, ofType[event.Error](h.rec.all()), 1)
+
+	require.NoError(t, h.c.NewSession(t.Context()))
+	evs := h.rec.all()
+	i := slices.IndexFunc(evs, func(ev event.Event) bool { _, ok := ev.(event.SessionChanged); return ok })
+	require.GreaterOrEqual(t, i, 0)
+	after := ofType[event.Error](evs[i:])
+	require.Len(t, after, 2)
+	assert.Equal(t, first, after[0].Err)
+	assert.ErrorIs(t, after[1].Err, broken)
+
+	require.NoError(t, h.c.NewSession(t.Context()))
+	assert.Len(t, ofType[event.Error](h.rec.all()), 3, "a later session does not repeat them")
 }
 
 func TestBareDenyRemovesServerTool(t *testing.T) {

@@ -77,11 +77,7 @@ func NewToolSearch(deferred []Tool, rank func(query string, tools []Tool, limit 
 				if args.Query == "" {
 					return "ToolSearch"
 				}
-				line, whole := bashTitleLine("ToolSearch " + args.Query)
-				if !whole {
-					line += " …"
-				}
-				return line
+				return titleLine("ToolSearch " + args.Query)
 			},
 			Summary: func(output string) string {
 				var n int

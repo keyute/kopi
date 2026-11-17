@@ -129,11 +129,16 @@ func bashTitle(raw json.RawMessage) string {
 	if command == "" {
 		return "Bash"
 	}
-	line, whole := bashTitleLine(command)
+	return "Bash " + titleLine(command)
+}
+
+// titleLine is bashTitleLine's line, marked with " …" when cut.
+func titleLine(s string) string {
+	line, whole := bashTitleLine(s)
 	if !whole {
 		line += " …"
 	}
-	return "Bash " + line
+	return line
 }
 
 // bashTitleLine returns the command's first line cut to maxBashTitleRunes

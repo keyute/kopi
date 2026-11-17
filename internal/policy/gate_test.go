@@ -622,6 +622,13 @@ func TestAskToolAsksWithNoRuleEvenForRead(t *testing.T) {
 	assert.Equal(t, []Request{{CallID: "c1", Tool: "mcp__s__read"}}, f.reqs)
 	assert.NoError(t, admitApproved(g, "c1", "mcp__s__read"))
 
+	f = &approver{answer: Allow}
+	a, g := mcpGate(t, f.approve, Source{Name: "config"})
+	a.EnterExecute()
+	require.NoError(t, g.Before(t.Context(), "c2", "mcp__s__exec", nil))
+	assert.Equal(t, []Request{{CallID: "c2", Tool: "mcp__s__exec"}}, f.reqs)
+	assert.NoError(t, admitApproved(g, "c2", "mcp__s__exec"))
+
 	_, g = mcpGate(t, nil, Source{Name: "config"})
 	err := g.Before(t.Context(), "c1", "mcp__s__read", nil)
 	require.ErrorIs(t, err, ErrDenied)
@@ -629,11 +636,20 @@ func TestAskToolAsksWithNoRuleEvenForRead(t *testing.T) {
 }
 
 func TestAskToolFollowsRules(t *testing.T) {
-	for _, rule := range []string{"mcp__s__read", "mcp__s__*", "mcp__*"} {
+	for _, tc := range []struct{ tool, rule string }{
+		{"mcp__s__read", "mcp__s__read"},
+		{"mcp__s__read", "mcp__s__*"},
+		{"mcp__s__read", "mcp__*"},
+		{"mcp__s__exec", "mcp__s__exec"},
+		{"mcp__s__exec", "mcp__s__*"},
+	} {
 		f := &approver{answer: Reject}
-		_, g := mcpGate(t, f.approve, Source{Name: "config", Allow: []string{rule}})
-		require.NoError(t, g.Before(t.Context(), "c1", "mcp__s__read", nil), rule)
-		assert.Empty(t, f.reqs, rule)
+		a, g := mcpGate(t, f.approve, Source{Name: "config", Allow: []string{tc.rule}})
+		if tc.tool == "mcp__s__exec" {
+			a.EnterExecute()
+		}
+		require.NoError(t, g.Before(t.Context(), "c1", tc.tool, nil), tc.rule)
+		assert.Empty(t, f.reqs, tc.rule)
 	}
 
 	f := &approver{answer: Allow}

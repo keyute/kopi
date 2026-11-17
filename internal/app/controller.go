@@ -65,6 +65,9 @@ type Controller struct {
 	authority *policy.Authority
 	relay     relay
 	wg        sync.WaitGroup
+	// startup is what the first open that succeeds reports, so a failed first
+	// open does not lose it; life guards it once a session can be opened.
+	startup []event.Event
 
 	// life serialises session start, switch and close.
 	life sync.Mutex
@@ -152,14 +155,13 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	return events
 }
 
-// startupEvents sets up the first session from statuses and returns what it
+// prepareStartup sets up the first session from statuses and keeps what it
 // reports once open: Config.Errors, then the events about the servers.
-func (c *Controller) startupEvents(statuses []pigruntime.ServerStatus) []event.Event {
-	var events []event.Event
+func (c *Controller) prepareStartup(statuses []pigruntime.ServerStatus) {
 	for _, err := range c.cfg.Errors {
-		events = append(events, event.Error{Err: err})
+		c.startup = append(c.startup, event.Error{Err: err})
 	}
-	return append(events, c.setup(statuses)...)
+	c.startup = append(c.startup, c.setup(statuses)...)
 }
 
 // Subscribe registers fn for every event of the current session plus
@@ -185,7 +187,8 @@ func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
 	if err != nil {
 		return err
 	}
-	return c.start(ctx, req, c.startupEvents(statuses))
+	c.prepareStartup(statuses)
+	return c.start(ctx, req)
 }
 
 // Start is Open without waiting: it returns the check's error, and otherwise
@@ -215,7 +218,8 @@ func (c *Controller) Start(ctx context.Context, req OpenRequest) error {
 		c.life.Lock()
 		defer c.life.Unlock()
 		if err == nil {
-			err = c.startSwitch(ctx, req, op, c.startupEvents(statuses))
+			c.prepareStartup(statuses)
+			err = c.startSwitch(ctx, req, op)
 		} else {
 			c.mu.Lock()
 			c.switching = nil
@@ -240,11 +244,11 @@ func (c *Controller) servers(ctx context.Context) ([]pigruntime.ServerStatus, er
 }
 
 func (c *Controller) NewSession(ctx context.Context) error {
-	return c.start(ctx, OpenRequest{}, nil)
+	return c.start(ctx, OpenRequest{})
 }
 
 func (c *Controller) Resume(ctx context.Context, id string) error {
-	return c.start(ctx, OpenRequest{ResumeID: id}, nil)
+	return c.start(ctx, OpenRequest{ResumeID: id})
 }
 
 // switchTo starts the switch to req in the background; its failure arrives as
@@ -261,7 +265,7 @@ func (c *Controller) switchTo(ctx context.Context, req OpenRequest) error {
 	go func() {
 		c.life.Lock()
 		defer c.life.Unlock()
-		if err := c.startSwitch(ctx, req, op, nil); err != nil {
+		if err := c.startSwitch(ctx, req, op); err != nil {
 			c.relay.emit(event.Error{Err: err})
 		}
 	}()
@@ -527,7 +531,7 @@ func (c *Controller) Status() Status {
 		}
 	}
 	for _, t := range c.cfg.Tools {
-		if t.Capability == policy.Exec && !strings.HasPrefix(t.Name, policy.MCPPrefix) {
+		if t.Capability == policy.Exec {
 			s.Shell, s.Sandboxed = true, t.Sandboxed
 			break
 		}
@@ -731,14 +735,14 @@ func inputs(ps []pigruntime.Prompt) []event.Input {
 // Running work is stopped and joined first; if it will not stop the switch is
 // refused. The new session is opened before the old one is closed, so a failed
 // open leaves the old session in place.
-func (c *Controller) start(ctx context.Context, req OpenRequest, events []event.Event) error {
+func (c *Controller) start(ctx context.Context, req OpenRequest) error {
 	c.life.Lock()
 	defer c.life.Unlock()
 	op, err := c.beginSwitch(nil)
 	if err != nil {
 		return err
 	}
-	return c.startSwitch(ctx, req, op, events)
+	return c.startSwitch(ctx, req, op)
 }
 
 // beginSwitch marks and stops in one queue section, before settlement can
@@ -771,7 +775,7 @@ func (c *Controller) beginSwitch(cancelWait context.CancelFunc) (*sessionSwitch,
 // open, input still pending, which only the first open started by Start or a
 // later open after it failed can leave, starts the session's first turn in the
 // same queue section that ends the switch, ahead of any input given later.
-func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessionSwitch, events []event.Event) (err error) {
+func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessionSwitch) (err error) {
 	defer func() {
 		c.queue.Lock()
 		defer c.queue.Unlock()
@@ -867,9 +871,10 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 	}
 	c.relay.emit(changed)
-	for _, ev := range events {
+	for _, ev := range c.startup {
 		c.relay.emit(ev)
 	}
+	c.startup = nil
 	return nil
 }
 

@@ -75,7 +75,7 @@ func parse(name string) (Decision, bool) {
 // Lookup returns the decision saved for dir or, failing that, for its closest
 // ancestor that has one.
 func (s *Store) Lookup(dir string) (d Decision, ok bool, err error) {
-	dir, err = canonical(dir)
+	dir, err = Canonical(dir)
 	if err != nil {
 		return 0, false, err
 	}
@@ -95,7 +95,7 @@ func (s *Store) Lookup(dir string) (d Decision, ok bool, err error) {
 // change to the file as it is now, so a decision another process saved since
 // Open is kept.
 func (s *Store) Set(dir string, d Decision) (err error) {
-	dir, err = canonical(dir)
+	dir, err = Canonical(dir)
 	if err != nil {
 		return err
 	}
@@ -124,7 +124,9 @@ func (s *Store) Set(dir string, d Decision) (err error) {
 	return nil
 }
 
-func canonical(dir string) (string, error) {
+// Canonical is dir absolute, cleaned and with symlinks resolved, as decisions
+// are keyed.
+func Canonical(dir string) (string, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve folder %s: %w", dir, err)
@@ -153,6 +155,9 @@ func (s *Store) write() error {
 		return fmt.Errorf("failed to create trust file: %w", err)
 	}
 	_, err = tmp.Write(append(b, '\n'))
+	if err == nil {
+		err = tmp.Sync()
+	}
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}

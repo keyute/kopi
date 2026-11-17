@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"golang.org/x/term"
 )
 
 // TrustRequest is what the trust prompt shows. Every field may come from an
@@ -45,6 +47,13 @@ func AskTrust(ctx context.Context, in io.Reader, out io.Writer, opts Options, re
 			p.Quit()
 		}
 	}()
+	// Keys typed before the prompt is drawn, such as a second Enter after
+	// starting kopi, would otherwise pick an option the human has not seen.
+	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		if err := discardInput(f); err != nil {
+			return TrustCancelled, fmt.Errorf("failed to discard typed-ahead input before the trust prompt: %w", err)
+		}
+	}
 	if _, err := p.Run(); err != nil {
 		return TrustCancelled, fmt.Errorf("failed to run the trust prompt: %w", err)
 	}

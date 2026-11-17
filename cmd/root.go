@@ -291,6 +291,10 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// startup as the runtime's signal.
 	startCtx, stopStart := signal.NotifyContext(ctx, os.Interrupt)
 	defer stopStart()
+	// interrupts is notified only once the frontend is about to run; stopping
+	// it is deferred here so the handler outlives the servers' deferred Close.
+	interrupts := make(chan os.Signal, 1)
+	defer signal.Stop(interrupts)
 	// workRunning is set when Close leaves work running; see below.
 	var workRunning bool
 	servers := pigruntime.StartServers(pigruntime.ServerOptions{Servers: set.servers, CWD: cwd, Version: kopiVersion()})
@@ -397,9 +401,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// keep firing: each one interrupts the running turn, and only one at
 	// idle exits. It is registered before stopStart so SIGINT never reverts to
 	// the default exit in between.
-	interrupts := make(chan os.Signal, 1)
 	signal.Notify(interrupts, os.Interrupt)
-	defer signal.Stop(interrupts)
 	stopStart()
 	runErr := f.Run(ctx, interrupts)
 
@@ -502,14 +504,15 @@ func waitServers(ctx context.Context, servers *pigruntime.Servers) ([]pigruntime
 // decideTrust asks about cwd and saves the answer; a cancelled prompt saves
 // nothing and returns no decision. The folder and parent are resolved first,
 // so what is shown is what is saved, and the home check sees through
-// symlinks. Trust saved for the user's home or the root would cover almost
-// every folder below it, so there it holds for this run only.
+// symlinks. An answer saved for the user's home or the root would cover
+// almost every folder below it, so there either answer holds for this run
+// only.
 func decideTrust(store *trust.Store, cwd, userHome string, project map[string]config.MCPServer, ask askTrust) (trust.Decision, error) {
-	cwd, err := resolveDir(cwd)
+	cwd, err := trust.Canonical(cwd)
 	if err != nil {
 		return 0, err
 	}
-	userHome, err = resolveDir(userHome)
+	userHome, err = trust.Canonical(userHome)
 	if err != nil {
 		return 0, err
 	}
@@ -534,6 +537,9 @@ func decideTrust(store *trust.Store, cwd, userHome string, project map[string]co
 	case tui.TrustParent:
 		dir = req.Parent
 	case tui.TrustDeny:
+		if broad {
+			return trust.Untrusted, nil
+		}
 		d = trust.Untrusted
 	default:
 		return 0, nil
@@ -542,19 +548,6 @@ func decideTrust(store *trust.Store, cwd, userHome string, project map[string]co
 		return 0, fmt.Errorf("failed to save the trust decision: %w", err)
 	}
 	return d, nil
-}
-
-// resolveDir is dir absolute, cleaned and with symlinks resolved.
-func resolveDir(dir string) (string, error) {
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve %s: %w", dir, err)
-	}
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve %s: %w", dir, err)
-	}
-	return resolved, nil
 }
 
 // serverTarget is what a server runs or connects to, as configured: the

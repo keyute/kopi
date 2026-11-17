@@ -103,11 +103,7 @@ func NewMCP(t MCPTool, call func(ctx context.Context, args json.RawMessage) (str
 				if json.Compact(&compact, raw) == nil && compact.String() != "{}" {
 					title += " " + compact.String()
 				}
-				line, whole := bashTitleLine(title)
-				if !whole {
-					line += " …"
-				}
-				return line
+				return titleLine(title)
 			},
 			Summary: func(output string) string {
 				if output == noOutputNotice {

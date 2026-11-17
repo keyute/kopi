@@ -66,11 +66,13 @@ func mcpListCmd() *cobra.Command {
 				_, err := fmt.Fprintf(out, "No MCP servers configured: declare them under mcpServers in %s or in %s in this folder.\n", printable(paths.ConfigFile, ""), policy.ProjectMCPFile)
 				return err
 			}
+			// Deferred before Close so the handler outlives it: a signal while
+			// Close runs must not kill Kopi and orphan the servers.
+			waitCtx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
 			servers := pigruntime.StartServers(pigruntime.ServerOptions{Servers: set.servers, CWD: cwd, Version: kopiVersion()})
 			defer servers.Close()
-			waitCtx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			statuses, err := waitServers(waitCtx, servers)
-			stop()
 			if err != nil {
 				return err
 			}

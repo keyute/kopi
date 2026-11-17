@@ -410,3 +410,122 @@ func TestRootFullscreenStartupSubmitExit(t *testing.T) {
 		t.Fatal("timed out draining fullscreen terminal")
 	}
 }
+
+func TestRootFullscreenTrustPromptStartsTheProjectServers(t *testing.T) {
+	e := newTestEnv(t)
+	t.Setenv("TERM", "xterm-256color")
+	logger := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(logger) })
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "trusted-response") })
+	e.writeMockModels(t, server.URL)
+	e.writeServers(t, filepath.Join(e.workspace, ".mcp.json"), map[string]any{"fake": map[string]any{
+		"command": os.Args[0],
+		"args":    []string{"-test.run=^TestMCPStdioHelper$"},
+		"env":     map[string]string{stdioHelperEnv: "serve"},
+	}})
+	master, slave := openTestTerminal(t)
+	asked, ready, answered := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	drained := make(chan struct{})
+	var result terminalDrainResult
+	go func() {
+		var output strings.Builder
+		buf := make([]byte, 4096)
+		var sawAsk, sawReady, sawAnswer bool
+		askedAt := 0
+		for {
+			n, err := master.Read(buf)
+			output.Write(buf[:n])
+			plain := ansi.Strip(output.String())
+			if !sawAsk {
+				if i := strings.Index(plain, "Do you trust this folder?"); i >= 0 {
+					sawAsk, askedAt = true, i
+					close(asked)
+				}
+			}
+			// The main interface's status line names the model; the trust
+			// prompt, whose paths may contain "kopi", never does.
+			if sawAsk && !sawReady && strings.Contains(plain[askedAt:], "mock-1") {
+				sawReady = true
+				close(ready)
+			}
+			if !sawAnswer && strings.Contains(plain, "trusted-response") {
+				sawAnswer = true
+				close(answered)
+			}
+			if err != nil {
+				result = terminalDrainResult{text: output.String(), err: err}
+				close(drained)
+				return
+			}
+		}
+	}()
+	root := newRoot()
+	root.SetIn(slave)
+	root.SetOut(slave)
+	var stderr bytes.Buffer
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"--model", mockModel})
+	done := make(chan error, 1)
+	stopped := make(chan struct{})
+	go func() {
+		done <- root.ExecuteContext(ctx)
+		close(stopped)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-stopped:
+		case <-time.After(waitLimit):
+			t.Error("timed out cleaning up fullscreen command")
+			return
+		}
+		// Close the last slave first: closing a master with a blocked read can hang on Darwin.
+		_ = slave.Close()
+		select {
+		case <-drained:
+		case <-time.After(waitLimit):
+			t.Error("timed out cleaning up fullscreen terminal drain")
+			return
+		}
+		_ = master.Close()
+	})
+	waitFor := func(name string, ch <-chan struct{}) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-drained:
+			t.Fatalf("terminal drain ended before %s: %v; output: %q", name, result.err, result.text)
+		case err := <-done:
+			t.Fatalf("fullscreen exited before %s: %v; stderr: %s", name, err, stderr.String())
+		case <-time.After(waitLimit):
+			t.Fatalf("timed out waiting for %s", name)
+		}
+	}
+	waitFor("the trust prompt", asked)
+	_, err := io.WriteString(master, "1") // Yes, trust this folder
+	require.NoError(t, err)
+	waitFor("the main interface", ready)
+	assert.Equal(t, map[string]string{canonical(t, e.workspace): "trusted"}, trustFolders(t, filepath.Join(e.kopiHome, "trust.json")))
+
+	_, err = io.WriteString(master, "what can you use?\r")
+	require.NoError(t, err)
+	req := server.next(t)
+	var tools []string
+	for _, tl := range req.body["tools"].([]any) {
+		tools = append(tools, tl.(map[string]any)["function"].(map[string]any)["name"].(string))
+	}
+	assert.Contains(t, tools, "ToolSearch")
+	system := req.body["messages"].([]any)[0].(map[string]any)
+	assert.Contains(t, system["content"], "mcp__fake__search")
+	waitFor("the rendered response", answered)
+	_, err = master.Write([]byte{4}) // ctrl-d quits with an empty composer.
+	require.NoError(t, err)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for fullscreen exit")
+	}
+}

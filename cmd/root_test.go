@@ -1300,6 +1300,7 @@ func TestDecideTrustOffersNoParentAtHomeOrRoot(t *testing.T) {
 		{"home through a symlink", proj, homeLink},
 		{"working directory through a symlinked home", filepath.Join(homeLink, "proj"), home},
 		{"root", "/", home},
+		{"directly under root", "/usr", home},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var asked tui.TrustRequest
@@ -1321,8 +1322,8 @@ func TestDecideTrustAtHomeOrRootTrustsForThisRunOnly(t *testing.T) {
 	}{
 		{"home trusted", home, tui.TrustFolder, trust.Trusted, nil},
 		{"root trusted", "/", tui.TrustFolder, trust.Trusted, nil},
-		{"home denied", home, tui.TrustDeny, trust.Untrusted, map[string]string{home: "untrusted"}},
-		{"root denied", "/", tui.TrustDeny, trust.Untrusted, map[string]string{"/": "untrusted"}},
+		{"home denied", home, tui.TrustDeny, trust.Untrusted, nil},
+		{"root denied", "/", tui.TrustDeny, trust.Untrusted, nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			trustFile := filepath.Join(t.TempDir(), "trust.json")
