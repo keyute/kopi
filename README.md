@@ -10,6 +10,7 @@ Needs Go (version in `go.mod`) and [Task](https://taskfile.dev/) to build; the b
 ```sh
 task build
 bin/kopi login <provider>          # list providers with: bin/kopi login
+bin/kopi logout <provider>
 bin/kopi --model provider/id
 bin/kopi --model provider/id -c    # continue the latest session in this directory
 bin/kopi --model provider/id -r <id>
@@ -84,6 +85,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `trust.json` holds which folders you trust (see MCP servers); Kopi writes it and never writes `config.json`.
 - `history.jsonl` holds input history per working directory, written by the fullscreen interface; the last 100 entries are recalled.
 - `images/` holds pasted clipboard images, removed after a day.
+- `installation_id` holds the installation's UUID, created the first time a sign-in asks for it.
 - `agent/` is PiG's agent directory, created on first run: its credential file (`auth.json`), session logs (`sessions/`), other PiG state and an optional `models.json`.
 
 `mode` is the mode sessions start in: `plan` (default) or `execute`.
@@ -136,6 +138,18 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `sandbox.allowWrite` and `sandbox.denyRead` take plain paths, no globs: `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory, so `.env` means only `<start directory>/.env`, unlike in a rule.
 - A later layer's `sandbox.allowWrite` or `sandbox.denyRead` replaces an earlier one's whole.
 - `sandbox.network` (default `false`) allows IP networking in the sandbox.
+
+## Providers
+
+- `kopi login` lists the providers that offer a login, with their methods and the ones Kopi holds a credential for; `kopi login <provider>` runs one.
+- A provider offers an account sign-in, a stored API key or both; with both, Kopi asks which. An API key is read hidden on a terminal, or as a line from piped stdin.
+- A sign-in prints its URL and opens it in the browser; when the browser does not open, use the printed URL.
+- `kopi logout <provider>` removes the provider's credential from `agent/auth.json`.
+- A credential in the environment works without a login; `kopi login` marks only stored credentials as logged in.
+- After an `anthropic` account sign-in Kopi notes that Anthropic bills third-party tools per token as extra usage, not from Claude plan limits.
+- Sign-in introduces the app as `Kopi` to OpenAI's Sign in with ChatGPT (`openai`), which also receives `installation_id`, and as `kopi` to other sign-ins that take a name.
+- Requests carry no PiG attribution headers.
+- Still PiG's: the page a browser sign-in returns to shows pi's logo, the `radius` sign-in URL names `pi-gateway` on `radius.pi.dev`, and xAI's sign-in sends `referrer: pig`.
 
 ## Modes and tools
 
@@ -251,11 +265,11 @@ task fmt
 
 Tests are mock-backed (PiG's faux provider and a local HTTP mock server); none use a live provider.
 
-Manual live check: `kopi login openai-codex`, run with a model, ask it to read a file, then try `/execute`, `/plan`, Ctrl+C and `--continue`; then `kopi -p` with an argument and with piped input.
+Manual live check: `kopi login openai-codex`, run with a model, ask it to read a file, then try `/execute`, `/plan`, Ctrl+C and `--continue`; then `kopi -p` with an argument and with piped input. For sign-in, with a scratch `KOPI_HOME`: `kopi login` lists `openai` and `openai-codex`; `kopi login openai-codex` opens the browser with `originator=kopi` in the URL; `kopi login openai` has `agent_name_hint=Kopi` and `ext_agent_host_id=urn:uuid:<installation_id>` in the URL and OpenAI's consent screen names Kopi; `kopi logout openai-codex`, then a run suggests `kopi login`.
 
 ## Not implemented
 
-Project-level config, loading project instruction files, a Linux sandbox, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approval classification, delegation and workflows, background jobs, a Kopi provider identity, release packaging and self-update, and login for providers that need an installation device ID (`openai`).
+Project-level config, loading project instruction files, a Linux sandbox, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approval classification, delegation and workflows, background jobs, a Kopi provider identity, and release packaging and self-update.
 
 MCP: OAuth for remote servers, the SSE transport, resources and prompts, `tools/list_changed`, image results, sandboxing servers or giving them a restricted environment, and a command or flag to set or change a folder's trust.
 

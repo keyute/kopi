@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -13,14 +15,16 @@ import (
 	"github.com/MichaelKinsy/PiG/agent"
 	"github.com/MichaelKinsy/PiG/ai"
 	"github.com/MichaelKinsy/PiG/coding"
+	"github.com/pkg/browser"
 
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
 )
 
 // pigSettings is unmarshalled rather than built because the nested settings
-// types live in a PiG internal package and cannot be named here.
-const pigSettings = `{"retry":{"enabled":true},"compaction":{"enabled":true},"cacheWarming":"off","steeringMode":"all"}`
+// types live in a PiG internal package and cannot be named here. Install
+// telemetry off is what stops PiG attributing requests to itself.
+const pigSettings = `{"retry":{"enabled":true},"compaction":{"enabled":true},"cacheWarming":"off","steeringMode":"all","enableInstallTelemetry":false}`
 
 type Options struct {
 	// Home is Kopi's home; PiG's own home is pinned beneath it.
@@ -28,8 +32,11 @@ type Options struct {
 }
 
 type Runtime struct {
-	svcs *coding.AgentSessionServices
-	rt   *coding.Runtime
+	svcs             *coding.AgentSessionServices
+	rt               *coding.Runtime
+	installationFile string
+	// openURL opens a sign-in URL in the user's browser.
+	openURL func(string) error
 }
 
 // New builds a PiG runtime whose every input is explicit: in-memory settings,
@@ -60,7 +67,14 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		svcs.Close()
 		return nil, fmt.Errorf("failed to create pig runtime: %w", err)
 	}
-	return &Runtime{svcs: svcs, rt: rt}, nil
+	// The browser's own output would land in the terminal mid-prompt.
+	browser.Stdout, browser.Stderr = io.Discard, io.Discard
+	return &Runtime{
+		svcs:             svcs,
+		rt:               rt,
+		installationFile: filepath.Join(opts.Home, "installation_id"),
+		openURL:          browser.OpenURL,
+	}, nil
 }
 
 func (r *Runtime) RegisterProvider(p *ai.ModelsProvider) error {
@@ -193,7 +207,7 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 		sess, err = r.rt.New(start)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to open session: %w", err)
+		return nil, fmt.Errorf("failed to open session: %w", reword(err))
 	}
 	// With SkipBuiltinTools PiG activates every ExtraTool whatever
 	// InitialActiveToolNames says, and a resumed session restores the tools
@@ -207,7 +221,7 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 func (r *Runtime) hasCredential(ctx context.Context, provider string) (bool, error) {
 	check, err := r.svcs.ModelRuntime().CheckAuth(ctx, provider)
 	if err != nil {
-		return false, fmt.Errorf("failed to check credential for provider %q: %w", provider, err)
+		return false, fmt.Errorf("failed to check credential for provider %q: %w", provider, reword(err))
 	}
 	return check != nil, nil
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/headless"
 	"github.com/keyute/kopi/internal/pigruntime"
@@ -262,7 +263,7 @@ func TestRootWithoutCredentialSuggestsLogin(t *testing.T) {
 	assert.Equal(t, `no credential for provider "openai-codex": run "kopi login openai-codex"`, err.Error())
 }
 
-func TestRootWithoutCredentialForProviderWithoutLogin(t *testing.T) {
+func TestRootWithoutCredentialSuggestsLoginOrAPIKey(t *testing.T) {
 	newTestEnv(t)
 	t.Setenv("MISTRAL_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "")
@@ -271,10 +272,15 @@ func TestRootWithoutCredentialForProviderWithoutLogin(t *testing.T) {
 		_, _, err := execute(t, "", "--model", builtinModel(t, provider), "-p", "hi")
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), fmt.Sprintf("no credential for provider %q", provider))
-		assert.Contains(t, err.Error(), "API key in the environment")
-		assert.NotContains(t, err.Error(), "login")
+		assert.Equal(t, fmt.Sprintf(`no credential for provider %q: run "kopi login %s" or set its API key in the environment`, provider, provider), err.Error())
 	}
+}
+
+func TestDiagnoseProviderWithoutLogin(t *testing.T) {
+	err := diagnose(fmt.Errorf("failed to open session: %w", pigruntime.ErrNoCredential), "ambient/model-1", "flags", config.Paths{}, app.OpenRequest{},
+		[]pigruntime.Provider{{ID: "ambient"}})
+
+	assert.Equal(t, `no credential for provider "ambient": supply its credential in the environment`, err.Error())
 }
 
 func TestRootUnknownModelNamesWhereItIsSet(t *testing.T) {
@@ -288,6 +294,16 @@ func TestRootUnknownModelNamesWhereItIsSet(t *testing.T) {
 	_, _, err = execute(t, "", "-p", "hi")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), filepath.Join(e.kopiHome, "config.json"))
+}
+
+func TestRootDiagnosesOpenFailureWhenCredentialsCannotBeListed(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.agentDir, "auth.json"), `{not json`)
+
+	_, _, err := execute(t, "", "--model", "nosuch/model-1", "-p", "hi")
+
+	require.Error(t, err)
+	assert.Equal(t, `unknown model "nosuch/model-1": check --model`, err.Error())
 }
 
 func TestRootReportsMissingSession(t *testing.T) {
