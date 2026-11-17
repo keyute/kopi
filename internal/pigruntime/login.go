@@ -6,65 +6,181 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net/url"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/MichaelKinsy/PiG/ai"
+	"github.com/muesli/cancelreader"
 	"golang.org/x/term"
 )
 
-// unsupportedLogins are providers whose OAuth login PiG cannot complete
-// without a stable installation device ID (ai.LoginOptions.GetDeviceID: Sign
-// in with ChatGPT on "openai"), which Kopi does not keep yet. PiG exposes no
-// way to tell which flows need one, so the id is named here.
-var unsupportedLogins = []string{"openai"}
+// signInNames are the names Kopi introduces itself with during a provider's
+// sign-in where the default does not fit: OpenAI shows the Sign in with
+// ChatGPT name on its consent screen. The default is what Kopi sends as the
+// Codex originator in the sign-in URL.
+var signInNames = map[string]string{"openai": "Kopi"}
 
-// OAuthProviders returns the sorted ids of the providers whose OAuth login
-// Kopi can run.
-func (r *Runtime) OAuthProviders() []string {
-	var ids []string
-	for _, p := range r.svcs.ModelRuntime().GetProviders() {
-		if p.Auth.OAuth != nil && !slices.Contains(unsupportedLogins, p.ID) {
-			ids = append(ids, p.ID)
-		}
-	}
-	slices.Sort(ids)
-	return ids
+const defaultSignInName = "kopi"
+
+// signInNotices are printed after a sign-in to the provider's account, not
+// after storing an API key.
+var signInNotices = map[string]string{
+	"anthropic": "Anthropic bills third-party tools per token as extra usage, not from your Claude plan limits.",
 }
 
-// Login runs the provider's OAuth flow, answering its prompts from in and
-// printing its instructions to out. PiG persists the credential in the agent
-// dir's auth.json; Kopi never sees it written or printed, and no browser is
-// opened.
+type Provider struct {
+	ID string
+	// SignIn names the provider's account sign-in, such as "OpenAI (ChatGPT Plus/Pro)"; empty when it has none.
+	SignIn string
+	// APIKey reports that Kopi can store an API key for it.
+	APIKey bool
+	// LoggedIn reports a credential in Kopi's store; credentials in the environment are not counted.
+	LoggedIn bool
+}
+
+// Providers lists every provider sorted by id, with the logins it offers.
+func (r *Runtime) Providers(ctx context.Context) ([]Provider, error) {
+	creds, err := r.svcs.ModelRuntime().ListCredentials(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list credentials: %w", err)
+	}
+	var out []Provider
+	for _, p := range r.svcs.ModelRuntime().GetProviders() {
+		info := Provider{ID: p.ID, APIKey: storesAPIKey(p)}
+		if p.Auth.OAuth != nil {
+			info.SignIn = p.Auth.OAuth.Name
+		}
+		info.LoggedIn = slices.ContainsFunc(creds, func(c ai.CredentialInfo) bool { return c.ProviderID == p.ID })
+		out = append(out, info)
+	}
+	slices.SortFunc(out, func(a, b Provider) int { return strings.Compare(a.ID, b.ID) })
+	return out, nil
+}
+
+// storesAPIKey is PiG's rule for an API-key login: an API-key method without
+// a Login is ambient-only (environment, cloud credential chain).
+func storesAPIKey(p *ai.ModelsProvider) bool {
+	return p.Auth.APIKey != nil && p.Auth.APIKey.Login != nil
+}
+
+// storedCredential reports whether Kopi's store holds a credential for the
+// provider.
+func (r *Runtime) storedCredential(ctx context.Context, provider string) (bool, error) {
+	creds, err := r.svcs.ModelRuntime().ListCredentials(ctx)
+	if err != nil {
+		return false, fmt.Errorf("failed to list credentials: %w", err)
+	}
+	return slices.ContainsFunc(creds, func(c ai.CredentialInfo) bool { return c.ProviderID == provider }), nil
+}
+
+// Login signs in to the provider's account or stores an API key for it,
+// asking which when it offers both, answering the flow's prompts from in and
+// printing its instructions to out. A sign-in URL is also opened in the
+// browser. PiG persists the credential in the agent dir's auth.json; Kopi
+// never sees it written or printed.
 func (r *Runtime) Login(ctx context.Context, provider string, in io.Reader, out io.Writer) error {
 	p := r.svcs.ModelRuntime().GetProvider(provider)
 	if p == nil {
 		return fmt.Errorf("failed to log in to %q: %w", provider, ErrUnknownProvider)
 	}
-	if p.Auth.OAuth == nil {
-		return fmt.Errorf("failed to log in to %q: %w", provider, ErrNoOAuth)
+	signIn, apiKey := p.Auth.OAuth != nil, storesAPIKey(p)
+	if !signIn && !apiKey {
+		return fmt.Errorf("failed to log in to %q: %w", provider, ErrNoLogin)
 	}
-	if slices.Contains(unsupportedLogins, provider) {
-		return fmt.Errorf("failed to log in to %q: Kopi does not support this provider's login yet", provider)
+	l := &loginIO{in: in, lines: bufio.NewReader(in), out: out, openURL: r.openURL}
+	kind := ai.CredentialOAuth
+	switch {
+	case signIn && apiKey:
+		choice, err := l.selectOption(ctx, ai.AuthSelectPrompt{Message: fmt.Sprintf("Log in to %s with:", provider), Options: []ai.AuthSelectOption{
+			{ID: string(ai.CredentialOAuth), Label: p.Auth.OAuth.Name},
+			{ID: string(ai.CredentialAPIKey), Label: "API key"},
+		}})
+		if err != nil {
+			return fmt.Errorf("failed to log in to %q: %w", provider, err)
+		}
+		kind = ai.CredentialType(choice)
+	case apiKey:
+		kind = ai.CredentialAPIKey
 	}
-	l := &loginIO{in: in, lines: bufio.NewReader(in), out: out}
-	if _, err := r.svcs.ModelRuntime().Login(ctx, provider, ai.CredentialOAuth, ai.AuthInteraction{Prompt: l.prompt, Notify: l.notify}); err != nil {
-		return fmt.Errorf("failed to log in to %q: %w", provider, err)
+	name := defaultSignInName
+	if n, ok := signInNames[provider]; ok {
+		name = n
+	}
+	// PiG turns an empty device ID into its own generic error, so the cause is
+	// kept to report instead.
+	var idMu sync.Mutex
+	var idErr error
+	opts := ai.LoginOptions{AgentName: &name, GetDeviceID: func() string {
+		id, err := installationID(r.installationFile)
+		if err != nil {
+			idMu.Lock()
+			idErr = err
+			idMu.Unlock()
+		}
+		return id
+	}}
+	_, err := r.svcs.ModelRuntime().Login(ctx, provider, kind, ai.AuthInteraction{Prompt: l.prompt, Notify: l.notify}, opts)
+	// PiG returns on a cancelled ctx without joining the flow's goroutine; a
+	// hidden read still in flight must restore the terminal before Login
+	// returns, and none may start after.
+	l.rawMu.Lock()
+	l.closed = true
+	l.rawMu.Unlock()
+	idMu.Lock()
+	deviceErr := idErr
+	idMu.Unlock()
+	if deviceErr != nil {
+		return fmt.Errorf("failed to log in to %q: %w", provider, deviceErr)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to log in to %q: %w", provider, reword(err))
+	}
+	if notice, ok := signInNotices[provider]; ok && kind == ai.CredentialOAuth {
+		if _, err := fmt.Fprintln(out, notice); err != nil {
+			return fmt.Errorf("failed to print login notice: %w", err)
+		}
+	}
+	return nil
+}
+
+// Logout deletes the provider's credential from Kopi's store. PiG's logout
+// deletes without checking, so the credential is looked up first.
+func (r *Runtime) Logout(ctx context.Context, provider string) error {
+	ok, err := r.storedCredential(ctx, provider)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		if r.svcs.ModelRuntime().GetProvider(provider) == nil {
+			return fmt.Errorf("failed to log out of %q: %w", provider, ErrUnknownProvider)
+		}
+		return fmt.Errorf("failed to log out of %q: %w", provider, ErrNotLoggedIn)
+	}
+	if err := r.svcs.ModelRuntime().Logout(ctx, provider); err != nil {
+		return fmt.Errorf("failed to log out of %q: %w", provider, reword(err))
 	}
 	return nil
 }
 
 type loginIO struct {
-	in    io.Reader
-	lines *bufio.Reader
-	out   io.Writer
+	in      io.Reader
+	lines   *bufio.Reader
+	out     io.Writer
+	openURL func(string) error
 	// pending is the read still in flight after its prompt's ctx ended; the
 	// next prompt takes its answer instead of starting a concurrent read.
 	// PiG joins a cancelled prompt before issuing the next, so prompts never
 	// overlap.
 	pending chan readResult
+	// rawMu is held while a hidden read has the terminal raw; closed, which it
+	// guards, refuses hidden reads once Login has returned.
+	rawMu  sync.Mutex
+	closed bool
 }
 
 type readResult struct {
@@ -76,13 +192,16 @@ func (l *loginIO) prompt(ctx context.Context, p ai.AuthPrompt) (string, error) {
 	switch p := p.(type) {
 	case ai.AuthTextPrompt:
 		l.ask(p.Message, p.Placeholder)
-		return l.read(ctx, l.readLine)
+		return l.read(ctx)
 	case ai.AuthManualCodePrompt:
 		l.ask(p.Message, p.Placeholder)
-		return l.read(ctx, l.readLine)
+		return l.read(ctx)
 	case ai.AuthSecretPrompt:
-		l.ask(p.Message, p.Placeholder)
-		return l.read(ctx, l.readSecret)
+		secret, err := l.readSecret(ctx, p)
+		if err == nil && secret == "" {
+			return "", errors.New("failed to read login input: empty answer")
+		}
+		return secret, err
 	case ai.AuthSelectPrompt:
 		return l.selectOption(ctx, p)
 	}
@@ -96,8 +215,11 @@ func (l *loginIO) notify(e ai.AuthEvent) {
 		if e.Instructions != "" {
 			fmt.Fprintln(l.out, e.Instructions)
 		}
+		// The opener waits for the browser's launcher; do not block the login flow.
+		go l.open(e.URL)
 	case ai.AuthDeviceCodeEvent:
 		fmt.Fprintf(l.out, "Visit %s and enter the code %s\n", e.VerificationURI, e.UserCode)
+		go l.open(e.VerificationURI)
 	case ai.AuthProgressEvent:
 		fmt.Fprintln(l.out, e.Message)
 	case ai.AuthInfoEvent:
@@ -105,6 +227,16 @@ func (l *loginIO) notify(e ai.AuthEvent) {
 		for _, link := range e.Links {
 			fmt.Fprintf(l.out, "  %s\n", link.URL)
 		}
+	}
+}
+
+func (l *loginIO) open(rawURL string) {
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return
+	}
+	if err := l.openURL(rawURL); err != nil {
+		slog.Debug("failed to open browser", "error", err)
 	}
 }
 
@@ -126,7 +258,7 @@ func (l *loginIO) selectOption(ctx context.Context, p ai.AuthSelectPrompt) (stri
 		fmt.Fprintf(l.out, "  %d) %s\n", i+1, o.Label)
 	}
 	fmt.Fprint(l.out, "Choice: ")
-	answer, err := l.read(ctx, l.readLine)
+	answer, err := l.read(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -139,14 +271,14 @@ func (l *loginIO) selectOption(ctx context.Context, p ai.AuthSelectPrompt) (stri
 	return "", fmt.Errorf("invalid choice %q", answer)
 }
 
-// read runs fn off the prompt's goroutine so a cancelled ctx (the OAuth
+// read runs readLine off the prompt's goroutine so a cancelled ctx (the OAuth
 // callback server winning against a pasted code) returns at once.
-func (l *loginIO) read(ctx context.Context, fn func() (string, error)) (string, error) {
+func (l *loginIO) read(ctx context.Context) (string, error) {
 	if l.pending == nil {
 		ch := make(chan readResult, 1)
 		l.pending = ch
 		go func() {
-			text, err := fn()
+			text, err := l.readLine()
 			ch <- readResult{text: text, err: err}
 		}()
 	}
@@ -167,15 +299,59 @@ func (l *loginIO) readLine() (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
-func (l *loginIO) readSecret() (string, error) {
+func (l *loginIO) readSecret(ctx context.Context, p ai.AuthSecretPrompt) (string, error) {
 	f, ok := l.in.(*os.File)
 	if !ok || !term.IsTerminal(int(f.Fd())) {
-		return l.readLine()
+		l.ask(p.Message, p.Placeholder)
+		return l.read(ctx)
 	}
-	secret, err := term.ReadPassword(int(f.Fd()))
-	fmt.Fprintln(l.out)
+	l.rawMu.Lock()
+	defer l.rawMu.Unlock()
+	if l.closed {
+		return "", context.Canceled
+	}
+	if err := context.Cause(ctx); err != nil {
+		return "", err
+	}
+	reader, err := cancelreader.NewReader(f)
 	if err != nil {
-		return "", fmt.Errorf("failed to read login input: %w", err)
+		return "", fmt.Errorf("failed to create login input reader: %w", err)
 	}
-	return string(secret), nil
+	defer func() { _ = reader.Close() }()
+	state, err := term.MakeRaw(int(f.Fd()))
+	if err != nil {
+		return "", fmt.Errorf("failed to set terminal state: %w", err)
+	}
+	defer func() { _ = term.Restore(int(f.Fd()), state) }()
+	terminal := term.NewTerminal(struct {
+		io.Reader
+		io.Writer
+	}{reader, l.out}, "")
+	prompt := p.Message
+	if p.Placeholder != "" {
+		prompt += " [" + p.Placeholder + "]"
+	}
+	done := make(chan readResult, 1)
+	go func() {
+		text, err := terminal.ReadPassword(prompt + " ")
+		done <- readResult{text: text, err: err}
+	}()
+	select {
+	case res := <-done:
+		// In raw mode the editor reports Ctrl-C, and Ctrl-D on an empty line, as EOF.
+		if errors.Is(res.err, io.EOF) {
+			// The terminal is still raw, so end the prompt line explicitly.
+			fmt.Fprint(l.out, "\r\n")
+			return "", context.Canceled
+		}
+		if res.err != nil {
+			return "", fmt.Errorf("failed to read login input: %w", res.err)
+		}
+		return res.text, nil
+	case <-ctx.Done():
+		// The editor must stop writing before the caller regains the terminal.
+		reader.Cancel()
+		<-done
+		return "", context.Cause(ctx)
+	}
 }

@@ -240,7 +240,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (Sen
 	_, _ = s.inner.ClearQueue()
 	res := SendResult{Sent: sent, Undelivered: handed}
 	if err != nil {
-		return res, fmt.Errorf("failed to send prompt: %w", err)
+		return res, fmt.Errorf("failed to send prompt: %w", reword(err))
 	}
 	// A cancel can land after PiG finished the turn but before stop(); a
 	// turn that ended normally is complete whatever the abort hook saw.
@@ -256,7 +256,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (Sen
 	case ai.StopReasonAborted:
 		res.Outcome = event.Outcome{Status: event.Interrupted}
 	case ai.StopReasonError:
-		res.Outcome = event.Outcome{Status: event.Failed, Message: last.ErrorMessage}
+		res.Outcome = event.Outcome{Status: event.Failed, Message: pigTexts.Replace(last.ErrorMessage)}
 	default:
 		res.Outcome = event.Outcome{Status: event.Completed}
 		var parts []string

@@ -129,7 +129,7 @@ func storedTurnEnd(m *agent.AssistantMessage) (event.TurnEnd, bool) {
 		m.StopReason == ai.StopReasonError && m.ErrorMessage == context.Canceled.Error():
 		return event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}}, true
 	case m.StopReason == ai.StopReasonError:
-		return event.TurnEnd{Outcome: event.Outcome{Status: event.Failed, Message: m.ErrorMessage}}, true
+		return event.TurnEnd{Outcome: event.Outcome{Status: event.Failed, Message: pigTexts.Replace(m.ErrorMessage)}}, true
 	}
 	return event.TurnEnd{}, false
 }

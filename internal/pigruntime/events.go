@@ -29,7 +29,7 @@ func translate(ev agent.AgentEvent) (event.Event, bool) {
 		return event.ToolEnd{CallID: ev.ToolCallID, Name: ev.ToolName, Output: toolResultContentText(ev.Result.Content), IsError: ev.IsError}, true
 	case agent.AutoRetryStartEvent:
 		delay := time.Duration(ev.DelayMs) * time.Millisecond
-		return event.Notice{Text: fmt.Sprintf("retrying (attempt %d/%d) in %s: %s", ev.Attempt, ev.MaxAttempts, delay, ev.ErrorMessage)}, true
+		return event.Notice{Text: fmt.Sprintf("retrying (attempt %d/%d) in %s: %s", ev.Attempt, ev.MaxAttempts, delay, pigTexts.Replace(ev.ErrorMessage))}, true
 	case agent.CompactionStartEvent:
 		return event.Notice{Text: fmt.Sprintf("compacting context (%s)", ev.Reason)}, true
 	case agent.CompactionEndEvent:
@@ -37,7 +37,7 @@ func translate(ev agent.AgentEvent) (event.Event, bool) {
 		case ev.Aborted:
 			return event.Notice{Text: "compaction aborted"}, true
 		case ev.ErrorMessage != "":
-			return event.Notice{Text: "compaction failed: " + ev.ErrorMessage}, true
+			return event.Notice{Text: "compaction failed: " + pigTexts.Replace(ev.ErrorMessage)}, true
 		}
 		return event.Notice{Text: "compaction done"}, true
 	}

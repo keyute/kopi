@@ -15,11 +15,14 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/go-viper/mapstructure/v2 v2.5.0
+	github.com/google/uuid v1.6.0
 	github.com/knadh/koanf/parsers/json v1.0.1
 	github.com/knadh/koanf/providers/confmap v1.0.1
 	github.com/knadh/koanf/providers/rawbytes v1.0.1
 	github.com/knadh/koanf/v2 v2.4.1
 	github.com/lmittmann/tint v1.2.1
+	github.com/muesli/cancelreader v0.2.2
+	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/sahilm/fuzzy v0.1.3
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
@@ -47,7 +50,6 @@ require (
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-git/go-billy/v5 v5.9.2 // indirect
 	github.com/gofrs/flock v0.13.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -59,7 +61,6 @@ require (
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
-	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/xo/terminfo v1.0.0 // indirect

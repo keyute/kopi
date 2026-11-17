@@ -3,9 +3,12 @@ package pigruntime
 import (
 	"bufio"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -53,7 +56,6 @@ func TestLoginPersistsCredentialForFreshRuntime(t *testing.T) {
 	sb := newSandbox(t)
 	r, _ := newTestRuntime(t, sb)
 	require.NoError(t, r.RegisterProvider(oauthTestProvider(t)))
-	assert.Contains(t, r.OAuthProviders(), oauthProvider)
 	ok, err := r.hasCredential(t.Context(), oauthProvider)
 	require.NoError(t, err)
 	assert.False(t, ok)
@@ -80,14 +82,309 @@ func TestLoginPersistsCredentialForFreshRuntime(t *testing.T) {
 	assert.True(t, ok)
 }
 
-func TestOAuthProvidersAreSorted(t *testing.T) {
+func TestLoginOpensSignInURLInBrowser(t *testing.T) {
 	sb := newSandbox(t)
 	r, _ := newTestRuntime(t, sb)
 	require.NoError(t, r.RegisterProvider(oauthTestProvider(t)))
-	ids := r.OAuthProviders()
-	assert.IsNonDecreasing(t, ids)
-	assert.Contains(t, ids, oauthProvider)
-	assert.NotContains(t, ids, fauxProvider)
+	opened := make(chan string, 1)
+	r.openURL = func(u string) error {
+		opened <- u
+		return errors.New("no browser")
+	}
+
+	var out strings.Builder
+	require.NoError(t, r.Login(t.Context(), oauthProvider, strings.NewReader("code-123\n2\n"), &out))
+
+	assert.Equal(t, loginURL, <-opened)
+	assert.Contains(t, out.String(), loginURL, "the printed URL is the fallback")
+}
+
+func TestLoginOpensDeviceVerificationURLInBrowser(t *testing.T) {
+	opened := make(chan string, 1)
+	var out strings.Builder
+	l := &loginIO{out: &out, openURL: func(u string) error {
+		opened <- u
+		return nil
+	}}
+	l.notify(ai.AuthDeviceCodeEvent{VerificationURI: loginURL, UserCode: "TEST-CODE"})
+
+	assert.Contains(t, out.String(), loginURL)
+	assert.Contains(t, out.String(), "TEST-CODE")
+	select {
+	case u := <-opened:
+		assert.Equal(t, loginURL, u)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for browser opener")
+	}
+}
+
+func TestLoginOpensOnlyWebURLsInBrowser(t *testing.T) {
+	opened := make(chan string, 8)
+	var out strings.Builder
+	l := &loginIO{out: &out, openURL: func(u string) error {
+		opened <- u
+		return nil
+	}}
+	for _, bad := range []string{"file:///etc/passwd", "javascript:alert(1)", "http://[::1"} {
+		l.open(bad)
+		assert.Empty(t, opened, "%s must not open in the browser", bad)
+		l.notify(ai.AuthURLEvent{URL: bad})
+		l.notify(ai.AuthDeviceCodeEvent{VerificationURI: bad, UserCode: "TEST-CODE"})
+		assert.Equal(t, 2, strings.Count(out.String(), bad), "%s is printed for both events", bad)
+	}
+	for _, web := range []string{loginURL, "http://login.example/authorize"} {
+		l.open(web)
+		require.Len(t, opened, 1)
+		assert.Equal(t, web, <-opened)
+	}
+	assert.Empty(t, opened, "only web URLs were opened")
+}
+
+// loginCall is what a recording provider's sign-in received.
+type loginCall struct {
+	opts     ai.LoginOptions
+	deviceID string
+}
+
+// recordingSignIn is a sign-in that sends its LoginOptions to calls, asking
+// for the device ID first when askDeviceID, and fails as PiG's does when the
+// ID is empty.
+func recordingSignIn(calls chan<- loginCall, askDeviceID bool) *ai.OAuthAuth {
+	return &ai.OAuthAuth{
+		Name: "Kopi test sign-in",
+		Login: func(_ context.Context, _ ai.AuthInteraction, opts ai.LoginOptions) (ai.Credential, error) {
+			call := loginCall{opts: opts}
+			if askDeviceID {
+				call.deviceID = opts.GetDeviceID()
+			}
+			calls <- call
+			if askDeviceID && call.deviceID == "" {
+				return ai.Credential{}, errors.New("requires a device ID")
+			}
+			return ai.Credential{Type: ai.CredentialOAuth, Access: syntheticToken, Refresh: "r", Expires: time.Now().Add(time.Hour).UnixMilli()}, nil
+		},
+		Refresh: func(_ context.Context, c ai.Credential) (ai.Credential, error) { return c, nil },
+		ToAuth:  func(c ai.Credential) (ai.ModelAuth, error) { return ai.ModelAuth{APIKey: c.Access}, nil },
+	}
+}
+
+// storedKeyAuth takes an API key from the secret prompt, as PiG's default
+// API-key login does.
+func storedKeyAuth() *ai.APIKeyAuth {
+	return &ai.APIKeyAuth{
+		Name: "Kopi test key",
+		Login: func(ctx context.Context, in ai.AuthInteraction) (ai.Credential, error) {
+			key, err := in.Prompt(ctx, ai.AuthSecretPrompt{Message: "Enter API key"})
+			return ai.Credential{Type: ai.CredentialAPIKey, Key: key}, err
+		},
+		Resolve: func(_ context.Context, in ai.APIKeyAuthInput) (*ai.AuthResult, error) {
+			if in.Credential == nil {
+				return nil, nil
+			}
+			return &ai.AuthResult{Auth: ai.ModelAuth{APIKey: in.Credential.Key}}, nil
+		},
+	}
+}
+
+func loginTestProvider(id string, auth ai.ProviderAuth) *ai.ModelsProvider {
+	p := *ai.NewFauxProvider(ai.FauxConfig{ProviderID: id, Model: "login-1"}).Provider()
+	p.Auth = auth
+	return &p
+}
+
+func TestLoginIntroducesKopi(t *testing.T) {
+	for provider, want := range map[string]string{oauthProvider: "kopi", "openai": "Kopi"} {
+		t.Run(provider, func(t *testing.T) {
+			sb := newSandbox(t)
+			r, _ := newTestRuntime(t, sb)
+			calls := make(chan loginCall, 1)
+			require.NoError(t, r.RegisterProvider(loginTestProvider(provider, ai.ProviderAuth{OAuth: recordingSignIn(calls, false)})))
+
+			require.NoError(t, r.Login(t.Context(), provider, strings.NewReader(""), io.Discard))
+
+			call := <-calls
+			require.NotNil(t, call.opts.AgentName)
+			assert.Equal(t, want, *call.opts.AgentName)
+		})
+	}
+}
+
+func TestLoginDeviceIDIsInstallationID(t *testing.T) {
+	sb := newSandbox(t)
+	file := filepath.Join(sb.kopiHome, "installation_id")
+	login := func() string {
+		r, _ := newTestRuntime(t, sb)
+		calls := make(chan loginCall, 1)
+		require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{OAuth: recordingSignIn(calls, true)})))
+		require.NoError(t, r.Login(t.Context(), oauthProvider, strings.NewReader(""), io.Discard))
+		return (<-calls).deviceID
+	}
+
+	id := login()
+
+	content, err := os.ReadFile(file)
+	require.NoError(t, err)
+	assert.Equal(t, string(content), id)
+	info, err := os.Stat(file)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	assert.Equal(t, id, login(), "a fresh runtime reads the same id")
+}
+
+func TestLoginNotAskingForDeviceIDCreatesNoInstallationID(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	calls := make(chan loginCall, 1)
+	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{OAuth: recordingSignIn(calls, false)})))
+
+	require.NoError(t, r.Login(t.Context(), oauthProvider, strings.NewReader(""), io.Discard))
+
+	<-calls
+	assert.NoFileExists(t, filepath.Join(sb.kopiHome, "installation_id"))
+}
+
+func TestLoginReportsInvalidInstallationID(t *testing.T) {
+	sb := newSandbox(t)
+	file := filepath.Join(sb.kopiHome, "installation_id")
+	require.NoError(t, os.WriteFile(file, []byte("garbage"), 0o600))
+	r, _ := newTestRuntime(t, sb)
+	calls := make(chan loginCall, 1)
+	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{OAuth: recordingSignIn(calls, true)})))
+
+	err := r.Login(t.Context(), oauthProvider, strings.NewReader(""), io.Discard)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), file)
+	assert.NotContains(t, err.Error(), "requires a device ID")
+}
+
+func TestLoginStoresAPIKey(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{APIKey: storedKeyAuth()})))
+
+	var out strings.Builder
+	require.NoError(t, r.Login(t.Context(), oauthProvider, strings.NewReader(syntheticToken+"\n"), &out))
+
+	assert.Contains(t, out.String(), "Enter API key")
+	assert.NotContains(t, out.String(), syntheticToken)
+	content, err := os.ReadFile(filepath.Join(sb.agentDir, "auth.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), syntheticToken)
+	ok, err := r.hasCredential(t.Context(), oauthProvider)
+	require.NoError(t, err)
+	assert.True(t, ok)
+}
+
+func TestLoginRejectsEmptyAPIKey(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{APIKey: storedKeyAuth()})))
+
+	err := r.Login(t.Context(), oauthProvider, strings.NewReader("\n"), io.Discard)
+
+	require.Error(t, err)
+	providers, err := r.Providers(t.Context())
+	require.NoError(t, err)
+	i := slices.IndexFunc(providers, func(p Provider) bool { return p.ID == oauthProvider })
+	require.GreaterOrEqual(t, i, 0)
+	assert.False(t, providers[i].LoggedIn)
+}
+
+func TestLoginRewordsSignInFailure(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	errPort := errors.New("address in use")
+	signIn := recordingSignIn(make(chan loginCall, 1), false)
+	signIn.Login = func(context.Context, ai.AuthInteraction, ai.LoginOptions) (ai.Credential, error) {
+		return ai.Credential{}, fmt.Errorf("Port 1455 is in use, probably by an unfinished login in another pi session: %w", errPort)
+	}
+	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{OAuth: signIn})))
+
+	err := r.Login(t.Context(), oauthProvider, strings.NewReader(""), io.Discard)
+
+	require.ErrorIs(t, err, errPort)
+	assert.Contains(t, err.Error(), "another Kopi session")
+	assert.NotContains(t, err.Error(), "another pi session")
+}
+
+func TestLoginAsksForMethodWhenProviderOffersBoth(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	calls := make(chan loginCall, 1)
+	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{OAuth: recordingSignIn(calls, false), APIKey: storedKeyAuth()})))
+
+	var out strings.Builder
+	require.NoError(t, r.Login(t.Context(), oauthProvider, strings.NewReader("2\n"+syntheticToken+"\n"), &out))
+
+	assert.Contains(t, out.String(), "1) Kopi test sign-in")
+	assert.Contains(t, out.String(), "2) API key")
+	assert.Empty(t, calls, "the sign-in never ran")
+	content, err := os.ReadFile(filepath.Join(sb.agentDir, "auth.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), `"api_key"`)
+}
+
+func TestLoginPrintsAnthropicBillingNoticeAfterSignInOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		notice      bool
+	}{
+		{name: "sign-in", input: "1\n", notice: true},
+		{name: "api key", input: "2\n" + syntheticToken + "\n", notice: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sb := newSandbox(t)
+			r, _ := newTestRuntime(t, sb)
+			calls := make(chan loginCall, 1)
+			require.NoError(t, r.RegisterProvider(loginTestProvider("anthropic", ai.ProviderAuth{OAuth: recordingSignIn(calls, false), APIKey: storedKeyAuth()})))
+
+			var out strings.Builder
+			require.NoError(t, r.Login(t.Context(), "anthropic", strings.NewReader(tc.input), &out))
+
+			if tc.notice {
+				assert.Contains(t, out.String(), signInNotices["anthropic"])
+			} else {
+				assert.NotContains(t, out.String(), signInNotices["anthropic"])
+			}
+		})
+	}
+}
+
+func TestProvidersReportLoginsAndStatus(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	require.NoError(t, r.RegisterProvider(oauthTestProvider(t)))
+	find := func() Provider {
+		providers, err := r.Providers(t.Context())
+		require.NoError(t, err)
+		assert.True(t, slices.IsSortedFunc(providers, func(a, b Provider) int { return strings.Compare(a.ID, b.ID) }))
+		faux := slices.IndexFunc(providers, func(p Provider) bool { return p.ID == fauxProvider })
+		require.GreaterOrEqual(t, faux, 0)
+		assert.Equal(t, Provider{ID: fauxProvider}, providers[faux], "ambient-only auth is no login")
+		i := slices.IndexFunc(providers, func(p Provider) bool { return p.ID == oauthProvider })
+		require.GreaterOrEqual(t, i, 0)
+		return providers[i]
+	}
+
+	assert.Equal(t, Provider{ID: oauthProvider, SignIn: "Kopi test OAuth"}, find())
+	require.NoError(t, r.Login(t.Context(), oauthProvider, strings.NewReader("code-123\n2\n"), io.Discard))
+	assert.True(t, find().LoggedIn)
+}
+
+func TestLogout(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	require.NoError(t, r.RegisterProvider(oauthTestProvider(t)))
+	require.NoError(t, r.Login(t.Context(), oauthProvider, strings.NewReader("code-123\n2\n"), io.Discard))
+
+	require.NoError(t, r.Logout(t.Context(), oauthProvider))
+
+	ok, err := r.hasCredential(t.Context(), oauthProvider)
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.ErrorIs(t, r.Logout(t.Context(), oauthProvider), ErrNotLoggedIn)
+	assert.ErrorIs(t, r.Logout(t.Context(), "no-such-provider"), ErrUnknownProvider)
 }
 
 func TestLoginRejectsProvider(t *testing.T) {
@@ -98,25 +395,13 @@ func TestLoginRejectsProvider(t *testing.T) {
 		want           error
 	}{
 		{name: "unknown", provider: "no-such-provider", want: ErrUnknownProvider},
-		{name: "without oauth", provider: fauxProvider, want: ErrNoOAuth},
+		{name: "without login", provider: fauxProvider, want: ErrNoLogin},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := r.Login(t.Context(), tc.provider, strings.NewReader(""), io.Discard)
 			assert.ErrorIs(t, err, tc.want)
 		})
 	}
-}
-
-func TestLoginNeedingDeviceIDIsUnsupported(t *testing.T) {
-	sb := newSandbox(t)
-	r, _ := newTestRuntime(t, sb)
-
-	assert.NotContains(t, r.OAuthProviders(), "openai")
-	var out strings.Builder
-	err := r.Login(t.Context(), "openai", strings.NewReader(""), &out)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not support")
-	assert.Empty(t, out.String(), "the flow never starts")
 }
 
 func TestLoginPromptReturnsWhenContextEnds(t *testing.T) {

@@ -48,6 +48,7 @@ func newRoot() *cobra.Command {
 	root.AddCommand(versionCmd())
 	root.AddCommand(configCmd())
 	root.AddCommand(loginCmd())
+	root.AddCommand(logoutCmd())
 	return root
 }
 
@@ -339,7 +340,15 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	openCtx, stopOpen := signal.NotifyContext(ctx, os.Interrupt)
 	if err := c.Open(openCtx, req); err != nil {
 		stopOpen()
-		return diagnose(err, model, resolved.Origins["model"], paths, req, rt.OAuthProviders())
+		var providers []pigruntime.Provider
+		var listErr error
+		if errors.Is(err, pigruntime.ErrNoCredential) {
+			providers, listErr = rt.Providers(ctx)
+		}
+		if listErr != nil {
+			return errors.Join(err, listErr)
+		}
+		return diagnose(err, model, resolved.Origins["model"], paths, req, providers)
 	}
 	// SIGINT is a channel rather than part of the context because it must
 	// keep firing: each one interrupts the running turn, and only one at
@@ -435,15 +444,19 @@ func planPolicy(p sandbox.Policy, cwd string) sandbox.Policy {
 }
 
 // diagnose turns the open failures a user can fix into Kopi's own advice.
-func diagnose(err error, model, origin string, paths config.Paths, req app.OpenRequest, loginProviders []string) error {
+func diagnose(err error, model, origin string, paths config.Paths, req app.OpenRequest, providers []pigruntime.Provider) error {
 	switch {
 	case errors.Is(err, pigruntime.ErrNoCredential):
-		provider, _, _ := config.ParseModelRef(model)
-		if slices.Contains(loginProviders, provider) {
-			return fmt.Errorf("no credential for provider %q: run \"kopi login %s\"", provider, provider)
+		id, _, _ := config.ParseModelRef(model)
+		i := slices.IndexFunc(providers, func(p pigruntime.Provider) bool { return p.ID == id })
+		switch {
+		case i >= 0 && providers[i].APIKey:
+			// PiG has no public accessor naming a provider's API-key variable.
+			return fmt.Errorf("no credential for provider %q: run \"kopi login %s\" or set its API key in the environment", id, id)
+		case i >= 0 && providers[i].SignIn != "":
+			return fmt.Errorf("no credential for provider %q: run \"kopi login %s\"", id, id)
 		}
-		// PiG has no public accessor naming a provider's API-key variable.
-		return fmt.Errorf("no credential for provider %q: Kopi has no sign-in flow for it; supply its credential the way PiG reads it, such as an API key in the environment", provider)
+		return fmt.Errorf("no credential for provider %q: supply its credential in the environment", id)
 	case errors.Is(err, pigruntime.ErrUnknownModel):
 		where := "--model"
 		if origin != "flags" {

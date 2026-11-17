@@ -3,7 +3,12 @@ package pigruntime
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,6 +127,7 @@ func newTestRuntime(t *testing.T, sb sandbox) (*Runtime, *ai.FauxProviderHandle)
 	r, err := New(t.Context(), Options{Home: sb.kopiHome, AgentDir: sb.agentDir, CWD: sb.ws})
 	require.NoError(t, err)
 	t.Cleanup(r.Close)
+	r.openURL = func(string) error { return errors.New("tests open no browser") }
 	faux := ai.NewFauxProvider(ai.FauxConfig{ProviderID: fauxProvider, Model: "faux-1"})
 	require.NoError(t, r.RegisterProvider(faux.Provider()))
 	return r, faux
@@ -253,6 +259,44 @@ func TestSeamOpenStreamsFauxTurnWithZeroAmbient(t *testing.T) {
 	assert.Len(t, sessionFiles(t, filepath.Join(sb.agentDir, "sessions")), 1)
 
 	assert.Equal(t, before, snapshot(t, sb.home, sb.ws))
+}
+
+func writeAgentFile(t *testing.T, sb sandbox, name, content string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(sb.agentDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(sb.agentDir, name), []byte(content), 0o600))
+}
+
+func TestRuntimeOmitsPiGAttribution(t *testing.T) {
+	sb := newSandbox(t)
+	t.Setenv("PI_TELEMETRY", "1")
+	requests := make(chan http.Header, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- r.Header.Clone()
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	t.Cleanup(server.Close)
+	writeAgentFile(t, sb, "models.json", fmt.Sprintf(`{"providers":{"openrouter":{"baseUrl":%q,"api":"openai-completions","apiKey":"synthetic-key","models":[{"id":"attribution-test"}]}}}`, server.URL))
+	r, err := New(t.Context(), Options{Home: sb.kopiHome, AgentDir: sb.agentDir, CWD: sb.ws})
+	require.NoError(t, err)
+	t.Cleanup(r.Close)
+	sess, err := r.Open(t.Context(), OpenOptions{
+		Model: "openrouter/attribution-test", SystemPrompt: kopiPrompt,
+		Tools: []tool.Tool{}, Authority: policy.NewAuthority(),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+
+	res, err := sess.Send(t.Context(), Prompt{Text: "hello"}, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Sent)
+	assert.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
+
+	headers := <-requests
+	for _, name := range []string{"HTTP-Referer", "X-OpenRouter-Title", "X-OpenRouter-Categories"} {
+		assert.NotContains(t, headers, http.CanonicalHeaderKey(name))
+	}
 }
 
 func sessionFiles(t *testing.T, root string) []string {

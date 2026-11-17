@@ -46,6 +46,11 @@ func TestTranslate(t *testing.T) {
 			want: event.Notice{Text: "retrying (attempt 2/3) in 1.5s: overloaded"},
 		},
 		{
+			name: "auto retry names kopi",
+			in:   agent.AutoRetryStartEvent{Attempt: 1, MaxAttempts: 3, DelayMs: 1000, ErrorMessage: "not logged in (run `pig login github-copilot`)"},
+			want: event.Notice{Text: "retrying (attempt 1/3) in 1s: not logged in (run `kopi login github-copilot`)"},
+		},
+		{
 			name: "compaction start",
 			in:   agent.CompactionStartEvent{Reason: "threshold"},
 			want: event.Notice{Text: "compacting context (threshold)"},
@@ -56,6 +61,11 @@ func TestTranslate(t *testing.T) {
 			name: "compaction failed",
 			in:   agent.CompactionEndEvent{ErrorMessage: "too big"},
 			want: event.Notice{Text: "compaction failed: too big"},
+		},
+		{
+			name: "compaction failed names kopi",
+			in:   agent.CompactionEndEvent{ErrorMessage: "not logged in (run `pig login github-copilot`)"},
+			want: event.Notice{Text: "compaction failed: not logged in (run `kopi login github-copilot`)"},
 		},
 		{name: "queue update dropped", in: agent.QueueUpdateEvent{Steering: []string{"a", "b"}, FollowUp: []string{"c"}}},
 		{name: "user message start dropped", in: agent.MessageStartEvent{Message: agent.AgentMessage{User: &agent.UserMessage{Content: ai.UserContentBlocks{ai.TextContent{Text: "steer"}}}}}},
