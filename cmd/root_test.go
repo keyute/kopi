@@ -265,8 +265,7 @@ func TestRootDiagnosesOpenFailureWhenCredentialsCannotBeListed(t *testing.T) {
 	_, _, err := execute(t, "", "--model", "nosuch/model-1", "-p", "hi")
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `unknown model "nosuch/model-1": check --model`)
-	assert.Contains(t, err.Error(), "failed to list credentials")
+	assert.Equal(t, `unknown model "nosuch/model-1": check --model`, err.Error())
 }
 
 func TestRootReportsMissingSession(t *testing.T) {

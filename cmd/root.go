@@ -340,7 +340,11 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	openCtx, stopOpen := signal.NotifyContext(ctx, os.Interrupt)
 	if err := c.Open(openCtx, req); err != nil {
 		stopOpen()
-		providers, listErr := rt.Providers(ctx)
+		var providers []pigruntime.Provider
+		var listErr error
+		if errors.Is(err, pigruntime.ErrNoCredential) {
+			providers, listErr = rt.Providers(ctx)
+		}
 		return errors.Join(diagnose(err, model, resolved.Origins["model"], paths, req, providers), listErr)
 	}
 	// SIGINT is a channel rather than part of the context because it must
