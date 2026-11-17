@@ -178,7 +178,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (Sen
 	defer interrupt.retire()
 	toolCtx := context.WithValue(ctx, turnInterruptKey{}, interrupt)
 	abort := func() { interrupt.interrupt() }
-	runStart := abortAtRunStart(ctx, abort)
+	abortInLoop := abortOnEvent(ctx, abort)
 	// handed is the handed-over prompts not yet delivered. Send is the only
 	// producer into PiG's queue and PiG delivers in queue order, after p, so
 	// each user message after p's is the head.
@@ -188,7 +188,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (Sen
 	// whole transcript, so it cannot say which assistant message is this run's.
 	var last *agent.AssistantMessage
 	unsubscribe := s.inner.Subscribe(func(ev agent.AgentEvent) {
-		runStart(ev)
+		abortInLoop(ev)
 		switch ev := ev.(type) {
 		case agent.MessageStartEvent:
 			if ev.Message.User == nil {
@@ -334,15 +334,18 @@ func (s *Session) resize(images []ai.ImageContent) []*ai.ImageContent {
 	return out
 }
 
-// abortAtRunStart re-issues the abort at agent_start when ctx is already
-// cancelled. PiG drops an abort requested before the run is marked busy
-// (RequestAbort only records it while a run is active) and clears pending
-// requests when the run starts; agent_start is emitted after that clear and
-// before the first provider request, so aborting there stops the run as PiG's
-// own agent_start check does.
-func abortAtRunStart(ctx context.Context, abort func()) func(agent.AgentEvent) {
-	return func(ev agent.AgentEvent) {
-		if _, ok := ev.(agent.AgentStartEvent); ok && ctx.Err() != nil {
+// abortOnEvent re-issues the abort at every PiG event while ctx is cancelled.
+// The AfterFunc abort runs on its own goroutine and can land after PiG sends
+// the next provider request; PiG's loop waits on the listeners of its own
+// events, so no provider request starts after the next loop event. PiG drops
+// an abort requested before the run is marked busy (RequestAbort only records
+// it while a run is active) and clears pending requests when the run starts;
+// agent_start is emitted after that clear and before the first provider
+// request, so aborting there stops the run as PiG's own agent_start check
+// does.
+func abortOnEvent(ctx context.Context, abort func()) func(agent.AgentEvent) {
+	return func(agent.AgentEvent) {
+		if ctx.Err() != nil {
 			abort()
 		}
 	}

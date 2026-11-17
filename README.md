@@ -151,7 +151,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 ## Modes and tools
 
-- Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab. Plan mode allows only `Read`.
+- Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab. Plan mode allows `Read`, and `Bash` only in the sandbox, where it cannot write the start directory; `Write` and `Edit` need execute mode.
 - Sessions start and resume in the configured `mode` (default plan), including ones opened with `/new` and `/resume`; `--mode` overrides the config file.
 - `Read` reads text files inside the start directory: up to 2000 lines, 2000 characters per line and 100 KiB per call; binary files and directories are refused.
 - `Write` creates a file or replaces its whole content; `Edit` replaces a string that must match exactly once unless `replace_all` is set, in a text file of up to 10 MiB. Both work inside the start directory, replace the file atomically and keep its mode.
@@ -160,7 +160,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `Bash`'s `timeout` is in milliseconds, default 120000, at most 600000. On timeout or interrupt the command's whole process group is killed (on Windows, only the shell).
 - `Bash` returns stdout and stderr combined, keeping the first and last 15,000 bytes. A non-zero exit is an error reporting the exit code.
 - On macOS `Bash` runs inside an OS sandbox (`sandbox-exec`), configured with `sandbox` (see Configuration).
-- In the sandbox a command can write only in the start directory, `/tmp`, the temp directory and the `sandbox.allowWrite` paths, and never the files of the start directory's `.git` that choose git's config and hooks (`hooks`, `config`, `config.worktree`, `commondir`, `worktrees`, `modules`); when the start directory has no `.git`, a command cannot write `HEAD` in it.
+- In the sandbox a command can write only in the start directory, `/tmp`, the temp directory and the `sandbox.allowWrite` paths, and never the files of the start directory's `.git` that choose git's config and hooks (`hooks`, `config`, `config.worktree`, `commondir`, `worktrees`, `modules`); when the start directory has no `.git`, a command cannot write `HEAD` in it. In plan mode nothing in the start directory is writable, including `sandbox.allowWrite` paths inside it.
 - In the sandbox a command can read everything except Kopi's home and the `sandbox.denyRead` paths, which it also cannot write, rename or remove.
 - In the sandbox a command has no network unless `sandbox.network` is true, which opens IP networking only; Unix sockets stay blocked.
 
@@ -181,6 +181,7 @@ Permission rules in `config.json` allow, ask about or deny calls:
 - `Name(!path)` exempts the calls it matches from the other rules in its own list, from the same config layer or flag; it never reaches rules from anywhere else.
 - A bare `Name` in `deny` removes the tool from the model.
 - `Bash` takes no path: only a bare `Bash` or `*` rule applies to it, `Bash(path)` is rejected at start, and path rules such as `*(~/.ssh)` never apply to `Bash`. `"ask": ["Bash"]` makes every command ask.
+- Plan mode refuses `Write`, `Edit` and unsandboxed `Bash` before any rule; otherwise rules apply to `Bash` the same in both modes.
 - Deny beats ask, and ask beats allow. With no rule matching, `Read` and sandboxed `Bash` are allowed and any other call asks, including every `Bash` command without the sandbox.
 - Built in: `Edit` and `Write` under any `.git` directory always ask.
 - `--allowed-tools` and `--disallowed-tools` add allow and deny rules to the config's; each is repeatable and takes comma-separated rules (commas inside `()` or `{}` do not split).
@@ -194,11 +195,12 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - The sandbox exists only on macOS; elsewhere it is unavailable.
 - The sandbox is unavailable when Kopi itself runs inside a Seatbelt sandbox, because profiles do not nest; for the same reason tools that apply their own sandbox (`swift build`, `xcodebuild` packages) fail inside it.
 - Sandboxed commands inherit Kopi's environment, including provider API keys, and can read any file outside Kopi's home and `sandbox.denyRead`.
-- With `sandbox.network` true, commands reach the network without asking.
+- With `sandbox.network` true, commands reach the network without asking, in plan mode too.
 - Tools that write outside the start directory and temp directories, such as Go's build cache and package-manager caches, fail in the sandbox until those paths are in `sandbox.allowWrite`.
 - In the sandbox, `git init` in the start directory, `git config` writes, `git worktree add`, commits in a linked worktree (its git directory is outside the start directory), commits inside a submodule and commit signing through an agent socket fail.
 - The sandbox does not protect the config and hooks of repositories nested inside the start directory, or of the start directory itself when it is a bare repository or a git directory.
-- Sandboxed commands can write anything else in the start directory, so starting Kopi in a directory holding files other programs run, such as the home directory, lets commands change them.
+- In execute mode, sandboxed commands can write anything else in the start directory, so starting Kopi in a directory holding files other programs run, such as the home directory, lets commands change them.
+- Plan mode keeps only the start directory read-only: commands can still write `/tmp`, the temp directory and `sandbox.allowWrite` paths outside it, and act over the network when `sandbox.network` is true. In plan mode `kopi -p` runs sandboxed `Bash` without asking. Commands started in execute mode, including background processes they leave running, keep their execute-mode access after a switch to plan mode.
 - `ps`, `pgrep` and `top` do not work in the sandbox.
 - Unix sockets (ssh-agent, Docker) are unreachable from the sandbox, even with `sandbox.network` true.
 - A background process a command leaves running (`cmd &`) can outlive the call. A running command keeps running if Kopi is killed.

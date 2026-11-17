@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -147,8 +148,8 @@ func probeTool(run func(ctx context.Context, args json.RawMessage) (string, erro
 		Description: "Returns a fixed probe string.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 		Capability:  policy.Read,
-		Run: func(ctx context.Context, args json.RawMessage, admit func(policy.Target) error) (string, error) {
-			if err := admit(policy.Target{}); err != nil {
+		Run: func(ctx context.Context, args json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+			if _, err := admit(policy.Target{}); err != nil {
 				return "", err
 			}
 			return run(ctx, args)
@@ -368,6 +369,60 @@ func TestSeamCancelDuringToolReportsInterrupted(t *testing.T) {
 	assert.Equal(t, 4, resumed.MessageCount())
 }
 
+// Hold asynchronous cancellation forwarding until the loop has ended, so only
+// Send's synchronous event listener can prevent the second provider request.
+func TestCancelDuringToolAbortsBeforeCancellationForwarding(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), reply("should not be requested")})
+
+	started, release := make(chan struct{}), make(chan struct{})
+	releaseProbe := sync.OnceFunc(func() { close(release) })
+	sess := openTestSession(t, r, probeTool(func(context.Context, json.RawMessage) (string, error) {
+		close(started)
+		<-release
+		return toolOutput, nil
+	}))
+	runEnded := make(chan struct{}, 1)
+	t.Cleanup(sess.inner.Subscribe(func(ev agent.AgentEvent) {
+		if _, ok := ev.(agent.AgentEndEvent); ok {
+			runEnded <- struct{}{}
+		}
+	}))
+	forward, cancel := context.WithCancel(t.Context())
+	ctx := &gatedAbortContext{Context: context.WithoutCancel(t.Context()), forward: forward, started: make(chan struct{}), release: make(chan struct{})}
+	releaseForwarding := sync.OnceFunc(func() { close(ctx.release) })
+	type result struct {
+		res SendResult
+		err error
+	}
+	done := make(chan result, 1)
+	joined := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		releaseProbe()
+		releaseForwarding()
+		<-joined
+	})
+	go func() {
+		defer close(joined)
+		res, err := sess.Send(ctx, Prompt{Text: "block"}, nil)
+		done <- result{res, err}
+	}()
+	<-started
+	cancel()
+	<-ctx.started
+	releaseProbe()
+	<-runEnded
+	require.Equal(t, 1, faux.CallCount())
+
+	releaseForwarding()
+	res := <-done
+	<-joined
+	require.NoError(t, res.err)
+	assert.Equal(t, event.Outcome{Status: event.Interrupted}, res.res.Outcome)
+}
+
 func TestCancelledBeforeSendInterruptsWithoutProviderCall(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)
@@ -463,16 +518,18 @@ func TestCancelAfterTurnFinishedReportsCompleted(t *testing.T) {
 	assert.Equal(t, 2, sess.MessageCount())
 }
 
-func TestAbortAtRunStart(t *testing.T) {
+func TestAbortOnEvent(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		cancelled bool
-		ev        agent.AgentEvent
+		evs       []agent.AgentEvent
 		want      int
 	}{
-		{name: "agent start with ctx cancelled", cancelled: true, ev: agent.AgentStartEvent{}, want: 1},
-		{name: "agent start with ctx live", ev: agent.AgentStartEvent{}},
-		{name: "other event with ctx cancelled", cancelled: true, ev: agent.TurnStartEvent{}},
+		{name: "agent start with ctx cancelled", cancelled: true, evs: []agent.AgentEvent{agent.AgentStartEvent{}}, want: 1},
+		{name: "agent start with ctx live", evs: []agent.AgentEvent{agent.AgentStartEvent{}}},
+		{name: "tool end with ctx live", evs: []agent.AgentEvent{agent.ToolExecutionEndEvent{}}},
+		{name: "two other events with ctx cancelled", cancelled: true, evs: []agent.AgentEvent{agent.ToolExecutionEndEvent{}, agent.TurnEndEvent{}}, want: 2},
+		{name: "other event then agent start with ctx cancelled", cancelled: true, evs: []agent.AgentEvent{agent.TurnStartEvent{}, agent.AgentStartEvent{}}, want: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
@@ -481,7 +538,10 @@ func TestAbortAtRunStart(t *testing.T) {
 				cancel()
 			}
 			calls := 0
-			abortAtRunStart(ctx, func() { calls++ })(tc.ev)
+			listen := abortOnEvent(ctx, func() { calls++ })
+			for _, ev := range tc.evs {
+				listen(ev)
+			}
 			assert.Equal(t, tc.want, calls)
 		})
 	}

@@ -710,7 +710,7 @@ func TestRootSandboxUnavailableWarns(t *testing.T) {
 	_, stderr, err := execute(t, "", "--model", mockModel, "-p", "hi")
 
 	require.NoError(t, err)
-	assert.Contains(t, stderr, "sandbox is unavailable; Bash runs without it and needs approval or an allow rule")
+	assert.Contains(t, stderr, "sandbox is unavailable; Bash runs without it and needs approval or an allow rule, and plan mode refuses it")
 }
 
 func TestRootSandboxDisabledBashNeedsApproval(t *testing.T) {
@@ -742,6 +742,16 @@ func TestRootSandboxDisabledBashRunsWithAllowRule(t *testing.T) {
 
 	assert.Equal(t, "hi\n", result)
 	assert.NotContains(t, stderr, "sandbox is unavailable")
+}
+
+func TestRootSandboxDisabledPlanRefusesBash(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"sandbox":{"enabled":false}}`)
+
+	result, _ := printBash(t, e, "echo hi", "--mode", "plan", "--allowed-tools", "Bash")
+
+	assert.Contains(t, result, `tool "Bash" needs execute mode; the session is in plan mode, where it runs only in the OS sandbox`)
+	assert.NotEqual(t, "hi\n", result)
 }
 
 func TestRootSandboxedBashRunsWithoutAllowRule(t *testing.T) {
@@ -889,6 +899,41 @@ func TestRootSandboxedBashHonorsConfiguredPaths(t *testing.T) {
 	assert.Equal(t, sentinel+"\n", string(content))
 }
 
+func TestRootSandboxedBashCannotWriteWorkspaceInPlan(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	e := newTestEnv(t)
+	// The workspace lies inside a write root, which must not make it writable.
+	cfg, err := json.Marshal(map[string]any{"sandbox": map[string]any{"allowWrite": []string{e.root}}})
+	require.NoError(t, err)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), string(cfg))
+	wsFile := filepath.Join(e.workspace, "written.txt")
+	tempFile := filepath.Join(t.TempDir(), "written.txt")
+	quotedWS := "'" + strings.ReplaceAll(wsFile, "'", "'\"'\"'") + "'"
+	quotedTemp := "'" + strings.ReplaceAll(tempFile, "'", "'\"'\"'") + "'"
+
+	result, _ := printBash(t, e, "printf changed > "+quotedWS, "--mode", "plan")
+
+	assert.Contains(t, result, tool.ErrExitStatus.Error())
+	assert.Contains(t, result, "Operation not permitted")
+	assert.NoFileExists(t, wsFile)
+
+	result, _ = printBash(t, e, "printf 'temp\\n' > "+quotedTemp+" && printf 'write succeeded\\n'", "--mode", "plan")
+
+	assert.Equal(t, "write succeeded\n", result)
+	content, err := os.ReadFile(tempFile)
+	require.NoError(t, err)
+	assert.Equal(t, "temp\n", string(content))
+
+	result, _ = printBash(t, e, "printf 'workspace\\n' > "+quotedWS+" && printf 'write succeeded\\n'", "--mode", "execute")
+
+	assert.Equal(t, "write succeeded\n", result)
+	content, err = os.ReadFile(wsFile)
+	require.NoError(t, err)
+	assert.Equal(t, "workspace\n", string(content))
+}
+
 func TestSandboxPolicy(t *testing.T) {
 	home, kopiHome, absolute := t.TempDir(), t.TempDir(), t.TempDir()
 	cfg := config.Sandbox{
@@ -944,6 +989,21 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
+		assert.Equal(t, gitFiles(cwd), p.DenyWrite)
+	})
+
+	t.Run("plan", func(t *testing.T) {
+		cwd := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(cwd, ".git"), 0o755))
+		p := sandboxPolicy(cfg, cwd, home, kopiHome)
+
+		plan := planPolicy(p, cwd)
+
+		assert.Equal(t, append(gitFiles(cwd), cwd), plan.DenyWrite)
+		assert.Equal(t, p.Write, plan.Write)
+		assert.Equal(t, p.DenyRead, plan.DenyRead)
+		assert.Equal(t, p.Network, plan.Network)
+		plan.DenyWrite[0] = "changed"
 		assert.Equal(t, gitFiles(cwd), p.DenyWrite)
 	})
 }

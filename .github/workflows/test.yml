@@ -7,7 +7,13 @@ on:
 permissions: {}
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }}, ${{ matrix.race && 'race' || 'no race' }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        race: [true, false]
     permissions:
       contents: read
     steps:
@@ -22,32 +28,16 @@ jobs:
       - run: go mod download
       - run: go build ./...
       - run: go vet ./...
+      - name: Verify Seatbelt availability
+        if: runner.os == 'macOS'
+        run: /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true
       - name: Run Go tests
         uses: robherley/go-test-action@2f859e0c8769d755d3174eecb9af8f64660827f3 # v1.1.0
         with:
-          testArguments: './... -race'
-  test-macos:
-    runs-on: macos-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      - name: Verify Seatbelt availability
-        run: /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true
-      - name: Install Task
-        run: go install github.com/go-task/task/v3/cmd/task@v3.44.1
-      - name: Run Go tests
-        run: task test
+          testArguments: ${{ matrix.race && './... -race' || './...' }}
   ci:
     if: always()
-    needs: [test, test-macos]
+    needs: [test]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
