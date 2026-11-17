@@ -10,6 +10,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
 
 	"github.com/gofrs/flock"
 )
@@ -125,7 +128,8 @@ func (s *Store) Set(dir string, d Decision) (err error) {
 }
 
 // Canonical is dir absolute, cleaned and with symlinks resolved, as decisions
-// are keyed.
+// are keyed. On darwin each name is also spelled as on disk: APFS is usually
+// case-insensitive and the working directory keeps the case it was typed in.
 func Canonical(dir string) (string, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -135,7 +139,39 @@ func Canonical(dir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve folder %s: %w", dir, err)
 	}
+	if runtime.GOOS == "darwin" {
+		return onDiskNames(resolved), nil
+	}
 	return resolved, nil
+}
+
+// onDiskNames rebuilds path, which has no symlinks, from the names its
+// parents list for it. A name that cannot be checked, or that no entry of its
+// parent matches, stays as given.
+func onDiskNames(path string) string {
+	out := string(filepath.Separator)
+	for _, name := range strings.Split(path, string(filepath.Separator)) {
+		if name == "" {
+			continue
+		}
+		parent := out
+		out = filepath.Join(parent, name)
+		entries, err := os.ReadDir(parent)
+		if err != nil || slices.ContainsFunc(entries, func(e fs.DirEntry) bool { return e.Name() == name }) {
+			continue
+		}
+		info, err := os.Lstat(out)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if ei, err := e.Info(); err == nil && os.SameFile(info, ei) {
+				out = filepath.Join(parent, e.Name())
+				break
+			}
+		}
+	}
+	return out
 }
 
 // write replaces the file through a rename so a reader never sees it half

@@ -38,6 +38,15 @@ const (
 func AskTrust(ctx context.Context, in io.Reader, out io.Writer, opts Options, req TrustRequest) (TrustChoice, error) {
 	m := newTrustModel(req, opts.Keys)
 	p := tea.NewProgram(m, tea.WithInput(in), tea.WithOutput(out), tea.WithoutSignalHandler())
+	// Discard already queued input, not establish a render/readiness boundary.
+	// Keys arriving during Bubble Tea startup can still be accepted before the
+	// first draw; that timing limitation is accepted.
+	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		if err := discardInput(f); err != nil {
+			return TrustCancelled, fmt.Errorf("failed to discard typed-ahead input before the trust prompt: %w", err)
+		}
+	}
+	// Started only once Run is certain: Quit blocks until Run reads it.
 	stopped := make(chan struct{})
 	defer close(stopped)
 	go func() {
@@ -47,14 +56,6 @@ func AskTrust(ctx context.Context, in io.Reader, out io.Writer, opts Options, re
 			p.Quit()
 		}
 	}()
-	// Discard already queued input, not establish a render/readiness boundary.
-	// Keys arriving during Bubble Tea startup can still be accepted before the
-	// first draw; that timing limitation is accepted.
-	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		if err := discardInput(f); err != nil {
-			return TrustCancelled, fmt.Errorf("failed to discard typed-ahead input before the trust prompt: %w", err)
-		}
-	}
 	if _, err := p.Run(); err != nil {
 		return TrustCancelled, fmt.Errorf("failed to run the trust prompt: %w", err)
 	}
@@ -116,7 +117,8 @@ func (m *trustModel) View() tea.View {
 		return v
 	}
 	rows := append(m.rows(), m.hint())
-	// Past the height the top is cut so the options stay visible; short of it,
+	// rows caps the servers to the height; only when the other rows alone do
+	// not fit is the top cut so the options stay visible. Short of the height,
 	// blank rows above put the dialog at the bottom, where approvals are drawn.
 	rows = rows[max(0, len(rows)-m.height):]
 	v.SetContent(strings.Join(append(make([]string, m.height-len(rows)), rows...), "\n"))
@@ -143,9 +145,34 @@ func (m *trustModel) rows() []string {
 	body := hang("", none, oneLine(m.req.Folder), none.Bold(true), width)
 	body = append(body, "")
 	body = append(body, hang("", none, "Its .mcp.json declares MCP servers that Kopi would start. They run with your permissions.", none, width)...)
-	for _, s := range m.req.Servers {
-		body = append(body, hang("  ", none, oneLine(s), fg(m.th.muted), width)...)
-	}
+	m.dialog.body = body
+	// The footer row is the one below the dialog.
+	fixed := len(m.dialog.rows(m.width, m.height, 1, m.th)) + 1
+	body = append(body, m.serverRows(m.height-fixed, width)...)
 	m.dialog.body = body
 	return m.dialog.rows(m.width, m.height, 1, m.th)
+}
+
+// serverRows draws whole server lines within limit rows; when they do not all
+// fit, the last row counts the servers left out. The count shows even past
+// limit, so the top cut drops a top row rather than every server unseen.
+func (m *trustModel) serverRows(limit, width int) []string {
+	var rows []string
+	for i, s := range m.req.Servers {
+		lines := hang("  ", lipgloss.NewStyle(), oneLine(s), fg(m.th.muted), width)
+		budget := limit - len(rows)
+		if i != len(m.req.Servers)-1 {
+			budget--
+		}
+		if len(lines) <= budget {
+			rows = append(rows, lines...)
+			continue
+		}
+		more := fmt.Sprintf("… %d more servers", len(m.req.Servers)-i)
+		if len(m.req.Servers)-i == 1 {
+			more = "… 1 more server"
+		}
+		return append(rows, hang("  ", fg(m.th.dim), more, fg(m.th.dim), width)[0])
+	}
+	return rows
 }

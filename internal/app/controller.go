@@ -148,7 +148,13 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	tools := slices.Clone(c.cfg.Tools)
 	if len(serverTools) > 0 {
 		search := tool.NewToolSearch(serverTools, pigruntime.RankTools, pigruntime.LoadTools)
-		if !c.cfg.Rules.Removes(search.Name) {
+		if c.cfg.Rules.Removes(search.Name) {
+			// ToolSearch is the only way to load deferred tools.
+			serverTools = nil
+			for i := range servers {
+				servers[i].tools = nil
+			}
+		} else {
 			tools = append(tools, search)
 		}
 	}

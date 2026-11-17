@@ -178,10 +178,10 @@ func (s *Servers) Wait(ctx context.Context) []ServerStatus {
 			case <-srv.done:
 				out[i] = srv.status
 				if err := s.startup.Err(); err != nil && errors.Is(out[i].Err, err) {
-					out[i].Err = fmt.Errorf("failed to start: %w", ErrServerStartTimeout)
+					out[i].Err = ErrServerStartTimeout
 				}
 			default:
-				out[i] = ServerStatus{Name: srv.name, Err: fmt.Errorf("failed to start: %w", ErrServerStartTimeout)}
+				out[i] = ServerStatus{Name: srv.name, Err: ErrServerStartTimeout}
 				srv.close()
 			}
 		}

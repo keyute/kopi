@@ -1910,6 +1910,23 @@ func TestStartQueuesPromptsUntilTheSessionOpens(t *testing.T) {
 	assert.NotEmpty(t, h.c.Status().SessionID)
 }
 
+func TestSendNowWhileStartingQueues(t *testing.T) {
+	srv := holdServers()
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Servers: srv.wait})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("answered")})
+	queued := subscribeTo[event.QueueChanged](h.c)
+	starts := subscribeTo[event.TurnStart](h.c)
+	ends := turnEnds(h.c)
+
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	require.NoError(t, h.c.SendNow(t.Context(), "now"))
+	assert.Equal(t, []string{"now"}, receiveEvent(t, queued).Pending)
+
+	close(srv.release)
+	assert.Equal(t, "now", receiveEvent(t, starts).Prompt)
+	assert.Equal(t, event.Outcome{Status: event.Completed}, receiveEnd(t, ends).Outcome)
+}
+
 func TestStartEmitsConnectingActivityBeforeTheSession(t *testing.T) {
 	first := errors.New("first")
 	srv := holdServers(pigruntime.ServerStatus{Name: "broken", Err: errors.New("no such command")})
@@ -2051,6 +2068,29 @@ func TestStartReportsFailureAndKeepsQueuedInput(t *testing.T) {
 	assert.Equal(t, event.Outcome{Status: event.Completed}, h.turn(t, "after").Outcome())
 }
 
+func TestNewAfterFailedStartSendsQueuedInput(t *testing.T) {
+	srv := holdServers()
+	srv.err = errors.New("startup was interrupted")
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Servers: srv.wait})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("kept")})
+	errs := subscribeTo[event.Error](h.c)
+	starts := subscribeTo[event.TurnStart](h.c)
+	ends := turnEnds(h.c)
+
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	_, err := h.c.Submit(t.Context(), "keep me")
+	require.NoError(t, err)
+	close(srv.release)
+	require.ErrorIs(t, receiveEvent(t, errs).Err, srv.err)
+	assertSwitchDone(t, h)
+
+	_, err = h.c.Submit(t.Context(), "/new")
+	require.NoError(t, err)
+	assert.Equal(t, "keep me", receiveEvent(t, starts).Prompt)
+	assert.Equal(t, event.Outcome{Status: event.Completed}, receiveEnd(t, ends).Outcome)
+	assert.NotEmpty(t, h.c.Status().SessionID)
+}
+
 func TestStartupEventsWaitForTheFirstSessionThatOpens(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	prior := newHarness(t, sb, Config{})
@@ -2124,14 +2164,11 @@ func TestBareDenyRemovesToolSearch(t *testing.T) {
 
 			h.turn(t, "what can you use?")
 
-			assert.Empty(t, receive(t, requests).ToolNames)
+			req := receive(t, requests)
+			assert.Empty(t, req.ToolNames)
+			assert.NotContains(t, req.SystemPrompt, mcp.Name)
 			assert.NotContains(t, toolNames(h.c.tools), "ToolSearch")
-			if deny == "ToolSearch" {
-				assert.Equal(t, []string{mcp.Name}, toolNames(h.c.tools))
-				assert.True(t, h.c.tools[0].Deferred)
-			} else {
-				assert.Empty(t, h.c.tools)
-			}
+			assert.Empty(t, h.c.tools)
 		})
 	}
 }

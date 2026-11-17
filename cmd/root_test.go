@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1319,7 +1320,7 @@ func TestResolveServersAsksAndSaves(t *testing.T) {
 			assert.Equal(t, []tui.TrustRequest{{
 				Folder:  canonical(t, e.workspace),
 				Parent:  canonical(t, e.root),
-				Servers: []string{"remote: https://example.com/mcp", "shared: npx -y docs-mcp"},
+				Servers: []string{"remote: https://example.com/mcp", "shared: npx -y docs-mcp (env: TOKEN)"},
 			}}, asked)
 			assert.Equal(t, tt.saved(e), trustFolders(t, trustFile))
 			assert.Equal(t, tt.trusted, set.project["shared"])
@@ -1356,10 +1357,47 @@ func TestDecideTrustOffersNoParentAtHomeOrRoot(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var asked tui.TrustRequest
-			_, err := decideTrust(nil, tt.cwd, tt.home, map[string]config.MCPServer{"a": {Command: "a"}}, askOnce(&asked))
+			_, err := decideTrust(nil, tt.cwd, tt.home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, askOnce(&asked))
 			require.NoError(t, err)
 			assert.Equal(t, canonical(t, tt.cwd), asked.Folder)
 			assert.Empty(t, asked.Parent)
+		})
+	}
+}
+
+func TestDecideTrustTreatsHomeTypedInAnotherCaseAsHome(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("case-insensitive folders are checked on darwin")
+	}
+	home := filepath.Join(canonical(t, t.TempDir()), "home")
+	require.NoError(t, os.Mkdir(home, 0o755))
+	upper := filepath.Join(filepath.Dir(home), "HOME")
+	if _, err := os.Stat(upper); err != nil {
+		t.Skip("the temporary directory is on a case-sensitive volume")
+	}
+	trustFile := filepath.Join(t.TempDir(), "trust.json")
+	store, err := trust.Open(trustFile)
+	require.NoError(t, err)
+
+	d, err := decideTrust(store, upper, home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, func(tui.TrustRequest) (tui.TrustChoice, error) { return tui.TrustFolder, nil })
+
+	require.NoError(t, err)
+	assert.Equal(t, trust.Trusted, d)
+	assert.Nil(t, trustFolders(t, trustFile), "an answer at home holds for this run only")
+}
+
+func TestServerTargetNamesEnvAndHeadersWithoutValues(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		server config.MCPServer
+		want   string
+	}{
+		{"command", config.MCPServer{Command: "npx", Args: []string{"-y", "pkg"}}, "npx -y pkg"},
+		{"env", config.MCPServer{Command: "npx", Args: []string{"-y", "pkg"}, Env: map[string]string{"TOKEN": "secret", "NODE_OPTIONS": "--require x"}}, "npx -y pkg (env: NODE_OPTIONS, TOKEN)"},
+		{"headers", config.MCPServer{URL: "https://x", Headers: map[string]string{"X-Api-Key": "secret", "Authorization": "Bearer secret"}}, "https://x (headers: Authorization, X-Api-Key)"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, serverTarget(tt.server))
 		})
 	}
 }
@@ -1382,7 +1420,7 @@ func TestDecideTrustAtHomeOrRootTrustsForThisRunOnly(t *testing.T) {
 			store, err := trust.Open(trustFile)
 			require.NoError(t, err)
 
-			d, err := decideTrust(store, tt.cwd, home, map[string]config.MCPServer{"a": {Command: "a"}}, func(tui.TrustRequest) (tui.TrustChoice, error) { return tt.choice, nil })
+			d, err := decideTrust(store, tt.cwd, home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, func(tui.TrustRequest) (tui.TrustChoice, error) { return tt.choice, nil })
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, d)
@@ -1407,7 +1445,7 @@ func TestDecideTrustResolvesASymlinkedWorkingDirectory(t *testing.T) {
 		return tui.TrustParent, nil
 	}
 
-	d, err := decideTrust(store, link, e.home, map[string]config.MCPServer{"a": {Command: "a"}}, ask)
+	d, err := decideTrust(store, link, e.home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, ask)
 
 	require.NoError(t, err)
 	assert.Equal(t, trust.Trusted, d)
@@ -1423,7 +1461,7 @@ func TestDecideTrustResolvesASymlinkedWorkingDirectory(t *testing.T) {
 }
 
 func TestDecideTrustFailsOnAnUnresolvableHome(t *testing.T) {
-	_, err := decideTrust(nil, t.TempDir(), filepath.Join(t.TempDir(), "missing"), map[string]config.MCPServer{"a": {Command: "a"}}, noAsk(t))
+	_, err := decideTrust(nil, t.TempDir(), filepath.Join(t.TempDir(), "missing"), map[string]config.MCPServer{"a": {Command: "a"}}, nil, noAsk(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to resolve")
 }
@@ -1469,7 +1507,7 @@ func TestResolveServersInvalidDeclarations(t *testing.T) {
 			var ask askTrust
 			if decision == "ask" {
 				ask = func(req tui.TrustRequest) (tui.TrustChoice, error) {
-					assert.Equal(t, []string{"bad: ", "healthy: healthy-mcp", "shared: "}, req.Servers)
+					assert.Equal(t, []string{"bad: invalid, will not start", "healthy: healthy-mcp", "shared: invalid, will not start"}, req.Servers)
 					return tui.TrustCancelled, nil
 				}
 			}

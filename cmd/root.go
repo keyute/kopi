@@ -300,11 +300,9 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// workRunning is set when Close leaves work running; see below.
 	var workRunning bool
 	servers := pigruntime.StartServers(pigruntime.ServerOptions{Servers: set.servers, CWD: cwd, Version: kopiVersion()})
-	defer func() {
-		if !workRunning {
-			servers.Close()
-		}
-	}()
+	// Closed even under running work: stdio servers would outlive the process,
+	// and a call they are serving can fail as the process exits anyway.
+	defer servers.Close()
 
 	sb, planSB, unavailable, err := openSandbox(cmd.Context(), resolved.Config.Sandbox, cwd, userHome, paths.Home)
 	if err != nil {
@@ -413,7 +411,8 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	if errors.Is(closeErr, pigruntime.ErrJoinTimeout) {
 		// Close left the session open under work that is still running, so
 		// the runtime and workspace stay open too rather than being pulled
-		// from under it; the process exits right after.
+		// from under it; the process exits right after. The MCP servers are
+		// closed regardless.
 		workRunning = true
 		closeErr = fmt.Errorf("running work did not stop before exit: %w", closeErr)
 	}
@@ -473,7 +472,7 @@ func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome
 	case ask == nil:
 		s.undecided = true
 	default:
-		if d, err = decideTrust(store, cwd, userHome, project, ask); err != nil {
+		if d, err = decideTrust(store, cwd, userHome, project, invalid, ask); err != nil {
 			return mcpServers{}, err
 		}
 	}
@@ -506,10 +505,10 @@ func waitServers(ctx context.Context, servers *pigruntime.Servers) ([]pigruntime
 // decideTrust asks about cwd and saves the answer; a cancelled prompt saves
 // nothing and returns no decision. The folder and parent are resolved first,
 // so what is shown is what is saved, and the home check sees through
-// symlinks. An answer saved for the user's home or the root would cover
-// almost every folder below it, so there either answer holds for this run
-// only.
-func decideTrust(store *trust.Store, cwd, userHome string, project map[string]config.MCPServer, ask askTrust) (trust.Decision, error) {
+// symlinks and the case a name was typed in. An answer saved for the user's
+// home or the root would cover almost every folder below it, so there either
+// answer holds for this run only.
+func decideTrust(store *trust.Store, cwd, userHome string, project map[string]config.MCPServer, invalid map[string]error, ask askTrust) (trust.Decision, error) {
 	cwd, err := trust.Canonical(cwd)
 	if err != nil {
 		return 0, err
@@ -524,7 +523,11 @@ func decideTrust(store *trust.Store, cwd, userHome string, project map[string]co
 		req.Parent = parent
 	}
 	for _, name := range slices.Sorted(maps.Keys(project)) {
-		req.Servers = append(req.Servers, name+": "+serverTarget(project[name]))
+		target := serverTarget(project[name])
+		if invalid[name] != nil {
+			target = "invalid, will not start"
+		}
+		req.Servers = append(req.Servers, name+": "+target)
 	}
 	choice, err := ask(req)
 	if err != nil {
@@ -553,12 +556,20 @@ func decideTrust(store *trust.Store, cwd, userHome string, project map[string]co
 }
 
 // serverTarget is what a server runs or connects to, as configured: the
-// command and its arguments, or the URL.
+// command and its arguments, or the URL, then the names, never the values, of
+// the environment variables and headers it sets.
 func serverTarget(s config.MCPServer) string {
+	target := s.URL
 	if s.Command != "" {
-		return strings.Join(append([]string{s.Command}, s.Args...), " ")
+		target = strings.Join(append([]string{s.Command}, s.Args...), " ")
 	}
-	return s.URL
+	if len(s.Env) > 0 {
+		target += " (env: " + strings.Join(slices.Sorted(maps.Keys(s.Env)), ", ") + ")"
+	}
+	if len(s.Headers) > 0 {
+		target += " (headers: " + strings.Join(slices.Sorted(maps.Keys(s.Headers)), ", ") + ")"
+	}
+	return target
 }
 
 // openSandbox returns the sandboxes Bash runs under in execute and in plan

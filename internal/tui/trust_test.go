@@ -122,7 +122,41 @@ func TestTrustRowsKeepHostileTextOnItsLine(t *testing.T) {
 	}
 }
 
-func TestTrustRowsCutTheTopToTheHeight(t *testing.T) {
+func TestTrustRowsCapTheServersToTheHeight(t *testing.T) {
+	req := trustReq
+	req.Servers = []string{"a: a-mcp", "b: b-mcp", "c: c-mcp", "d: d-mcp", "e: e-mcp"}
+	m := newTrustTestModel(req)
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 15})
+	rule := strings.Repeat("─", 60)
+	assert.Equal(t, []string{
+		rule,
+		"  Do you trust this folder?",
+		"  /w/proj",
+		"",
+		"  Its .mcp.json declares MCP servers that Kopi would start.",
+		"  They run with your permissions.",
+		"    a: a-mcp",
+		"    b: b-mcp",
+		"    … 3 more servers",
+		"",
+		"❭ 1. Yes, trust this folder",
+		"  2. Yes, trust the parent folder (/w)",
+		"  3. No, don't trust",
+		rule,
+		"  enter to choose · esc to decide later",
+	}, trustScreen(m))
+
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 12})
+	assert.Contains(t, trustScreen(m), "    … 5 more servers", "with no room left the count still shows")
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 14})
+	assert.Contains(t, trustScreen(m), "    … 4 more servers")
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 16})
+	assert.Contains(t, trustScreen(m), "    … 2 more servers")
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 17})
+	assert.Contains(t, trustScreen(m), "    e: e-mcp", "the last server takes the row the count would")
+}
+
+func TestTrustRowsCutTheTopWhenTheFixedRowsDoNotFit(t *testing.T) {
 	m := newTrustTestModel(trustReq)
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 5})
 	rows := trustScreen(m)

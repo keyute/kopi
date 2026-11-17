@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +93,32 @@ func TestLookupClosestDecisionApplies(t *testing.T) {
 	_, ok, err := s.Lookup(root)
 	require.NoError(t, err)
 	assert.False(t, ok)
+}
+
+func TestLookupMatchesAFolderTypedInAnotherCase(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("case-insensitive folders are checked on darwin")
+	}
+	root := tempDir(t)
+	parent := mkdir(t, root, "parent")
+	child := mkdir(t, parent, "evil")
+	flipped := filepath.Join(parent, "EVIL")
+	if _, err := os.Stat(flipped); err != nil {
+		t.Skip("the temporary directory is on a case-sensitive volume")
+	}
+	s, err := Open(filepath.Join(root, "trust.json"))
+	require.NoError(t, err)
+	require.NoError(t, s.Set(parent, Trusted))
+	require.NoError(t, s.Set(child, Untrusted))
+
+	d, ok, err := s.Lookup(flipped)
+
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, Untrusted, d)
+	got, err := Canonical(strings.ToUpper(child))
+	require.NoError(t, err)
+	assert.Equal(t, child, got)
 }
 
 func TestSymlinkedPathResolvesToSameEntry(t *testing.T) {
