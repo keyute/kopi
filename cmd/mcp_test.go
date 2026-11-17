@@ -57,6 +57,17 @@ func TestMCPListWithoutServers(t *testing.T) {
 	assert.Equal(t, before, pigruntimetest.Snapshot(t, e.root))
 }
 
+func TestMCPListWithUnreadableProjectFile(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), `{"mcpServers":`)
+
+	stdout, stderr, err := execute(t, "", "mcp", "list")
+
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "skipped this folder's MCP servers")
+	assert.NotContains(t, stdout, "No MCP servers configured")
+}
+
 func TestServerBlockStripsControlsFromWhere(t *testing.T) {
 	for _, where := range []string{"global (/config\x1b[31m\a\n\tpath)", "project (/config\x1b[31m\a\n\tpath)"} {
 		t.Run(strings.Split(where, " ")[0], func(t *testing.T) {

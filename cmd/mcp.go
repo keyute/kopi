@@ -63,6 +63,10 @@ func mcpListCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if len(set.servers) == 0 && len(set.untrusted) == 0 && len(set.invalid) == 0 {
+				// The warning already says why this folder's servers are missing.
+				if len(set.errs) > 0 {
+					return nil
+				}
 				_, err := fmt.Fprintf(out, "No MCP servers configured: declare them under mcpServers in %s or in %s in this folder.\n", printable(paths.ConfigFile, ""), policy.ProjectMCPFile)
 				return err
 			}

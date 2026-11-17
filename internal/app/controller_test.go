@@ -1978,6 +1978,35 @@ func TestModeChosenWhileStartingCarriesIntoTheSession(t *testing.T) {
 	assert.Equal(t, []event.ModeChanged{{Mode: policy.Execute}, {Mode: policy.Plan}, {Mode: policy.Execute}}, ofType[event.ModeChanged](h.rec.all()))
 }
 
+func TestNewAfterFailedStartOpensInConfiguredMode(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	prior := newHarness(t, sb, Config{})
+	require.NoError(t, prior.c.Open(t.Context(), OpenRequest{}))
+	prior.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("hi")})
+	prior.turn(t, "hi")
+	id := prior.c.Status().SessionID
+	require.NoError(t, prior.c.Close(t.Context()))
+
+	srv := holdServers()
+	h := newHarness(t, sb, Config{Mode: policy.Plan, Servers: srv.wait})
+	errs := subscribeTo[event.Error](h.c)
+	changes := subscribeTo[event.SessionChanged](h.c)
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{ResumeID: id}))
+	// The session passes the check, then is gone by the time it is opened.
+	require.NoError(t, os.RemoveAll(filepath.Join(sb.AgentDir, "sessions")))
+	close(srv.release)
+	require.ErrorIs(t, receiveEvent(t, errs).Err, pigruntime.ErrSessionNotFound)
+	assertSwitchDone(t, h)
+
+	h.c.ToggleMode()
+	assert.Equal(t, policy.Execute, h.c.Status().Mode)
+	_, err := h.c.Submit(t.Context(), "/new")
+	require.NoError(t, err)
+	receiveEvent(t, changes)
+	assertSwitchDone(t, h)
+	assert.Equal(t, policy.Plan, h.c.Status().Mode)
+}
+
 func TestSwitchCommandsAreBusyWhileStarting(t *testing.T) {
 	srv := holdServers()
 	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Servers: srv.wait})

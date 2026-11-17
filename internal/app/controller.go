@@ -68,6 +68,9 @@ type Controller struct {
 	// startup is what the first open that succeeds reports, so a failed first
 	// open does not lose it; life guards it once a session can be opened.
 	startup []event.Event
+	// attempted is set once the first open has been tried or its wait for the
+	// servers has failed; life guards it.
+	attempted bool
 
 	// life serialises session start, switch and close.
 	life sync.Mutex
@@ -230,6 +233,7 @@ func (c *Controller) Start(ctx context.Context, req OpenRequest) error {
 			c.prepareStartup(statuses)
 			err = c.startSwitch(ctx, req, op)
 		} else {
+			c.attempted = true
 			c.mu.Lock()
 			c.switching = nil
 			c.mu.Unlock()
@@ -822,6 +826,8 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 	}
 
+	later := c.attempted
+	c.attempted = true
 	d := newDisplay(c.tools)
 	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
 		Model:        c.cfg.Model,
@@ -851,10 +857,10 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 		cancel()
 	}
-	// A later session starts in the configured mode, never in the mode the
-	// previous session was left in; the first keeps the mode chosen before it
-	// opened.
-	if old != nil {
+	// A session opened after the first open was tried, even one that failed,
+	// starts in the configured mode, never in the mode it was left in; the
+	// first keeps the mode chosen while it was opening.
+	if later {
 		if c.cfg.Mode == policy.Execute {
 			c.EnterExecute()
 		} else {
