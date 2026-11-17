@@ -683,6 +683,16 @@ func TestRootPrintExecuteAllowCannotExemptMCPFile(t *testing.T) {
 	assert.Equal(t, "alpha\n", content)
 }
 
+func TestRootPrintExecuteAllowCannotExemptLinkedMCPFile(t *testing.T) {
+	e := newTestEnv(t)
+	require.NoError(t, os.Symlink("servers.json", filepath.Join(e.workspace, ".mcp.json")))
+
+	result, content := printEditIn(t, e, "servers.json", "--mode", "execute", "--allowed-tools", "Edit")
+
+	assert.Contains(t, result, "Edit(.mcp.json) (built-in)")
+	assert.Equal(t, "alpha\n", content)
+}
+
 func TestRootPrintStartsInPlanByDefault(t *testing.T) {
 	result, content := printEdit(t, "docs/a.md", "--allowed-tools", "Edit(docs/**)")
 
@@ -942,11 +952,16 @@ func TestRootSandboxedBashProtectsMCPFile(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, path, command string
+		link                string
 		exists              bool
 	}{
-		{"cannot be created", ".mcp.json", "printf changed > .mcp.json", false},
-		{"cannot be replaced", ".mcp.json", "/bin/mv -f replacement .mcp.json", true},
-		{"nested cannot be overwritten", "sub/.mcp.json", "printf changed > sub/.mcp.json", true},
+		{"cannot be created", ".mcp.json", "printf changed > .mcp.json", "", false},
+		{"cannot be replaced", ".mcp.json", "/bin/mv -f replacement .mcp.json", "", true},
+		{"nested cannot be overwritten", "sub/.mcp.json", "printf changed > sub/.mcp.json", "", true},
+		{"linked cannot be overwritten", "servers.json", "printf changed > servers.json", "servers.json", true},
+		{"linked cannot be replaced", "servers.json", "/bin/mv -f replacement servers.json", "servers.json", true},
+		{"linked directory cannot be written", "conf/keep", "printf changed > conf/keep", "conf", true},
+		{"linked directory cannot be replaced", "conf/keep", "/bin/mv conf moved", "conf", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newTestEnv(t)
@@ -954,6 +969,9 @@ func TestRootSandboxedBashProtectsMCPFile(t *testing.T) {
 			path := filepath.Join(e.workspace, tc.path)
 			if tc.exists {
 				e.writeFile(t, path, original)
+			}
+			if tc.link != "" {
+				require.NoError(t, os.Symlink(tc.link, filepath.Join(e.workspace, ".mcp.json")))
 			}
 			e.writeFile(t, filepath.Join(e.workspace, "replacement"), "changed\n")
 
@@ -1096,7 +1114,7 @@ func TestSandboxPolicy(t *testing.T) {
 			assert.True(t, filepath.IsAbs(path), path)
 		}
 		assert.Equal(t, append([]string{kopiHome}, expanded...), p.DenyRead)
-		assert.Equal(t, gitFiles(cwd), p.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".mcp.json")), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 		assert.True(t, p.Network)
 	})
@@ -1107,7 +1125,7 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".git")), p.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".git"), filepath.Join(cwd, ".mcp.json")), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 	})
 
@@ -1116,7 +1134,7 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, "HEAD")), p.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, "HEAD"), filepath.Join(cwd, ".mcp.json")), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 	})
 
@@ -1126,7 +1144,7 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, gitFiles(cwd), p.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".mcp.json")), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 	})
 
@@ -1137,13 +1155,13 @@ func TestSandboxPolicy(t *testing.T) {
 
 		plan := planPolicy(p, cwd)
 
-		assert.Equal(t, append(gitFiles(cwd), cwd), plan.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".mcp.json"), cwd), plan.DenyWrite)
 		assert.Equal(t, p.DenyWriteNames, plan.DenyWriteNames)
 		assert.Equal(t, p.Write, plan.Write)
 		assert.Equal(t, p.DenyRead, plan.DenyRead)
 		assert.Equal(t, p.Network, plan.Network)
 		plan.DenyWrite[0] = "changed"
-		assert.Equal(t, gitFiles(cwd), p.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".mcp.json")), p.DenyWrite)
 	})
 }
 

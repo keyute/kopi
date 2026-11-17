@@ -24,10 +24,14 @@ type Source struct {
 const MCPPrefix = "mcp__"
 
 // ProjectMCPFile is the file in which a folder declares MCP servers; Kopi
-// starts a trusted folder's servers outside the sandbox. Loading may follow a
-// symlink, but built-in protection deliberately checks the .mcp.json name without
-// discovering differently named targets; unprotected direct access to those
-// targets is an accepted limitation.
+// starts a trusted folder's servers outside the sandbox. Loading follows a
+// symlink, as every peer does, so protection covers the name in every
+// directory and whatever the start directory's .mcp.json resolves to at
+// startup, with no file-or-directory check: skipping a linked directory let
+// Bash swap it for a file. Deliberately not chased: another link on the way,
+// a link broken at startup, an existing hard link, and other folders' link
+// targets. Codex and Claude Code's sandbox stop at the resolved target too
+// (anthropics/sandbox-runtime#790); reopen only with new evidence.
 const ProjectMCPFile = ".mcp.json"
 
 // ruleName also admits a trailing * for parseRule to refuse on non-MCP names.
@@ -52,6 +56,9 @@ type Rules struct {
 	// fold matches case-insensitively, as the file systems of darwin and
 	// windows do by default.
 	fold bool
+	// mcpFile is the file the workspace's .mcp.json resolves to when the
+	// rules are built.
+	mcpFile string
 }
 
 type effect int
@@ -135,7 +142,10 @@ func NewRules(workspace, home string, tools map[string]ToolSpec, sources ...Sour
 		}
 	}
 	ws, hm := escape(filepath.ToSlash(filepath.Clean(workspace))), escape(filepath.ToSlash(filepath.Clean(home)))
-	r := &Rules{fold: runtime.GOOS == "darwin" || runtime.GOOS == "windows"}
+	r := &Rules{
+		fold:    runtime.GOOS == "darwin" || runtime.GOOS == "windows",
+		mcpFile: Resolve(filepath.Join(workspace, ProjectMCPFile)),
+	}
 	for _, src := range sources {
 		s := source{name: src.Name}
 		for _, l := range []struct {
@@ -324,7 +334,11 @@ func (r *Rules) underGit(p string) bool {
 }
 
 func (r *Rules) isMCPFile(p string) bool {
-	base := path.Base(filepath.ToSlash(filepath.Clean(p)))
+	p = filepath.Clean(p)
+	if p == r.mcpFile || r.fold && strings.EqualFold(p, r.mcpFile) {
+		return true
+	}
+	base := path.Base(filepath.ToSlash(p))
 	return base == ProjectMCPFile || r.fold && strings.EqualFold(base, ProjectMCPFile)
 }
 

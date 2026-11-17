@@ -460,6 +460,44 @@ func TestBuiltInAsksForEditsOfMCPFile(t *testing.T) {
 	assert.Equal(t, effectAllow, eff)
 }
 
+func TestBuiltInAsksForEditsOfLinkedMCPFile(t *testing.T) {
+	d := newDirs(t)
+	require.NoError(t, os.WriteFile(filepath.Join(d.ws, "servers.json"), []byte("{}"), 0o600))
+	require.NoError(t, os.Symlink("servers.json", filepath.Join(d.ws, ".mcp.json")))
+	r := d.rules(t, Source{Name: "config", Allow: []string{"*"}})
+	resolved, err := filepath.EvalSymlinks(d.ws)
+	require.NoError(t, err)
+	rws := func(p string) string { return filepath.Join(resolved, p) }
+	for _, tool := range []string{"Edit", "Write"} {
+		for _, tc := range []struct {
+			name   string
+			target *Target
+			want   effect
+		}{
+			{"target", at(rws("servers.json")), effectAsk},
+			{"resolved alias", &Target{Path: filepath.Join(d.ws, "x"), Real: rws("servers.json")}, effectAsk},
+			{"other", at(rws("other.json")), effectAllow},
+		} {
+			t.Run(tool+"/"+tc.name, func(t *testing.T) {
+				eff, text, src := r.decide(tool, tc.target)
+				assert.Equal(t, tc.want, eff)
+				if tc.want == effectAsk {
+					assert.Equal(t, tool+"(.mcp.json)", text)
+					assert.Equal(t, "built-in", src)
+				}
+			})
+		}
+		target := at(rws("SERVERS.JSON"))
+		r.fold = false
+		eff, _, _ := r.decide(tool, target)
+		assert.Equal(t, effectAllow, eff)
+		r.fold = true
+		eff, _, _ = r.decide(tool, target)
+		assert.Equal(t, effectAsk, eff)
+		r.fold = false
+	}
+}
+
 func TestBuiltInMCPFileAskPrecedence(t *testing.T) {
 	d := newDirs(t)
 	target := at(filepath.Join(d.ws, ".mcp.json"))

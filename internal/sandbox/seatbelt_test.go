@@ -329,6 +329,29 @@ func TestSeatbeltDenyWriteNames(t *testing.T) {
 	require.NoError(t, bash(t, sb, `echo y >"$ROOT/.mcp.json.bak"`, env...))
 }
 
+func TestSeatbeltDenyWriteSymlinkProtectsTarget(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "root")
+	writeFile(t, filepath.Join(root, "servers.json"))
+	writeFile(t, filepath.Join(root, "other"))
+	require.NoError(t, os.Symlink("servers.json", filepath.Join(root, "link")))
+	sb := newSandbox(t, Policy{Write: []string{root}, DenyWrite: []string{filepath.Join(root, "link")}})
+	env := []string{"ROOT=" + root}
+
+	for _, script := range []string{
+		`echo y >"$ROOT/servers.json"`,
+		`echo y >"$ROOT/link"`,
+		`echo y >"$ROOT/SERVERS.JSON"`,
+		`mv "$ROOT/other" "$ROOT/servers.json"`,
+		`rm "$ROOT/servers.json"`,
+	} {
+		assert.Error(t, bash(t, sb, script, env...), script)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "servers.json"))
+	require.NoError(t, err)
+	assert.Equal(t, "x", string(got))
+	require.NoError(t, bash(t, sb, `echo y >"$ROOT/sibling"`, env...))
+}
+
 func TestSeatbeltDenyWriteNamesCannotBeCreated(t *testing.T) {
 	base := t.TempDir()
 	empty, temp := filepath.Join(base, "empty"), filepath.Join(base, "temp")

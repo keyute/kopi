@@ -149,7 +149,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `Bash` returns stdout and stderr combined, keeping the first and last 15,000 bytes. A non-zero exit is an error reporting the exit code.
 - On macOS `Bash` runs inside an OS sandbox (`sandbox-exec`), configured with `sandbox` (see Configuration).
 - In the sandbox a command can write only in the start directory, `/tmp`, the temp directory and the `sandbox.allowWrite` paths, and never the files of the start directory's `.git` that choose git's config and hooks (`hooks`, `config`, `config.worktree`, `commondir`, `worktrees`, `modules`); when the start directory has no `.git`, a command cannot write `HEAD` in it. In plan mode nothing in the start directory is writable, including `sandbox.allowWrite` paths inside it.
-- In the sandbox a command cannot create, write, rename or remove a file named `.mcp.json`, in any letter case and in any directory; git operations that change a `.mcp.json` therefore fail in the sandbox.
+- In the sandbox a command cannot create, write, rename or remove a file named `.mcp.json`, in any letter case and in any directory, nor what the start directory's `.mcp.json` resolves to when it is a symlink; git operations that change a `.mcp.json` therefore fail in the sandbox.
 - In the sandbox a command can read everything except Kopi's home and the `sandbox.denyRead` paths, which it also cannot write, rename or remove.
 - In the sandbox a command has no network unless `sandbox.network` is true, which opens IP networking only; Unix sockets stay blocked.
 
@@ -173,7 +173,7 @@ Permission rules in `config.json` allow, ask about or deny calls:
 - `Bash` takes no path: only a bare `Bash` or `*` rule applies to it, `Bash(path)` is rejected at start, and path rules such as `*(~/.ssh)` never apply to `Bash`. `"ask": ["Bash"]` makes every command ask.
 - Plan mode refuses `Write`, `Edit`, unsandboxed `Bash` and MCP tools not marked read-only before any rule; otherwise rules apply to `Bash` the same in both modes.
 - Deny beats ask, and ask beats allow. With no rule matching, `Read`, `ToolSearch` and sandboxed `Bash` are allowed and any other call asks, including every `Bash` command without the sandbox.
-- Built in: `Edit` and `Write` under any `.git` directory, and of any file named `.mcp.json`, always ask unless a deny rule refuses them.
+- Built in: `Edit` and `Write` under any `.git` directory, and of any file named `.mcp.json` or the file the start directory's `.mcp.json` resolves to when it is a symlink, always ask unless a deny rule refuses them.
 - `--allowed-tools` and `--disallowed-tools` add allow and deny rules to the config's; each is repeatable and takes comma-separated rules (commas inside `()` or `{}` do not split).
 - A rule's path counts as a match on either the path as written or its resolved target when it denies, asks or exempts from an allow, and only on both when it allows or exempts from a deny or ask.
 
@@ -218,7 +218,7 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - Tools that write outside the start directory and temp directories, such as Go's build cache and package-manager caches, fail in the sandbox until those paths are in `sandbox.allowWrite`.
 - In the sandbox, `git init` in the start directory, `git config` writes, `git worktree add`, commits in a linked worktree (its git directory is outside the start directory), commits inside a submodule and commit signing through an agent socket fail.
 - The sandbox does not protect the config and hooks of repositories nested inside the start directory, or of the start directory itself when it is a bare repository or a git directory.
-- When a `.mcp.json` is a symlink, the file it links to is not protected: sandboxed commands can write it, and `Edit` and `Write` ask only when called on the `.mcp.json` name.
+- When the start directory's `.mcp.json` is a symlink, what it resolves to when Kopi starts is protected like `.mcp.json` itself; when that is a directory, sandboxed commands cannot write anywhere in it. Another symlink on the way to it, a link that is broken at startup, a hard link that already exists, and the link targets of `.mcp.json` files in other folders are not protected.
 - A command can move into a write root a directory that already holds a `.mcp.json`, and a folder moved in takes the trust of its new parent.
 - An MCP tool an allow rule covers can change `.mcp.json` and `.git` files without asking, as MCP rules take no path.
 - The files a `.mcp.json` server runs, such as `./server.sh` or `node_modules/.bin/…`, stay writable.

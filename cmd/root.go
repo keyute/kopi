@@ -583,7 +583,8 @@ func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHom
 // sandboxPolicy lets commands write only the workspace, temporary
 // directories and the paths the user allowed, never read Kopi's home, and
 // never write the git files that decide which config and hooks git runs, nor
-// any .mcp.json, either of which would run code outside the sandbox.
+// any .mcp.json or what the start directory's .mcp.json resolves to, either of
+// which would run code outside the sandbox.
 func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.Policy {
 	expand := func(paths []string) []string {
 		out := make([]string, 0, len(paths))
@@ -614,6 +615,9 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 		// A .git file, as in a linked worktree or submodule, names the git directory.
 		denyWrite = append(denyWrite, gitDir)
 	}
+	// Unconditional: the sandbox also denies what a link resolves to, and a
+	// linked directory is denied whole rather than left to be swapped for a file.
+	denyWrite = append(denyWrite, filepath.Join(cwd, policy.ProjectMCPFile))
 	write := []string{cwd, "/tmp", os.TempDir()}
 	return sandbox.Policy{
 		Write:          append(write, expand(cfg.AllowWrite)...),
