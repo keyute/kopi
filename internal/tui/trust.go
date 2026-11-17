@@ -9,6 +9,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // TrustRequest is what the trust prompt shows. Every field may come from an
@@ -104,10 +105,27 @@ func (m *trustModel) View() tea.View {
 	if m.width == 0 || m.height == 0 {
 		return v
 	}
-	rows := m.rows()
-	// Past the height the top is cut so the options stay visible.
-	v.SetContent(strings.Join(rows[max(0, len(rows)-m.height):], "\n"))
+	rows := append(m.rows(), m.hint())
+	// Past the height the top is cut so the options stay visible; short of it,
+	// blank rows above put the dialog at the bottom, where approvals are drawn.
+	rows = rows[max(0, len(rows)-m.height):]
+	v.SetContent(strings.Join(append(make([]string, m.height-len(rows)), rows...), "\n"))
 	return v
+}
+
+// hint is the footer row naming the bound keys.
+func (m *trustModel) hint() string {
+	var parts []string
+	if ks := m.keys.submit.Keys(); len(ks) > 0 {
+		parts = append(parts, ks[0]+" to choose")
+	}
+	if ks := m.keys.interrupt.Keys(); len(ks) > 0 {
+		parts = append(parts, ks[0]+" to decide later")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return fg(m.th.dim).Render(ansi.Truncate("  "+strings.Join(parts, " · "), m.width, "…"))
 }
 
 func (m *trustModel) rows() []string {

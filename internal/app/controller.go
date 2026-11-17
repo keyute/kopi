@@ -36,9 +36,9 @@ type Config struct {
 	Mode policy.Mode
 	// Files lists the entries that @ references complete to; nil offers none.
 	Files *tool.Workspace
-	// Notices are shown once, after the first session opens, before those
-	// about the MCP servers.
-	Notices []string
+	// Errors are reported once as Error events, after the first session
+	// opens, before those about the MCP servers.
+	Errors []error
 	// Servers waits for the MCP servers to settle and returns their statuses;
 	// Open or Start calls it once, before the first session. Open returns its
 	// error unchanged; Start reports it as an Error event. Nil means there are
@@ -119,14 +119,14 @@ func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
 }
 
 // setup sets the session tools and prompt from the built-in tools and
-// statuses, and returns the notices about the servers.
-func (c *Controller) setup(statuses []pigruntime.ServerStatus) []string {
-	var notices []string
+// statuses, and returns the events about the servers.
+func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
+	var events []event.Event
 	var serverTools []tool.Tool
 	var servers []mcpServer
 	for _, st := range statuses {
 		if st.Err != nil {
-			notices = append(notices, fmt.Sprintf("MCP server %s failed to start: %v", st.Name, st.Err))
+			events = append(events, event.Error{Err: fmt.Errorf("MCP server %s failed to start: %w", st.Name, st.Err)})
 			continue
 		}
 		server := mcpServer{name: st.Name, instructions: st.Instructions}
@@ -138,7 +138,7 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []string {
 			server.tools = append(server.tools, t.Name)
 		}
 		for _, skipped := range st.Skipped {
-			notices = append(notices, fmt.Sprintf("MCP server %s: skipped tool %s", st.Name, skipped))
+			events = append(events, event.Notice{Text: fmt.Sprintf("MCP server %s: skipped tool %s", st.Name, skipped)})
 		}
 		servers = append(servers, server)
 	}
@@ -149,7 +149,17 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []string {
 	tools = append(tools, serverTools...)
 	c.tools = tools
 	c.prompt = systemPrompt(c.cfg.Workspace, c.tools, servers)
-	return notices
+	return events
+}
+
+// startupEvents sets up the first session from statuses and returns what it
+// reports once open: Config.Errors, then the events about the servers.
+func (c *Controller) startupEvents(statuses []pigruntime.ServerStatus) []event.Event {
+	var events []event.Event
+	for _, err := range c.cfg.Errors {
+		events = append(events, event.Error{Err: err})
+	}
+	return append(events, c.setup(statuses)...)
 }
 
 // Subscribe registers fn for every event of the current session plus
@@ -165,8 +175,8 @@ type OpenRequest struct {
 }
 
 // Open checks that req can be opened, waits for the MCP servers, opens the
-// first session with their tools, then emits each of Config.Notices and the
-// notices about the servers.
+// first session with their tools, then emits each of Config.Errors and the
+// events about the servers.
 func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
 	if err := c.check(ctx, req); err != nil {
 		return err
@@ -175,7 +185,7 @@ func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
 	if err != nil {
 		return err
 	}
-	return c.start(ctx, req, slices.Concat(c.cfg.Notices, c.setup(statuses)))
+	return c.start(ctx, req, c.startupEvents(statuses))
 }
 
 // Start is Open without waiting: it returns the check's error, and otherwise
@@ -194,15 +204,18 @@ func (c *Controller) Start(ctx context.Context, req OpenRequest) error {
 		return err
 	}
 	if c.cfg.Servers != nil {
-		c.relay.emit(event.Notice{Text: "Connecting to MCP servers…"})
+		c.relay.emit(event.Activity{Text: "Connecting to MCP servers…"})
 	}
 	go func() {
 		defer cancel()
 		statuses, err := c.servers(ctx)
+		if c.cfg.Servers != nil {
+			c.relay.emit(event.Activity{})
+		}
 		c.life.Lock()
 		defer c.life.Unlock()
 		if err == nil {
-			err = c.startSwitch(ctx, req, op, slices.Concat(c.cfg.Notices, c.setup(statuses)))
+			err = c.startSwitch(ctx, req, op, c.startupEvents(statuses))
 		} else {
 			c.mu.Lock()
 			c.switching = nil
@@ -714,18 +727,18 @@ func inputs(ps []pigruntime.Prompt) []event.Input {
 	return out
 }
 
-// start opens a session for req and makes it current, then emits notices.
+// start opens a session for req and makes it current, then emits events.
 // Running work is stopped and joined first; if it will not stop the switch is
 // refused. The new session is opened before the old one is closed, so a failed
 // open leaves the old session in place.
-func (c *Controller) start(ctx context.Context, req OpenRequest, notices []string) error {
+func (c *Controller) start(ctx context.Context, req OpenRequest, events []event.Event) error {
 	c.life.Lock()
 	defer c.life.Unlock()
 	op, err := c.beginSwitch(nil)
 	if err != nil {
 		return err
 	}
-	return c.startSwitch(ctx, req, op, notices)
+	return c.startSwitch(ctx, req, op, events)
 }
 
 // beginSwitch marks and stops in one queue section, before settlement can
@@ -758,7 +771,7 @@ func (c *Controller) beginSwitch(cancelWait context.CancelFunc) (*sessionSwitch,
 // open, input still pending, which only the first open started by Start or a
 // later open after it failed can leave, starts the session's first turn in the
 // same queue section that ends the switch, ahead of any input given later.
-func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessionSwitch, notices []string) (err error) {
+func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessionSwitch, events []event.Event) (err error) {
 	defer func() {
 		c.queue.Lock()
 		defer c.queue.Unlock()
@@ -854,8 +867,8 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 	}
 	c.relay.emit(changed)
-	for _, n := range notices {
-		c.relay.emit(event.Notice{Text: n})
+	for _, ev := range events {
+		c.relay.emit(ev)
 	}
 	return nil
 }

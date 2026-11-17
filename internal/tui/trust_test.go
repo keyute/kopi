@@ -41,7 +41,7 @@ func trustPress(m *trustModel, msg tea.KeyPressMsg) bool {
 
 func TestTrustRows(t *testing.T) {
 	rule := strings.Repeat("─", 60)
-	assert.Equal(t, []string{
+	assert.Equal(t, append(make([]string, 16),
 		rule,
 		"  Do you trust this folder?",
 		"  /w/proj",
@@ -55,7 +55,8 @@ func TestTrustRows(t *testing.T) {
 		"  2. Yes, trust the parent folder (/w)",
 		"  3. No, don't trust",
 		rule,
-	}, trustScreen(newTrustTestModel(trustReq)))
+		"  enter to choose · esc to decide later",
+	), trustScreen(newTrustTestModel(trustReq)))
 	assert.True(t, newTrustTestModel(trustReq).View().AltScreen)
 }
 
@@ -93,7 +94,7 @@ func TestTrustRowsHideTheParentOption(t *testing.T) {
 	req := trustReq
 	req.Parent = ""
 	rows := trustScreen(newTrustTestModel(req))
-	assert.Equal(t, []string{"❭ 1. Yes, trust this folder", "  2. No, don't trust"}, rows[len(rows)-3:len(rows)-1])
+	assert.Equal(t, []string{"❭ 1. Yes, trust this folder", "  2. No, don't trust"}, rows[len(rows)-4:len(rows)-2])
 	assert.NotContains(t, strings.Join(rows, "\n"), "parent")
 }
 
@@ -125,7 +126,26 @@ func TestTrustRowsCutTheTopToTheHeight(t *testing.T) {
 	m := newTrustTestModel(trustReq)
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 5})
 	rows := trustScreen(m)
-	assert.Equal(t, []string{"", "❭ 1. Yes, trust this folder", "  2. Yes, trust the parent folder (/w)", "  3. No, don't trust", strings.Repeat("─", 60)}, rows)
+	assert.Equal(t, []string{"❭ 1. Yes, trust this folder", "  2. Yes, trust the parent folder (/w)", "  3. No, don't trust", strings.Repeat("─", 60), "  enter to choose · esc to decide later"}, rows)
+}
+
+func TestTrustHintNamesBoundKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		keys map[string][]string
+		want string
+	}{
+		{"rebound", map[string][]string{"submit": {"ctrl+j", "enter"}, "interrupt": {"ctrl+g"}}, "  ctrl+j to choose · ctrl+g to decide later"},
+		{"no interrupt", map[string][]string{"submit": {"enter"}}, "  enter to choose"},
+		{"neither", map[string][]string{}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTrustModel(trustReq, tc.keys)
+			m.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+			rows := trustScreen(m)
+			assert.Equal(t, tc.want, rows[len(rows)-1])
+		})
+	}
 }
 
 func TestAskTrustReturnsCancelledWhenContextEnds(t *testing.T) {

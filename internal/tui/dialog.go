@@ -21,7 +21,9 @@ type option struct {
 	field *composer
 }
 
-// dialog is a choice drawn in the composer's slot.
+// dialog is a choice drawn in the composer's slot. It is drawn between two
+// rules directly above the screen's last row: the status line in the main UI,
+// key hints on a screen of its own.
 type dialog struct {
 	title   string
 	body    []string // rendered at width-2; rows indents them

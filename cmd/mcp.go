@@ -58,8 +58,8 @@ func mcpListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			for _, n := range set.notices {
-				slog.Warn(printable(n, "    "))
+			for _, err := range set.errs {
+				slog.Warn(printable(err.Error(), "    "))
 			}
 			out := cmd.OutOrStdout()
 			if len(set.servers) == 0 && len(set.untrusted) == 0 && len(set.invalid) == 0 {

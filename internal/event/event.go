@@ -62,10 +62,13 @@ type ApprovalRequested struct {
 // cancelled.
 type ApprovalEnded struct{ Token uint64 }
 
-// Notice reports retry and compaction progress, and the first session's
-// startup: that it waits for the MCP servers and, once it opens, the notices
-// about them.
+// Notice reports retry and compaction progress, and the MCP server tools the
+// first session skipped.
 type Notice struct{ Text string }
+
+// Activity is what the Controller is doing outside a turn, such as waiting
+// for the MCP servers; an empty Text means it has finished.
+type Activity struct{ Text string }
 
 type TurnEnd struct {
 	WorkID  string
@@ -100,6 +103,7 @@ func (ToolEnd) isEvent()           {}
 func (ApprovalRequested) isEvent() {}
 func (ApprovalEnded) isEvent()     {}
 func (Notice) isEvent()            {}
+func (Activity) isEvent()          {}
 func (TurnEnd) isEvent()           {}
 func (ModeChanged) isEvent()       {}
 func (SessionChanged) isEvent()    {}

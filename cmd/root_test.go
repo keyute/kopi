@@ -1177,7 +1177,7 @@ func TestResolveServersWithoutProjectFile(t *testing.T) {
 	assert.Equal(t, globalServers, set.servers)
 	assert.Empty(t, set.project)
 	assert.Empty(t, set.untrusted)
-	assert.Empty(t, set.notices)
+	assert.Empty(t, set.errs)
 	assert.NoFileExists(t, trustFile)
 
 	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), `{"mcpServers":{}}`)
@@ -1222,7 +1222,7 @@ func TestResolveServersUntrustedSkipsProject(t *testing.T) {
 	assert.Empty(t, set.project)
 	assert.Len(t, set.untrusted, 2)
 	assert.False(t, set.undecided)
-	assert.Empty(t, set.notices)
+	assert.Empty(t, set.errs)
 }
 
 func TestResolveServersUndecidedWithoutAsk(t *testing.T) {
@@ -1424,9 +1424,9 @@ func TestResolveServersInvalidDeclarations(t *testing.T) {
 			set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, ask)
 
 			require.NoError(t, err)
-			require.Len(t, set.notices, 2)
-			assert.Contains(t, set.notices[0], "MCP server bad: failed to decode")
-			assert.Contains(t, set.notices[1], "MCP server shared: failed to decode")
+			require.Len(t, set.errs, 2)
+			assert.ErrorContains(t, set.errs[0], "MCP server bad: failed to decode")
+			assert.ErrorContains(t, set.errs[1], "MCP server shared: failed to decode")
 			if decision == "trusted" {
 				assert.Equal(t, map[string]config.MCPServer{"solo": {Command: "solo-mcp"}, "healthy": {Command: "healthy-mcp"}}, set.servers)
 				assert.Len(t, set.invalid, 2)
@@ -1450,8 +1450,8 @@ func TestResolveServersMalformedProjectFileIsANotice(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, globalServers, set.servers)
-	require.Len(t, set.notices, 1)
-	assert.Contains(t, set.notices[0], "Skipped this folder's MCP servers: failed to parse MCP config "+filepath.Join(e.workspace, ".mcp.json"))
+	require.Len(t, set.errs, 1)
+	assert.ErrorContains(t, set.errs[0], "skipped this folder's MCP servers: failed to parse MCP config "+filepath.Join(e.workspace, ".mcp.json"))
 	assert.NoFileExists(t, trustFile)
 }
 

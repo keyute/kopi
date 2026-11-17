@@ -42,6 +42,10 @@
 - Add a key only for a setting someone needs to change, never to move mechanics out of the binary.
 - When it is unclear which side something is on, check what peer agents build in and follow the majority.
 
+## TUI
+
+- Every screen ends with a footer row: the status line in a session, key hints on a screen of its own. A dialog sits directly above it and always draws both rules; do not add a dialog variant for what surrounds it.
+
 ## Style
 
 - Keep implementations simple. Prefer an established, maintained library over hand-rolled code when one fits; do not add one for something trivial.

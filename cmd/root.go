@@ -346,7 +346,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// Only the fullscreen interface has a human to answer approvals.
 	cfg := app.Config{
 		Model: model, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
-		Notices: set.notices,
+		Errors: set.errs,
 	}
 	if len(set.servers) > 0 {
 		cfg.Servers = func(ctx context.Context) ([]pigruntime.ServerStatus, error) { return waitServers(ctx, servers) }
@@ -377,10 +377,14 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		// The session opens behind the interface; prompts given meanwhile queue.
 		err = c.Start(startCtx, req)
 	} else {
-		// The headless frontend shows no notices; they all arrive during Open.
+		// The headless frontend shows no notices or errors; startup's all
+		// arrive during Open.
 		unsubscribe := c.Subscribe(func(ev event.Event) {
-			if n, ok := ev.(event.Notice); ok {
-				slog.Warn(printable(n.Text, "    "))
+			switch ev := ev.(type) {
+			case event.Notice:
+				slog.Warn(printable(ev.Text, "    "))
+			case event.Error:
+				slog.Warn(printable(ev.Err.Error(), "    "))
 			}
 		})
 		err = c.Open(startCtx, req)
@@ -424,7 +428,7 @@ type mcpServers struct {
 	// undecided means no trust decision applies and none was asked for.
 	undecided bool
 	invalid   map[string]error
-	notices   []string
+	errs      []error
 }
 
 // askTrust asks the human whether to trust a folder; nil means no human can
@@ -442,11 +446,11 @@ func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome
 	}
 	project, invalid, err := config.ProjectServers(filepath.Join(cwd, policy.ProjectMCPFile))
 	if err != nil {
-		s.notices = append(s.notices, fmt.Sprintf("Skipped this folder's MCP servers: %v", err))
+		s.errs = append(s.errs, fmt.Errorf("skipped this folder's MCP servers: %w", err))
 		return s, nil
 	}
 	for _, name := range slices.Sorted(maps.Keys(invalid)) {
-		s.notices = append(s.notices, fmt.Sprintf("MCP server %s: %v", name, invalid[name]))
+		s.errs = append(s.errs, fmt.Errorf("MCP server %s: %w", name, invalid[name]))
 		project[name] = config.MCPServer{}
 	}
 	if len(project) == 0 {

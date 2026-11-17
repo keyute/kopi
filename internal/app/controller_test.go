@@ -1770,17 +1770,18 @@ func TestStatusReportsShell(t *testing.T) {
 	assert.False(t, denied.c.Status().Shell, "an MCP tool is not the shell")
 }
 
-func TestOpenEmitsNoticesAfterTheSession(t *testing.T) {
-	h, _ := openHarness(t, Config{Notices: []string{"first", "second"}})
+func TestOpenEmitsConfigErrorsAfterTheSession(t *testing.T) {
+	first, second := errors.New("first"), errors.New("second")
+	h, _ := openHarness(t, Config{Errors: []error{first, second}})
 
 	evs := h.rec.all()
 	i := slices.IndexFunc(evs, func(ev event.Event) bool { _, ok := ev.(event.SessionChanged); return ok })
 	require.GreaterOrEqual(t, i, 0)
-	assert.Equal(t, []event.Notice{{Text: "first"}, {Text: "second"}}, ofType[event.Notice](evs[i:]))
-	assert.Empty(t, ofType[event.Notice](evs[:i]))
+	assert.Equal(t, []event.Error{{Err: first}, {Err: second}}, ofType[event.Error](evs[i:]))
+	assert.Empty(t, ofType[event.Error](evs[:i]))
 
 	require.NoError(t, h.c.NewSession(t.Context()))
-	assert.Len(t, ofType[event.Notice](h.rec.all()), 2, "a later session does not repeat them")
+	assert.Len(t, ofType[event.Error](h.rec.all()), 2, "a later session does not repeat them")
 }
 
 func serverTool(name string) tool.Tool {
@@ -1828,20 +1829,22 @@ func TestOpenWaitsForServersAndAddsTheirTools(t *testing.T) {
 	assert.Equal(t, req.SystemPrompt, again.SystemPrompt)
 }
 
-func TestOpenReportsServerFailuresAsNotices(t *testing.T) {
+func TestOpenReportsServerFailuresAsErrors(t *testing.T) {
+	first, broken := errors.New("first"), errors.New("no such command")
 	h, _ := openHarness(t, Config{
-		Notices: []string{"first"},
+		Errors: []error{first},
 		Servers: servers(
-			pigruntime.ServerStatus{Name: "broken", Err: errors.New("no such command")},
+			pigruntime.ServerStatus{Name: "broken", Err: broken},
 			pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{serverTool("mcp__s__t")}, Skipped: []string{"bad: name longer than 64 characters"}},
 		),
 	})
 
-	assert.Equal(t, []event.Notice{
-		{Text: "first"},
-		{Text: "MCP server broken failed to start: no such command"},
-		{Text: "MCP server s: skipped tool bad: name longer than 64 characters"},
-	}, ofType[event.Notice](h.rec.all()))
+	errs := ofType[event.Error](h.rec.all())
+	require.Len(t, errs, 2)
+	assert.Equal(t, first, errs[0].Err)
+	require.ErrorIs(t, errs[1].Err, broken)
+	assert.EqualError(t, errs[1].Err, "MCP server broken failed to start: no such command")
+	assert.Equal(t, []event.Notice{{Text: "MCP server s: skipped tool bad: name longer than 64 characters"}}, ofType[event.Notice](h.rec.all()))
 }
 
 func TestOpenFailsWhenServersAreInterrupted(t *testing.T) {
@@ -1908,13 +1911,14 @@ func TestStartQueuesPromptsUntilTheSessionOpens(t *testing.T) {
 	assert.NotEmpty(t, h.c.Status().SessionID)
 }
 
-func TestStartEmitsConnectingNoticeBeforeTheSession(t *testing.T) {
+func TestStartEmitsConnectingActivityBeforeTheSession(t *testing.T) {
+	first := errors.New("first")
 	srv := holdServers(pigruntime.ServerStatus{Name: "broken", Err: errors.New("no such command")})
-	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Notices: []string{"first"}, Servers: srv.wait})
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Errors: []error{first}, Servers: srv.wait})
 	changes := subscribeTo[event.SessionChanged](h.c)
 
 	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
-	assert.Equal(t, []event.Notice{{Text: "Connecting to MCP servers…"}}, ofType[event.Notice](h.rec.all()))
+	assert.Equal(t, []event.Activity{{Text: "Connecting to MCP servers…"}}, ofType[event.Activity](h.rec.all()))
 	close(srv.release)
 	receiveEvent(t, changes)
 	assertSwitchDone(t, h)
@@ -1922,15 +1926,20 @@ func TestStartEmitsConnectingNoticeBeforeTheSession(t *testing.T) {
 	evs := h.rec.all()
 	i := slices.IndexFunc(evs, func(ev event.Event) bool { _, ok := ev.(event.SessionChanged); return ok })
 	require.GreaterOrEqual(t, i, 0)
-	assert.Equal(t, []event.Notice{{Text: "Connecting to MCP servers…"}}, ofType[event.Notice](evs[:i]))
-	assert.Equal(t, []event.Notice{{Text: "first"}, {Text: "MCP server broken failed to start: no such command"}}, ofType[event.Notice](evs[i:]))
+	assert.Equal(t, []event.Activity{{Text: "Connecting to MCP servers…"}, {}}, ofType[event.Activity](evs[:i]))
+	assert.Empty(t, ofType[event.Activity](evs[i:]))
+	assert.Empty(t, ofType[event.Error](evs[:i]))
+	errs := ofType[event.Error](evs[i:])
+	require.Len(t, errs, 2)
+	assert.Equal(t, first, errs[0].Err)
+	assert.EqualError(t, errs[1].Err, "MCP server broken failed to start: no such command")
 
 	bare := newHarness(t, pigruntimetest.NewSandbox(t), Config{})
 	changes = subscribeTo[event.SessionChanged](bare.c)
 	require.NoError(t, bare.c.Start(t.Context(), OpenRequest{}))
 	receiveEvent(t, changes)
 	assertSwitchDone(t, bare)
-	assert.Empty(t, ofType[event.Notice](bare.rec.all()), "without servers there is nothing to connect to")
+	assert.Empty(t, ofType[event.Activity](bare.rec.all()), "without servers there is nothing to connect to")
 }
 
 func TestModeChosenWhileStartingCarriesIntoTheSession(t *testing.T) {
@@ -2024,6 +2033,11 @@ func TestStartReportsFailureAndKeepsQueuedInput(t *testing.T) {
 	close(srv.release)
 	require.ErrorIs(t, receiveEvent(t, errs).Err, interrupted)
 	assertSwitchDone(t, h)
+	evs := h.rec.all()
+	ended := slices.Index(evs, event.Event(event.Activity{}))
+	failed := slices.IndexFunc(evs, func(ev event.Event) bool { _, ok := ev.(event.Error); return ok })
+	require.GreaterOrEqual(t, ended, 0)
+	assert.Less(t, ended, failed, "the activity ends before the failure is reported")
 
 	assert.Empty(t, h.c.Status().SessionID)
 	_, err = h.c.Submit(t.Context(), "no session yet")
