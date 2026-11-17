@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest/mcpfake"
 )
@@ -27,6 +28,8 @@ func TestMCPStdioHelper(t *testing.T) {
 		{"name": "search", "inputSchema": map[string]any{"type": "object"}, "annotations": map[string]any{"readOnlyHint": true}},
 		{"name": "write", "inputSchema": map[string]any{"type": "object"}},
 		{"name": strings.Repeat("x", 60), "inputSchema": map[string]any{"type": "object"}},
+	}, Reply: func(name string, _ json.RawMessage) map[string]any {
+		return map[string]any{"content": []any{map[string]any{"type": "text", "text": "synthetic MCP result from " + name}}}
 	}}
 	if err := fake.ServeStdio(os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -52,6 +55,16 @@ func TestMCPListWithoutServers(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "No MCP servers configured: declare them under mcpServers in "+filepath.Join(e.kopiHome, "config.json")+" or in .mcp.json in this folder.\n", stdout)
 	assert.Equal(t, before, pigruntimetest.Snapshot(t, e.root))
+}
+
+func TestServerBlockStripsControlsFromWhere(t *testing.T) {
+	for _, where := range []string{"global (/config\x1b[31m\a\n\tpath)", "project (/config\x1b[31m\a\n\tpath)"} {
+		t.Run(strings.Split(where, " ")[0], func(t *testing.T) {
+			got := serverBlock(pigruntime.ServerStatus{Name: "fake"}, where)
+
+			assert.Equal(t, "fake  "+strings.Split(where, " ")[0]+" (/config[31m  path)\n  connected, 0 tools\n", got)
+		})
+	}
 }
 
 func TestMCPListShowsAFailedServer(t *testing.T) {

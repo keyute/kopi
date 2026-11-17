@@ -70,9 +70,10 @@ type server struct {
 	done   chan struct{} // closed once status is final
 	status ServerStatus
 
-	mu     sync.Mutex
-	client *mcp.Client
-	closed bool
+	mu        sync.Mutex
+	client    *mcp.Client
+	closed    bool
+	closeDone chan struct{} // closed after the published client's teardown
 }
 
 // StartServers begins connecting every server, each on its own goroutine, and
@@ -87,7 +88,7 @@ func startServers(ctx context.Context, cancel context.CancelFunc, o ServerOption
 	prefixes := map[string]string{}
 	for _, name := range slices.Sorted(maps.Keys(o.Servers)) {
 		life, stop := context.WithCancel(context.Background())
-		srv := &server{name: name, version: o.Version, dial: dial, life: life, stop: stop, done: make(chan struct{}), status: ServerStatus{Name: name}}
+		srv := &server{name: name, version: o.Version, dial: dial, life: life, stop: stop, done: make(chan struct{}), closeDone: make(chan struct{}), status: ServerStatus{Name: name}}
 		s.servers = append(s.servers, srv)
 		if err := tool.ValidateMCPServerName(name); err != nil {
 			srv.fail(fmt.Errorf("failed to name tools: %w", err))
@@ -184,12 +185,16 @@ func (s *Servers) Wait(ctx context.Context) []ServerStatus {
 	return s.result
 }
 
-// Close stops every server; it is safe to call more than once and before Wait.
+// Close stops every server and joins teardown and startup workers; it is safe
+// to call more than once and before Wait.
 func (s *Servers) Close() {
 	s.closeOnce.Do(func() {
 		s.cancel()
 		for _, srv := range s.servers {
 			srv.close()
+		}
+		for _, srv := range s.servers {
+			<-srv.closeDone
 		}
 		s.wg.Wait()
 	})
@@ -409,13 +414,22 @@ func (s *server) invalidate(c *mcp.Client) {
 func (s *server) close() {
 	s.stop()
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
 	s.closed = true
 	c := s.client
 	s.client = nil
 	s.mu.Unlock()
-	if c != nil {
-		s.closeClient(c)
+	if c == nil {
+		close(s.closeDone)
+		return
 	}
+	go func() {
+		defer close(s.closeDone)
+		s.closeClient(c)
+	}()
 }
 
 func (s *server) closeClient(c *mcp.Client) {

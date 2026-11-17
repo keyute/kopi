@@ -63,7 +63,7 @@ func mcpListCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if len(set.servers) == 0 && len(set.untrusted) == 0 && len(set.invalid) == 0 {
-				_, err := fmt.Fprintf(out, "No MCP servers configured: declare them under mcpServers in %s or in %s in this folder.\n", paths.ConfigFile, projectMCPFile)
+				_, err := fmt.Fprintf(out, "No MCP servers configured: declare them under mcpServers in %s or in %s in this folder.\n", printable(paths.ConfigFile, ""), projectMCPFile)
 				return err
 			}
 			servers := pigruntime.StartServers(pigruntime.ServerOptions{Servers: set.servers, CWD: cwd, Version: kopiVersion()})
@@ -87,7 +87,7 @@ func mcpListCmd() *cobra.Command {
 				blocks[name] = append(blocks[name], serverBlock(pigruntime.ServerStatus{Name: name, Err: err}, "project ("+projectFile+")"))
 			}
 			for _, name := range slices.Sorted(maps.Keys(set.untrusted)) {
-				blocks[name] = append(blocks[name], fmt.Sprintf("%s  project (%s)\n  not trusted, not started\n", printable(name, ""), projectFile))
+				blocks[name] = append(blocks[name], fmt.Sprintf("%s  project (%s)\n  not trusted, not started\n", printable(name, ""), printable(projectFile, "")))
 			}
 			var all []string
 			for _, name := range slices.Sorted(maps.Keys(blocks)) {
@@ -103,7 +103,7 @@ func mcpListCmd() *cobra.Command {
 // its tools and the tools it skipped.
 func serverBlock(st pigruntime.ServerStatus, where string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s  %s\n", printable(st.Name, ""), where)
+	fmt.Fprintf(&b, "%s  %s\n", printable(st.Name, ""), printable(where, ""))
 	if st.Err != nil {
 		fmt.Fprintf(&b, "  failed: %s\n", printable(st.Err.Error(), "    "))
 		return b.String()

@@ -385,6 +385,65 @@ func TestRootStreamsTurnFromMockServer(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(e.kopiHome, "history.jsonl"), "headless runs record no prompt history")
 }
 
+func TestRootPrintMCPTool(t *testing.T) {
+	for _, allowed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("allowed=%t", allowed), func(t *testing.T) {
+			e := newTestEnv(t)
+			e.writeServers(t, filepath.Join(e.kopiHome, "config.json"), map[string]any{"fake": map[string]any{
+				"command": os.Args[0],
+				"args":    []string{"-test.run=^TestMCPStdioHelper$"},
+				"env":     map[string]string{stdioHelperEnv: "serve"},
+			}})
+			var calls atomic.Int32
+			server := newMockProvider(t, func(w http.ResponseWriter) {
+				if calls.Add(1) == 1 {
+					w.Header().Set("Content-Type", "text/event-stream")
+					writeChunk(w, map[string]any{"role": "assistant", "content": ""}, nil)
+					writeChunk(w, map[string]any{"tool_calls": []any{map[string]any{
+						"index": 0, "id": "call_0", "type": "function",
+						"function": map[string]any{"name": "mcp__fake__search", "arguments": "{}"},
+					}}}, nil)
+					writeChunk(w, map[string]any{}, "tool_calls")
+					fmt.Fprint(w, "data: [DONE]\n\n")
+					return
+				}
+				streamText(w, "done")
+			})
+			e.writeMockModels(t, server.URL)
+			args := []string{"--model", mockModel, "-p", "search"}
+			if allowed {
+				args = append(args, "--allowed-tools", "mcp__fake__search")
+			}
+
+			stdout, _, err := execute(t, "", args...)
+
+			require.NoError(t, err)
+			assert.Equal(t, "done\n", stdout)
+			var tools []string
+			for _, tl := range server.next(t).body["tools"].([]any) {
+				tools = append(tools, tl.(map[string]any)["function"].(map[string]any)["name"].(string))
+			}
+			assert.Contains(t, tools, "mcp__fake__search")
+			var results []string
+			for _, m := range server.next(t).body["messages"].([]any) {
+				if msg := m.(map[string]any); msg["role"] == "tool" {
+					assert.Equal(t, "call_0", msg["tool_call_id"])
+					results = append(results, fmt.Sprint(msg["content"]))
+				}
+			}
+			require.Len(t, results, 1)
+			if allowed {
+				assert.Contains(t, results[0], "synthetic MCP result from search")
+				assert.NotContains(t, results[0], "needs approval")
+			} else {
+				assert.Contains(t, results[0], `tool "mcp__fake__search" needs approval`)
+				assert.Contains(t, results[0], "--allowed-tools")
+				assert.NotContains(t, results[0], "synthetic MCP result")
+			}
+		})
+	}
+}
+
 func TestRootReportsProviderFailure(t *testing.T) {
 	e := newTestEnv(t)
 	server := newMockProvider(t, func(w http.ResponseWriter) {

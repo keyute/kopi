@@ -10,8 +10,11 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/MichaelKinsy/PiG/mcp"
 	"github.com/stretchr/testify/assert"
@@ -314,6 +317,132 @@ func TestServersWaitAfterStartupCancellation(t *testing.T) {
 			require.ErrorIs(t, statuses[0].Err, ErrServerStartTimeout)
 			assert.NotErrorIs(t, statuses[0].Err, context.Canceled)
 			assert.Same(t, &statuses[0], &s.Wait(t.Context())[0])
+		})
+	}
+}
+
+// startupExpiry lets the test signal a startup deadline through a channel.
+type startupExpiry struct{ context.Context }
+
+func (c startupExpiry) Err() error {
+	if c.Context.Err() != nil {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+func TestServersWaitDoesNotJoinTeardown(t *testing.T) {
+	for _, trigger := range []string{"caller cancellation", "startup expiry"} {
+		t.Run(trigger, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, stop := context.WithTimeout(t.Context(), 10*time.Second)
+				defer stop()
+				listed := make(chan struct{})
+				closing := make(chan struct{})
+				release := make(chan struct{})
+				var releaseOnce sync.Once
+				var deletes atomic.Int32
+				fake := &mcpfake.Server{Tools: []map[string]any{echoTool("t")}, Reply: echo}
+				dial := scriptedHTTP(t, fake, func(r *http.Request) (*http.Response, error) {
+					if r.Method == http.MethodDelete {
+						if deletes.Add(1) == 1 {
+							close(closing)
+						}
+						<-release
+						return nil, nil
+					}
+					raw, err := io.ReadAll(r.Body)
+					if err != nil {
+						return nil, err
+					}
+					r.Body = io.NopCloser(strings.NewReader(string(raw)))
+					msg, err := mcp.ParseJSONRPCMessage(raw)
+					if err != nil {
+						return nil, err
+					}
+					if msg.Method == "tools/list" {
+						close(listed)
+						<-r.Context().Done()
+						return nil, r.Context().Err()
+					}
+					return nil, nil
+				})
+				startup, expire := context.WithCancel(context.Background())
+				defer expire()
+				s := startServers(startupExpiry{startup}, expire, ServerOptions{Servers: map[string]config.MCPServer{
+					"good": {Command: "fake"}, "stuck": {Command: "fake"},
+				}}, func(name string, cfg config.MCPServer) (mcp.Transport, error) {
+					if name == "good" {
+						return fake.Connect(), nil
+					}
+					return dial(name, cfg)
+				})
+				t.Cleanup(s.Close)
+				t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+				<-s.servers[0].done
+				<-listed
+				waitCtx, cancelWait := context.WithCancel(ctx)
+				defer cancelWait()
+				if trigger == "startup expiry" {
+					expire()
+				} else {
+					cancelWait()
+				}
+				waited := make(chan []ServerStatus, 1)
+				go func() { waited <- s.Wait(waitCtx) }()
+				var statuses []ServerStatus
+				select {
+				case statuses = <-waited:
+				case <-ctx.Done():
+					t.Fatal("Wait blocked on transport teardown")
+				}
+				require.NoError(t, statuses[0].Err)
+				require.ErrorIs(t, statuses[1].Err, ErrServerStartTimeout)
+				assert.Empty(t, statuses[1].Tools)
+				out, err := call(t, statuses[0].Tools[0], `{"still":"usable"}`)
+				require.NoError(t, err)
+				assert.JSONEq(t, `{"still":"usable"}`, out)
+				<-closing
+
+				closed := make(chan struct{}, 3)
+				go func() {
+					s.Close()
+					closed <- struct{}{}
+				}()
+				synctest.Wait()
+				select {
+				case <-closed:
+					t.Fatal("Close returned before transport teardown finished")
+				default:
+				}
+				assert.Same(t, &statuses[0], &s.Wait(ctx)[0])
+				for range 2 {
+					go func() {
+						s.Close()
+						closed <- struct{}{}
+					}()
+				}
+				releaseOnce.Do(func() { close(release) })
+				for range 3 {
+					select {
+					case <-closed:
+					case <-ctx.Done():
+						t.Fatal("Close did not join transport teardown")
+					}
+				}
+				s.Close()
+				assert.Equal(t, int32(1), deletes.Load())
+				assert.Same(t, &statuses[0], &s.Wait(ctx)[0])
+				assert.ErrorIs(t, statuses[1].Err, ErrServerStartTimeout)
+				assert.Empty(t, statuses[1].Tools)
+				for _, srv := range s.servers {
+					select {
+					case <-srv.done:
+					default:
+						t.Error("Close did not join startup worker")
+					}
+				}
+			})
 		})
 	}
 }
