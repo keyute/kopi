@@ -410,10 +410,10 @@ func (s *server) live(ctx context.Context) (*mcp.Client, error) {
 
 func (s *server) invalidate(c *mcp.Client) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.client == c {
 		s.client = nil
 	}
-	s.mu.Unlock()
 	s.closeClient(c)
 }
 

@@ -849,6 +849,160 @@ func TestServersHTTPExpiredSessionReconnectsWithoutReplay(t *testing.T) {
 	assert.Equal(t, int32(2), initializes.Load())
 }
 
+func TestServersCloseJoinsExpiredSessionTeardown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		closing := make(chan struct{})
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		var calls atomic.Int32
+		var deletes atomic.Int32
+		fake := &mcpfake.Server{Tools: []map[string]any{echoTool("t")}, Reply: echo}
+		dial := scriptedHTTP(t, fake, func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodDelete {
+				if deletes.Add(1) == 1 {
+					close(closing)
+				}
+				<-release
+				return nil, nil
+			}
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				return nil, err
+			}
+			r.Body = io.NopCloser(strings.NewReader(string(raw)))
+			msg, err := mcp.ParseJSONRPCMessage(raw)
+			if err != nil {
+				return nil, err
+			}
+			if msg.Method == "tools/call" {
+				calls.Add(1)
+				return &http.Response{StatusCode: http.StatusNotFound, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("expired"))}, nil
+			}
+			return nil, nil
+		})
+		s, _ := startWith(t, map[string]config.MCPServer{"srv": {Command: "fake"}}, dial)
+		t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+		st := s.Wait(t.Context())[0]
+		require.NoError(t, st.Err)
+		called := make(chan error, 1)
+		go func() {
+			_, err := call(t, st.Tools[0], `{}`)
+			called <- err
+		}()
+		<-closing
+		// Mutex waits are not durably blocked in synctest; check ownership
+		// before starting Close, which must acquire the same mutex.
+		if s.servers[0].mu.TryLock() {
+			s.servers[0].mu.Unlock()
+			t.Fatal("expired session teardown released lifecycle ownership")
+		}
+
+		closed := make(chan struct{}, 3)
+		for range 3 {
+			go func() {
+				s.Close()
+				closed <- struct{}{}
+			}()
+		}
+		<-s.servers[0].life.Done()
+		select {
+		case <-closed:
+			t.Fatal("Close returned before expired session teardown finished")
+		default:
+		}
+		releaseOnce.Do(func() { close(release) })
+		for range 3 {
+			<-closed
+		}
+		var expired *mcp.McpSessionExpiredError
+		require.ErrorAs(t, <-called, &expired)
+		s.Close()
+		assert.Equal(t, int32(1), calls.Load())
+		assert.Equal(t, int32(1), deletes.Load())
+	})
+}
+
+func TestServersEstablishedHTTPCallCancellationAndTimeout(t *testing.T) {
+	for _, action := range []string{"cancel", "timeout"} {
+		t.Run(action, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				entered := make(chan struct{})
+				release := make(chan struct{})
+				var releaseOnce sync.Once
+				var calls atomic.Int32
+				var initializes atomic.Int32
+				fake := &mcpfake.Server{Tools: []map[string]any{echoTool("t")}, Reply: echo}
+				dial := scriptedHTTP(t, fake, func(r *http.Request) (*http.Response, error) {
+					if r.Method != http.MethodPost {
+						return nil, nil
+					}
+					raw, err := io.ReadAll(r.Body)
+					if err != nil {
+						return nil, err
+					}
+					r.Body = io.NopCloser(strings.NewReader(string(raw)))
+					msg, err := mcp.ParseJSONRPCMessage(raw)
+					if err != nil {
+						return nil, err
+					}
+					if msg.Method == "initialize" {
+						initializes.Add(1)
+					}
+					if msg.Method == "tools/call" && calls.Add(1) == 1 {
+						close(entered)
+						<-release
+					}
+					return nil, nil
+				})
+				s, _ := startWith(t, map[string]config.MCPServer{"srv": {Command: "fake"}}, dial)
+				t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+				st := s.Wait(t.Context())[0]
+				require.NoError(t, st.Err)
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				called := make(chan error, 1)
+				started := time.Now()
+				go func() {
+					_, err := st.Tools[0].Run(ctx, json.RawMessage(`{}`), func(policy.Target) (policy.Mode, error) { return policy.Execute, nil })
+					called <- err
+				}()
+				<-entered
+				if action == "cancel" {
+					cancel()
+				} else {
+					<-time.NewTimer(59 * time.Second).C
+					synctest.Wait()
+					select {
+					case err := <-called:
+						t.Fatalf("call returned before configured 60s timeout: %v", err)
+					default:
+					}
+				}
+				err := <-called
+				if action == "cancel" {
+					var abort *mcp.McpAbortError
+					require.ErrorAs(t, err, &abort)
+				} else {
+					var timeout *mcp.McpTimeoutError
+					require.ErrorAs(t, err, &timeout)
+					assert.Equal(t, 60000, timeout.TimeoutMs)
+					assert.Equal(t, 60*time.Second, time.Since(started))
+				}
+				synctest.Wait()
+				assert.Equal(t, int32(1), calls.Load())
+				assert.Equal(t, int32(1), initializes.Load())
+				releaseOnce.Do(func() { close(release) })
+				synctest.Wait()
+				out, err := call(t, st.Tools[0], `{"next":true}`)
+				require.NoError(t, err)
+				assert.JSONEq(t, `{"next":true}`, out)
+				assert.Equal(t, int32(2), calls.Load())
+				assert.Equal(t, int32(1), initializes.Load())
+			})
+		})
+	}
+}
+
 func TestServersSuccessfulHTTPOutlivesConnectContext(t *testing.T) {
 	fake := &mcpfake.Server{Tools: []map[string]any{echoTool("t")}, Reply: echo}
 	s, _ := startWith(t, map[string]config.MCPServer{"srv": {Command: "fake"}}, scriptedHTTP(t, fake, nil))
