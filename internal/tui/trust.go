@@ -22,6 +22,8 @@ type TrustRequest struct {
 	Parent string
 	// Servers has one line per server, such as "name: command args".
 	Servers []string
+	// Instructions are the paths of the folder's instruction files.
+	Instructions []string
 }
 
 type TrustChoice int
@@ -143,12 +145,21 @@ func (m *trustModel) hint() string {
 func (m *trustModel) rows() []string {
 	none, width := lipgloss.NewStyle(), m.width-2
 	body := hang("", none, oneLine(m.req.Folder), none.Bold(true), width)
-	body = append(body, "")
-	body = append(body, hang("", none, "Its .mcp.json declares MCP servers that Kopi would start. They run with your permissions.", none, width)...)
-	m.dialog.body = body
-	// The footer row is the one below the dialog.
-	fixed := len(m.dialog.rows(m.width, m.height, 1, m.th)) + 1
-	body = append(body, m.serverRows(m.height-fixed, width)...)
+	if len(m.req.Instructions) > 0 {
+		body = append(body, "")
+		body = append(body, hang("", none, "Kopi would add these instruction files to the model's instructions:", none, width)...)
+		for _, path := range m.req.Instructions {
+			body = append(body, hang("  ", none, oneLine(path), fg(m.th.muted), width)...)
+		}
+	}
+	if len(m.req.Servers) > 0 {
+		body = append(body, "")
+		body = append(body, hang("", none, "Its .mcp.json declares MCP servers that Kopi would start. They run with your permissions.", none, width)...)
+		m.dialog.body = body
+		// The footer row is the one below the dialog.
+		fixed := len(m.dialog.rows(m.width, m.height, 1, m.th)) + 1
+		body = append(body, m.serverRows(m.height-fixed, width)...)
+	}
 	m.dialog.body = body
 	return m.dialog.rows(m.width, m.height, 1, m.th)
 }

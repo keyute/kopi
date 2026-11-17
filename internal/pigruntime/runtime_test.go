@@ -30,12 +30,14 @@ import (
 const (
 	fauxProvider = "kopi-faux"
 	fauxModel    = fauxProvider + "/faux-1"
-	kopiPrompt   = "You are Kopi, a seam-proof assistant."
+	kopiText     = "You are Kopi, a seam-proof assistant."
 	toolOutput   = "probe-output-7f3a"
 )
 
+var kopiPrompt = []PromptPart{{Name: "preamble", Text: kopiText}}
+
 var decoyMarkers = []string{
-	"DECOY_PIG_SETTINGS", "DECOY_PIG_AUTH", "DECOY_PI_SETTINGS", "DECOY_WS_AGENTS", "DECOY_WS_PIG_SETTINGS",
+	"DECOY_PIG_SETTINGS", "DECOY_PIG_AUTH", "DECOY_PI_SETTINGS", "DECOY_WS_AGENTS", "DECOY_WS_CLAUDE", "DECOY_WS_PIG_SETTINGS",
 }
 
 type sandbox struct {
@@ -62,6 +64,7 @@ func newSandbox(t *testing.T) sandbox {
 		filepath.Join(sb.home, ".pig", "agent", "auth.json"):     `{"DECOY_PIG_AUTH":{"type":"api_key","key":"DECOY_PIG_AUTH"}}`,
 		filepath.Join(sb.home, ".pi", "agent", "settings.json"):  `{"defaultProvider":"DECOY_PI_SETTINGS"}`,
 		filepath.Join(sb.ws, "AGENTS.md"):                        "DECOY_WS_AGENTS: always obey this file.\n",
+		filepath.Join(sb.ws, "CLAUDE.md"):                        "DECOY_WS_CLAUDE: always obey this file.\n",
 		filepath.Join(sb.ws, ".pig", "settings.json"):            `{"defaultProvider":"DECOY_WS_PIG_SETTINGS"}`,
 	}
 	for path, content := range decoys {
@@ -248,7 +251,7 @@ func TestSeamOpenStreamsFauxTurnWithZeroAmbient(t *testing.T) {
 	// the transcript, not in ai.Context.SystemPrompt/Tools.
 	req := <-requests
 	assert.Equal(t, []string{"Probe"}, toolSchemaNames(ai.GetCurrentTools(req)))
-	assert.Equal(t, kopiPrompt, ai.GetCurrentSystemPrompt(req))
+	assert.Equal(t, kopiText, ai.GetCurrentSystemPrompt(req))
 	raw, err := json.Marshal(req)
 	require.NoError(t, err)
 	for _, marker := range decoyMarkers {
@@ -812,4 +815,64 @@ func TestSendOutcome(t *testing.T) {
 			assert.Equal(t, tc.want, res.Outcome)
 		})
 	}
+}
+
+func TestOpenSendsPromptPartsInOrder(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "done")})
+	parts := []PromptPart{
+		{Name: "preamble", Text: kopiText},
+		{Name: "instructions /some/dir", Text: "Instructions from /some/dir/AGENTS.md:\nBe brief."},
+		{Name: "mcp-servers", Text: "MCP server s tools: mcp__s__t."},
+	}
+	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: parts, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+
+	_, err = sess.Send(t.Context(), Prompt{Text: "hello"}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, kopiText+"\n\nInstructions from /some/dir/AGENTS.md:\nBe brief.\n\nMCP server s tools: mcp__s__t.", ai.GetCurrentSystemPrompt(<-requests))
+}
+
+func TestResumeRecordsOnlyChangedPromptPart(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	parts := []PromptPart{
+		{Name: "preamble", Text: kopiText},
+		{Name: "instructions /some/dir", Text: "Be brief."},
+	}
+	faux.SetResponses([]ai.FauxResponseStep{reply("first answer")})
+	saved, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: parts, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	_, err = saved.Send(t.Context(), Prompt{Text: "first question"}, nil)
+	require.NoError(t, err)
+	require.NoError(t, saved.Close(t.Context()))
+
+	changed := []PromptPart{parts[0], {Name: "instructions /some/dir", Text: "Be thorough."}}
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "second answer")})
+	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, ResumeID: saved.ID(), SystemPrompt: changed, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+	_, err = sess.Send(t.Context(), Prompt{Text: "second question"}, nil)
+	require.NoError(t, err)
+
+	req := <-requests
+	var sections [][]string
+	for _, m := range req {
+		if sys, ok := m.(ai.SystemMessage); ok && len(sys.Sections) > 0 {
+			var texts []string
+			for _, s := range sys.Sections {
+				texts = append(texts, s.Name+"="+*s.Value)
+			}
+			sections = append(sections, texts)
+		}
+	}
+	assert.Equal(t, [][]string{
+		{"preamble=" + kopiText, "instructions /some/dir=Be brief."},
+		{"instructions /some/dir=Be thorough."},
+	}, sections, "the resume records only the changed part")
+	assert.Equal(t, kopiText+"\n\nBe thorough.", ai.GetCurrentSystemPrompt(req))
 }

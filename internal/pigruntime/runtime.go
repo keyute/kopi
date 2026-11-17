@@ -111,7 +111,7 @@ type OpenOptions struct {
 	ResumeID string
 	// Continue resumes the most recent session of the workspace.
 	Continue     bool
-	SystemPrompt string
+	SystemPrompt []PromptPart
 	Tools        []tool.Tool
 	Authority    *policy.Authority
 	// Rules nil means no rules.
@@ -119,6 +119,11 @@ type OpenOptions struct {
 	// Approve nil means nobody can answer, so a call needing approval is denied.
 	Approve policy.Approver
 }
+
+// PromptPart is one named piece of the system prompt. Parts are sent in
+// order, separated by a blank line; a resumed session is told only of the
+// parts whose text changed, matched by name.
+type PromptPart struct{ Name, Text string }
 
 func (r *Runtime) Open(ctx context.Context, o OpenOptions) (*Session, error) {
 	return r.open(ctx, o, policy.NewGate(o.Authority, tool.Specs(o.Tools), o.Rules, o.Approve))
@@ -184,12 +189,18 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 		}
 		allowed[t.Name] = struct{}{}
 	}
+	// Sections must be non-nil even when empty: nil with no SystemPrompt
+	// selects PiG's stock prompt.
+	sections := make(ai.OrderedSections, 0, len(o.SystemPrompt))
+	for _, p := range o.SystemPrompt {
+		sections = append(sections, ai.PromptSection{Name: p.Name, Value: &p.Text})
+	}
 	// InitialActiveToolNames must be set too: nil falls back to PiG's
 	// read/bash/edit/write defaults. An explicit Model also stops a resumed
 	// session from restoring the model it was saved with.
 	start := coding.SessionStartOptions{
 		Model:                  model,
-		SystemPrompt:           o.SystemPrompt,
+		SystemPromptSections:   sections,
 		ResourceLoader:         coding.NoResources,
 		SkipBuiltinTools:       true,
 		ExtraTools:             tools,
