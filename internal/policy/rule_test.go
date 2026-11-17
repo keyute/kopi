@@ -478,25 +478,6 @@ func TestBuiltInMCPFileAskPrecedence(t *testing.T) {
 	}
 }
 
-func TestBuiltInAsksForStartMCPFileTarget(t *testing.T) {
-	d := newDirs(t)
-	ws, err := filepath.EvalSymlinks(d.ws)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(d.ws, "servers.json"), []byte("{}"), 0o600))
-	require.NoError(t, os.Symlink("servers.json", filepath.Join(d.ws, ".mcp.json")))
-	r := d.rules(t, Source{Name: "config", Allow: []string{"*"}})
-	for _, tool := range []string{"Edit", "Write"} {
-		target := &Target{Path: filepath.Join(d.ws, "servers.json"), Real: filepath.Join(ws, "servers.json")}
-		eff, text, src := r.decide(tool, target)
-		assert.Equal(t, effectAsk, eff)
-		assert.Equal(t, tool+"(.mcp.json)", text)
-		assert.Equal(t, "built-in", src)
-
-		eff, _, _ = r.decide(tool, at(filepath.Join(ws, "other.json")))
-		assert.Equal(t, effectAllow, eff)
-	}
-}
-
 // linkedDir returns a link to a new directory and the directory's resolved path.
 func linkedDir(t *testing.T) (link, resolved string) {
 	t.Helper()
@@ -703,54 +684,4 @@ func TestRemovesKeepsToolWithExceptionInSameList(t *testing.T) {
 	assert.False(t, d.rules(t, Source{Name: "config", Deny: []string{"Edit", "*(!docs/**)"}}).Removes("Edit"))
 	other := d.rules(t, Source{Name: "config", Deny: []string{"Edit"}}, Source{Name: "flags", Deny: []string{"Edit(!docs/**)"}})
 	assert.True(t, other.Removes("Edit"))
-}
-
-func TestResolveLinks(t *testing.T) {
-	base, err := filepath.EvalSymlinks(t.TempDir())
-	require.NoError(t, err)
-	under := func(names ...string) string { return filepath.Join(append([]string{base}, names...)...) }
-	require.NoError(t, os.MkdirAll(under("real", "child"), 0o700))
-	require.NoError(t, os.WriteFile(under("real", "file"), nil, 0o600))
-	for _, l := range []struct{ name, target string }{
-		{"dangling", "servers.json"},
-		{"hop1", "hop2"},
-		{"hop2", under("hop3")},
-		{"hop3", "real/file"},
-		{"dir", "real/child"},
-		{"viasub", "real/child/../file"},
-		{"loop1", "loop2"},
-		{"loop2", "loop1"},
-		{"self", "self"},
-	} {
-		require.NoError(t, os.Symlink(l.target, under(l.name)))
-	}
-	for _, tc := range []struct {
-		name, path, want string
-		links            []string
-	}{
-		{"plain", under("real", "file"), under("real", "file"), nil},
-		{"missing tail", under("real", "missing", "deep") + "/", under("real", "missing", "deep"), nil},
-		{"under a file", under("real", "file", "x"), under("real", "file", "x"), nil},
-		{"dangling link to its target", under("dangling"), under("servers.json"), []string{under("dangling")}},
-		{"chain through every hop", under("hop1"), under("real", "file"), []string{under("hop1"), under("hop2"), under("hop3")}},
-		{"directory link on the path", under("dir", "x", "y"), under("real", "child", "x", "y"), []string{under("dir")}},
-		{"dot dot after a link", under("dir") + "/../file", under("real", "file"), []string{under("dir"), under("real", "child")}},
-		{"dot dot past a directory", under("real", "child") + "/../file", under("real", "file"), []string{under("real", "child")}},
-		{"link through a directory and dot dot", under("viasub"), under("real", "file"), []string{under("viasub"), under("real", "child")}},
-		{"dot dot past a missing name", under("real", "missing") + "/../file", under("real", "file"), []string{under("real", "missing")}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			resolved, links := ResolveLinks(tc.path)
-			assert.Equal(t, tc.want, resolved)
-			assert.Equal(t, tc.links, links)
-			assert.Equal(t, tc.want, Resolve(tc.path))
-		})
-	}
-	t.Run("cycle", func(t *testing.T) {
-		for _, name := range []string{"loop1", "self"} {
-			resolved, links := ResolveLinks(under(name, "x"))
-			assert.Len(t, links, maxLinks+1, name)
-			assert.Equal(t, filepath.Join(links[len(links)-1], "x"), resolved, name)
-		}
-	})
 }

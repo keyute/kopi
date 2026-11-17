@@ -1,0 +1,45 @@
+package pigruntime
+
+import (
+	"context"
+	"slices"
+
+	"github.com/MichaelKinsy/PiG/coding/extension/builtin/toolsearch"
+
+	"github.com/keyute/kopi/internal/tool"
+)
+
+// LoadTools makes the named tools callable from the next model request of
+// the Send that supplied ctx to a tool. Names the session does not have are
+// ignored.
+func LoadTools(ctx context.Context, names []string) error {
+	s, ok := ctx.Value(turnSessionKey{}).(*Session)
+	if !ok {
+		return ErrNoTurn
+	}
+	s.toolsMu.Lock()
+	defer s.toolsMu.Unlock()
+	active := s.inner.ActiveToolNames()
+	for _, name := range names {
+		if !slices.Contains(active, name) {
+			active = append(active, name)
+		}
+	}
+	s.inner.SetActiveToolsByName(active)
+	return nil
+}
+
+// RankTools returns the names of at most limit tools matching query by name
+// and description, best first.
+func RankTools(query string, tools []tool.Tool, limit int) []string {
+	docs := make([]toolsearch.Document, 0, len(tools))
+	for _, t := range tools {
+		docs = append(docs, toolsearch.Document{Name: t.Name, Text: t.Description})
+	}
+	matches := toolsearch.NewBm25Ranker().Rank(query, docs, limit)
+	names := make([]string, 0, len(matches))
+	for _, m := range matches {
+		names = append(names, m.Name)
+	}
+	return names
+}

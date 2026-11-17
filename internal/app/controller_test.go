@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/png"
 	"os"
@@ -830,7 +831,7 @@ func TestCloseDiscardsDeregisteredSwitchWorkBeforeDelayedStart(t *testing.T) {
 	require.True(t, h.c.Interrupt())
 	_, err = h.c.Submit(t.Context(), "later [image #1]", pngFile(t))
 	require.NoError(t, err)
-	op, err := h.c.beginSwitch()
+	op, err := h.c.beginSwitch(nil)
 	require.NoError(t, err)
 	// Delay the async starter explicitly so Close wins life after settlement.
 	start := make(chan struct{})
@@ -839,7 +840,7 @@ func TestCloseDiscardsDeregisteredSwitchWorkBeforeDelayedStart(t *testing.T) {
 		<-start
 		h.c.life.Lock()
 		defer h.c.life.Unlock()
-		err := h.c.startSwitch(t.Context(), OpenRequest{ResumeID: "no-such-session"}, op)
+		err := h.c.startSwitch(t.Context(), OpenRequest{ResumeID: "no-such-session"}, op, nil)
 		if err != nil {
 			h.c.relay.emit(event.Error{Err: err})
 		}
@@ -1699,7 +1700,7 @@ func TestNewAndResumeCommandsStartInConfiguredMode(t *testing.T) {
 	assertSwitchDone(t, h)
 	assert.Equal(t, policy.Execute, h.c.Status().Mode)
 	assert.Equal(t, []event.ModeChanged{
-		{Mode: policy.Execute}, {Mode: policy.Plan}, {Mode: policy.Execute}, {Mode: policy.Plan}, {Mode: policy.Execute},
+		{Mode: policy.Plan}, {Mode: policy.Execute}, {Mode: policy.Plan}, {Mode: policy.Execute},
 	}, ofType[event.ModeChanged](h.rec.all()))
 }
 
@@ -1782,6 +1783,334 @@ func TestOpenEmitsNoticesAfterTheSession(t *testing.T) {
 	assert.Len(t, ofType[event.Notice](h.rec.all()), 2, "a later session does not repeat them")
 }
 
+func serverTool(name string) tool.Tool {
+	t := testTool(name, policy.Read, func(context.Context, json.RawMessage) (string, error) { return "", nil })
+	t.Deferred = true
+	return t
+}
+
+func toolNames(tools []tool.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		names = append(names, t.Name)
+	}
+	return names
+}
+
+func servers(statuses ...pigruntime.ServerStatus) func(context.Context) ([]pigruntime.ServerStatus, error) {
+	return func(context.Context) ([]pigruntime.ServerStatus, error) { return statuses, nil }
+}
+
+func TestOpenWaitsForServersAndAddsTheirTools(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	read, mcp := readTool(t, sb), serverTool("mcp__s__t")
+	h := newHarness(t, sb, Config{
+		Tools:   []tool.Tool{read},
+		Servers: servers(pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{mcp}, Instructions: "use t wisely"}),
+	})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	requests := make(chan pigruntimetest.Request, 2)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "done"), pigruntimetest.Capture(t, requests, "done")})
+
+	h.turn(t, "what can you use?")
+
+	req := receive(t, requests)
+	assert.Equal(t, []string{"Read", "ToolSearch"}, req.ToolNames)
+	search := tool.NewToolSearch(nil, nil, nil)
+	assert.Equal(t, systemPrompt(sb.Workspace, []tool.Tool{read, search, mcp}, []mcpServer{{name: "s", instructions: "use t wisely", tools: []string{mcp.Name}}}), req.SystemPrompt)
+	assert.Contains(t, req.SystemPrompt, "use t wisely")
+	assert.Contains(t, req.SystemPrompt, "MCP server s tools: mcp__s__t.")
+
+	require.NoError(t, h.c.NewSession(t.Context()))
+	h.turn(t, "and now?")
+	again := receive(t, requests)
+	assert.Equal(t, req.ToolNames, again.ToolNames, "a later session keeps the server tools")
+	assert.Equal(t, req.SystemPrompt, again.SystemPrompt)
+}
+
+func TestOpenReportsServerFailuresAsNotices(t *testing.T) {
+	h, _ := openHarness(t, Config{
+		Notices: []string{"first"},
+		Servers: servers(
+			pigruntime.ServerStatus{Name: "broken", Err: errors.New("no such command")},
+			pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{serverTool("mcp__s__t")}, Skipped: []string{"bad: name longer than 64 characters"}},
+		),
+	})
+
+	assert.Equal(t, []event.Notice{
+		{Text: "first"},
+		{Text: "MCP server broken failed to start: no such command"},
+		{Text: "MCP server s: skipped tool bad: name longer than 64 characters"},
+	}, ofType[event.Notice](h.rec.all()))
+}
+
+func TestOpenFailsWhenServersAreInterrupted(t *testing.T) {
+	interrupted := errors.New("startup was interrupted")
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{
+		Servers: func(context.Context) ([]pigruntime.ServerStatus, error) { return nil, interrupted },
+	})
+
+	require.ErrorIs(t, h.c.Open(t.Context(), OpenRequest{}), interrupted)
+
+	assert.Empty(t, h.c.Status().SessionID)
+	assert.Empty(t, ofType[event.SessionChanged](h.rec.all()))
+}
+
+// heldServers is a Servers that blocks until release is closed, then returns
+// statuses and err; cancelled is closed if its ctx ends first.
+type heldServers struct {
+	statuses           []pigruntime.ServerStatus
+	err                error
+	release, cancelled chan struct{}
+}
+
+func holdServers(statuses ...pigruntime.ServerStatus) *heldServers {
+	return &heldServers{statuses: statuses, release: make(chan struct{}), cancelled: make(chan struct{})}
+}
+
+func (s *heldServers) wait(ctx context.Context) ([]pigruntime.ServerStatus, error) {
+	select {
+	case <-s.release:
+		return s.statuses, s.err
+	case <-ctx.Done():
+		close(s.cancelled)
+		return nil, ctx.Err()
+	}
+}
+
+func TestStartQueuesPromptsUntilTheSessionOpens(t *testing.T) {
+	srv := holdServers()
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Servers: srv.wait})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "both answered")})
+	queued := subscribeTo[event.QueueChanged](h.c)
+	starts := subscribeTo[event.TurnStart](h.c)
+	ends := turnEnds(h.c)
+
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	for i, want := range [][]string{{"first"}, {"first", "second"}} {
+		w, err := h.c.Submit(t.Context(), want[i])
+		require.NoError(t, err)
+		assert.Nil(t, w)
+		assert.Equal(t, want, receiveEvent(t, queued).Pending)
+	}
+	status := h.c.Status()
+	assert.Empty(t, status.SessionID)
+	assert.False(t, status.Busy)
+	assert.False(t, h.c.Interrupt())
+
+	close(srv.release)
+	assert.Equal(t, "first\n\nsecond", receiveEvent(t, starts).Prompt)
+	assert.Empty(t, receiveEvent(t, queued).Pending)
+	assert.Equal(t, event.Outcome{Status: event.Completed}, receiveEnd(t, ends).Outcome)
+	assert.Equal(t, []string{"first\n\nsecond"}, receive(t, requests).UserTexts)
+	assert.Equal(t, 1, h.faux.CallCount())
+	assert.NotEmpty(t, h.c.Status().SessionID)
+}
+
+func TestStartEmitsConnectingNoticeBeforeTheSession(t *testing.T) {
+	srv := holdServers(pigruntime.ServerStatus{Name: "broken", Err: errors.New("no such command")})
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Notices: []string{"first"}, Servers: srv.wait})
+	changes := subscribeTo[event.SessionChanged](h.c)
+
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	assert.Equal(t, []event.Notice{{Text: "Connecting to MCP servers…"}}, ofType[event.Notice](h.rec.all()))
+	close(srv.release)
+	receiveEvent(t, changes)
+	assertSwitchDone(t, h)
+
+	evs := h.rec.all()
+	i := slices.IndexFunc(evs, func(ev event.Event) bool { _, ok := ev.(event.SessionChanged); return ok })
+	require.GreaterOrEqual(t, i, 0)
+	assert.Equal(t, []event.Notice{{Text: "Connecting to MCP servers…"}}, ofType[event.Notice](evs[:i]))
+	assert.Equal(t, []event.Notice{{Text: "first"}, {Text: "MCP server broken failed to start: no such command"}}, ofType[event.Notice](evs[i:]))
+
+	bare := newHarness(t, pigruntimetest.NewSandbox(t), Config{})
+	changes = subscribeTo[event.SessionChanged](bare.c)
+	require.NoError(t, bare.c.Start(t.Context(), OpenRequest{}))
+	receiveEvent(t, changes)
+	assertSwitchDone(t, bare)
+	assert.Empty(t, ofType[event.Notice](bare.rec.all()), "without servers there is nothing to connect to")
+}
+
+func TestModeChosenWhileStartingCarriesIntoTheSession(t *testing.T) {
+	srv := holdServers()
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Mode: policy.Plan, Servers: srv.wait})
+	changes := subscribeTo[event.SessionChanged](h.c)
+
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	assert.Equal(t, policy.Plan, h.c.Status().Mode)
+	_, err := h.c.Submit(t.Context(), "/execute")
+	require.NoError(t, err)
+	h.c.ToggleMode()
+	h.c.ToggleMode()
+	assert.Equal(t, policy.Execute, h.c.Status().Mode)
+
+	close(srv.release)
+	receiveEvent(t, changes)
+	assertSwitchDone(t, h)
+	assert.Equal(t, policy.Execute, h.c.Status().Mode)
+	assert.Equal(t, []event.ModeChanged{{Mode: policy.Execute}, {Mode: policy.Plan}, {Mode: policy.Execute}}, ofType[event.ModeChanged](h.rec.all()))
+}
+
+func TestSwitchCommandsAreBusyWhileStarting(t *testing.T) {
+	srv := holdServers()
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Servers: srv.wait})
+	changes := subscribeTo[event.SessionChanged](h.c)
+
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	for _, cmd := range []string{"/new", "/resume some-session"} {
+		_, err := h.c.Submit(t.Context(), cmd)
+		assert.ErrorIs(t, err, ErrBusy, cmd)
+	}
+
+	close(srv.release)
+	receiveEvent(t, changes)
+	assertSwitchDone(t, h)
+	assert.Len(t, ofType[event.SessionChanged](h.rec.all()), 1)
+}
+
+func TestTakeQueuedWhileStarting(t *testing.T) {
+	srv := holdServers()
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Servers: srv.wait})
+	changes := subscribeTo[event.SessionChanged](h.c)
+
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	_, err := h.c.Submit(t.Context(), "take me back")
+	require.NoError(t, err)
+	assert.Equal(t, []event.Input{{Text: "take me back"}}, h.c.TakeQueued())
+	assert.Nil(t, h.c.TakeQueued())
+	assert.Equal(t, []event.QueueChanged{{Pending: []string{"take me back"}}, {Pending: []string{}}}, ofType[event.QueueChanged](h.rec.all()))
+
+	close(srv.release)
+	receiveEvent(t, changes)
+	assertSwitchDone(t, h)
+	assert.False(t, h.c.Status().Busy)
+	assert.Zero(t, h.faux.CallCount())
+}
+
+func TestCloseWhileStartingEndsTheWait(t *testing.T) {
+	srv := holdServers()
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Servers: srv.wait})
+	ignore := goleak.IgnoreCurrent()
+
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	_, err := h.c.Submit(t.Context(), "never sent")
+	require.NoError(t, err)
+	require.NoError(t, h.c.Close(t.Context()))
+	delivered := len(h.rec.all())
+	wait(t, srv.cancelled)
+	goleak.VerifyNone(t, ignore)
+
+	assert.Nil(t, h.c.sess)
+	assert.Empty(t, h.c.Status().SessionID)
+	assert.Empty(t, ofType[event.SessionChanged](h.rec.all()))
+	assert.Len(t, h.rec.all(), delivered, "no event may be delivered after Close returned")
+	assert.Zero(t, h.faux.CallCount())
+}
+
+func TestStartReportsFailureAndKeepsQueuedInput(t *testing.T) {
+	interrupted := errors.New("startup was interrupted")
+	srv := holdServers()
+	srv.err = interrupted
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Servers: srv.wait})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("fresh")})
+	errs := subscribeTo[event.Error](h.c)
+	changes := subscribeTo[event.SessionChanged](h.c)
+
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	_, err := h.c.Submit(t.Context(), "keep me")
+	require.NoError(t, err)
+	close(srv.release)
+	require.ErrorIs(t, receiveEvent(t, errs).Err, interrupted)
+	assertSwitchDone(t, h)
+
+	assert.Empty(t, h.c.Status().SessionID)
+	_, err = h.c.Submit(t.Context(), "no session yet")
+	assert.ErrorIs(t, err, ErrNoSession)
+	assert.Equal(t, []event.Input{{Text: "keep me"}}, h.c.TakeQueued())
+
+	_, err = h.c.Submit(t.Context(), "/new")
+	require.NoError(t, err)
+	changed := receiveEvent(t, changes)
+	assertSwitchDone(t, h)
+	assert.Equal(t, changed.SessionID, h.c.Status().SessionID)
+	assert.Equal(t, event.Outcome{Status: event.Completed}, h.turn(t, "after").Outcome())
+}
+
+func TestBareDenyRemovesServerTool(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	read, kept, denied := readTool(t, sb), serverTool("mcp__s__kept"), serverTool("mcp__s__denied")
+	rules, err := policy.NewRules(sb.Workspace, sb.Home, map[string]policy.ToolSpec{"Read": {}}, policy.Source{Name: "test", Deny: []string{denied.Name}})
+	require.NoError(t, err)
+	h := newHarness(t, sb, Config{
+		Tools:   []tool.Tool{read},
+		Rules:   rules,
+		Servers: servers(pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{denied, kept}}),
+	})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "done")})
+
+	h.turn(t, "what can you use?")
+
+	req := receive(t, requests)
+	assert.Equal(t, []string{"Read", "ToolSearch"}, req.ToolNames)
+	assert.Equal(t, []string{"Read", "ToolSearch", kept.Name}, toolNames(h.c.tools))
+	assert.NotContains(t, req.SystemPrompt, denied.Name)
+}
+
+func TestOpenDefersServerTools(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	read, a, b := readTool(t, sb), serverTool("mcp__s__a"), serverTool("mcp__s__b")
+	h := newHarness(t, sb, Config{
+		Tools:   []tool.Tool{read},
+		Servers: servers(pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{a, b}}),
+	})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	require.Equal(t, []string{"Read", "ToolSearch", a.Name, b.Name}, toolNames(h.c.tools))
+	for i, deferred := range []bool{false, false, true, true} {
+		assert.Equal(t, deferred, h.c.tools[i].Deferred, h.c.tools[i].Name)
+	}
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(pigruntimetest.Call{Name: "ToolSearch", ID: "call-1", Args: map[string]any{"query": a.Name}}),
+		pigruntimetest.Capture(t, requests, "done"),
+	})
+
+	h.turn(t, "load a")
+
+	ends := ofType[event.ToolEnd](h.rec.all())
+	require.Len(t, ends, 1)
+	assert.False(t, ends[0].IsError, "ToolSearch runs in plan mode without asking")
+	assert.ElementsMatch(t, []string{"Read", "ToolSearch", a.Name}, receive(t, requests).ToolNames)
+}
+
+func TestNoToolSearchWithoutServerTools(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	read := readTool(t, sb)
+	h := newHarness(t, sb, Config{Tools: []tool.Tool{read}})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	assert.Equal(t, []string{"Read"}, toolNames(h.c.tools))
+	assert.Contains(t, h.c.prompt, "\nTools available: Read.\n")
+	assert.NotContains(t, h.c.prompt, "deferred")
+
+	denySB := pigruntimetest.NewSandbox(t)
+	denied := serverTool("mcp__s__denied")
+	rules, err := policy.NewRules(denySB.Workspace, denySB.Home, map[string]policy.ToolSpec{"Read": {}}, policy.Source{Name: "test", Deny: []string{denied.Name}})
+	require.NoError(t, err)
+	h = newHarness(t, denySB, Config{
+		Tools:   []tool.Tool{readTool(t, denySB)},
+		Rules:   rules,
+		Servers: servers(pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{denied}}),
+	})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	assert.Equal(t, []string{"Read"}, toolNames(h.c.tools))
+	assert.Contains(t, h.c.prompt, "\nTools available: Read.\n")
+	assert.NotContains(t, h.c.prompt, "deferred")
+	assert.NotContains(t, h.c.prompt, "MCP server s tools")
+}
+
 func TestResumeWithoutIDIsMissingArgument(t *testing.T) {
 	h, _ := openHarness(t, Config{})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("still here")})
@@ -1804,14 +2133,23 @@ func TestOpenErrorsPassThrough(t *testing.T) {
 		want  error
 	}{
 		{name: "continue without sessions", req: OpenRequest{Continue: true}, want: pigruntime.ErrSessionNotFound},
+		{name: "resume a missing session", req: OpenRequest{ResumeID: "no-such-session"}, want: pigruntime.ErrSessionNotFound},
 		{name: "unknown model", model: fauxProvider + "/missing", want: pigruntime.ErrUnknownModel},
 		{name: "missing credential", model: "openai-codex/" + codex[0].ID, want: pigruntime.ErrNoCredential},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Model: tc.model})
+			h := newHarness(t, pigruntimetest.NewSandbox(t), Config{
+				Model: tc.model,
+				Servers: func(context.Context) ([]pigruntime.ServerStatus, error) {
+					t.Error("the servers were waited for before the check")
+					return nil, nil
+				},
+			})
 			require.ErrorIs(t, h.c.Open(t.Context(), tc.req), tc.want)
+			require.ErrorIs(t, h.c.Start(t.Context(), tc.req), tc.want)
 			_, err := h.c.Submit(t.Context(), "hello")
 			assert.ErrorIs(t, err, ErrNoSession)
+			assert.Empty(t, h.rec.all())
 		})
 	}
 }

@@ -110,9 +110,16 @@ func (r *Runtime) Open(ctx context.Context, o OpenOptions) (*Session, error) {
 	return r.open(ctx, o, policy.NewGate(o.Authority, tool.Specs(o.Tools), o.Rules, o.Approve))
 }
 
-// open takes the gate separately so a test can install one that does not
-// know every tool.
-func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*Session, error) {
+// Check reports, without creating a session, the failures Open would report
+// that do not depend on o's tools.
+func (r *Runtime) Check(ctx context.Context, o OpenOptions) error {
+	_, err := r.check(ctx, o)
+	return err
+}
+
+// check returns the model o names once every tool-independent precondition
+// of open holds.
+func (r *Runtime) check(ctx context.Context, o OpenOptions) (*ai.Model, error) {
 	if o.ResumeID != "" && o.Continue {
 		return nil, errors.New("failed to open session: resume id and continue are mutually exclusive")
 	}
@@ -128,12 +135,39 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	if !ok {
 		return nil, fmt.Errorf("failed to open session: provider %q: %w", provider, ErrNoCredential)
 	}
+	if o.ResumeID == "" && !o.Continue {
+		return model, nil
+	}
+	// The listing is checked here because PiG reports a missing session only
+	// as unwrapped error text.
+	infos, err := r.Sessions()
+	if err != nil {
+		return nil, fmt.Errorf("failed to open session: %w", err)
+	}
+	switch {
+	case o.ResumeID != "" && !slices.ContainsFunc(infos, func(info SessionInfo) bool { return info.ID == o.ResumeID }):
+		return nil, fmt.Errorf("failed to open session: session %q: %w", o.ResumeID, ErrSessionNotFound)
+	case o.Continue && len(infos) == 0:
+		return nil, fmt.Errorf("failed to open session: no session to continue: %w", ErrSessionNotFound)
+	}
+	return model, nil
+}
+
+// open takes the gate separately so a test can install one that does not
+// know every tool.
+func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*Session, error) {
+	model, err := r.check(ctx, o)
+	if err != nil {
+		return nil, err
+	}
 	tools := make([]agent.AgentTool, 0, len(o.Tools))
 	names := make([]string, 0, len(o.Tools))
 	allowed := make(map[string]struct{}, len(o.Tools))
 	for _, t := range o.Tools {
 		tools = append(tools, agentTool{tool: t, gate: gate})
-		names = append(names, t.Name)
+		if !t.Deferred {
+			names = append(names, t.Name)
+		}
 		allowed[t.Name] = struct{}{}
 	}
 	// InitialActiveToolNames must be set too: nil falls back to PiG's
@@ -152,40 +186,20 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	var sess *coding.Session
 	switch {
 	case o.ResumeID != "":
-		sess, err = r.resume(o.ResumeID, start)
+		sess, err = r.rt.Resume(o.ResumeID, start)
 	case o.Continue:
-		sess, err = r.continueLatest(start)
+		sess, err = r.rt.Continue(start)
 	default:
 		sess, err = r.rt.New(start)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to open session: %w", err)
 	}
+	// With SkipBuiltinTools PiG activates every ExtraTool whatever
+	// InitialActiveToolNames says, and a resumed session restores the tools
+	// its transcript last declared, so deferred tools are deactivated here.
+	sess.SetActiveToolsByName(names)
 	return &Session{inner: sess}, nil
-}
-
-// resume and continueLatest check the listing first because PiG reports a
-// missing session only as unwrapped error text.
-func (r *Runtime) resume(id string, start coding.SessionStartOptions) (*coding.Session, error) {
-	infos, err := r.Sessions()
-	if err != nil {
-		return nil, err
-	}
-	if !slices.ContainsFunc(infos, func(info SessionInfo) bool { return info.ID == id }) {
-		return nil, fmt.Errorf("session %q: %w", id, ErrSessionNotFound)
-	}
-	return r.rt.Resume(id, start)
-}
-
-func (r *Runtime) continueLatest(start coding.SessionStartOptions) (*coding.Session, error) {
-	infos, err := r.Sessions()
-	if err != nil {
-		return nil, err
-	}
-	if len(infos) == 0 {
-		return nil, fmt.Errorf("no session to continue: %w", ErrSessionNotFound)
-	}
-	return r.rt.Continue(start)
 }
 
 // hasCredential relies on PiG's CheckAuth returning (nil, nil) when the

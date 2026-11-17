@@ -58,14 +58,11 @@ func seatbeltPrefix(p Policy) []string {
 		}
 		return keys
 	}
-	protected, links := forms(p.DenyRead, p.DenyWrite)
-	writeForms, _ := forms(p.Write)
-	denyReadForms, _ := forms(p.DenyRead)
-	write := define("WRITE", writeForms)
-	denyRead := define("DENY_READ", denyReadForms)
+	protected := forms(p.DenyRead, p.DenyWrite)
+	write := define("WRITE", forms(p.Write))
+	denyRead := define("DENY_READ", forms(p.DenyRead))
 	denyWrite := define("DENY_WRITE", protected)
-	denyLinks := define("DENY_LINK", links)
-	ancestors := define("ANCESTOR", appendNew(ancestors(slices.Concat(protected, links)), links...))
+	ancestors := define("ANCESTOR", ancestors(protected))
 	names := define("DENY_WRITE_NAME", nameRegexes(p.DenyWriteNames))
 
 	literal := func(k string) string { return `(literal (param "` + k + `"))` }
@@ -83,18 +80,13 @@ func seatbeltPrefix(p Policy) []string {
 	rule(&b, "allow file-write*", write, subpath)
 	// literal beside subpath also stops first-time creation of a missing path.
 	rule(&b, "deny file-write*", denyWrite, exact)
-	// A symlink on the way to a protected path must not be re-pointed. Only
-	// literal: a link such as /tmp, or a symlinked parent of the workspace, is
-	// also a prefix of paths that must stay writable.
-	rule(&b, "deny file-write*", denyLinks, literal)
 	rule(&b, "deny file-write*", names, func(k string) string { return `(regex (param "` + k + `"))` })
 	if p.Network {
 		b.WriteString(networkPolicy)
 	}
 	b.WriteString(denyPolicy)
-	// Renaming an ancestor, or a symlink on the way, would move a protected
-	// path out from under its rule, and a missing ancestor could be planted as
-	// a symlink.
+	// Renaming an ancestor would move a protected path out from under its
+	// rule, and a missing ancestor could be planted as a symlink.
 	rule(&b, "deny file-write-unlink file-write-create", ancestors, literal)
 	// A write root must not be renamed away or replaced; a missing one may
 	// still be created.
@@ -117,22 +109,20 @@ func rule(b *strings.Builder, head string, keys []string, filter func(string) st
 }
 
 // forms keeps a cleaned lexical alias only when it names the resolved target:
-// cleaning link/.. first could introduce a rule for an unrelated path. links
-// are the symlinks passed while resolving the forms kept.
-func forms(lists ...[]string) (out, links []string) {
+// cleaning link/.. first could introduce a rule for an unrelated path.
+func forms(lists ...[]string) []string {
+	var out []string
 	for _, list := range lists {
 		for _, p := range list {
-			resolved, via := policy.ResolveLinks(p)
+			resolved := policy.Resolve(p)
 			clean := filepath.Clean(p)
-			if cleanResolved, cleanVia := policy.ResolveLinks(clean); cleanResolved == resolved {
+			if policy.Resolve(clean) == resolved {
 				out = appendNew(out, clean)
-				links = appendNew(links, cleanVia...)
 			}
 			out = appendNew(out, resolved)
-			links = appendNew(links, via...)
 		}
 	}
-	return out, links
+	return out
 }
 
 // nameRegexes match a path ending in one of names in any letter case, as

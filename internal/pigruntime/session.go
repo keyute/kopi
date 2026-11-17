@@ -29,6 +29,8 @@ type Session struct {
 	listenersMu sync.Mutex
 	listeners   []listener
 	nextID      int
+	// toolsMu serializes LoadTools' read-modify-write of the active tools.
+	toolsMu sync.Mutex
 }
 
 type listener struct {
@@ -116,7 +118,10 @@ type SendResult struct {
 	Undelivered []Prompt
 }
 
-type turnInterruptKey struct{}
+type (
+	turnInterruptKey struct{}
+	turnSessionKey   struct{}
+)
 
 type turnInterrupt struct {
 	mu    sync.Mutex
@@ -176,7 +181,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (Sen
 	// Retirement is serialized with interruption and precedes releasing send
 	// ownership, so a hook retaining ctx cannot abort the next Send.
 	defer interrupt.retire()
-	toolCtx := context.WithValue(ctx, turnInterruptKey{}, interrupt)
+	toolCtx := context.WithValue(context.WithValue(ctx, turnInterruptKey{}, interrupt), turnSessionKey{}, s)
 	abort := func() { interrupt.interrupt() }
 	abortInLoop := abortOnEvent(ctx, abort)
 	// handed is the handed-over prompts not yet delivered. Send is the only

@@ -21,6 +21,9 @@ type Tool struct {
 	// PlanSandboxed reports that in plan mode the OS keeps the tool's calls
 	// from writing the workspace.
 	PlanSandboxed bool
+	// Deferred keeps the tool out of the model's tool list until ToolSearch
+	// loads it.
+	Deferred bool
 	// Run must acquire a nonmutating operation, call admit with its bound
 	// target before reading content or modifying files, and use that operation.
 	// admit returns the mode the call is admitted under.

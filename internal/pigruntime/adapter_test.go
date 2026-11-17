@@ -503,15 +503,24 @@ func TestSessionMCPAdmission(t *testing.T) {
 			sb := newSandbox(t)
 			r, faux := newTestRuntime(t, sb)
 			requests := make(chan []ai.Message, 1)
-			faux.SetResponses([]ai.FauxResponseStep{callTool(st.Tools[0].Name, "mcp-call"), captureRequest(requests, "done")})
+			search := ai.FauxAssistantMessage(
+				ai.FauxContentBlocks{ai.FauxToolCall("ToolSearch", map[string]any{"query": st.Tools[0].Name}, &ai.FauxToolCallOptions{ID: "search"})},
+				ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)},
+			)
+			faux.SetResponses([]ai.FauxResponseStep{search, callTool(st.Tools[0].Name, "mcp-call"), captureRequest(requests, "done")})
 			rules, err := policy.NewRules(sb.ws, sb.kopiHome, tool.Specs(st.Tools), policy.Source{Name: "test", Allow: tc.allow})
 			require.NoError(t, err)
-			sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, Tools: st.Tools, Authority: policy.NewAuthority(), Approve: tc.approve, Rules: rules})
+			tools := append([]tool.Tool{tool.NewToolSearch(st.Tools, RankTools, LoadTools)}, st.Tools...)
+			sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, Tools: tools, Authority: policy.NewAuthority(), Approve: tc.approve, Rules: rules})
 			require.NoError(t, err)
 			t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
 			_, err = sess.Send(t.Context(), Prompt{Text: "read"}, nil)
 			require.NoError(t, err)
-			result := lastToolResult(t, <-requests)
+			msgs := <-requests
+			texts := toolResultTexts(msgs)
+			require.Len(t, texts, 2)
+			assert.Contains(t, texts[0], "Loaded 1 tool")
+			result := lastToolResult(t, msgs)
 			assert.Equal(t, tc.wantCalls, calls.Load())
 			if tc.wantCalls == 1 {
 				assert.Equal(t, "MCP reply", result)

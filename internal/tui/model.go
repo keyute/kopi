@@ -355,7 +355,7 @@ func (m *model) submitted(err error) tea.Cmd {
 	case err == nil:
 		m.composer.reset()
 	case errors.Is(err, app.ErrBusy):
-		return m.flash("busy switching sessions")
+		return m.flash("busy opening a session")
 	default:
 		m.tr.Apply(event.Error{Err: err})
 		m.relayout()

@@ -21,6 +21,7 @@ import (
 
 	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/config"
+	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/headless"
 	"github.com/keyute/kopi/internal/history"
 	"github.com/keyute/kopi/internal/pigruntime"
@@ -282,10 +283,12 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	if set.undecided {
 		slog.Warn("this folder is not trusted, so the MCP servers in its " + policy.ProjectMCPFile + " are skipped; run kopi here in a terminal to be asked whether to trust it")
 	}
-	// From here until the session is open, SIGINT does not kill Kopi but ends
-	// startup at the wait for servers or at Open: stdio servers run in their
-	// own process group, so the terminal's SIGINT does not reach them, and the
-	// deferred Close must run. ctx outlives startup as the runtime's signal.
+	// From here until the frontend runs, SIGINT does not kill Kopi: stdio
+	// servers run in their own process group, so the terminal's SIGINT does not
+	// reach them, and the deferred Close must run. In print mode it ends startup
+	// at the wait for servers or at Open; in fullscreen the wait runs behind the
+	// interface and ends when the interface is quit (c.Close). ctx outlives
+	// startup as the runtime's signal.
 	startCtx, stopStart := signal.NotifyContext(ctx, os.Interrupt)
 	defer stopStart()
 	// workRunning is set when Close leaves work running; see below.
@@ -312,23 +315,6 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		}
 	}()
 	tools := []tool.Tool{tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb), tool.NewShell(cwd, planSB))}
-	statuses, err := waitServers(startCtx, servers)
-	if err != nil {
-		return err
-	}
-	notices := set.notices
-	instructions := map[string]string{}
-	for _, st := range statuses {
-		if st.Err != nil {
-			notices = append(notices, fmt.Sprintf("MCP server %s failed to start: %v", st.Name, st.Err))
-			continue
-		}
-		tools = append(tools, st.Tools...)
-		for _, skipped := range st.Skipped {
-			notices = append(notices, fmt.Sprintf("MCP server %s: skipped tool %s", st.Name, skipped))
-		}
-		instructions[st.Name] = st.Instructions
-	}
 	rules, err := permissionRules(cwd, userHome, tools, resolved.Config.Permissions, resolved.Origins, flagRules)
 	if err != nil {
 		return err
@@ -348,13 +334,6 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	if unavailable != nil {
 		slog.Warn("sandbox is unavailable; Bash runs without it and needs approval or an allow rule, and plan mode refuses it", "err", unavailable)
 	}
-	// The headless frontend shows no notices.
-	if !fullscreen {
-		for _, n := range notices {
-			slog.Warn(printable(n, "    "))
-		}
-	}
-
 	rt, err := openRuntime(ctx, paths, cwd)
 	if err != nil {
 		return err
@@ -367,7 +346,10 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// Only the fullscreen interface has a human to answer approvals.
 	cfg := app.Config{
 		Model: model, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
-		Notices: notices, ServerInstructions: instructions,
+		Notices: set.notices,
+	}
+	if len(set.servers) > 0 {
+		cfg.Servers = func(ctx context.Context) ([]pigruntime.ServerStatus, error) { return waitServers(ctx, servers) }
 	}
 	// Only the fullscreen interface records prompts.
 	if fullscreen {
@@ -380,7 +362,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	c := app.NewController(rt, cfg)
 	var f frontend
 	if fullscreen {
-		// Created before Open so the TUI shows the session event.
+		// Created before Start so the TUI shows the events Start emits.
 		f = tui.New(c, cmd.InOrStdin(), cmd.OutOrStdout(), tui.Options{
 			Version:     kopiVersion(),
 			Keys:        resolved.Config.Keys,
@@ -391,7 +373,20 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	} else {
 		f = headless.New(c, prompt, cmd.OutOrStdout())
 	}
-	if err := c.Open(startCtx, req); err != nil {
+	if fullscreen {
+		// The session opens behind the interface; prompts given meanwhile queue.
+		err = c.Start(startCtx, req)
+	} else {
+		// The headless frontend shows no notices; they all arrive during Open.
+		unsubscribe := c.Subscribe(func(ev event.Event) {
+			if n, ok := ev.(event.Notice); ok {
+				slog.Warn(printable(n.Text, "    "))
+			}
+		})
+		err = c.Open(startCtx, req)
+		unsubscribe()
+	}
+	if err != nil {
 		return diagnose(err, model, resolved.Origins["model"], paths, req, rt.OAuthProviders())
 	}
 	// SIGINT is a channel rather than part of the context because it must
@@ -620,9 +615,6 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 		// A .git file, as in a linked worktree or submodule, names the git directory.
 		denyWrite = append(denyWrite, gitDir)
 	}
-	// A .mcp.json names commands Kopi starts outside the sandbox. Its name is
-	// denied everywhere; the start directory's path adds its symlink target.
-	denyWrite = append(denyWrite, filepath.Join(cwd, policy.ProjectMCPFile))
 	write := []string{cwd, "/tmp", os.TempDir()}
 	return sandbox.Policy{
 		Write:          append(write, expand(cfg.AllowWrite)...),

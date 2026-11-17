@@ -394,20 +394,26 @@ func TestRootPrintMCPTool(t *testing.T) {
 				"args":    []string{"-test.run=^TestMCPStdioHelper$"},
 				"env":     map[string]string{stdioHelperEnv: "serve"},
 			}})
+			callTool := func(w http.ResponseWriter, id, name, arguments string) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				writeChunk(w, map[string]any{"role": "assistant", "content": ""}, nil)
+				writeChunk(w, map[string]any{"tool_calls": []any{map[string]any{
+					"index": 0, "id": id, "type": "function",
+					"function": map[string]any{"name": name, "arguments": arguments},
+				}}}, nil)
+				writeChunk(w, map[string]any{}, "tool_calls")
+				fmt.Fprint(w, "data: [DONE]\n\n")
+			}
 			var calls atomic.Int32
 			server := newMockProvider(t, func(w http.ResponseWriter) {
-				if calls.Add(1) == 1 {
-					w.Header().Set("Content-Type", "text/event-stream")
-					writeChunk(w, map[string]any{"role": "assistant", "content": ""}, nil)
-					writeChunk(w, map[string]any{"tool_calls": []any{map[string]any{
-						"index": 0, "id": "call_0", "type": "function",
-						"function": map[string]any{"name": "mcp__fake__search", "arguments": "{}"},
-					}}}, nil)
-					writeChunk(w, map[string]any{}, "tool_calls")
-					fmt.Fprint(w, "data: [DONE]\n\n")
-					return
+				switch calls.Add(1) {
+				case 1:
+					callTool(w, "call_search", "ToolSearch", `{"query":"mcp__fake__search"}`)
+				case 2:
+					callTool(w, "call_0", "mcp__fake__search", "{}")
+				default:
+					streamText(w, "done")
 				}
-				streamText(w, "done")
 			})
 			e.writeMockModels(t, server.URL)
 			args := []string{"--model", mockModel, "-p", "search"}
@@ -419,15 +425,20 @@ func TestRootPrintMCPTool(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, "done\n", stdout)
-			var tools []string
-			for _, tl := range server.next(t).body["tools"].([]any) {
-				tools = append(tools, tl.(map[string]any)["function"].(map[string]any)["name"].(string))
+			declared := func(body map[string]any) []string {
+				var tools []string
+				for _, tl := range body["tools"].([]any) {
+					tools = append(tools, tl.(map[string]any)["function"].(map[string]any)["name"].(string))
+				}
+				return tools
 			}
-			assert.Contains(t, tools, "mcp__fake__search")
+			first := declared(server.next(t).body)
+			assert.Contains(t, first, "ToolSearch")
+			assert.NotContains(t, first, "mcp__fake__search")
+			assert.Contains(t, declared(server.next(t).body), "mcp__fake__search")
 			var results []string
 			for _, m := range server.next(t).body["messages"].([]any) {
-				if msg := m.(map[string]any); msg["role"] == "tool" {
-					assert.Equal(t, "call_0", msg["tool_call_id"])
+				if msg := m.(map[string]any); msg["role"] == "tool" && msg["tool_call_id"] == "call_0" {
 					results = append(results, fmt.Sprint(msg["content"]))
 				}
 			}
@@ -575,33 +586,10 @@ func printEditIn(t *testing.T, e testEnv, path string, flags ...string) (result,
 	t.Helper()
 	file := filepath.Join(e.workspace, path)
 	e.writeFile(t, file, "alpha\n")
-	result = printCall(t, e, func(w http.ResponseWriter) { streamEdit(w, path) }, flags...)
-	b, err := os.ReadFile(file)
-	require.NoError(t, err)
-	return result, string(b)
-}
-
-// streamWrite answers with one Write call putting "beta\n" in path.
-func streamWrite(w http.ResponseWriter, path string) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	writeChunk(w, map[string]any{"role": "assistant", "content": ""}, nil)
-	args, _ := json.Marshal(map[string]any{"file_path": path, "content": "beta\n"})
-	writeChunk(w, map[string]any{"tool_calls": []any{map[string]any{
-		"index": 0, "id": "call_0", "type": "function",
-		"function": map[string]any{"name": "Write", "arguments": string(args)},
-	}}}, nil)
-	writeChunk(w, map[string]any{}, "tool_calls")
-	fmt.Fprint(w, "data: [DONE]\n\n")
-}
-
-// printCall runs kopi -p with flags while the model makes the one tool call
-// that call streams, and returns the tool result the model got back.
-func printCall(t *testing.T, e testEnv, call func(http.ResponseWriter), flags ...string) string {
-	t.Helper()
 	var calls atomic.Int32
 	server := newMockProvider(t, func(w http.ResponseWriter) {
 		if calls.Add(1) == 1 {
-			call(w)
+			streamEdit(w, path)
 			return
 		}
 		streamText(w, "done")
@@ -628,7 +616,9 @@ func printCall(t *testing.T, e testEnv, call func(http.ResponseWriter), flags ..
 		}
 	}
 	require.Len(t, results, 1)
-	return results[0]
+	b, err := os.ReadFile(file)
+	require.NoError(t, err)
+	return results[0], string(b)
 }
 
 func TestRootPrintExecuteWithAllowRuleEdits(t *testing.T) {
@@ -657,22 +647,6 @@ func TestRootPrintExecuteAllowCannotExemptMCPFile(t *testing.T) {
 
 	assert.Contains(t, result, "Edit(.mcp.json) (built-in)")
 	assert.Equal(t, "alpha\n", content)
-
-	e := newTestEnv(t)
-	require.NoError(t, os.Symlink("servers.json", filepath.Join(e.workspace, ".mcp.json")))
-
-	result, content = printEditIn(t, e, "servers.json", "--mode", "execute", "--allowed-tools", "Edit")
-
-	assert.Contains(t, result, "Edit(.mcp.json) (built-in)")
-	assert.Equal(t, "alpha\n", content)
-
-	e = newTestEnv(t)
-	require.NoError(t, os.Symlink("servers.json", filepath.Join(e.workspace, ".mcp.json")))
-
-	result = printCall(t, e, func(w http.ResponseWriter) { streamWrite(w, "servers.json") }, "--mode", "execute", "--allowed-tools", "Write")
-
-	assert.Contains(t, result, "Write(.mcp.json) (built-in)", "a target dangling at start is protected too")
-	assert.NoFileExists(t, filepath.Join(e.workspace, "servers.json"))
 }
 
 func TestRootPrintStartsInPlanByDefault(t *testing.T) {
@@ -934,13 +908,11 @@ func TestRootSandboxedBashProtectsMCPFile(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, path, command string
-		exists, link        bool
+		exists              bool
 	}{
-		{"cannot be created", ".mcp.json", "printf changed > .mcp.json", false, false},
-		{"cannot be replaced", ".mcp.json", "/bin/mv -f replacement .mcp.json", true, false},
-		{"nested cannot be overwritten", "sub/.mcp.json", "printf changed > sub/.mcp.json", true, false},
-		{"link target cannot be overwritten", "servers.json", "printf changed > servers.json", true, true},
-		{"dangling target cannot be created", "servers.json", "printf changed > servers.json", false, true},
+		{"cannot be created", ".mcp.json", "printf changed > .mcp.json", false},
+		{"cannot be replaced", ".mcp.json", "/bin/mv -f replacement .mcp.json", true},
+		{"nested cannot be overwritten", "sub/.mcp.json", "printf changed > sub/.mcp.json", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newTestEnv(t)
@@ -948,9 +920,6 @@ func TestRootSandboxedBashProtectsMCPFile(t *testing.T) {
 			path := filepath.Join(e.workspace, tc.path)
 			if tc.exists {
 				e.writeFile(t, path, original)
-			}
-			if tc.link {
-				require.NoError(t, os.Symlink(tc.path, filepath.Join(e.workspace, ".mcp.json")))
 			}
 			e.writeFile(t, filepath.Join(e.workspace, "replacement"), "changed\n")
 
@@ -967,23 +936,6 @@ func TestRootSandboxedBashProtectsMCPFile(t *testing.T) {
 			}
 		})
 	}
-	t.Run("chain hop cannot be redirected", func(t *testing.T) {
-		e := newTestEnv(t)
-		const original = `{"mcpServers":{}}` + "\n"
-		e.writeFile(t, filepath.Join(e.workspace, "servers.json"), original)
-		e.writeFile(t, filepath.Join(e.workspace, "other.json"), "changed\n")
-		hop := filepath.Join(e.workspace, "a")
-		require.NoError(t, os.Symlink("servers.json", hop))
-		require.NoError(t, os.Symlink("a", filepath.Join(e.workspace, ".mcp.json")))
-
-		result, _ := printBash(t, e, "/bin/ln -sfn other.json a", "--mode", "execute")
-
-		assert.Contains(t, result, tool.ErrExitStatus.Error())
-		assert.Contains(t, result, "Operation not permitted")
-		dest, err := os.Readlink(hop)
-		require.NoError(t, err)
-		assert.Equal(t, "servers.json", dest)
-	})
 }
 
 func TestRootSandboxedBashHonorsConfiguredPaths(t *testing.T) {
@@ -1096,7 +1048,6 @@ func TestSandboxPolicy(t *testing.T) {
 		}
 		return out
 	}
-	mcpFile := func(cwd string) string { return filepath.Join(cwd, ".mcp.json") }
 
 	t.Run("git directory", func(t *testing.T) {
 		cwd := t.TempDir()
@@ -1111,7 +1062,7 @@ func TestSandboxPolicy(t *testing.T) {
 			assert.True(t, filepath.IsAbs(path), path)
 		}
 		assert.Equal(t, append([]string{kopiHome}, expanded...), p.DenyRead)
-		assert.Equal(t, append(gitFiles(cwd), mcpFile(cwd)), p.DenyWrite)
+		assert.Equal(t, gitFiles(cwd), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 		assert.True(t, p.Network)
 	})
@@ -1122,7 +1073,7 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".git"), mcpFile(cwd)), p.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".git")), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 	})
 
@@ -1131,7 +1082,7 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, "HEAD"), mcpFile(cwd)), p.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, "HEAD")), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 	})
 
@@ -1141,7 +1092,7 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, append(gitFiles(cwd), mcpFile(cwd)), p.DenyWrite)
+		assert.Equal(t, gitFiles(cwd), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 	})
 
@@ -1152,13 +1103,13 @@ func TestSandboxPolicy(t *testing.T) {
 
 		plan := planPolicy(p, cwd)
 
-		assert.Equal(t, append(gitFiles(cwd), mcpFile(cwd), cwd), plan.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), cwd), plan.DenyWrite)
 		assert.Equal(t, p.DenyWriteNames, plan.DenyWriteNames)
 		assert.Equal(t, p.Write, plan.Write)
 		assert.Equal(t, p.DenyRead, plan.DenyRead)
 		assert.Equal(t, p.Network, plan.Network)
 		plan.DenyWrite[0] = "changed"
-		assert.Equal(t, append(gitFiles(cwd), mcpFile(cwd)), p.DenyWrite)
+		assert.Equal(t, gitFiles(cwd), p.DenyWrite)
 	})
 }
 

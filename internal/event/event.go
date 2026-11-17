@@ -62,7 +62,9 @@ type ApprovalRequested struct {
 // cancelled.
 type ApprovalEnded struct{ Token uint64 }
 
-// Notice reports retry and compaction progress.
+// Notice reports retry and compaction progress, and the first session's
+// startup: that it waits for the MCP servers and, once it opens, the notices
+// about them.
 type Notice struct{ Text string }
 
 type TurnEnd struct {

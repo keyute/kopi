@@ -38,6 +38,7 @@ func TestMCPDescribesItself(t *testing.T) {
 	assert.Equal(t, params, tool.Parameters)
 	assert.Equal(t, policy.Exec, tool.Capability)
 	assert.True(t, tool.Ask)
+	assert.True(t, tool.Deferred)
 	assert.Nil(t, tool.Target)
 	assert.False(t, tool.Sandboxed)
 	assert.Equal(t, Action{Verb: "Called", One: "MCP tool", Many: "MCP tools"}, tool.Display.Action)
