@@ -54,7 +54,7 @@ func NewEdit(ws *Workspace) Tool {
 		},
 		Capability: policy.Write,
 		Target:     pathTarget(ws),
-		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) error) (string, error) {
+		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
 			args, err := decodeEditArgs(raw)
 			if err != nil {
 				return "", err
@@ -102,7 +102,7 @@ func decodeEditArgs(raw json.RawMessage) (editArgs, error) {
 	return args, nil
 }
 
-func edit(ctx context.Context, ws *Workspace, args editArgs, admit func(policy.Target) error) (string, error) {
+func edit(ctx context.Context, ws *Workspace, args editArgs, admit func(policy.Target) (policy.Mode, error)) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -119,7 +119,7 @@ func edit(ctx context.Context, ws *Workspace, args editArgs, admit func(policy.T
 	if err := ws.checkRead(f, args.FilePath); err != nil {
 		return "", err
 	}
-	if err := admit(dest.target); err != nil {
+	if _, err := admit(dest.target); err != nil {
 		return "", err
 	}
 	content, err := readForEdit(f, args.FilePath)

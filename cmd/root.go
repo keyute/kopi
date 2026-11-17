@@ -282,6 +282,12 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	if set.undecided {
 		slog.Warn("this folder is not trusted, so the MCP servers in its " + policy.ProjectMCPFile + " are skipped; run kopi here in a terminal to be asked whether to trust it")
 	}
+	// From here until the session is open, SIGINT does not kill Kopi but ends
+	// startup at the wait for servers or at Open: stdio servers run in their
+	// own process group, so the terminal's SIGINT does not reach them, and the
+	// deferred Close must run. ctx outlives startup as the runtime's signal.
+	startCtx, stopStart := signal.NotifyContext(ctx, os.Interrupt)
+	defer stopStart()
 	// workRunning is set when Close leaves work running; see below.
 	var workRunning bool
 	servers := pigruntime.StartServers(pigruntime.ServerOptions{Servers: set.servers, CWD: cwd, Version: kopiVersion()})
@@ -291,7 +297,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		}
 	}()
 
-	sb, unavailable, err := openSandbox(cmd.Context(), resolved.Config.Sandbox, cwd, userHome, paths.Home)
+	sb, planSB, unavailable, err := openSandbox(cmd.Context(), resolved.Config.Sandbox, cwd, userHome, paths.Home)
 	if err != nil {
 		return err
 	}
@@ -305,12 +311,8 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			ws.Close()
 		}
 	}()
-	tools := []tool.Tool{tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb))}
-	// The terminal's SIGINT does not reach stdio servers, which run in their
-	// own process group, so it must end the wait and let Close run.
-	waitCtx, stopWait := signal.NotifyContext(ctx, os.Interrupt)
-	statuses, err := waitServers(waitCtx, servers)
-	stopWait()
+	tools := []tool.Tool{tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb), tool.NewShell(cwd, planSB))}
+	statuses, err := waitServers(startCtx, servers)
 	if err != nil {
 		return err
 	}
@@ -344,7 +346,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	}
 	// Logged only now so that in fullscreen it goes to the log file.
 	if unavailable != nil {
-		slog.Warn("sandbox is unavailable; Bash runs without it and needs approval or an allow rule", "err", unavailable)
+		slog.Warn("sandbox is unavailable; Bash runs without it and needs approval or an allow rule, and plan mode refuses it", "err", unavailable)
 	}
 	// The headless frontend shows no notices.
 	if !fullscreen {
@@ -389,21 +391,17 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	} else {
 		f = headless.New(c, prompt, cmd.OutOrStdout())
 	}
-	// Only Open may be cancelled by SIGINT; ctx outlives it as the runtime's
-	// signal.
-	openCtx, stopOpen := signal.NotifyContext(ctx, os.Interrupt)
-	if err := c.Open(openCtx, req); err != nil {
-		stopOpen()
+	if err := c.Open(startCtx, req); err != nil {
 		return diagnose(err, model, resolved.Origins["model"], paths, req, rt.OAuthProviders())
 	}
 	// SIGINT is a channel rather than part of the context because it must
 	// keep firing: each one interrupts the running turn, and only one at
-	// idle exits. It is registered before stopOpen so SIGINT never reverts to
+	// idle exits. It is registered before stopStart so SIGINT never reverts to
 	// the default exit in between.
 	interrupts := make(chan os.Signal, 1)
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
-	stopOpen()
+	stopStart()
 	runErr := f.Run(ctx, interrupts)
 
 	// Close must not inherit SIGTERM's cancellation; it bounds itself by
@@ -505,7 +503,8 @@ func waitServers(ctx context.Context, servers *pigruntime.Servers) ([]pigruntime
 // decideTrust asks about cwd and saves the answer; a cancelled prompt saves
 // nothing and returns no decision. The folder and parent are resolved first,
 // so what is shown is what is saved, and the home check sees through
-// symlinks.
+// symlinks. Trust saved for the user's home or the root would cover almost
+// every folder below it, so there it holds for this run only.
 func decideTrust(store *trust.Store, cwd, userHome string, project map[string]config.MCPServer, ask askTrust) (trust.Decision, error) {
 	cwd, err := resolveDir(cwd)
 	if err != nil {
@@ -515,8 +514,9 @@ func decideTrust(store *trust.Store, cwd, userHome string, project map[string]co
 	if err != nil {
 		return 0, err
 	}
+	broad := cwd == userHome || filepath.Dir(cwd) == cwd
 	req := tui.TrustRequest{Folder: cwd}
-	if parent := filepath.Dir(cwd); parent != filepath.Dir(parent) && parent != userHome {
+	if parent := filepath.Dir(cwd); !broad && parent != filepath.Dir(parent) && parent != userHome {
 		req.Parent = parent
 	}
 	for _, name := range slices.Sorted(maps.Keys(project)) {
@@ -529,6 +529,9 @@ func decideTrust(store *trust.Store, cwd, userHome string, project map[string]co
 	dir, d := cwd, trust.Trusted
 	switch choice {
 	case tui.TrustFolder:
+		if broad {
+			return trust.Trusted, nil
+		}
 	case tui.TrustParent:
 		dir = req.Parent
 	case tui.TrustDeny:
@@ -564,21 +567,23 @@ func serverTarget(s config.MCPServer) string {
 	return s.URL
 }
 
-// openSandbox returns the sandbox Bash runs under, or nil when sandbox.enabled
-// is false. With enabled unset, a machine without a usable sandbox is not an
-// error: the sandbox is nil and unavailable says why.
-func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHome string) (sb *sandbox.Sandbox, unavailable, err error) {
+// openSandbox returns the sandboxes Bash runs under in execute and in plan
+// mode, both or neither; neither when sandbox.enabled is false. With enabled
+// unset, a machine without a usable sandbox is not an error: the sandboxes
+// are nil and unavailable says why.
+func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHome string) (sb, plan *sandbox.Sandbox, unavailable, err error) {
 	if cfg.Enabled != nil && !*cfg.Enabled {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
-	sb, err = sandbox.New(ctx, sandboxPolicy(cfg, cwd, userHome, kopiHome))
+	p := sandboxPolicy(cfg, cwd, userHome, kopiHome)
+	sandboxes, err := sandbox.New(ctx, p, planPolicy(p, cwd))
 	switch {
 	case cfg.Enabled == nil && errors.Is(err, sandbox.ErrUnavailable):
-		return nil, err, nil
+		return nil, nil, err, nil
 	case err != nil:
-		return nil, nil, fmt.Errorf("failed to start the sandbox: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to start the sandbox: %w", err)
 	}
-	return sb, nil, nil
+	return sandboxes[0], sandboxes[1], nil, nil
 }
 
 // sandboxPolicy lets commands write only the workspace, temporary
@@ -626,6 +631,14 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 		DenyWriteNames: []string{policy.ProjectMCPFile},
 		Network:        cfg.Network,
 	}
+}
+
+// planPolicy is p with the workspace denied rather than dropped from the write
+// roots: a workspace under /tmp, the temporary directory or an allowWrite path
+// would stay writable through that root.
+func planPolicy(p sandbox.Policy, cwd string) sandbox.Policy {
+	p.DenyWrite = slices.Concat(p.DenyWrite, []string{cwd})
+	return p
 }
 
 // diagnose turns the open failures a user can fix into Kopi's own advice.

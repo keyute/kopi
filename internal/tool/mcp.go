@@ -78,8 +78,8 @@ func NewMCP(t MCPTool, call func(ctx context.Context, args json.RawMessage) (str
 		Parameters:  t.Parameters,
 		Capability:  capability,
 		Ask:         true,
-		Run: func(ctx context.Context, args json.RawMessage, admit func(policy.Target) error) (string, error) {
-			if err := admit(policy.Target{}); err != nil {
+		Run: func(ctx context.Context, args json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+			if _, err := admit(policy.Target{}); err != nil {
 				return "", err
 			}
 			text, err := call(ctx, args)

@@ -29,6 +29,22 @@ const (
 	flashFor = 2 * time.Second
 )
 
+// geometry is the row heights and field areas arrange last computed, which
+// View draws and the mouse hit-tests.
+type geometry struct {
+	transcript, menu, composerTop int
+	fields                        []fieldArea
+	// working is the working row's index in model.below, -1 without one.
+	working int
+}
+
+// fieldArea is where an editable field is drawn: its first text row y and
+// column x on screen, and its h rows.
+type fieldArea struct {
+	c       *composer
+	x, y, h int
+}
+
 // interruptMsg is an external SIGINT.
 type interruptMsg struct{}
 
@@ -48,6 +64,7 @@ type model struct {
 	composer      composer
 	spinner       spinner.Model
 	layout        statusLayout
+	geo           geometry
 	clip          clipboard
 	imageDir      string
 
@@ -58,8 +75,11 @@ type model struct {
 	// offset is the first visible transcript line while not following.
 	offset int
 	follow bool
-	// sel is the transcript selection, drawn in reverse video.
-	sel    selection
+	// sel is the selection in the space selIn names, drawn in reverse video.
+	sel   selection
+	selIn region
+	// below is the rows under the transcript as drawn.
+	below  []line
 	drag   drag
 	clicks clicks
 	// ticking is set while an autoScrollMsg is due, so one chain runs at a
@@ -106,6 +126,7 @@ func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model
 		imageDir: opts.ImageDir,
 		folds:    newFolds(),
 		follow:   true,
+		geo:      geometry{working: -1},
 		status:   c.Status(),
 		pickVerb: randomVerb,
 		verb:     fallbackVerb,
@@ -119,15 +140,19 @@ func (m *model) Init() tea.Cmd {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	held := m.holding()
 	cmd := m.update(msg)
-	return m, tea.Batch(cmd, m.syncInput())
+	cmd = tea.Batch(cmd, m.syncInput(held))
+	m.arrange()
+	return m, cmd
 }
 
 func (m *model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.clearSelection()
+		m.deselect()
+		m.drag = drag{}
 		m.composer.resize(m.width, m.height)
 		m.relayout()
 	case tea.BackgroundColorMsg:
@@ -152,17 +177,14 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case autoScrollMsg:
 		return m.autoScroll()
 	case interruptMsg:
-		defer m.refreshPending()
 		return m.cancel()
 	case flashMsg:
 		if msg.seq == m.flashSeq {
 			m.flashText, m.exitArmed = "", false
 		}
 	case tea.KeyPressMsg:
-		defer m.refreshPending()
 		return m.key(msg)
 	case clipboardTextMsg:
-		defer m.refreshPending()
 		if msg.field != nil {
 			if m.dialog != nil && m.dialog.field() == msg.field {
 				return m.dialog.paste(msg.text)
@@ -174,13 +196,11 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	case tea.PasteMsg:
-		defer m.refreshPending()
 		if m.dialog != nil {
 			return m.dialog.paste(msg.Content)
 		}
 		return m.paste(msg.Content)
 	case imagePastedMsg:
-		defer m.refreshPending()
 		return m.composer.insertImage(msg.path)
 	case pasteFailedMsg:
 		return m.flash("paste failed")
@@ -190,16 +210,19 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-// syncInput reconciles what is derived from the draft after any message that may have changed it.
-func (m *model) syncInput() tea.Cmd {
+// syncInput reconciles what is derived from the draft after any message that
+// may have changed it. The menu follows once a composer hold ends, as well as
+// on a change, so it never acts on a token from before the hold.
+func (m *model) syncInput(wasHeld bool) tea.Cmd {
 	value, line, col := m.composer.value(), m.composer.ta.Line(), m.composer.ta.Column()
-	if value == m.seen.value && line == m.seen.line && col == m.seen.col {
-		return nil
-	}
+	changed := value != m.seen.value || line != m.seen.line || col != m.seen.col
 	if value != m.seen.value {
 		m.composer.spans = app.Spans(value)
 	}
 	m.seen.value, m.seen.line, m.seen.col = value, line, col
+	if m.holding() || (!changed && !wasHeld) {
+		return nil
+	}
 	return m.followMenu()
 }
 
@@ -215,7 +238,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	if m.approval != nil {
 		return m.approvalKey(msg)
 	}
-	if m.menuHeight() > 0 {
+	if m.menuHeight() > 0 && !m.holding() {
 		if cmd, ok := m.menuKey(msg); ok {
 			return cmd
 		}
@@ -345,7 +368,6 @@ func (m *model) editQueue() {
 	m.composer.restore(m.c.TakeQueued())
 	// QueueChanged follows; clearing now keeps a second press from taking again.
 	m.queued = nil
-	m.refreshPending()
 }
 
 // applyBatch applies events in order, refreshes the status when one of them
@@ -439,7 +461,6 @@ func (m *model) relayout() {
 	if m.width == 0 {
 		return
 	}
-	m.refreshPending()
 	blocks := m.tr.Blocks()
 	m.folds.settle(blocks)
 	old := m.lines
@@ -452,7 +473,7 @@ func (m *model) relayout() {
 		m.lines = append(m.lines, line{})
 		m.lines = append(m.lines, ls...)
 	}
-	if m.drag.region != regionTranscript && m.sel.empty() {
+	if m.selIn != regionTranscript {
 		return
 	}
 	n := max(m.sel.anchor.line, m.sel.head.line) + 1
@@ -462,56 +483,95 @@ func (m *model) relayout() {
 	}
 }
 
-// refreshPending updates the approval prompt and queue geometry without
-// rebuilding transcript lines.
-func (m *model) refreshPending() {
-	if m.width <= 0 {
-		m.pending, m.prompt = nil, nil
+// arrange computes every row height below the transcript, and the prompt's
+// and queue's rows, for the state Update leaves; it is the only place they are
+// computed.
+// A lower-row selection is dropped once the row count changes or a row it
+// covers reads differently; a row that was and is the working row is skipped,
+// so the spinner's ticks keep a selection crossing it.
+func (m *model) arrange() {
+	old, wasWorking := m.below, m.geo.working
+	m.place()
+	if m.drag.region == regionTranscript && m.transcriptHeight() == 0 {
+		m.clearSelection()
+	}
+	if m.selIn != regionRows {
 		return
 	}
-	m.prompt = nil
+	if len(old) != len(m.below) {
+		m.clearSelection()
+		return
+	}
+	from, to := m.sel.ordered()
+	for i := from.line; i <= to.line; i++ {
+		if (i != wasWorking || i != m.geo.working) && ansi.Strip(old[i].text) != ansi.Strip(m.below[i].text) {
+			m.clearSelection()
+			return
+		}
+	}
+}
+
+// place computes the heights and field areas and builds the lower rows.
+func (m *model) place() {
+	m.geo, m.prompt, m.pending, m.below = geometry{working: -1}, nil, nil, nil
+	if m.width <= 0 {
+		return
+	}
+	free := m.height - chromeRows
+	if m.busy {
+		free -= busyRows
+	}
+	input := m.composer.height()
 	if m.approval != nil {
 		// The prompt takes the composer's frame rows too.
-		maxRows := m.height - chromeRows + 2
-		if m.busy {
-			maxRows -= busyRows
+		m.prompt = approvalRows(m.dialog, m.approval, m.width, max(2, m.height/3), free+2, m.th)
+		input = len(m.prompt) - 2
+	} else {
+		m.geo.menu = max(0, min(m.menu.want(), free-input))
+	}
+	free -= input + m.geo.menu
+	m.pending = m.pendingCache.rows(m.queued, &m.keys, m.width, max(2, m.height/3), free, m.th)
+	m.geo.transcript = max(0, free-len(m.pending))
+
+	rows := append([]string{""}, m.pending...)
+	if m.busy {
+		text := m.verb.ing + "… " + formatDuration(time.Since(m.turnStart))
+		if m.approval != nil {
+			text = "Waiting for you…"
 		}
-		m.prompt = approvalRows(m.dialog, m.approval, m.width, max(2, m.height/3), maxRows, m.th)
+		m.geo.working = len(rows)
+		rows = append(rows, workingRow(&m.spinner, text, m.th), "")
 	}
-	budget := m.height - m.inputHeight() - chromeRows
-	if m.busy {
-		budget -= busyRows
-	}
-	m.pending = m.pendingCache.rows(m.queued, &m.keys, m.width, max(2, m.height/3), budget, m.th)
-}
-
-func (m *model) transcriptHeight() int {
-	h := m.height - m.inputHeight() - chromeRows - len(m.pending)
-	if m.busy {
-		h -= busyRows
-	}
-	return max(0, h)
-}
-
-// inputHeight is the composer's text lines or, while an approval is pending,
-// the prompt's rows less the composer's two frame rows that chromeRows counts.
-func (m *model) inputHeight() int {
+	// The +1 is the shaded top row that the composer and the prompt both draw.
+	m.geo.composerTop = m.geo.transcript + len(rows) + 1
 	if m.approval != nil {
-		return len(m.prompt) - 2
+		rows = append(rows, m.prompt...)
+		if len(m.prompt) > 0 {
+			// The prompt's first row is the composer's top shaded row; with
+			// no rows, the areas are an earlier render's.
+			for _, fa := range m.dialog.areas {
+				fa.y += m.geo.composerTop - 1
+				m.geo.fields = append(m.geo.fields, fa)
+			}
+		}
+	} else {
+		rows = append(rows, m.composer.view(m.width, m.th)...)
+		rows = append(rows, m.menuRows()...)
+		m.geo.fields = []fieldArea{{c: &m.composer, y: m.geo.composerTop, h: m.composer.height()}}
 	}
-	return m.composer.height()
+	rows = append(rows, statusLine(m.status, m.layout, m.flashText, m.width, m.th))
+	m.below = make([]line, len(rows))
+	for i, r := range rows {
+		m.below[i] = line{text: r}
+	}
 }
+
+func (m *model) transcriptHeight() int { return m.geo.transcript }
 
 // composerTop is the screen row of the composer's first text line, below
 // the transcript, the blank row, the pending rows, the busy rows and the
 // shaded row.
-func (m *model) composerTop() int {
-	top := m.transcriptHeight() + 2 + len(m.pending)
-	if m.busy {
-		top += busyRows
-	}
-	return top
-}
+func (m *model) composerTop() int { return m.geo.composerTop }
 
 func (m *model) maxOffset() int {
 	return max(0, len(m.lines)-m.transcriptHeight())
@@ -532,9 +592,14 @@ func (m *model) scroll(n int) {
 	m.follow = m.offset == m.maxOffset()
 }
 
-// selected is line i with the part of it the selection covers reversed.
-func (m *model) selected(i int) string {
-	text := m.lines[i].text
+// selected is line i of space r with the part of it the selection covers
+// reversed.
+func (m *model) selected(r region, i int) string {
+	lines, _ := m.space(r)
+	text := lines[i].text
+	if m.selIn != r {
+		return text
+	}
 	if from, to := m.sel.span(i, ansi.StringWidth(text)); from < to {
 		return lipgloss.StyleRanges(text, lipgloss.NewRange(from, to, lipgloss.NewStyle().Reverse(true)))
 	}
@@ -547,30 +612,17 @@ func (m *model) View() tea.View {
 		return v
 	}
 	h, top := m.transcriptHeight(), m.top()
-	rows := make([]string, 0, m.height)
+	rows := make([]string, 0, h+len(m.below))
 	for i := top; i < top+h; i++ {
 		if i < len(m.lines) {
-			rows = append(rows, m.selected(i))
+			rows = append(rows, m.selected(regionTranscript, i))
 		} else {
 			rows = append(rows, "")
 		}
 	}
-	rows = append(rows, "")
-	rows = append(rows, m.pending...)
-	if m.busy {
-		text := m.verb.ing + "… " + formatDuration(time.Since(m.turnStart))
-		if m.approval != nil {
-			text = "Waiting for you…"
-		}
-		rows = append(rows, workingRow(&m.spinner, text, m.th), "")
+	for i := range m.below {
+		rows = append(rows, m.selected(regionRows, i))
 	}
-	if m.approval != nil {
-		rows = append(rows, m.prompt...)
-	} else {
-		copy(rows[len(rows)-m.menuHeight():], m.menuRows())
-		rows = append(rows, m.composer.view(m.width, m.th)...)
-	}
-	rows = append(rows, statusLine(m.status, m.layout, m.flashText, m.width, m.th))
 	v.SetContent(strings.Join(rows, "\n"))
 	return v
 }

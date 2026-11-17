@@ -35,8 +35,8 @@ func execTool(ran *atomic.Int32) tool.Tool {
 		Description: "Test-only tool that needs execute mode.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 		Capability:  policy.Exec,
-		Run: func(_ context.Context, _ json.RawMessage, admit func(policy.Target) error) (string, error) {
-			if err := admit(policy.Target{}); err != nil {
+		Run: func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+			if _, err := admit(policy.Target{}); err != nil {
 				return "", err
 			}
 			ran.Add(1)
@@ -120,6 +120,31 @@ func TestExecuteRefusesCallRevokedAfterBefore(t *testing.T) {
 	assert.True(t, res.IsError)
 	assert.Contains(t, toolResultContentText(res.Content), policy.ErrRevoked.Error())
 	assert.Zero(t, ran.Load())
+}
+
+func TestExecutePassesTheAdmittedModeToTheTool(t *testing.T) {
+	for _, want := range []policy.Mode{policy.Plan, policy.Execute} {
+		authority := policy.NewAuthority()
+		if want == policy.Execute {
+			authority.EnterExecute()
+		}
+		gate := policy.NewGate(authority, map[string]policy.ToolSpec{"Exec": {Capability: policy.Exec, Sandboxed: true, PlanSandboxed: true}}, nil, nil)
+		require.NoError(t, gate.Before(t.Context(), "call-1", "Exec", json.RawMessage(`{}`)))
+		got := make(chan policy.Mode, 1)
+		exec := tool.Tool{Name: "Exec", Capability: policy.Exec, Run: func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+			mode, err := admit(policy.Target{})
+			if err != nil {
+				return "", err
+			}
+			got <- mode
+			return execOutput, nil
+		}}
+
+		res, err := agentTool{tool: exec, gate: gate}.Execute(t.Context(), "call-1", json.RawMessage(`{}`), nil)
+		require.NoError(t, err)
+		assert.False(t, res.IsError, toolResultContentText(res.Content))
+		assert.Equal(t, want, <-got)
+	}
 }
 
 func TestHookPassesArgsToGate(t *testing.T) {

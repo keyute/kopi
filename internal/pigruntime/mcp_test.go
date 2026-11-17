@@ -57,7 +57,7 @@ func echoTool(name string) map[string]any {
 
 func call(t *testing.T, tl tool.Tool, args string) (string, error) {
 	t.Helper()
-	return tl.Run(t.Context(), json.RawMessage(args), func(policy.Target) error { return nil })
+	return tl.Run(t.Context(), json.RawMessage(args), func(policy.Target) (policy.Mode, error) { return policy.Execute, nil })
 }
 
 func findTool(t *testing.T, st ServerStatus, name string) tool.Tool {
@@ -232,6 +232,26 @@ func TestServersConfigFailuresStayPerServer(t *testing.T) {
 	assert.Contains(t, byName["sse"].Err.Error(), "sse")
 	require.ErrorIs(t, byName["unset"].Err, config.ErrUnsetVariable)
 	assert.Contains(t, byName["unset"].Err.Error(), "KOPI_TEST_UNSET_VAR")
+}
+
+func TestServersValidateExpandedConfig(t *testing.T) {
+	t.Setenv("KOPI_TEST_EMPTY_VAR", "")
+	servers := map[string]config.MCPServer{
+		"url":     {URL: "${KOPI_TEST_EMPTY_VAR:-}"},
+		"http":    {Type: "http", URL: "${KOPI_TEST_EMPTY_VAR}", Headers: map[string]string{"A": "b"}},
+		"command": {Command: "${KOPI_TEST_EMPTY_VAR}", Args: []string{"x"}},
+	}
+	s, _ := startWith(t, servers, func(name string, _ config.MCPServer) (mcp.Transport, error) {
+		return nil, fmt.Errorf("unexpected dial of %s", name)
+	})
+
+	statuses := s.Wait(t.Context())
+	require.Len(t, statuses, 3)
+	for _, st := range statuses {
+		require.ErrorIs(t, st.Err, config.ErrInvalidValue, st.Name)
+		assert.Contains(t, st.Err.Error(), "failed to validate expanded config", st.Name)
+		assert.Contains(t, st.Err.Error(), "want command or url", st.Name)
+	}
 }
 
 func TestServersDialFailureStaysPerServer(t *testing.T) {
@@ -769,7 +789,7 @@ func TestServersCancelInitializedHTTP(t *testing.T) {
 				cancelCall = stop
 				defer stop()
 				go func() {
-					_, err := tl.Run(ctx, json.RawMessage(`{}`), func(policy.Target) error { return nil })
+					_, err := tl.Run(ctx, json.RawMessage(`{}`), func(policy.Target) (policy.Mode, error) { return policy.Execute, nil })
 					callDone <- err
 				}()
 			}

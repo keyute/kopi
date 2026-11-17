@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"image/color"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -58,16 +60,25 @@ func assertCopied(t *testing.T, m *model, cmd tea.Cmd, want string) {
 	assert.Contains(t, statusText(m), "Copied")
 }
 
-// reversedRows is the transcript's screen rows drawn with reverse video; the
-// composer's cursor is reverse video too.
+// reversedRows is the screen rows drawn with reverse video, leaving out the
+// fields' rows, where the cursor is reverse video too.
 func reversedRows(m *model) []int {
 	var out []int
-	for i, r := range strings.Split(m.View().Content, "\n")[:m.transcriptHeight()] {
-		if reverseVideo.MatchString(r) {
+	for i, r := range strings.Split(m.View().Content, "\n") {
+		inField := slices.ContainsFunc(m.geo.fields, func(a fieldArea) bool { return i >= a.y && i < a.y+a.h })
+		if !inField && reverseVideo.MatchString(r) {
 			out = append(out, i)
 		}
 	}
 	return out
+}
+
+// dragRow drags across row y from column x to toX and returns the release's
+// command.
+func dragRow(m *model, x, toX, y int) tea.Cmd {
+	pressAt(m, x, y)
+	moveTo(m, toX, y)
+	return releaseAt(m, toX, y)
 }
 
 func TestSingleClickTogglesFoldAndCopiesNothing(t *testing.T) {
@@ -232,7 +243,7 @@ func TestComposerDragNeverSelectsTranscript(t *testing.T) {
 	assertCopied(t, m, cmd, "hello")
 }
 
-func TestPressesOutsideTranscriptAndComposerDoNothing(t *testing.T) {
+func TestPressesBelowTranscriptSelectRowsAsDrawn(t *testing.T) {
 	m, _ := newTestModel(t, 60, 30)
 	send(m, event.TurnStart{Prompt: "go"})
 	send(m, event.QueueChanged{Pending: []string{"a"}})
@@ -240,13 +251,267 @@ func TestPressesOutsideTranscriptAndComposerDoNothing(t *testing.T) {
 	top := m.composerTop()
 
 	for _, y := range []int{m.transcriptHeight(), top - 4, top - 2, top - 1, top + 1, len(screen(m)) - 1} {
-		pressAt(m, 3, y)
-		moveTo(m, 5, y)
-		assert.Nil(t, releaseAt(m, 5, y), "row %d", y)
-		assert.True(t, m.sel.empty(), "row %d", y)
+		m.clip = &fakeClipboard{}
+		want := strings.TrimRight(ansi.Cut(screen(m)[y], 3, 5), " ")
+		cmd := dragRow(m, 3, 5, y)
+		if want == "" {
+			assert.Nil(t, cmd, "row %d", y)
+		} else {
+			assertCopied(t, m, cmd, want)
+		}
 		assert.False(t, m.composer.ta.HasSelection(), "row %d", y)
 	}
 	assert.Equal(t, "draft", m.composer.value())
+}
+
+func TestDialogPreviewRowsSelectAndCopy(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		clicks, x, to int
+		want          string
+	}{
+		{"drag", 1, 2, 7, "- old"},
+		{"double click", 2, 4, 4, "old"},
+		{"triple click", 3, 4, 4, "  - old"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newTestModel(t, 60, 30)
+			send(m, event.TurnStart{}, editApproval())
+			row := rowOf(t, m, "  - old")
+
+			for range tc.clicks - 1 {
+				pressAt(m, tc.x, row)
+				releaseAt(m, tc.x, row)
+			}
+			assertCopied(t, m, dragRow(m, tc.x, tc.to, row), tc.want)
+			assert.Equal(t, []int{row}, reversedRows(m))
+		})
+	}
+}
+
+func TestQueuedRowAndStatusLineCopy(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	queueTwo(m, c)
+	last := len(screen(m)) - 1
+	pressAt(m, 4, last)
+	releaseAt(m, 4, last)
+	pressAt(m, 4, last)
+	assertCopied(t, m, releaseAt(m, 4, last), "model-1")
+	assert.True(t, m.sel.empty(), "the flash redraws the status line")
+
+	m.clip = &fakeClipboard{}
+	assertCopied(t, m, dragRow(m, 0, 3, rowOf(t, m, "❯ a")), "❯ a")
+}
+
+func TestOneLiveSelection(t *testing.T) {
+	type surface struct {
+		pick func(t *testing.T, m *model)
+		has  func(m *model) bool
+	}
+	transcript := surface{
+		func(t *testing.T, m *model) { dragRow(m, 2, 7, rowOf(t, m, "κ first")) },
+		func(m *model) bool { return m.selIn == regionTranscript && !m.sel.empty() },
+	}
+	composer := surface{
+		func(_ *testing.T, m *model) { dragRow(m, 2, 7, m.composerTop()) },
+		func(m *model) bool { return m.composer.ta.HasSelection() },
+	}
+	rows := surface{
+		func(t *testing.T, m *model) { dragRow(m, 0, 3, rowOf(t, m, "❯ a")) },
+		func(m *model) bool { return m.selIn == regionRows && !m.sel.empty() },
+	}
+	reason := surface{
+		func(_ *testing.T, m *model) { a := m.geo.fields[0]; dragRow(m, a.x, a.x+5, a.y) },
+		func(m *model) bool { return m.dialog.field().ta.HasSelection() },
+	}
+	for _, tc := range []struct {
+		name          string
+		first, second surface
+		approval      bool
+	}{
+		{"transcript then composer", transcript, composer, false},
+		{"composer then transcript", composer, transcript, false},
+		{"rows then composer", rows, composer, false},
+		{"composer then rows", composer, rows, false},
+		{"rows then reason field", rows, reason, true},
+		{"reason field then rows", reason, rows, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, c := newTestModel(t, 60, 30)
+			send(m, event.Notice{Text: "first"})
+			queueTwo(m, c)
+			typeText(m, "hello world")
+			if tc.approval {
+				reasonField(t, m, "alpha beta")
+			}
+
+			tc.first.pick(t, m)
+			require.True(t, tc.first.has(m))
+			tc.second.pick(t, m)
+
+			assert.False(t, tc.first.has(m))
+			assert.True(t, tc.second.has(m))
+		})
+	}
+}
+
+// reasonField opens an approval, types draft into its reason field and
+// returns where the field is drawn.
+func reasonField(t *testing.T, m *model, draft string) fieldArea {
+	t.Helper()
+	send(m, editApproval())
+	press(m, digit('3'))
+	keys(m, draft)
+	require.Len(t, m.geo.fields, 1)
+	return m.geo.fields[0]
+}
+
+func TestReasonFieldDragCopies(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	a := reasonField(t, m, "alpha beta")
+	require.True(t, strings.HasPrefix(screen(m)[a.y], "❭ 3. No (esc)  alpha beta"))
+
+	assertCopied(t, m, dragRow(m, a.x, a.x+5, a.y), "alpha")
+	assert.Equal(t, "alpha", m.dialog.field().ta.SelectedText())
+	assert.True(t, m.sel.empty())
+}
+
+func TestReasonFieldSelectionIsReplaced(t *testing.T) {
+	for name, replace := range map[string]func(m *model){
+		"typing": func(m *model) { keys(m, "gamma") },
+		"paste":  func(m *model) { pasteText(m, "gamma") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				m, _ := newTestModel(t, 60, 30)
+				a := reasonField(t, m, "alpha beta")
+
+				clickTimes(m, 2, a.x+7, a.y)
+				releaseAt(m, a.x+7, a.y)
+				require.Equal(t, "beta", m.dialog.field().ta.SelectedText())
+				replace(m)
+
+				assert.Equal(t, "alpha gamma", m.dialog.text())
+			})
+		})
+	}
+}
+
+func TestPressOnUnselectedFieldSelectsItsOption(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	send(m, editApproval())
+	require.Len(t, m.geo.fields, 1)
+	a := m.geo.fields[0]
+	require.Equal(t, "  3. No (esc)  What should change?", screen(m)[a.y])
+
+	pressAt(m, a.x, a.y)
+	releaseAt(m, a.x, a.y)
+
+	assert.Equal(t, 2, m.dialog.sel)
+	assert.True(t, strings.HasPrefix(screen(m)[a.y], "❭ 3. No (esc)"))
+	keys(m, "hi")
+	assert.Equal(t, "hi", m.dialog.text(), "the cursor is in the field")
+}
+
+func TestApprovalEndedDuringReasonDragCopiesNothing(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	a := reasonField(t, m, "alpha beta")
+	pressAt(m, a.x, a.y)
+	moveTo(m, a.x+5, a.y)
+
+	send(m, event.ApprovalEnded{Token: 1})
+
+	assert.Nil(t, moveTo(m, a.x+7, a.y))
+	assert.Nil(t, releaseAt(m, a.x+7, a.y))
+	assert.Empty(t, m.clip.(*fakeClipboard).written)
+}
+
+func TestRowSelectionClearsWhenItsRowsChange(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	queueTwo(m, c)
+	row := rowOf(t, m, "❯ a")
+	dragRow(m, 0, 3, row)
+	require.Equal(t, []int{row}, reversedRows(m))
+
+	send(m, event.QueueChanged{Pending: []string{"c", "b"}})
+
+	require.Equal(t, row, rowOf(t, m, "❯ c"), "the rows keep their count")
+	assert.True(t, m.sel.empty())
+	assert.Empty(t, reversedRows(m))
+}
+
+func TestRowSelectionClearsWhenTheWorkingRowTakesItsPlace(t *testing.T) {
+	m, _ := newTestModel(t, 40, 14)
+	send(m, event.QueueChanged{Pending: []string{linesOf(8), "b"}})
+	n := len(m.below)
+	y := m.transcriptHeight() + 1 + len(m.pending) - busyRows
+	dragRow(m, 0, 10, y)
+	require.Equal(t, regionRows, m.selIn)
+
+	send(m, event.TurnStart{Prompt: "go"})
+
+	require.Len(t, m.below, n, "the busy rows are paid for by queue rows")
+	require.True(t, strings.HasPrefix(screen(m)[y], "⠋ Working"))
+	assert.True(t, m.sel.empty())
+}
+
+func TestRowSelectionSurvivesSpinnerTicks(t *testing.T) {
+	for name, setup := range map[string]func(t *testing.T, m *model, c *fakeController){
+		"dialog preview": func(t *testing.T, m *model, _ *fakeController) {
+			send(m, event.TurnStart{}, editApproval())
+			dragRow(m, 2, 7, rowOf(t, m, "  - old"))
+		},
+		"across the working row": func(t *testing.T, m *model, c *fakeController) {
+			queueTwo(m, c)
+			from := rowOf(t, m, "  ↳ queued · ctrl+enter to send now · up to edit")
+			pressAt(m, 2, from)
+			moveTo(m, 0, from+3)
+			releaseAt(m, 0, from+3)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, c := newTestModel(t, 60, 30)
+			setup(t, m, c)
+			reversed := reversedRows(m)
+			require.NotEmpty(t, reversed)
+			working := screen(m)[m.geo.transcript+len(m.pending)+1]
+
+			m.Update(m.spinner.Tick())
+
+			require.NotEqual(t, working, screen(m)[m.geo.transcript+len(m.pending)+1], "the spinner moved")
+			assert.Equal(t, reversed, reversedRows(m))
+		})
+	}
+}
+
+func TestDragStaysInItsSurface(t *testing.T) {
+	t.Run("rows", func(t *testing.T) {
+		m, c := newTestModel(t, 60, 30)
+		send(m, event.Notice{Text: "first"})
+		queueTwo(m, c)
+		row := rowOf(t, m, "❯ a")
+
+		pressAt(m, 2, row)
+		moveTo(m, 1, rowOf(t, m, "κ first"))
+
+		assert.Equal(t, regionRows, m.selIn)
+		assert.Equal(t, point{0, 1}, m.sel.head, "clamped to the first lower row")
+		for _, r := range reversedRows(m) {
+			assert.GreaterOrEqual(t, r, m.transcriptHeight())
+		}
+	})
+	t.Run("composer", func(t *testing.T) {
+		m, _ := newTestModel(t, 40, 30)
+		typeText(m, "hello world")
+		last := len(screen(m)) - 1
+
+		pressAt(m, 2, m.composerTop())
+		moveTo(m, 7, last)
+		cmd := releaseAt(m, 7, last)
+
+		assert.True(t, m.sel.empty())
+		assertCopied(t, m, cmd, "hello world")
+	})
 }
 
 func TestWheelInvalidatesHeldFoldClickOnlyWhenViewportMoves(t *testing.T) {
@@ -351,6 +616,59 @@ func TestActiveTranscriptDragClearsWhenCoordinatesChange(t *testing.T) {
 			assert.Empty(t, reversedRows(m))
 			assert.Empty(t, m.clip.(*fakeClipboard).written)
 		})
+	}
+}
+
+func TestTranscriptDragWhenCandidatesConsumeViewport(t *testing.T) {
+	for _, height := range []int{10, 12} {
+		for _, clicks := range []int{2, 3} {
+			t.Run(fmt.Sprintf("height%d/clicks%d", height, clicks), func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					m, c := newMenuModel(t, 40, height)
+					c.files = append(c.files, c.files[0])
+					notices(m, 30)
+					load := keys(m, "@")
+					require.True(t, m.menu.open)
+					require.Zero(t, m.menuHeight())
+					m.scroll(-len(m.lines))
+					require.Zero(t, m.top())
+					for range clicks {
+						pressAt(m, 8, 2)
+					}
+					require.Equal(t, clicks, m.drag.count)
+					tick := moveTo(m, 10, m.transcriptHeight()-1)
+					require.NotNil(t, tick)
+					require.True(t, m.ticking)
+					require.False(t, m.sel.empty())
+
+					settle(m, load)
+
+					require.Equal(t, 5, m.menuHeight())
+					require.Zero(t, m.top())
+					if height == 10 {
+						require.Zero(t, m.transcriptHeight())
+						require.NotPanics(t, func() { assert.Nil(t, moveTo(m, 12, 0)) })
+						assert.Equal(t, drag{}, m.drag)
+						assert.True(t, m.sel.empty())
+						_, cmd := m.Update(tick())
+						assert.Nil(t, cmd, "a pending tick cannot restart the drag")
+						assert.False(t, m.ticking)
+						assert.Zero(t, m.top())
+						assert.Nil(t, releaseAt(m, 12, 0))
+						assert.Empty(t, m.clip.(*fakeClipboard).written)
+					} else {
+						require.Positive(t, m.transcriptHeight())
+						assert.Equal(t, regionTranscript, m.drag.region)
+						assert.Nil(t, moveTo(m, 12, 0))
+						assert.False(t, m.sel.empty())
+						assert.NotNil(t, releaseAt(m, 12, 0))
+						_, cmd := m.Update(tick())
+						assert.Nil(t, cmd)
+						assert.False(t, m.ticking)
+					}
+				})
+			})
+		}
 	}
 }
 

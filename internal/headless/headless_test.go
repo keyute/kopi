@@ -81,8 +81,8 @@ func blockTool(started chan<- struct{}) tool.Tool {
 		Name: "Block", Label: "Block", Description: "Test-only tool.",
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{}},
 		Capability: policy.Read,
-		Run: func(ctx context.Context, _ json.RawMessage, admit func(policy.Target) error) (string, error) {
-			if err := admit(policy.Target{}); err != nil {
+		Run: func(ctx context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+			if _, err := admit(policy.Target{}); err != nil {
 				return "", err
 			}
 			close(started)

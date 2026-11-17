@@ -41,7 +41,7 @@ func NewWrite(ws *Workspace) Tool {
 		},
 		Capability: policy.Write,
 		Target:     pathTarget(ws),
-		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) error) (string, error) {
+		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
 			args, err := decodeWriteArgs(raw)
 			if err != nil {
 				return "", err
@@ -54,7 +54,7 @@ func NewWrite(ws *Workspace) Tool {
 				return "", err
 			}
 			defer func() { dest.parent.Close() }()
-			if err := admit(dest.target); err != nil {
+			if _, err := admit(dest.target); err != nil {
 				return "", err
 			}
 			if err := dest.write(ws, []byte(*args.Content)); err != nil {

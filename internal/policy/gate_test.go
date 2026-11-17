@@ -77,6 +77,11 @@ func TestPlanDeniesNonReadBeforeRules(t *testing.T) {
 		err := g.Before(t.Context(), "c1", tool, pathArgs("/x"))
 		require.ErrorIs(t, err, ErrDenied)
 		assert.Contains(t, err.Error(), `tool "`+tool+`" needs execute mode; the session is in plan mode`)
+		if tool == "Bash" {
+			assert.Contains(t, err.Error(), "runs only in the OS sandbox, which is off or unavailable")
+		} else {
+			assert.NotContains(t, err.Error(), "sandbox")
+		}
 	}
 	assert.Empty(t, f.reqs)
 }
@@ -134,11 +139,11 @@ func TestDefaultAsks(t *testing.T) {
 	}
 }
 
-// sandboxedGate is a gate with one Sandboxed exec tool, Shell, and rules that
+// sandboxedGate is a gate with one exec tool, Shell, with spec, and rules that
 // may name it.
-func sandboxedGate(t *testing.T, approve Approver, src Source) (*Authority, *Gate) {
+func sandboxedGate(t *testing.T, spec ToolSpec, approve Approver, src Source) (*Authority, *Gate) {
 	t.Helper()
-	specs := map[string]ToolSpec{"Shell": {Capability: Exec, Sandboxed: true}}
+	specs := map[string]ToolSpec{"Shell": spec}
 	d := newDirs(t)
 	rules, err := NewRules(d.ws, d.home, specs, src)
 	require.NoError(t, err)
@@ -146,14 +151,19 @@ func sandboxedGate(t *testing.T, approve Approver, src Source) (*Authority, *Gat
 	return a, NewGate(a, specs, rules, approve)
 }
 
+var (
+	sandboxed     = ToolSpec{Capability: Exec, Sandboxed: true}
+	planSandboxed = ToolSpec{Capability: Exec, Sandboxed: true, PlanSandboxed: true}
+)
+
 func TestSandboxedRunsWithoutAskingInExecute(t *testing.T) {
-	a, g := sandboxedGate(t, nil, Source{Name: "config"})
+	a, g := sandboxedGate(t, sandboxed, nil, Source{Name: "config"})
 	a.EnterExecute()
 	require.NoError(t, g.Before(t.Context(), "c1", "Shell", nil))
 	assert.NoError(t, admitApproved(g, "c1", "Shell"))
 
 	f := &approver{answer: Reject}
-	a, g = sandboxedGate(t, f.approve, Source{Name: "config"})
+	a, g = sandboxedGate(t, sandboxed, f.approve, Source{Name: "config"})
 	a.EnterExecute()
 	require.NoError(t, g.Before(t.Context(), "c1", "Shell", nil))
 	assert.Empty(t, f.reqs)
@@ -161,24 +171,115 @@ func TestSandboxedRunsWithoutAskingInExecute(t *testing.T) {
 
 func TestSandboxedStillObeysRulesAndPlan(t *testing.T) {
 	f := &approver{answer: Allow}
-	a, g := sandboxedGate(t, f.approve, Source{Name: "config", Ask: []string{"Shell"}})
+	a, g := sandboxedGate(t, sandboxed, f.approve, Source{Name: "config", Ask: []string{"Shell"}})
 	a.EnterExecute()
 	require.NoError(t, g.Before(t.Context(), "c1", "Shell", nil))
 	assert.Equal(t, []Request{{CallID: "c1", Tool: "Shell", Rule: "Shell (config)"}}, f.reqs)
 
 	f = &approver{answer: Allow}
-	a, g = sandboxedGate(t, f.approve, Source{Name: "config", Deny: []string{"Shell"}})
+	a, g = sandboxedGate(t, sandboxed, f.approve, Source{Name: "config", Deny: []string{"Shell"}})
 	a.EnterExecute()
 	err := g.Before(t.Context(), "c1", "Shell", nil)
 	require.ErrorIs(t, err, ErrDenied)
 	assert.Contains(t, err.Error(), "Shell (config)")
 	assert.Empty(t, f.reqs)
 
-	_, g = sandboxedGate(t, f.approve, Source{Name: "config", Allow: []string{"Shell"}})
+	_, g = sandboxedGate(t, sandboxed, f.approve, Source{Name: "config", Allow: []string{"Shell"}})
 	err = g.Before(t.Context(), "c1", "Shell", nil)
 	require.ErrorIs(t, err, ErrDenied)
 	assert.Contains(t, err.Error(), "needs execute mode")
 	assert.Empty(t, f.reqs)
+}
+
+func TestPlanSandboxedRunsInPlanWithoutAsking(t *testing.T) {
+	f := &approver{answer: Reject}
+	_, g := sandboxedGate(t, planSandboxed, f.approve, Source{Name: "config"})
+	require.NoError(t, g.Before(t.Context(), "c1", "Shell", nil))
+	assert.Empty(t, f.reqs)
+	mode, err := g.Admit("c1", "Shell", nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, Plan, mode)
+}
+
+func TestPlanSandboxedObeysRulesInPlan(t *testing.T) {
+	f := &approver{answer: Allow}
+	_, g := sandboxedGate(t, planSandboxed, f.approve, Source{Name: "config", Ask: []string{"Shell"}})
+	require.NoError(t, g.Before(t.Context(), "c1", "Shell", nil))
+	assert.Equal(t, []Request{{CallID: "c1", Tool: "Shell", Rule: "Shell (config)"}}, f.reqs)
+
+	f = &approver{answer: Allow}
+	_, g = sandboxedGate(t, planSandboxed, f.approve, Source{Name: "config", Deny: []string{"Shell"}})
+	err := g.Before(t.Context(), "c1", "Shell", nil)
+	require.ErrorIs(t, err, ErrDenied)
+	assert.Contains(t, err.Error(), "Shell (config)")
+	assert.Empty(t, f.reqs)
+}
+
+func TestPlanSandboxedGrantIsRevokedOnModeChange(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		execute       bool
+		before, after []Mode
+	}{
+		{"plan to execute", false, nil, []Mode{Execute}},
+		{"execute to plan", true, nil, []Mode{Plan}},
+		{"plan to execute to plan", false, nil, []Mode{Execute, Plan}},
+		{"inside the approver", false, []Mode{Execute, Plan}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var a *Authority
+			enter := func(modes []Mode) {
+				for _, m := range modes {
+					if m == Execute {
+						a.EnterExecute()
+					} else {
+						a.EnterPlan()
+					}
+				}
+			}
+			a, g := sandboxedGate(t, planSandboxed, func(context.Context, Request) (Decision, error) {
+				enter(tc.before)
+				return Decision{Answer: Allow}, nil
+			}, Source{Name: "config", Ask: []string{"Shell"}})
+			if tc.execute {
+				a.EnterExecute()
+			}
+			require.NoError(t, g.Before(t.Context(), "c1", "Shell", nil))
+			enter(tc.after)
+			mode, err := g.Admit("c1", "Shell", nil, nil)
+			assert.ErrorIs(t, err, ErrRevoked)
+			assert.Equal(t, Plan, mode)
+		})
+	}
+}
+
+func TestAdmitReturnsTheAdmittedMode(t *testing.T) {
+	for _, tc := range []struct {
+		tool    string
+		execute bool
+		want    Mode
+	}{
+		{"Shell", false, Plan},
+		{"Shell", true, Execute},
+		{"Read", false, Plan},
+		{"Read", true, Execute},
+	} {
+		specs := map[string]ToolSpec{"Shell": planSandboxed, "Read": {Capability: Read}}
+		a := NewAuthority()
+		g := NewGate(a, specs, nil, nil)
+		if tc.execute {
+			a.EnterExecute()
+		}
+		require.NoError(t, g.Before(t.Context(), "c1", tc.tool, nil))
+		mode, err := g.Admit("c1", tc.tool, nil, nil)
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, mode, tc.tool)
+	}
+	a, g := newTestGate(nil, nil)
+	a.EnterExecute()
+	mode, err := g.Admit("c1", "Read", nil, nil)
+	require.ErrorIs(t, err, ErrNoGrant)
+	assert.Equal(t, Plan, mode)
 }
 
 func TestAskRuleOffersNoEdits(t *testing.T) {
@@ -435,7 +536,8 @@ func TestNewGateCopiesTools(t *testing.T) {
 
 func admitApproved(g *Gate, id, tool string) error {
 	gr := g.grants[id]
-	return g.Admit(id, tool, gr.args, gr.target)
+	_, err := g.Admit(id, tool, gr.args, gr.target)
+	return err
 }
 
 func TestGrantBindsArgumentsAndTarget(t *testing.T) {
@@ -454,8 +556,10 @@ func TestGrantBindsArgumentsAndTarget(t *testing.T) {
 			case "missing target":
 				target = nil
 			}
-			assert.ErrorIs(t, g.Admit("call", "Edit", args, target), ErrChangedCall)
-			assert.ErrorIs(t, g.Admit("call", "Edit", pathArgs("/allowed"), &Target{Path: "/allowed", Real: "/allowed"}), ErrNoGrant)
+			_, err := g.Admit("call", "Edit", args, target)
+			assert.ErrorIs(t, err, ErrChangedCall)
+			_, err = g.Admit("call", "Edit", pathArgs("/allowed"), &Target{Path: "/allowed", Real: "/allowed"})
+			assert.ErrorIs(t, err, ErrNoGrant)
 		})
 	}
 }
@@ -478,7 +582,8 @@ func TestPendingApprovalBindsOriginalTarget(t *testing.T) {
 	target.Real = "/denied"
 	close(answer)
 	require.NoError(t, <-done)
-	assert.ErrorIs(t, g.Admit("call", "Edit", args, &target), ErrChangedCall)
+	_, err := g.Admit("call", "Edit", args, &target)
+	assert.ErrorIs(t, err, ErrChangedCall)
 }
 
 func TestGrantCopiesArgumentsBeforeApproval(t *testing.T) {
@@ -491,7 +596,8 @@ func TestGrantCopiesArgumentsBeforeApproval(t *testing.T) {
 	require.NoError(t, g.Before(t.Context(), "call", "Edit", args))
 	original := append(json.RawMessage(nil), args...)
 	copy(args, pathArgs("/changed"))
-	assert.NoError(t, g.Admit("call", "Edit", original, &Target{Path: "/allowed", Real: "/allowed"}))
+	_, err := g.Admit("call", "Edit", original, &Target{Path: "/allowed", Real: "/allowed"})
+	assert.NoError(t, err)
 }
 
 // mcpGate is a gate with an Ask read tool and an Ask exec tool, as MCP
@@ -544,6 +650,7 @@ func TestPlanRefusesAskExecButAsksAboutAskRead(t *testing.T) {
 	err := g.Before(t.Context(), "c1", "mcp__s__exec", nil)
 	require.ErrorIs(t, err, ErrDenied)
 	assert.Contains(t, err.Error(), "needs execute mode")
+	assert.NotContains(t, err.Error(), "sandbox")
 	assert.Empty(t, f.reqs)
 
 	require.NoError(t, g.Before(t.Context(), "c2", "mcp__s__read", nil))

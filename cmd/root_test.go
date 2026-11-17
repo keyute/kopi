@@ -575,10 +575,33 @@ func printEditIn(t *testing.T, e testEnv, path string, flags ...string) (result,
 	t.Helper()
 	file := filepath.Join(e.workspace, path)
 	e.writeFile(t, file, "alpha\n")
+	result = printCall(t, e, func(w http.ResponseWriter) { streamEdit(w, path) }, flags...)
+	b, err := os.ReadFile(file)
+	require.NoError(t, err)
+	return result, string(b)
+}
+
+// streamWrite answers with one Write call putting "beta\n" in path.
+func streamWrite(w http.ResponseWriter, path string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	writeChunk(w, map[string]any{"role": "assistant", "content": ""}, nil)
+	args, _ := json.Marshal(map[string]any{"file_path": path, "content": "beta\n"})
+	writeChunk(w, map[string]any{"tool_calls": []any{map[string]any{
+		"index": 0, "id": "call_0", "type": "function",
+		"function": map[string]any{"name": "Write", "arguments": string(args)},
+	}}}, nil)
+	writeChunk(w, map[string]any{}, "tool_calls")
+	fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
+// printCall runs kopi -p with flags while the model makes the one tool call
+// that call streams, and returns the tool result the model got back.
+func printCall(t *testing.T, e testEnv, call func(http.ResponseWriter), flags ...string) string {
+	t.Helper()
 	var calls atomic.Int32
 	server := newMockProvider(t, func(w http.ResponseWriter) {
 		if calls.Add(1) == 1 {
-			streamEdit(w, path)
+			call(w)
 			return
 		}
 		streamText(w, "done")
@@ -605,9 +628,7 @@ func printEditIn(t *testing.T, e testEnv, path string, flags ...string) (result,
 		}
 	}
 	require.Len(t, results, 1)
-	b, err := os.ReadFile(file)
-	require.NoError(t, err)
-	return results[0], string(b)
+	return results[0]
 }
 
 func TestRootPrintExecuteWithAllowRuleEdits(t *testing.T) {
@@ -644,6 +665,14 @@ func TestRootPrintExecuteAllowCannotExemptMCPFile(t *testing.T) {
 
 	assert.Contains(t, result, "Edit(.mcp.json) (built-in)")
 	assert.Equal(t, "alpha\n", content)
+
+	e = newTestEnv(t)
+	require.NoError(t, os.Symlink("servers.json", filepath.Join(e.workspace, ".mcp.json")))
+
+	result = printCall(t, e, func(w http.ResponseWriter) { streamWrite(w, "servers.json") }, "--mode", "execute", "--allowed-tools", "Write")
+
+	assert.Contains(t, result, "Write(.mcp.json) (built-in)", "a target dangling at start is protected too")
+	assert.NoFileExists(t, filepath.Join(e.workspace, "servers.json"))
 }
 
 func TestRootPrintStartsInPlanByDefault(t *testing.T) {
@@ -771,7 +800,7 @@ func TestRootSandboxUnavailableWarns(t *testing.T) {
 	_, stderr, err := execute(t, "", "--model", mockModel, "-p", "hi")
 
 	require.NoError(t, err)
-	assert.Contains(t, stderr, "sandbox is unavailable; Bash runs without it and needs approval or an allow rule")
+	assert.Contains(t, stderr, "sandbox is unavailable; Bash runs without it and needs approval or an allow rule, and plan mode refuses it")
 }
 
 func TestRootSandboxDisabledBashNeedsApproval(t *testing.T) {
@@ -803,6 +832,16 @@ func TestRootSandboxDisabledBashRunsWithAllowRule(t *testing.T) {
 
 	assert.Equal(t, "hi\n", result)
 	assert.NotContains(t, stderr, "sandbox is unavailable")
+}
+
+func TestRootSandboxDisabledPlanRefusesBash(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"sandbox":{"enabled":false}}`)
+
+	result, _ := printBash(t, e, "echo hi", "--mode", "plan", "--allowed-tools", "Bash")
+
+	assert.Contains(t, result, `tool "Bash" needs execute mode; the session is in plan mode, where it runs only in the OS sandbox`)
+	assert.NotEqual(t, "hi\n", result)
 }
 
 func TestRootSandboxedBashRunsWithoutAllowRule(t *testing.T) {
@@ -901,6 +940,7 @@ func TestRootSandboxedBashProtectsMCPFile(t *testing.T) {
 		{"cannot be replaced", ".mcp.json", "/bin/mv -f replacement .mcp.json", true, false},
 		{"nested cannot be overwritten", "sub/.mcp.json", "printf changed > sub/.mcp.json", true, false},
 		{"link target cannot be overwritten", "servers.json", "printf changed > servers.json", true, true},
+		{"dangling target cannot be created", "servers.json", "printf changed > servers.json", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newTestEnv(t)
@@ -927,6 +967,23 @@ func TestRootSandboxedBashProtectsMCPFile(t *testing.T) {
 			}
 		})
 	}
+	t.Run("chain hop cannot be redirected", func(t *testing.T) {
+		e := newTestEnv(t)
+		const original = `{"mcpServers":{}}` + "\n"
+		e.writeFile(t, filepath.Join(e.workspace, "servers.json"), original)
+		e.writeFile(t, filepath.Join(e.workspace, "other.json"), "changed\n")
+		hop := filepath.Join(e.workspace, "a")
+		require.NoError(t, os.Symlink("servers.json", hop))
+		require.NoError(t, os.Symlink("a", filepath.Join(e.workspace, ".mcp.json")))
+
+		result, _ := printBash(t, e, "/bin/ln -sfn other.json a", "--mode", "execute")
+
+		assert.Contains(t, result, tool.ErrExitStatus.Error())
+		assert.Contains(t, result, "Operation not permitted")
+		dest, err := os.Readlink(hop)
+		require.NoError(t, err)
+		assert.Equal(t, "servers.json", dest)
+	})
 }
 
 func TestRootSandboxedBashHonorsConfiguredPaths(t *testing.T) {
@@ -990,6 +1047,41 @@ func TestRootSandboxedBashHonorsConfiguredPaths(t *testing.T) {
 	assert.Equal(t, sentinel+"\n", string(content))
 }
 
+func TestRootSandboxedBashCannotWriteWorkspaceInPlan(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	e := newTestEnv(t)
+	// The workspace lies inside a write root, which must not make it writable.
+	cfg, err := json.Marshal(map[string]any{"sandbox": map[string]any{"allowWrite": []string{e.root}}})
+	require.NoError(t, err)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), string(cfg))
+	wsFile := filepath.Join(e.workspace, "written.txt")
+	tempFile := filepath.Join(t.TempDir(), "written.txt")
+	quotedWS := "'" + strings.ReplaceAll(wsFile, "'", "'\"'\"'") + "'"
+	quotedTemp := "'" + strings.ReplaceAll(tempFile, "'", "'\"'\"'") + "'"
+
+	result, _ := printBash(t, e, "printf changed > "+quotedWS, "--mode", "plan")
+
+	assert.Contains(t, result, tool.ErrExitStatus.Error())
+	assert.Contains(t, result, "Operation not permitted")
+	assert.NoFileExists(t, wsFile)
+
+	result, _ = printBash(t, e, "printf 'temp\\n' > "+quotedTemp+" && printf 'write succeeded\\n'", "--mode", "plan")
+
+	assert.Equal(t, "write succeeded\n", result)
+	content, err := os.ReadFile(tempFile)
+	require.NoError(t, err)
+	assert.Equal(t, "temp\n", string(content))
+
+	result, _ = printBash(t, e, "printf 'workspace\\n' > "+quotedWS+" && printf 'write succeeded\\n'", "--mode", "execute")
+
+	assert.Equal(t, "write succeeded\n", result)
+	content, err = os.ReadFile(wsFile)
+	require.NoError(t, err)
+	assert.Equal(t, "workspace\n", string(content))
+}
+
 func TestSandboxPolicy(t *testing.T) {
 	home, kopiHome, absolute := t.TempDir(), t.TempDir(), t.TempDir()
 	cfg := config.Sandbox{
@@ -1051,6 +1143,22 @@ func TestSandboxPolicy(t *testing.T) {
 
 		assert.Equal(t, append(gitFiles(cwd), mcpFile(cwd)), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
+	})
+
+	t.Run("plan", func(t *testing.T) {
+		cwd := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(cwd, ".git"), 0o755))
+		p := sandboxPolicy(cfg, cwd, home, kopiHome)
+
+		plan := planPolicy(p, cwd)
+
+		assert.Equal(t, append(gitFiles(cwd), mcpFile(cwd), cwd), plan.DenyWrite)
+		assert.Equal(t, p.DenyWriteNames, plan.DenyWriteNames)
+		assert.Equal(t, p.Write, plan.Write)
+		assert.Equal(t, p.DenyRead, plan.DenyRead)
+		assert.Equal(t, p.Network, plan.Network)
+		plan.DenyWrite[0] = "changed"
+		assert.Equal(t, append(gitFiles(cwd), mcpFile(cwd)), p.DenyWrite)
 	})
 }
 
@@ -1235,6 +1343,8 @@ func TestDecideTrustOffersNoParentAtHomeOrRoot(t *testing.T) {
 	require.NoError(t, os.Symlink(home, homeLink))
 	for _, tt := range []struct{ name, cwd, home string }{
 		{"home", proj, home},
+		{"at home", home, home},
+		{"at home through a symlink", homeLink, home},
 		{"home with a trailing slash", proj, home + string(filepath.Separator)},
 		{"home through a symlink", proj, homeLink},
 		{"working directory through a symlinked home", filepath.Join(homeLink, "proj"), home},
@@ -1246,6 +1356,33 @@ func TestDecideTrustOffersNoParentAtHomeOrRoot(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, canonical(t, tt.cwd), asked.Folder)
 			assert.Empty(t, asked.Parent)
+		})
+	}
+}
+
+func TestDecideTrustAtHomeOrRootTrustsForThisRunOnly(t *testing.T) {
+	home := canonical(t, t.TempDir())
+	for _, tt := range []struct {
+		name, cwd string
+		choice    tui.TrustChoice
+		want      trust.Decision
+		saved     map[string]string
+	}{
+		{"home trusted", home, tui.TrustFolder, trust.Trusted, nil},
+		{"root trusted", "/", tui.TrustFolder, trust.Trusted, nil},
+		{"home denied", home, tui.TrustDeny, trust.Untrusted, map[string]string{home: "untrusted"}},
+		{"root denied", "/", tui.TrustDeny, trust.Untrusted, map[string]string{"/": "untrusted"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			trustFile := filepath.Join(t.TempDir(), "trust.json")
+			store, err := trust.Open(trustFile)
+			require.NoError(t, err)
+
+			d, err := decideTrust(store, tt.cwd, home, map[string]config.MCPServer{"a": {Command: "a"}}, func(tui.TrustRequest) (tui.TrustChoice, error) { return tt.choice, nil })
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, d)
+			assert.Equal(t, tt.saved, trustFolders(t, trustFile))
 		})
 	}
 }

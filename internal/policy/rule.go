@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -78,9 +79,13 @@ func parseRule(s string) (name, spec string, except bool, err error) {
 	if name != "*" && strings.HasSuffix(name, "*") && !mcp {
 		return "", "", false, fmt.Errorf("rule %q: only a name starting with %s may end in *: %w", s, MCPPrefix, ErrInvalidRule)
 	}
-	if mcp && !strings.HasSuffix(name, "*") {
-		server, tool, ok := strings.Cut(strings.TrimPrefix(name, MCPPrefix), "__")
-		if !ok || server == "" || tool == "" {
+	if mcp {
+		suffix, star := strings.CutSuffix(strings.TrimPrefix(name, MCPPrefix), "*")
+		server, tool, cut := strings.Cut(suffix, "__")
+		// A prefix that ends inside the server name, such as mcp__git*, would
+		// also cover other servers' tools. Past the first __ it cannot, as a
+		// server name never contains __ or ends in _.
+		if valid := star && suffix == "" || cut && server != "" && (star || tool != ""); !valid {
 			return "", "", false, fmt.Errorf("rule %q: name one MCP tool as mcp__server__tool or all of a server's as mcp__server__*: %w", s, ErrInvalidRule)
 		}
 	}
@@ -240,26 +245,111 @@ func splitLiteral(pat string) (dir, tail string) {
 	return lit.String(), ""
 }
 
-// Resolve resolves the symlinks of p's deepest ancestor that can be resolved
-// and appends the rest of p unchanged, so p need not exist.
+// Resolve is the path ResolveLinks resolves p to.
 func Resolve(p string) string {
-	var rest []string
-	for {
-		for len(p) > len(filepath.VolumeName(p))+1 && os.IsPathSeparator(p[len(p)-1]) {
-			p = p[:len(p)-1]
-		}
-		if r, err := filepath.EvalSymlinks(p); err == nil {
-			return filepath.Join(append([]string{r}, rest...)...)
-		}
-		// filepath.Dir would clean away a symlink followed by .. before
-		// the next attempt to resolve the remaining prefix.
-		parent, base := filepath.Split(p)
-		if parent == p || parent == "" {
-			return p
-		}
-		rest = append([]string{base}, rest...)
-		p = parent
+	resolved, _ := ResolveLinks(p)
+	return resolved
+}
+
+// maxLinks is how many symlinks ResolveLinks follows, as darwin's MAXSYMLINKS.
+const maxLinks = 32
+
+// ResolveLinks resolves p name by name as the kernel does when creating it,
+// following every symlink, dangling ones too, so p need not exist: from the
+// first name that does not exist the rest of p is appended unchanged. links
+// are, in order, the symlinks passed and the names the walk backs over with
+// .., including a missing name a later .. would back over: the paths a
+// command could replace to change where p resolves. At the link past
+// maxLinks it stops and returns that link's path, so a cycle still ends.
+//
+// Adapted from walkSymlinks in Go's path/filepath (BSD-3-Clause).
+func ResolveLinks(p string) (resolved string, links []string) {
+	sep := string(os.PathSeparator)
+	volLen := len(filepath.VolumeName(p))
+	if volLen < len(p) && os.IsPathSeparator(p[volLen]) {
+		volLen++
 	}
+	vol := p[:volLen]
+	dest := vol
+	// lastSep is the index of the last separator in dest after the volume,
+	// or -1.
+	lastSep := func() int {
+		for r := len(dest) - 1; r >= volLen; r-- {
+			if os.IsPathSeparator(dest[r]) {
+				return r
+			}
+		}
+		return -1
+	}
+	var end int
+	for start := volLen; start < len(p); start = end {
+		for start < len(p) && os.IsPathSeparator(p[start]) {
+			start++
+		}
+		end = start
+		for end < len(p) && !os.IsPathSeparator(p[end]) {
+			end++
+		}
+		switch p[start:end] {
+		case "", ".":
+			continue
+		case "..":
+			// Back up over the last resolved name, keeping a leading .. that
+			// cannot be backed over.
+			if r := lastSep(); r < 0 || dest[r+1:] == ".." {
+				if len(dest) > volLen {
+					dest += sep
+				}
+				dest += ".."
+			} else {
+				links = append(links, dest)
+				dest = dest[:r]
+			}
+			continue
+		}
+		prev := dest
+		if len(dest) > len(filepath.VolumeName(dest)) && !os.IsPathSeparator(dest[len(dest)-1]) {
+			dest += sep
+		}
+		dest += p[start:end]
+		fi, err := os.Lstat(dest)
+		if err != nil {
+			// Join backs over the rest's .. lexically, where the kernel would
+			// walk through dest.
+			if slices.Contains(strings.Split(filepath.ToSlash(p[end:]), "/"), "..") {
+				links = append(links, dest)
+			}
+			return filepath.Join(prev, p[start:]), links
+		}
+		if fi.Mode()&fs.ModeSymlink == 0 {
+			continue
+		}
+		links = append(links, dest)
+		link, err := os.Readlink(dest)
+		if err != nil || len(links) > maxLinks {
+			return filepath.Join(dest, p[end:]), links
+		}
+		p = link + p[end:]
+		if v := len(filepath.VolumeName(link)); v > 0 {
+			if v < len(link) && os.IsPathSeparator(link[v]) {
+				v++
+			}
+			vol, volLen = link[:v], v
+			dest, end = vol, v
+		} else if len(link) > 0 && os.IsPathSeparator(link[0]) {
+			vol, volLen = link[:1], 1
+			dest, end = vol, 1
+		} else {
+			// A relative target replaces the link's name in dest.
+			if r := lastSep(); r < 0 {
+				dest = vol
+			} else {
+				dest = dest[:r]
+			}
+			end = 0
+		}
+	}
+	return filepath.Clean(dest), links
 }
 
 // Removes reports whether a bare deny takes tool away from the model entirely.

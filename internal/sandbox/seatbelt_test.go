@@ -204,6 +204,74 @@ func TestSeatbeltDenyReadIsAlsoDenyWrite(t *testing.T) {
   (literal (param "DENY_WRITE_0")) (subpath (param "DENY_WRITE_0")))`)
 }
 
+func TestSeatbeltDenyWriteLinks(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	under := func(names ...string) string { return filepath.Join(append([]string{base}, names...)...) }
+	require.NoError(t, os.MkdirAll(under("real", "ws"), 0o700))
+	require.NoError(t, os.WriteFile(under("servers.json"), nil, 0o600))
+	for _, l := range []struct{ name, target string }{
+		{".mcp.json", "a"},
+		{"a", "servers.json"},
+		{"dangling.json", "missing.json"},
+		{"link", "real"},
+	} {
+		require.NoError(t, os.Symlink(l.target, under(l.name)))
+	}
+
+	profile, defs := profileOf(t, seatbeltPrefix(Policy{
+		Write:     []string{under("link", "ws")},
+		DenyWrite: []string{under(".mcp.json"), under("dangling.json"), under("link", "ws", ".git", "hooks")},
+	}))
+
+	links := []string{under(".mcp.json"), under("a"), under("dangling.json"), under("link")}
+	assert.Equal(t, links, values(defs, "DENY_LINK"))
+	assert.Equal(t, []string{
+		under(".mcp.json"), under("servers.json"),
+		under("dangling.json"), under("missing.json"),
+		under("link", "ws", ".git", "hooks"), under("real", "ws", ".git", "hooks"),
+	}, values(defs, "DENY_WRITE"))
+	for _, l := range links {
+		assert.Contains(t, values(defs, "ANCESTOR"), l)
+	}
+	assert.Contains(t, profile, `(deny file-write*
+  (literal (param "DENY_LINK_0"))
+  (literal (param "DENY_LINK_1"))
+  (literal (param "DENY_LINK_2"))
+  (literal (param "DENY_LINK_3")))`)
+	assert.NotContains(t, profile, `(subpath (param "DENY_LINK_`)
+	assert.Equal(t, []string{under("link", "ws"), under("real", "ws")}, values(defs, "WRITE"))
+}
+
+func TestSeatbeltDenyWriteBackedOverNames(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, os.Mkdir(filepath.Join(base, "sub"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(base, "servers.json"), nil, 0o600))
+	link := filepath.Join(base, ".mcp.json")
+	require.NoError(t, os.Symlink("sub/../servers.json", link))
+
+	_, defs := profileOf(t, seatbeltPrefix(Policy{DenyWrite: []string{link}}))
+
+	sub := filepath.Join(base, "sub")
+	assert.Equal(t, []string{link, sub}, values(defs, "DENY_LINK"))
+	assert.Contains(t, values(defs, "ANCESTOR"), sub)
+	assert.Equal(t, []string{link, filepath.Join(base, "servers.json")}, values(defs, "DENY_WRITE"))
+}
+
+func TestSeatbeltWriteLinksAreNotDenied(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	link := filepath.Join(base, "link")
+	require.NoError(t, os.Mkdir(filepath.Join(base, "real"), 0o700))
+	require.NoError(t, os.Symlink("real", link))
+
+	_, defs := profileOf(t, seatbeltPrefix(Policy{Write: []string{link}}))
+
+	assert.Empty(t, values(defs, "DENY_LINK"))
+	assert.Empty(t, values(defs, "ANCESTOR"))
+}
+
 func TestSeatbeltDenyWriteNamesMatchAnyCase(t *testing.T) {
 	profile, defs := profileOf(t, seatbeltPrefix(Policy{DenyWriteNames: []string{".mcp.json"}}))
 	assert.Equal(t, []string{`/\.(m|M)(c|C)(p|P)\.(j|J)(s|ſ|S)(o|O)(n|N)$`}, values(defs, "DENY_WRITE_NAME"))
@@ -222,12 +290,12 @@ func TestSeatbeltDenyWriteNamesMatchAnyCase(t *testing.T) {
 // itself already runs inside a Seatbelt sandbox.
 func newSandbox(t *testing.T, p Policy) *Sandbox {
 	t.Helper()
-	sb, err := New(t.Context(), p)
+	sbs, err := New(t.Context(), p)
 	if errors.Is(err, ErrUnavailable) {
 		t.Skip(err)
 	}
 	require.NoError(t, err)
-	return sb
+	return sbs[0]
 }
 
 // bash runs script in sb with env added to the test's environment.
@@ -380,6 +448,98 @@ func TestSeatbeltDenyWriteFileSymlinkTarget(t *testing.T) {
 	assert.Equal(t, "x", string(got))
 }
 
+func TestSeatbeltDenyWriteSymlinkHopCannotBeRepointed(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "root")
+	writeFile(t, filepath.Join(root, "servers.json"))
+	writeFile(t, filepath.Join(root, "other"))
+	hop := filepath.Join(root, "a")
+	require.NoError(t, os.Symlink("servers.json", hop))
+	link := filepath.Join(root, ".mcp.json")
+	require.NoError(t, os.Symlink("a", link))
+	sb := newSandbox(t, Policy{Write: []string{root}, DenyWrite: []string{link}, DenyWriteNames: []string{".mcp.json"}})
+	env := []string{"ROOT=" + root}
+
+	for _, script := range []string{
+		`ln -sfn other "$ROOT/a"`,
+		`rm "$ROOT/a"`,
+		`mv "$ROOT/a" "$ROOT/moved"`,
+		`mv "$ROOT/other" "$ROOT/a"`,
+		`echo y >"$ROOT/a"`,
+		`echo y >"$ROOT/servers.json"`,
+	} {
+		assert.Error(t, bash(t, sb, script, env...), script)
+	}
+	dest, err := os.Readlink(hop)
+	require.NoError(t, err)
+	assert.Equal(t, "servers.json", dest)
+	got, err := os.ReadFile(filepath.Join(root, "servers.json"))
+	require.NoError(t, err)
+	assert.Equal(t, "x", string(got))
+}
+
+func TestSeatbeltDenyWriteBackedOverNameCannotBeReplaced(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "root")
+	writeFile(t, filepath.Join(root, "servers.json"))
+	sub := filepath.Join(root, "sub")
+	require.NoError(t, os.Mkdir(sub, 0o700))
+	link := filepath.Join(root, ".mcp.json")
+	require.NoError(t, os.Symlink("sub/../servers.json", link))
+	elsewhere := filepath.Join(t.TempDir(), "d")
+	require.NoError(t, os.Mkdir(elsewhere, 0o700))
+	sb := newSandbox(t, Policy{Write: []string{root}, DenyWrite: []string{link}, DenyWriteNames: []string{".mcp.json"}})
+	env := []string{"ROOT=" + root, "ELSEWHERE=" + elsewhere}
+
+	for _, script := range []string{
+		`mv "$ROOT/sub" "$ROOT/x" && ln -s "$ELSEWHERE" "$ROOT/sub"`,
+		`rmdir "$ROOT/sub" && ln -s "$ELSEWHERE" "$ROOT/sub"`,
+	} {
+		assert.Error(t, bash(t, sb, script, env...), script)
+		fi, err := os.Lstat(sub)
+		require.NoError(t, err, script)
+		assert.True(t, fi.IsDir(), script)
+	}
+}
+
+func TestSeatbeltDenyWriteDanglingTargetCannotBeCreated(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "root")
+	require.NoError(t, os.Mkdir(root, 0o700))
+	link := filepath.Join(root, ".mcp.json")
+	require.NoError(t, os.Symlink("servers.json", link))
+	sb := newSandbox(t, Policy{Write: []string{root}, DenyWrite: []string{link}, DenyWriteNames: []string{".mcp.json"}})
+	env := []string{"ROOT=" + root}
+
+	for _, script := range []string{
+		`echo y >"$ROOT/servers.json"`,
+		`echo y >"$ROOT/.mcp.json"`,
+		`mkdir "$ROOT/servers.json"`,
+	} {
+		assert.Error(t, bash(t, sb, script, env...), script)
+		_, err := os.Lstat(filepath.Join(root, "servers.json"))
+		assert.ErrorIs(t, err, os.ErrNotExist, script)
+	}
+}
+
+func TestSeatbeltWorkspaceThroughSymlinkedParentStaysWritable(t *testing.T) {
+	base := t.TempDir()
+	real, link := filepath.Join(base, "real"), filepath.Join(base, "link")
+	require.NoError(t, os.MkdirAll(filepath.Join(real, "ws", ".git", "hooks"), 0o700))
+	require.NoError(t, os.Symlink(real, link))
+	ws := filepath.Join(link, "ws")
+	sb := newSandbox(t, Policy{Write: []string{ws}, DenyWrite: []string{filepath.Join(ws, ".git", "hooks")}})
+	env := []string{"WS=" + ws}
+
+	for _, script := range []string{
+		`echo x >"$WS/f"`,
+		`mkdir "$WS/d" && echo x >"$WS/d/f"`,
+		`rm "$WS/f"`,
+	} {
+		require.NoError(t, bash(t, sb, script, env...), script)
+	}
+	assert.Error(t, bash(t, sb, `echo x >"$WS/.git/hooks/pre-commit"`, env...))
+	assert.FileExists(t, filepath.Join(real, "ws", "d", "f"))
+	assert.NoFileExists(t, filepath.Join(real, "ws", ".git", "hooks", "pre-commit"))
+}
+
 func TestSeatbeltDenyWriteFileSymlinkToDirectory(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "root")
 	conf := filepath.Join(root, "conf")
@@ -401,6 +561,41 @@ func TestSeatbeltDenyWriteNamesHardLink(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(root, ".mcp.json"))
 	require.NoError(t, err)
 	assert.Equal(t, "x", string(got))
+}
+
+func TestSeatbeltDenyWriteInsideWriteRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "root")
+	ws := filepath.Join(root, "ws")
+	writeFile(t, filepath.Join(ws, "f"))
+	require.NoError(t, os.Mkdir(filepath.Join(root, "scratch"), 0o700))
+	sb := newSandbox(t, Policy{Write: []string{root}, DenyWrite: []string{ws}})
+	env := []string{"ROOT=" + root, "WS=" + ws}
+
+	for _, script := range []string{
+		`cat "$WS/f"`,
+		`ls "$WS"`,
+		`echo x >"$ROOT/scratch/new"`,
+	} {
+		require.NoError(t, bash(t, sb, script, env...), script)
+	}
+	for _, script := range []string{
+		`echo y >"$WS/f"`,
+		`rm "$WS/f"`,
+		`touch "$WS/new"`,
+		`mkdir "$WS/d"`,
+		`mv "$WS/f" "$ROOT/scratch/moved"`,
+		`mv "$WS" "$ROOT/moved"`,
+	} {
+		assert.Error(t, bash(t, sb, script, env...), script)
+	}
+	// Either the link or the write through it must fail.
+	_ = bash(t, sb, `ln "$WS/f" "$ROOT/scratch/link" && echo y >"$ROOT/scratch/link"`, env...)
+	got, err := os.ReadFile(filepath.Join(ws, "f"))
+	require.NoError(t, err)
+	assert.Equal(t, "x", string(got))
+	assert.NoFileExists(t, filepath.Join(ws, "new"))
+	assert.NoDirExists(t, filepath.Join(ws, "d"))
+	assert.NoDirExists(t, filepath.Join(root, "moved"))
 }
 
 func TestSeatbeltWriteRootCannotBeRenamed(t *testing.T) {

@@ -18,9 +18,13 @@ type Tool struct {
 	Sandboxed bool
 	// Ask makes calls ask by default whatever the capability.
 	Ask bool
+	// PlanSandboxed reports that in plan mode the OS keeps the tool's calls
+	// from writing the workspace.
+	PlanSandboxed bool
 	// Run must acquire a nonmutating operation, call admit with its bound
 	// target before reading content or modifying files, and use that operation.
-	Run     func(ctx context.Context, args json.RawMessage, admit func(policy.Target) error) (string, error)
+	// admit returns the mode the call is admitted under.
+	Run     func(ctx context.Context, args json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error)
 	Display Display
 }
 
@@ -28,7 +32,7 @@ type Tool struct {
 func Specs(tools []Tool) map[string]policy.ToolSpec {
 	specs := make(map[string]policy.ToolSpec, len(tools))
 	for _, t := range tools {
-		specs[t.Name] = policy.ToolSpec{Capability: t.Capability, Target: t.Target, Sandboxed: t.Sandboxed, Ask: t.Ask}
+		specs[t.Name] = policy.ToolSpec{Capability: t.Capability, Target: t.Target, Sandboxed: t.Sandboxed, Ask: t.Ask, PlanSandboxed: t.PlanSandboxed}
 	}
 	return specs
 }

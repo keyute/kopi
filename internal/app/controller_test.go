@@ -134,8 +134,8 @@ func testTool(name string, c policy.Capability, run func(context.Context, json.R
 		Description: "Test-only tool.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 		Capability:  c,
-		Run: func(ctx context.Context, args json.RawMessage, admit func(policy.Target) error) (string, error) {
-			if err := admit(policy.Target{}); err != nil {
+		Run: func(ctx context.Context, args json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+			if _, err := admit(policy.Target{}); err != nil {
 				return "", err
 			}
 			return run(ctx, args)
@@ -336,6 +336,24 @@ func TestExecToolFollowsMode(t *testing.T) {
 	assert.Len(t, ofType[event.ApprovalRequested](h.rec.all()), 1, "plan mode refuses before asking")
 
 	assert.Equal(t, []event.ModeChanged{{Mode: policy.Execute}, {Mode: policy.Plan}}, ofType[event.ModeChanged](h.rec.all()))
+}
+
+func TestPlanSandboxedExecToolRunsInPlanWithoutAsking(t *testing.T) {
+	var ran atomic.Int32
+	exec := execTool(&ran)
+	exec.Sandboxed, exec.PlanSandboxed = true, true
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{exec}})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Exec", "call-1")), pigruntimetest.Capture(t, requests, "ok")})
+
+	h.turn(t, "run it")
+
+	req := receive(t, requests)
+	require.NotEmpty(t, req.ToolResults)
+	assert.Equal(t, execOutput, req.ToolResults[len(req.ToolResults)-1])
+	assert.Equal(t, int32(1), ran.Load())
+	assert.Equal(t, policy.Plan, h.c.Status().Mode)
+	assert.Empty(t, ofType[event.ApprovalRequested](h.rec.all()))
 }
 
 // PiG runs a batch containing a sequential (non-Read) tool one call at a
@@ -1724,6 +1742,31 @@ func TestBareDenyRemovesTool(t *testing.T) {
 	assert.Equal(t, []string{"Read"}, req.ToolNames)
 	assert.Equal(t, systemPrompt(sb.Workspace, []tool.Tool{read}, nil), req.SystemPrompt)
 	assert.NotContains(t, req.SystemPrompt, "Exec")
+}
+
+func TestStatusReportsShell(t *testing.T) {
+	var ran atomic.Int32
+	sb := pigruntimetest.NewSandbox(t)
+	exec := execTool(&ran)
+	exec.Sandboxed = true
+	h := newHarness(t, sb, Config{Tools: []tool.Tool{readTool(t, sb), exec}})
+	s := h.c.Status()
+	assert.True(t, s.Shell)
+	assert.True(t, s.Sandboxed)
+
+	unsandboxedSB := pigruntimetest.NewSandbox(t)
+	unsandboxed := execTool(&ran)
+	unsandboxed.Sandboxed = false
+	s = newHarness(t, unsandboxedSB, Config{Tools: []tool.Tool{readTool(t, unsandboxedSB), unsandboxed}}).c.Status()
+	assert.True(t, s.Shell)
+	assert.False(t, s.Sandboxed)
+
+	denySB := pigruntimetest.NewSandbox(t)
+	mcp := testTool("mcp__s__t", policy.Exec, func(context.Context, json.RawMessage) (string, error) { return "", nil })
+	rules, err := policy.NewRules(denySB.Workspace, denySB.Home, map[string]policy.ToolSpec{"Exec": {}, mcp.Name: {}}, policy.Source{Name: "test", Deny: []string{"Exec"}})
+	require.NoError(t, err)
+	denied := newHarness(t, denySB, Config{Tools: []tool.Tool{exec, mcp}, Rules: rules})
+	assert.False(t, denied.c.Status().Shell, "an MCP tool is not the shell")
 }
 
 func TestOpenEmitsNoticesAfterTheSession(t *testing.T) {

@@ -57,10 +57,10 @@ func TestMCPAdmitsBeforeCalling(t *testing.T) {
 		return "result", nil
 	})
 
-	out, err := tool.Run(t.Context(), args, func(target policy.Target) error {
+	out, err := tool.Run(t.Context(), args, func(target policy.Target) (policy.Mode, error) {
 		order = append(order, "admit")
 		assert.Equal(t, policy.Target{}, target)
-		return nil
+		return policy.Execute, nil
 	})
 
 	require.NoError(t, err)
@@ -76,7 +76,7 @@ func TestMCPDoesNotCallWithoutAdmission(t *testing.T) {
 	})
 	refused := errors.New("refused")
 
-	_, err := tool.Run(t.Context(), json.RawMessage(`{}`), func(policy.Target) error { return refused })
+	_, err := tool.Run(t.Context(), json.RawMessage(`{}`), func(policy.Target) (policy.Mode, error) { return policy.Execute, refused })
 
 	require.ErrorIs(t, err, refused)
 	assert.False(t, called)

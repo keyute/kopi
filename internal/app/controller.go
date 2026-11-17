@@ -405,6 +405,12 @@ func (c *Controller) Status() Status {
 			s.ContextTokens, s.ContextWindow = tokens, window
 		}
 	}
+	for _, t := range c.cfg.Tools {
+		if t.Capability == policy.Exec && !strings.HasPrefix(t.Name, policy.MCPPrefix) {
+			s.Shell, s.Sandboxed = true, t.Sandboxed
+			break
+		}
+	}
 	return s
 }
 

@@ -12,4 +12,7 @@ type Status struct {
 	// Branch is empty when the workspace is not in a git repository.
 	Branch string
 	Busy   bool
+	// Shell reports that a tool that runs commands is available, and
+	// Sandboxed that it runs them under the OS sandbox.
+	Shell, Sandboxed bool
 }

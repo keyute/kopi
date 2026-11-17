@@ -22,6 +22,8 @@ func TestPromptMentionsExecuteModeOnlyWhenNonReadToolAvailable(t *testing.T) {
 
 	assert.Contains(t, systemPrompt(sb.Workspace, []tool.Tool{read, edit}, nil), sentence)
 	assert.Contains(t, systemPrompt(sb.Workspace, []tool.Tool{read, {Name: "Probe", Capability: policy.Exec}}, nil), sentence)
+	assert.Contains(t, systemPrompt(sb.Workspace, []tool.Tool{read, {Name: "Probe", Capability: policy.Exec, PlanSandboxed: true}}, nil),
+		"Read-only tools work in both modes, the others only in execute mode, and any tool call may need the user's approval; in plan mode Probe runs too, but cannot write the workspace.")
 	rules, err := policy.NewRules(sb.Workspace, sb.Home, map[string]policy.ToolSpec{"Read": {}, "Write": {}, "Edit": {}}, policy.Source{Name: "test", Deny: []string{"Write", "Edit"}})
 	require.NoError(t, err)
 	h := newHarness(t, sb, Config{Tools: []tool.Tool{read, write, edit}, Rules: rules})

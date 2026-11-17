@@ -5,7 +5,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -24,12 +23,16 @@ type region int
 const (
 	regionNone region = iota
 	regionTranscript
-	regionComposer
+	// regionRows is the rows below the transcript, selected as drawn.
+	regionRows
+	// regionField is an editable text area, which keeps its own selection.
+	regionField
 )
 
 // drag is the left press being held.
 type drag struct {
 	region region
+	field  *composer
 	// at is the press, which a single click acts on at release.
 	at    tea.Mouse
 	press point
@@ -42,19 +45,53 @@ type drag struct {
 	x, edge int
 }
 
-// clearSelection also discards the transcript drag's coordinates. A pending
-// auto-scroll tick will stop when it finds no transcript drag.
+// clearSelection also discards the transcript or lower-row drag's
+// coordinates. A pending auto-scroll tick will stop when it finds no
+// transcript drag.
 func (m *model) clearSelection() {
-	m.sel = selection{}
-	if m.drag.region == regionTranscript {
+	m.sel, m.selIn = selection{}, regionNone
+	if m.drag.region == regionTranscript || m.drag.region == regionRows {
 		m.drag = drag{}
 	}
+}
+
+// deselect clears every selection, the text areas' included, so only one is
+// ever live.
+func (m *model) deselect() {
+	m.clearSelection()
+	m.composer.ta.ClearSelection()
+	if m.dialog != nil {
+		for _, o := range m.dialog.options {
+			if o.field != nil {
+				o.field.ta.ClearSelection()
+			}
+		}
+	}
+}
+
+// space is the lines a selection in r indexes, and shift, which takes a line
+// index to its screen row.
+func (m *model) space(r region) (lines []line, shift int) {
+	if r == regionRows {
+		return m.below, m.geo.transcript
+	}
+	return m.lines, -m.top()
+}
+
+// area is where field c is drawn, if it is on screen.
+func (m *model) area(c *composer) (fieldArea, bool) {
+	for _, a := range m.geo.fields {
+		if a.c == c {
+			return a, true
+		}
+	}
+	return fieldArea{}, false
 }
 
 func (m *model) mouse(msg tea.MouseMsg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.MouseClickMsg:
-		m.press(msg.Mouse())
+		return m.press(msg.Mouse())
 	case tea.MouseMotionMsg:
 		return m.motion(msg.Mouse())
 	case tea.MouseReleaseMsg:
@@ -74,48 +111,52 @@ func (m *model) mouse(msg tea.MouseMsg) tea.Cmd {
 	return nil
 }
 
-// press starts a drag in the transcript or the composer. A double click
-// selects the word under the pointer and a triple click its line; in the
-// composer that is the logical line across soft wraps. A press on the menu,
-// which covers the rows above the composer, is ignored.
-func (m *model) press(mo tea.Mouse) {
-	if menuEnd := m.composerTop() - 1; mo.Y >= menuEnd-m.menuHeight() && mo.Y < menuEnd {
-		return
-	}
-	m.sel, m.drag = selection{}, drag{}
+// press starts a drag in a field, the transcript or the rows below it; a
+// field takes the press first. A double click selects the word under the
+// pointer and a triple click its line; in a field that is the logical line
+// across soft wraps.
+func (m *model) press(mo tea.Mouse) tea.Cmd {
+	m.deselect()
+	m.drag = drag{}
 	if mo.Button != tea.MouseLeft {
-		return
+		return nil
 	}
 	n := m.clicks.press(time.Now(), mo.X, mo.Y)
-	switch top := m.composerTop(); {
-	case mo.Y >= 0 && mo.Y < m.transcriptHeight():
-		p := point{line: m.top() + mo.Y, col: mo.X}
-		unit := m.unitAt(p, n)
-		m.drag = drag{region: regionTranscript, at: mo, press: p, count: n, unit: unit, x: mo.X}
-		m.sel = unit
-	case m.approval == nil && mo.Y >= top && mo.Y < top+m.composer.height():
-		m.drag = drag{region: regionComposer}
-		m.composer.press(mo.X, mo.Y-top, n)
+	for _, a := range m.geo.fields {
+		if mo.Y >= a.y && mo.Y < a.y+a.h && mo.X >= a.x {
+			var cmd tea.Cmd
+			if m.dialog != nil {
+				cmd = m.dialog.pick(a.c)
+			}
+			m.drag = drag{region: regionField, field: a.c}
+			a.c.press(mo.X-a.x, mo.Y-a.y, n)
+			return cmd
+		}
 	}
+	r := regionTranscript
+	if mo.Y >= m.geo.transcript {
+		r = regionRows
+	}
+	lines, shift := m.space(r)
+	if mo.Y < 0 || (r == regionRows && mo.Y-shift >= len(lines)) {
+		return nil
+	}
+	p := point{line: mo.Y - shift, col: mo.X}
+	unit := unitAt(lines, p, n)
+	m.sel, m.selIn = unit, r
+	m.drag = drag{region: r, at: mo, press: p, count: n, unit: unit, x: mo.X}
+	return nil
 }
 
-// unitAt is what an n-th press at p selects in the transcript: the point
-// itself, its word or its line.
-func (m *model) unitAt(p point, n int) selection {
-	if n == 1 || p.line >= len(m.lines) {
-		return selection{anchor: p, head: p}
-	}
-	text := m.lines[p.line].text
-	if n == 2 {
-		from, to := wordAt(text, p.col)
-		return selection{anchor: point{p.line, from}, head: point{p.line, to}}
-	}
-	return selection{anchor: point{p.line, 0}, head: point{p.line, ansi.StringWidth(text)}}
+// holding reports a drag held in the composer; the menu holds still until the
+// button is released.
+func (m *model) holding() bool {
+	return m.drag.region == regionField && m.drag.field == &m.composer
 }
 
-// motion extends the drag in the region it began in. In the transcript the
-// pointer is clamped to the transcript rows, and holding it on the top or
-// bottom row scrolls.
+// motion extends the drag in the region it began in. In the transcript or the
+// lower rows the pointer is clamped to them; holding it on the transcript's
+// top or bottom row scrolls.
 func (m *model) motion(mo tea.Mouse) tea.Cmd {
 	switch m.drag.region {
 	case regionTranscript:
@@ -133,8 +174,16 @@ func (m *model) motion(mo tea.Mouse) tea.Cmd {
 		if m.drag.edge != 0 && !m.ticking {
 			return m.armAutoScroll()
 		}
-	case regionComposer:
-		m.composer.drag(mo.X, mo.Y-m.composerTop())
+	case regionRows:
+		m.drag.x = max(0, mo.X)
+		m.extend(min(max(m.geo.transcript, mo.Y), m.geo.transcript+len(m.below)-1))
+	case regionField:
+		a, ok := m.area(m.drag.field)
+		if !ok {
+			m.drag = drag{}
+			return nil
+		}
+		a.c.drag(mo.X-a.x, mo.Y-a.y)
 	}
 	return nil
 }
@@ -142,8 +191,9 @@ func (m *model) motion(mo tea.Mouse) tea.Cmd {
 // extend stretches the selection to the drag's column on screen row y, by
 // the unit the press selected: characters, words or lines.
 func (m *model) extend(y int) {
-	p := point{line: m.top() + y, col: m.drag.x}
-	m.sel = stretch(m.drag.unit, m.unitAt(p, m.drag.count))
+	lines, shift := m.space(m.selIn)
+	p := point{line: y - shift, col: m.drag.x}
+	m.sel = stretch(m.drag.unit, unitAt(lines, p, m.drag.count))
 	if p != m.drag.press {
 		m.drag.moved = true
 	}
@@ -175,16 +225,16 @@ func (m *model) autoScroll() tea.Cmd {
 	return m.armAutoScroll()
 }
 
-// release ends the drag. A single click in the transcript that never moved
-// toggles the fold under it; any other transcript drag, and a composer drag,
-// copies what it selected.
+// release ends the drag. A single click that never moved toggles the fold
+// under it in the transcript and only clears below it; any other drag copies
+// what it selected, a field's only while the field is on screen.
 func (m *model) release() tea.Cmd {
 	d := m.drag
 	m.drag = drag{}
 	switch d.region {
 	case regionTranscript:
 		if d.count == 1 && !d.moved {
-			m.sel = selection{}
+			m.clearSelection()
 			m.click(d.at)
 			return nil
 		}
@@ -192,8 +242,20 @@ func (m *model) release() tea.Cmd {
 			return nil
 		}
 		return m.copy(m.sel.text(m.lines))
-	case regionComposer:
-		if text, ok := m.composer.release(); ok {
+	case regionRows:
+		if d.count == 1 && !d.moved {
+			m.clearSelection()
+			return nil
+		}
+		if m.sel.empty() {
+			return nil
+		}
+		return m.copy(m.sel.text(m.below))
+	case regionField:
+		if _, ok := m.area(d.field); !ok {
+			return nil
+		}
+		if text, ok := d.field.release(); ok {
 			return m.copy(text)
 		}
 	}

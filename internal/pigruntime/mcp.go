@@ -111,6 +111,12 @@ func startServers(ctx context.Context, cancel context.CancelFunc, o ServerOption
 			srv.fail(fmt.Errorf("failed to expand config: %w", err))
 			continue
 		}
+		// A variable can expand to nothing, such as ${URL:-}. Checking the
+		// result also keeps redact from replacing an empty URL.
+		if err := cfg.Validate(); err != nil {
+			srv.fail(fmt.Errorf("failed to validate expanded config: %w", err))
+			continue
+		}
 		srv.cfg = cfg
 		s.wg.Go(func() { srv.start(ctx) })
 	}
