@@ -125,6 +125,12 @@ func (r *Runtime) Login(ctx context.Context, provider string, in io.Reader, out 
 		return id
 	}}
 	_, err := r.svcs.ModelRuntime().Login(ctx, provider, kind, ai.AuthInteraction{Prompt: l.prompt, Notify: l.notify}, opts)
+	// PiG returns on a cancelled ctx without joining the flow's goroutine; a
+	// hidden read still in flight must restore the terminal before Login
+	// returns, and none may start after.
+	l.rawMu.Lock()
+	l.closed = true
+	l.rawMu.Unlock()
 	idMu.Lock()
 	deviceErr := idErr
 	idMu.Unlock()
@@ -171,6 +177,10 @@ type loginIO struct {
 	// PiG joins a cancelled prompt before issuing the next, so prompts never
 	// overlap.
 	pending chan readResult
+	// rawMu is held while a hidden read has the terminal raw; closed, which it
+	// guards, refuses hidden reads once Login has returned.
+	rawMu  sync.Mutex
+	closed bool
 }
 
 type readResult struct {
@@ -294,6 +304,11 @@ func (l *loginIO) readSecret(ctx context.Context, p ai.AuthSecretPrompt) (string
 	if !ok || !term.IsTerminal(int(f.Fd())) {
 		l.ask(p.Message, p.Placeholder)
 		return l.read(ctx)
+	}
+	l.rawMu.Lock()
+	defer l.rawMu.Unlock()
+	if l.closed {
+		return "", context.Canceled
 	}
 	if err := context.Cause(ctx); err != nil {
 		return "", err

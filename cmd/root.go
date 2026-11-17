@@ -345,7 +345,10 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		if errors.Is(err, pigruntime.ErrNoCredential) {
 			providers, listErr = rt.Providers(ctx)
 		}
-		return errors.Join(diagnose(err, model, resolved.Origins["model"], paths, req, providers), listErr)
+		if listErr != nil {
+			return errors.Join(err, listErr)
+		}
+		return diagnose(err, model, resolved.Origins["model"], paths, req, providers)
 	}
 	// SIGINT is a channel rather than part of the context because it must
 	// keep firing: each one interrupts the running turn, and only one at

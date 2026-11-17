@@ -159,6 +159,35 @@ func TestLoginTerminalSecretCancellation(t *testing.T) {
 	}
 }
 
+func TestLoginTerminalSecretCancelRestoresTerminalBeforeReturn(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{APIKey: storedKeyAuth()})))
+	_, slave := loginTestTerminal(t)
+	before, err := term.GetState(int(slave.Fd()))
+	require.NoError(t, err)
+	out := &loginPromptOutput{ready: make(chan struct{}), release: make(chan struct{})}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan readResult, 1)
+	go func() { done <- readResult{err: r.Login(ctx, oauthProvider, slave, out)} }()
+	waitLoginPrompt(t, out.ready)
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("Login returned before the hidden read restored the terminal")
+	default:
+	}
+	close(out.release)
+
+	res := waitLoginResult(t, done)
+
+	require.ErrorIs(t, res.err, context.Canceled)
+	after, err := term.GetState(int(slave.Fd()))
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+}
+
 func TestLoginTerminalSecretEditingAndAbort(t *testing.T) {
 	for _, tc := range []struct {
 		name, input, want string
