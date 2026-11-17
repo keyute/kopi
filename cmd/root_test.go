@@ -198,6 +198,40 @@ func TestRootRejectsInvalidRuleInConfig(t *testing.T) {
 	assert.NoDirExists(t, e.agentDir)
 }
 
+func TestRootToolSearchRules(t *testing.T) {
+	for _, tc := range []struct {
+		name, config, flag string
+	}{
+		{name: "flag allow", flag: "--allowed-tools"},
+		{name: "flag deny", flag: "--disallowed-tools"},
+		{name: "config allow", config: "allow"},
+		{name: "config ask", config: "ask"},
+		{name: "config deny", config: "deny"},
+	} {
+		for _, rule := range []string{"ToolSearch", "ToolSearch(docs/**)"} {
+			t.Run(tc.name+"/"+rule, func(t *testing.T) {
+				e := newTestEnv(t)
+				args := []string{"--model", "nosuch/model-1", "-p", "hi"}
+				if tc.flag != "" {
+					args = append(args, tc.flag, rule)
+				} else {
+					e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), fmt.Sprintf(`{"permissions":{%q:[%q]}}`, tc.config, rule))
+				}
+
+				_, _, err := execute(t, "", args...)
+
+				require.Error(t, err)
+				if rule == "ToolSearch" {
+					assert.EqualError(t, err, `unknown model "nosuch/model-1": check --model`)
+				} else {
+					assert.Contains(t, err.Error(), `tool "ToolSearch" takes no path`)
+					assert.NoDirExists(t, e.agentDir)
+				}
+			})
+		}
+	}
+}
+
 func TestRootRejectsPathRuleForBash(t *testing.T) {
 	e := newTestEnv(t)
 

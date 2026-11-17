@@ -47,8 +47,9 @@ func AskTrust(ctx context.Context, in io.Reader, out io.Writer, opts Options, re
 			p.Quit()
 		}
 	}()
-	// Keys typed before the prompt is drawn, such as a second Enter after
-	// starting kopi, would otherwise pick an option the human has not seen.
+	// Discard already queued input, not establish a render/readiness boundary.
+	// Keys arriving during Bubble Tea startup can still be accepted before the
+	// first draw; that timing limitation is accepted.
 	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 		if err := discardInput(f); err != nil {
 			return TrustCancelled, fmt.Errorf("failed to discard typed-ahead input before the trust prompt: %w", err)

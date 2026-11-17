@@ -3,6 +3,7 @@ package pigruntime
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -108,6 +109,52 @@ func TestCallToDeferredToolBeforeLoadIsNotFound(t *testing.T) {
 	assert.Contains(t, lastToolResult(t, <-requests), "not found")
 	assert.False(t, ran.Load())
 	assert.Empty(t, asked)
+}
+
+func TestLoadToolsConcurrentlyPreservesActiveTools(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 2)
+	faux.SetResponses([]ai.FauxResponseStep{
+		captureAndCall(requests, "Load", "call-1"),
+		captureRequest(requests, "done"),
+	})
+
+	loadErrors := make(chan error, 2)
+	loader := readTool("Load", func(ctx context.Context) (string, error) {
+		ready := make(chan struct{}, 2)
+		start := make(chan struct{})
+		var loaders sync.WaitGroup
+		for _, name := range []string{"DeferredA", "DeferredB"} {
+			loaders.Add(1)
+			go func() {
+				defer loaders.Done()
+				ready <- struct{}{}
+				<-start
+				loadErrors <- LoadTools(ctx, []string{name})
+			}()
+		}
+		<-ready
+		<-ready
+		close(start)
+		loaders.Wait()
+		return "loaded", nil
+	})
+	tools := []tool.Tool{loader}
+	for _, name := range []string{"Original", "DeferredA", "DeferredB"} {
+		candidate := readTool(name, func(context.Context) (string, error) { return "ok", nil })
+		candidate.Deferred = name != "Original"
+		tools = append(tools, candidate)
+	}
+	sess := openTestSession(t, r, tools...)
+
+	res, err := sess.Send(t.Context(), Prompt{Text: "load both"}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "done", res.Reply)
+	assert.NoError(t, <-loadErrors)
+	assert.NoError(t, <-loadErrors)
+	assert.ElementsMatch(t, []string{"Load", "Original"}, declared(<-requests))
+	assert.ElementsMatch(t, []string{"Load", "Original", "DeferredA", "DeferredB"}, declared(<-requests))
 }
 
 func TestLoadToolsOutsideTurnFails(t *testing.T) {

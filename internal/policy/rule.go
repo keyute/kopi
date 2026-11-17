@@ -24,7 +24,10 @@ type Source struct {
 const MCPPrefix = "mcp__"
 
 // ProjectMCPFile is the file in which a folder declares MCP servers; Kopi
-// starts a trusted folder's servers outside the sandbox.
+// starts a trusted folder's servers outside the sandbox. Loading may follow a
+// symlink, but built-in protection deliberately checks the .mcp.json name without
+// discovering differently named targets; unprotected direct access to those
+// targets is an accepted limitation.
 const ProjectMCPFile = ".mcp.json"
 
 // ruleName also admits a trailing * for parseRule to refuse on non-MCP names.

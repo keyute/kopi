@@ -2107,6 +2107,73 @@ func TestBareDenyRemovesServerTool(t *testing.T) {
 	assert.NotContains(t, req.SystemPrompt, denied.Name)
 }
 
+func TestBareDenyRemovesToolSearch(t *testing.T) {
+	for _, deny := range []string{"ToolSearch", "*"} {
+		t.Run(deny, func(t *testing.T) {
+			sb := pigruntimetest.NewSandbox(t)
+			mcp := serverTool("mcp__s__t")
+			rules, err := policy.NewRules(sb.Workspace, sb.Home, tool.Specs([]tool.Tool{tool.NewToolSearch(nil, nil, nil)}), policy.Source{Name: "test", Deny: []string{deny}})
+			require.NoError(t, err)
+			h := newHarness(t, sb, Config{
+				Rules:   rules,
+				Servers: servers(pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{mcp}}),
+			})
+			require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+			requests := make(chan pigruntimetest.Request, 1)
+			h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "done")})
+
+			h.turn(t, "what can you use?")
+
+			assert.Empty(t, receive(t, requests).ToolNames)
+			assert.NotContains(t, toolNames(h.c.tools), "ToolSearch")
+			if deny == "ToolSearch" {
+				assert.Equal(t, []string{mcp.Name}, toolNames(h.c.tools))
+				assert.True(t, h.c.tools[0].Deferred)
+			} else {
+				assert.Empty(t, h.c.tools)
+			}
+		})
+	}
+}
+
+func TestToolSearchFollowsPermissionRules(t *testing.T) {
+	for _, effect := range []string{"allow", "ask"} {
+		t.Run(effect, func(t *testing.T) {
+			sb := pigruntimetest.NewSandbox(t)
+			mcp := serverTool("mcp__s__t")
+			source := policy.Source{Name: "test", Allow: []string{"ToolSearch"}}
+			if effect == "ask" {
+				source.Allow, source.Ask = nil, []string{"ToolSearch"}
+			}
+			rules, err := policy.NewRules(sb.Workspace, sb.Home, tool.Specs([]tool.Tool{tool.NewToolSearch(nil, nil, nil)}), source)
+			require.NoError(t, err)
+			h := newHarness(t, sb, Config{
+				Rules: rules, Unattended: true,
+				Servers: servers(pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{mcp}}),
+			})
+			require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+			requests := make(chan pigruntimetest.Request, 1)
+			h.faux.SetResponses([]ai.FauxResponseStep{
+				pigruntimetest.ToolCalls(pigruntimetest.Call{Name: "ToolSearch", ID: "call-1", Args: map[string]any{"query": mcp.Name}}),
+				pigruntimetest.Capture(t, requests, "done"),
+			})
+
+			h.turn(t, "load t")
+
+			req := receive(t, requests)
+			assert.Contains(t, req.ToolNames, "ToolSearch")
+			require.Len(t, req.ToolResults, 1)
+			if effect == "ask" {
+				assert.Contains(t, req.ToolResults[0], `rule ToolSearch (test) requires approval`)
+				assert.NotContains(t, req.ToolNames, mcp.Name)
+			} else {
+				assert.Contains(t, req.ToolResults[0], "Loaded 1 tool")
+				assert.Contains(t, req.ToolNames, mcp.Name)
+			}
+		})
+	}
+}
+
 func TestOpenDefersServerTools(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	read, a, b := readTool(t, sb), serverTool("mcp__s__a"), serverTool("mcp__s__b")

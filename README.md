@@ -165,11 +165,11 @@ Permission rules in `config.json` allow, ask about or deny calls:
 }
 ```
 
-- A rule is `Name` or `Name(path)`. The name is a tool name (`Read`, `Write`, `Edit`, `Bash`), an MCP tool name (see MCP servers) or `*` for every tool; an unknown name or a malformed rule is rejected at start.
+- A rule is `Name` or `Name(path)`. The name is a tool name (`Read`, `Write`, `Edit`, `Bash`, `ToolSearch`), an MCP tool name (see MCP servers) or `*` for every tool; an unknown name or a malformed rule is rejected at start.
 - `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory. `*` and `**` glob. A name with no slash (`.env`) matches at any depth, and a directory covers everything in it. Paths match case-insensitively on macOS and Windows.
 - `Name(!path)` exempts the calls it matches from the other rules in its own list, from the same config layer or flag; it never reaches rules from anywhere else.
 - A bare `Name` in `deny` removes the tool from the model.
-- `ToolSearch` cannot be named in a rule; only `*` rules cover it.
+- `ToolSearch` takes no path: only a bare `ToolSearch` or `*` rule applies to it; `ToolSearch(path)` is rejected at start.
 - `Bash` takes no path: only a bare `Bash` or `*` rule applies to it, `Bash(path)` is rejected at start, and path rules such as `*(~/.ssh)` never apply to `Bash`. `"ask": ["Bash"]` makes every command ask.
 - Plan mode refuses `Write`, `Edit`, unsandboxed `Bash` and MCP tools not marked read-only before any rule; otherwise rules apply to `Bash` the same in both modes.
 - Deny beats ask, and ask beats allow. With no rule matching, `Read`, `ToolSearch` and sandboxed `Bash` are allowed and any other call asks, including every `Bash` command without the sandbox.
@@ -203,7 +203,7 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - A server's tools are named `mcp__<server>__<tool>`, with characters outside `A-Z`, `a-z`, `0-9`, `_` and `-` turned into `_`. The normalized server component must be nonempty, must not contain `__`, and must not end in `_`, so a whole-server permission prefix cannot match another server. Invalid server names fail before connecting. A name over 64 characters, or one that two tools share, is skipped and reported.
 - A tool the server marks read-only (`readOnlyHint`) works in plan mode; any other works only in execute mode.
 - Every MCP call asks unless a rule allows it, read-only or not, and print mode denies it without one. A rule names one tool, `mcp__context7__resolve-library-id`, or ends in `*` to cover a prefix: `mcp__context7__*` for a whole server, `mcp__*` for every server. A prefix must be `mcp__` or run past the server name's `__`, so one that ends inside a server name, such as `mcp__context*`, is rejected at start. MCP rules take no path, and are accepted for servers that are not configured here.
-- The system prompt lists each server's tool names; a tool's schema reaches the model only after the model loads it with `ToolSearch`, by keywords or by exact names, at most 20 per keyword search. `ToolSearch` works in both modes and, with no `*` rule matching, never asks. Each new or resumed session starts with no MCP tool loaded.
+- The system prompt lists each server's tool names; a tool's schema reaches the model only after the model loads it with `ToolSearch`, by keywords or by exact names, at most 20 per keyword search. `ToolSearch` works in both modes and, with no rule matching, never asks. Each new or resumed session starts with no MCP tool loaded.
 - Server instructions are added to the system prompt, at most 2 KB each. Results are text, capped like other tool output; images and other content show as placeholders.
 - `kopi mcp list` starts the servers this directory uses, lists each with where it is declared, its state and its tools (`read-only` or `execute`), and exits. It never asks: undecided and untrusted folders' `.mcp.json` servers show as not trusted and are not started.
 

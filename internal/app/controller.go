@@ -147,7 +147,10 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	}
 	tools := slices.Clone(c.cfg.Tools)
 	if len(serverTools) > 0 {
-		tools = append(tools, tool.NewToolSearch(serverTools, pigruntime.RankTools, pigruntime.LoadTools))
+		search := tool.NewToolSearch(serverTools, pigruntime.RankTools, pigruntime.LoadTools)
+		if !c.cfg.Rules.Removes(search.Name) {
+			tools = append(tools, search)
+		}
 	}
 	tools = append(tools, serverTools...)
 	c.tools = tools
