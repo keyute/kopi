@@ -908,6 +908,13 @@ func TestRootSandboxedBashCannotWriteWorkspaceInPlan(t *testing.T) {
 	content, err := os.ReadFile(tempFile)
 	require.NoError(t, err)
 	assert.Equal(t, "temp\n", string(content))
+
+	result, _ = printBash(t, e, "printf 'workspace\\n' > "+quotedWS+" && printf 'write succeeded\\n'", "--mode", "execute")
+
+	assert.Equal(t, "write succeeded\n", result)
+	content, err = os.ReadFile(wsFile)
+	require.NoError(t, err)
+	assert.Equal(t, "workspace\n", string(content))
 }
 
 func TestSandboxPolicy(t *testing.T) {
