@@ -419,16 +419,18 @@ func TestCancelAfterTurnFinishedReportsCompleted(t *testing.T) {
 	assert.Equal(t, 2, sess.MessageCount())
 }
 
-func TestAbortAtRunStart(t *testing.T) {
+func TestAbortOnEvent(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		cancelled bool
-		ev        agent.AgentEvent
+		evs       []agent.AgentEvent
 		want      int
 	}{
-		{name: "agent start with ctx cancelled", cancelled: true, ev: agent.AgentStartEvent{}, want: 1},
-		{name: "agent start with ctx live", ev: agent.AgentStartEvent{}},
-		{name: "other event with ctx cancelled", cancelled: true, ev: agent.TurnStartEvent{}},
+		{name: "agent start with ctx cancelled", cancelled: true, evs: []agent.AgentEvent{agent.AgentStartEvent{}}, want: 1},
+		{name: "agent start with ctx live", evs: []agent.AgentEvent{agent.AgentStartEvent{}}},
+		{name: "tool end with ctx live", evs: []agent.AgentEvent{agent.ToolExecutionEndEvent{}}},
+		{name: "two other events with ctx cancelled", cancelled: true, evs: []agent.AgentEvent{agent.ToolExecutionEndEvent{}, agent.TurnEndEvent{}}, want: 2},
+		{name: "other event then agent start with ctx cancelled", cancelled: true, evs: []agent.AgentEvent{agent.TurnStartEvent{}, agent.AgentStartEvent{}}, want: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
@@ -437,7 +439,10 @@ func TestAbortAtRunStart(t *testing.T) {
 				cancel()
 			}
 			calls := 0
-			abortAtRunStart(ctx, func() { calls++ })(tc.ev)
+			listen := abortOnEvent(ctx, func() { calls++ })
+			for _, ev := range tc.evs {
+				listen(ev)
+			}
 			assert.Equal(t, tc.want, calls)
 		})
 	}
