@@ -210,6 +210,9 @@ func TestPreviewRowsHugeLineBoundedAllocations(t *testing.T) {
 	huge := []tool.PreviewLine{{Kind: tool.Added, Text: strings.Repeat("x", 4<<20)}}
 	assert.Equal(t, previewRows(short, 3, 20, th), previewRows(huge, 3, 20, th))
 	assert.Equal(t, []string{hang("  ", fg(th.dim), "… 1 more line", fg(th.dim), 20)[0]}, previewRows(huge, 3, 20, th))
+	if raceEnabled {
+		t.Skip("sync.Pool randomly drops items under -race, so allocation counts vary")
+	}
 	shortAllocs := testing.AllocsPerRun(10, func() { previewRows(short, 3, 20, th) })
 	hugeAllocs := testing.AllocsPerRun(10, func() { previewRows(huge, 3, 20, th) })
 	// Rendering uses pools, so allow a small constant variation, not growth

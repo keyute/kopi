@@ -33,26 +33,29 @@ func TestPermitsByModeAndCapability(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		execute bool
-		cap     Capability
+		spec    ToolSpec
 		want    bool
 	}{
-		{"plan read", false, Read, true},
-		{"plan write", false, Write, false},
-		{"plan exec", false, Exec, false},
-		{"plan unknown", false, Capability("network"), false},
-		{"execute read", true, Read, true},
-		{"execute write", true, Write, true},
-		{"execute exec", true, Exec, true},
-		{"execute unknown", true, Capability("network"), true},
+		{"plan read", false, ToolSpec{Capability: Read}, true},
+		{"plan write", false, ToolSpec{Capability: Write}, false},
+		{"plan exec", false, ToolSpec{Capability: Exec}, false},
+		{"plan sandboxed exec", false, ToolSpec{Capability: Exec, Sandboxed: true}, false},
+		{"plan plan-sandboxed exec", false, ToolSpec{Capability: Exec, Sandboxed: true, PlanSandboxed: true}, true},
+		{"plan unknown", false, ToolSpec{Capability: Capability("network")}, false},
+		{"execute read", true, ToolSpec{Capability: Read}, true},
+		{"execute write", true, ToolSpec{Capability: Write}, true},
+		{"execute exec", true, ToolSpec{Capability: Exec}, true},
+		{"execute unknown", true, ToolSpec{Capability: Capability("network")}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := NewAuthority()
 			if tc.execute {
 				a.EnterExecute()
 			}
-			_, wantGen := a.Snapshot()
-			gen, ok := a.Permits(tc.cap)
+			wantMode, wantGen := a.Snapshot()
+			mode, gen, ok := a.Permits(tc.spec)
 			assert.Equal(t, tc.want, ok)
+			assert.Equal(t, wantMode, mode)
 			assert.Equal(t, wantGen, gen)
 		})
 	}
@@ -70,7 +73,7 @@ func TestConcurrentTransitionsAndPermitsAreRaceFree(t *testing.T) {
 		})
 		wg.Go(func() {
 			for range 100 {
-				a.Permits(Exec)
+				a.Permits(ToolSpec{Capability: Exec})
 				a.Snapshot()
 			}
 		})

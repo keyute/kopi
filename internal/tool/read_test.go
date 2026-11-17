@@ -282,7 +282,7 @@ func TestReadTarget(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidArgs)
 }
 
-func allowTarget(policy.Target) error { return nil }
+func allowTarget(policy.Target) (policy.Mode, error) { return policy.Execute, nil }
 
 func TestToolsDoNotReadContentBeforeAdmission(t *testing.T) {
 	dir := t.TempDir()
@@ -294,7 +294,7 @@ func TestToolsDoNotReadContentBeforeAdmission(t *testing.T) {
 			if tool.Name == "Read" {
 				raw = json.RawMessage(`{"file_path":"binary"}`)
 			}
-			out, err := tool.Run(t.Context(), raw, func(policy.Target) error { return policy.ErrDenied })
+			out, err := tool.Run(t.Context(), raw, func(policy.Target) (policy.Mode, error) { return policy.Plan, policy.ErrDenied })
 			require.ErrorIs(t, err, policy.ErrDenied)
 			assert.Empty(t, out)
 			assert.Equal(t, "secret\x00", readContent(t, filepath.Join(dir, "binary")))
@@ -319,11 +319,11 @@ func TestToolsUseAdmittedHandlesAfterParentRetarget(t *testing.T) {
 			}
 			raw, err := json.Marshal(args)
 			require.NoError(t, err)
-			out, err := tools[name].Run(t.Context(), raw, func(target policy.Target) error {
+			out, err := tools[name].Run(t.Context(), raw, func(target policy.Target) (policy.Mode, error) {
 				assert.Equal(t, filepath.Join(ws.realDir, "allowed", "file"), target.Real)
 				require.NoError(t, os.Rename(filepath.Join(dir, "allowed"), filepath.Join(dir, "pinned")))
 				require.NoError(t, os.Symlink("denied", filepath.Join(dir, "allowed")))
-				return nil
+				return policy.Execute, nil
 			})
 			require.NoError(t, err)
 			if name == "Read" {

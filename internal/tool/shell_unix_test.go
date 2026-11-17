@@ -71,12 +71,12 @@ func lifecycleShell(t *testing.T, dir string, sandboxed bool) *Shell {
 	t.Helper()
 	var sb *sandbox.Sandbox
 	if sandboxed {
-		var err error
-		sb, err = sandbox.New(t.Context(), sandbox.Policy{Write: []string{dir}})
+		sbs, err := sandbox.New(t.Context(), sandbox.Policy{Write: []string{dir}})
 		if errors.Is(err, sandbox.ErrUnavailable) {
 			t.Skip(err)
 		}
 		require.NoError(t, err)
+		sb = sbs[0]
 	}
 	return NewShell(dir, sb)
 }

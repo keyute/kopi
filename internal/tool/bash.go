@@ -22,16 +22,24 @@ type bashArgs struct {
 	Timeout *int `json:"timeout"`
 }
 
-func NewBash(sh *Shell) Tool {
+// NewBash runs execute-mode calls in sh and plan-mode calls in plan, which
+// must keep commands from writing the workspace; with plan unsandboxed, plan
+// mode cannot run commands.
+func NewBash(sh, plan *Shell) Tool {
+	description := "Runs a shell command (bash, else sh) in the workspace and returns its combined stdout and stderr; " +
+		"long output keeps its start and end. Every call starts a fresh shell in the workspace with no input: " +
+		"cd and variables do not carry over. A non-zero exit status is an error that reports the exit code. " +
+		"timeout is in milliseconds (default 120000, at most 600000); a command that runs out of time is killed."
+	if sh.Sandboxed() {
+		description += " Commands run in an OS sandbox that allows writing only in temporary directories, paths the user allowed " +
+			"and, in execute mode, the workspace; it may block reading some paths and the network. " +
+			"A blocked operation fails with \"Operation not permitted\"."
+	}
+	planSandboxed := plan.Sandboxed()
 	return Tool{
-		Name:  "Bash",
-		Label: "Bash",
-		Description: "Runs a shell command (bash, else sh) in the workspace and returns its combined stdout and stderr; " +
-			"long output keeps its start and end. Every call starts a fresh shell in the workspace with no input: " +
-			"cd and variables do not carry over. A non-zero exit status is an error that reports the exit code. " +
-			"timeout is in milliseconds (default 120000, at most 600000); a command that runs out of time is killed. " +
-			"Commands may run in an OS sandbox that allows writing only in the workspace, temporary directories and paths the user allowed, " +
-			"and may block reading some paths and the network; a blocked operation fails with \"Operation not permitted\".",
+		Name:        "Bash",
+		Label:       "Bash",
+		Description: description,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -49,9 +57,10 @@ func NewBash(sh *Shell) Tool {
 			"required":             []string{"command"},
 			"additionalProperties": false,
 		},
-		Capability: policy.Exec,
-		Sandboxed:  sh.Sandboxed(),
-		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) error) (string, error) {
+		Capability:    policy.Exec,
+		Sandboxed:     sh.Sandboxed(),
+		PlanSandboxed: planSandboxed,
+		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
 			args, err := decodeBashArgs(raw)
 			if err != nil {
 				return "", err
@@ -59,14 +68,24 @@ func NewBash(sh *Shell) Tool {
 			if err := ctx.Err(); err != nil {
 				return "", err
 			}
-			if err := admit(policy.Target{}); err != nil {
+			mode, err := admit(policy.Target{})
+			if err != nil {
 				return "", err
+			}
+			// The shell is chosen from the admitted mode only: a later read of
+			// the mode could run a plan-admitted call with a writable workspace.
+			run := sh
+			if mode != policy.Execute {
+				if !planSandboxed {
+					return "", fmt.Errorf("failed to run command: plan mode runs commands only in the OS sandbox, which is off or unavailable: %w", policy.ErrDenied)
+				}
+				run = plan
 			}
 			timeout := defaultBashTimeoutMS
 			if args.Timeout != nil {
 				timeout = *args.Timeout
 			}
-			return sh.Run(ctx, args.Command, time.Duration(timeout)*time.Millisecond)
+			return run.Run(ctx, args.Command, time.Duration(timeout)*time.Millisecond)
 		},
 		Display: Display{
 			Title: bashTitle,

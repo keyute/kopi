@@ -261,7 +261,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		return fmt.Errorf("failed to resolve working directory: %w", err)
 	}
 
-	sb, unavailable, err := openSandbox(cmd.Context(), resolved.Config.Sandbox, cwd, userHome, paths.Home)
+	sb, planSB, unavailable, err := openSandbox(cmd.Context(), resolved.Config.Sandbox, cwd, userHome, paths.Home)
 	if err != nil {
 		return err
 	}
@@ -277,7 +277,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			ws.Close()
 		}
 	}()
-	tools := []tool.Tool{tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb))}
+	tools := []tool.Tool{tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb), tool.NewShell(cwd, planSB))}
 	rules, err := permissionRules(cwd, userHome, tools, resolved.Config.Permissions, resolved.Origins, flagRules)
 	if err != nil {
 		return err
@@ -298,7 +298,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	}
 	// Logged only now so that in fullscreen it goes to the log file.
 	if unavailable != nil {
-		slog.Warn("sandbox is unavailable; Bash runs without it and needs approval or an allow rule", "err", unavailable)
+		slog.Warn("sandbox is unavailable; Bash runs without it and needs approval or an allow rule, and plan mode refuses it", "err", unavailable)
 	}
 
 	rt, err := openRuntime(ctx, paths, cwd)
@@ -364,21 +364,23 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	return errors.Join(runErr, closeErr)
 }
 
-// openSandbox returns the sandbox Bash runs under, or nil when sandbox.enabled
-// is false. With enabled unset, a machine without a usable sandbox is not an
-// error: the sandbox is nil and unavailable says why.
-func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHome string) (sb *sandbox.Sandbox, unavailable, err error) {
+// openSandbox returns the sandboxes Bash runs under in execute and in plan
+// mode, both or neither; neither when sandbox.enabled is false. With enabled
+// unset, a machine without a usable sandbox is not an error: the sandboxes
+// are nil and unavailable says why.
+func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHome string) (sb, plan *sandbox.Sandbox, unavailable, err error) {
 	if cfg.Enabled != nil && !*cfg.Enabled {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
-	sb, err = sandbox.New(ctx, sandboxPolicy(cfg, cwd, userHome, kopiHome))
+	p := sandboxPolicy(cfg, cwd, userHome, kopiHome)
+	sandboxes, err := sandbox.New(ctx, p, planPolicy(p, cwd))
 	switch {
 	case cfg.Enabled == nil && errors.Is(err, sandbox.ErrUnavailable):
-		return nil, err, nil
+		return nil, nil, err, nil
 	case err != nil:
-		return nil, nil, fmt.Errorf("failed to start the sandbox: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to start the sandbox: %w", err)
 	}
-	return sb, nil, nil
+	return sandboxes[0], sandboxes[1], nil, nil
 }
 
 // sandboxPolicy lets commands write only the workspace, temporary
@@ -422,6 +424,14 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 		DenyWrite: denyWrite,
 		Network:   cfg.Network,
 	}
+}
+
+// planPolicy is p with the workspace denied rather than dropped from the write
+// roots: a workspace under /tmp, the temporary directory or an allowWrite path
+// would stay writable through that root.
+func planPolicy(p sandbox.Policy, cwd string) sandbox.Policy {
+	p.DenyWrite = slices.Concat(p.DenyWrite, []string{cwd})
+	return p
 }
 
 // diagnose turns the open failures a user can fix into Kopi's own advice.

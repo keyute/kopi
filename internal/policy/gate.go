@@ -21,6 +21,9 @@ type ToolSpec struct {
 	// Sandboxed reports that the OS confines what a call can do, so a call no
 	// rule matches runs without asking.
 	Sandboxed bool
+	// PlanSandboxed reports that in plan mode the OS keeps a call from writing
+	// the workspace, so plan mode admits it.
+	PlanSandboxed bool
 }
 
 type Answer int
@@ -88,9 +91,11 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 	if !ok {
 		return fmt.Errorf("tool %q: %w", tool, ErrUnknownTool)
 	}
-	gen, ok := g.authority.Permits(spec.Capability)
+	_, gen, ok := g.authority.Permits(spec)
 	if !ok {
-		// Only plan mode denies anything, so the mode is known without a racy re-read.
+		if spec.Capability == Exec {
+			return fmt.Errorf("tool %q needs execute mode; the session is in plan mode, where it runs only in the OS sandbox, which is off or unavailable: %w", tool, ErrDenied)
+		}
 		return fmt.Errorf("tool %q needs execute mode; the session is in %s mode: %w", tool, Plan, ErrDenied)
 	}
 	var target *Target
@@ -164,24 +169,25 @@ func (g *Gate) ask(ctx context.Context, r Request, allow string) error {
 }
 
 // Admit consumes the grant and compares the execution arguments and the
-// target bound to the tool's prepared operation with the approved call.
-func (g *Gate) Admit(callID, tool string, args json.RawMessage, target *Target) error {
+// target bound to the tool's prepared operation with the approved call. It
+// returns the mode the call is admitted under, Plan on any error.
+func (g *Gate) Admit(callID, tool string, args json.RawMessage, target *Target) (Mode, error) {
 	g.mu.Lock()
 	gr, ok := g.grants[callID]
 	delete(g.grants, callID)
 	g.mu.Unlock()
 	if !ok || gr.tool != tool {
-		return fmt.Errorf("tool %q: %w", tool, ErrNoGrant)
+		return Plan, fmt.Errorf("tool %q: %w", tool, ErrNoGrant)
 	}
 	if !bytes.Equal(gr.args, args) || (gr.target == nil) != (target == nil) || (target != nil && *gr.target != *target) {
-		return fmt.Errorf("tool %q: arguments or target changed; make a new call: %w", tool, ErrChangedCall)
+		return Plan, fmt.Errorf("tool %q: arguments or target changed; make a new call: %w", tool, ErrChangedCall)
 	}
-	c := g.tools[tool].Capability
-	gen, ok := g.authority.Permits(c)
-	if !ok || (c.NeedsExecute() && gen != gr.generation) {
-		return fmt.Errorf("tool %q: the session mode changed after the call was approved: %w", tool, ErrRevoked)
+	spec := g.tools[tool]
+	mode, gen, ok := g.authority.Permits(spec)
+	if !ok || (spec.Capability.NeedsExecute() && gen != gr.generation) {
+		return Plan, fmt.Errorf("tool %q: the session mode changed after the call was approved: %w", tool, ErrRevoked)
 	}
-	return nil
+	return mode, nil
 }
 
 // Finish discards any unused grant when execution fails before admission.

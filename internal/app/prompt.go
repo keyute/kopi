@@ -24,7 +24,11 @@ func systemPrompt(workspace string, tools []tool.Tool) string {
 		"The session has a plan mode and an execute mode; only the user can switch between them.",
 	}
 	if slices.ContainsFunc(tools, func(t tool.Tool) bool { return t.Capability != policy.Read }) {
-		lines = append(lines, "Tools other than Read work only in execute mode and may need the user's approval.")
+		line := "Tools other than Read work only in execute mode and may need the user's approval."
+		if i := slices.IndexFunc(tools, func(t tool.Tool) bool { return t.PlanSandboxed }); i >= 0 {
+			line = "Tools other than Read work only in execute mode and may need the user's approval; in plan mode " + tools[i].Name + " runs too, but cannot write the workspace."
+		}
+		lines = append(lines, line)
 	}
 	lines = append(lines, "A tool call that is refused or that the user rejects returns an error saying so; when the rejection carries the user's feedback, act on it; never retry a rejected call unchanged.")
 	return strings.Join(lines, "\n")

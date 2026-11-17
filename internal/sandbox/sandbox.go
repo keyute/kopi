@@ -20,22 +20,29 @@ type Policy struct {
 // Sandbox wraps commands so they run under one Policy.
 type Sandbox struct{ prefix []string }
 
-// New checks that the platform sandbox works and builds it for p. It returns
-// ErrUnavailable when this platform has no sandbox or it cannot be applied.
-func New(ctx context.Context, p Policy) (*Sandbox, error) {
+// New checks once that the platform sandbox works and builds one Sandbox per
+// policy, in argument order. It returns ErrUnavailable when this platform has
+// no sandbox or it cannot be applied.
+func New(ctx context.Context, policies ...Policy) ([]*Sandbox, error) {
 	switch runtime.GOOS {
 	case "darwin":
-		for _, list := range [][]string{p.Write, p.DenyRead, p.DenyWrite} {
-			for _, path := range list {
-				if !filepath.IsAbs(path) {
-					return nil, fmt.Errorf("sandbox path %q is not absolute", path)
+		for _, p := range policies {
+			for _, list := range [][]string{p.Write, p.DenyRead, p.DenyWrite} {
+				for _, path := range list {
+					if !filepath.IsAbs(path) {
+						return nil, fmt.Errorf("sandbox path %q is not absolute", path)
+					}
 				}
 			}
 		}
 		if err := probe(ctx); err != nil {
 			return nil, err
 		}
-		return &Sandbox{prefix: seatbeltPrefix(p)}, nil
+		sandboxes := make([]*Sandbox, len(policies))
+		for i, p := range policies {
+			sandboxes[i] = &Sandbox{prefix: seatbeltPrefix(p)}
+		}
+		return sandboxes, nil
 	default:
 		return nil, fmt.Errorf("%w on %s", ErrUnavailable, runtime.GOOS)
 	}
