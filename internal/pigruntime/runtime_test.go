@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -322,6 +323,60 @@ func TestSeamCancelDuringToolReportsInterrupted(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, resumed.Close(context.Background())) })
 	assert.Equal(t, 4, resumed.MessageCount())
+}
+
+// Hold asynchronous cancellation forwarding until the loop has ended, so only
+// Send's synchronous event listener can prevent the second provider request.
+func TestCancelDuringToolAbortsBeforeCancellationForwarding(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), reply("should not be requested")})
+
+	started, release := make(chan struct{}), make(chan struct{})
+	releaseProbe := sync.OnceFunc(func() { close(release) })
+	sess := openTestSession(t, r, probeTool(func(context.Context, json.RawMessage) (string, error) {
+		close(started)
+		<-release
+		return toolOutput, nil
+	}))
+	runEnded := make(chan struct{}, 1)
+	t.Cleanup(sess.inner.Subscribe(func(ev agent.AgentEvent) {
+		if _, ok := ev.(agent.AgentEndEvent); ok {
+			runEnded <- struct{}{}
+		}
+	}))
+	forward, cancel := context.WithCancel(t.Context())
+	ctx := &gatedAbortContext{Context: context.WithoutCancel(t.Context()), forward: forward, started: make(chan struct{}), release: make(chan struct{})}
+	releaseForwarding := sync.OnceFunc(func() { close(ctx.release) })
+	type result struct {
+		res SendResult
+		err error
+	}
+	done := make(chan result, 1)
+	joined := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		releaseProbe()
+		releaseForwarding()
+		<-joined
+	})
+	go func() {
+		defer close(joined)
+		res, err := sess.Send(ctx, Prompt{Text: "block"}, nil)
+		done <- result{res, err}
+	}()
+	<-started
+	cancel()
+	<-ctx.started
+	releaseProbe()
+	<-runEnded
+	require.Equal(t, 1, faux.CallCount())
+
+	releaseForwarding()
+	res := <-done
+	<-joined
+	require.NoError(t, res.err)
+	assert.Equal(t, event.Outcome{Status: event.Interrupted}, res.res.Outcome)
 }
 
 func TestCancelledBeforeSendInterruptsWithoutProviderCall(t *testing.T) {
