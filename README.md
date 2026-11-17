@@ -186,7 +186,7 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - In the sandbox, `git init` in the start directory, `git config` writes, `git worktree add`, commits in a linked worktree (its git directory is outside the start directory), commits inside a submodule and commit signing through an agent socket fail.
 - The sandbox does not protect the config and hooks of repositories nested inside the start directory, or of the start directory itself when it is a bare repository or a git directory.
 - In execute mode, sandboxed commands can write anything else in the start directory, so starting Kopi in a directory holding files other programs run, such as the home directory, lets commands change them.
-- Plan mode keeps only the start directory read-only: commands can still write `/tmp`, the temp directory and `sandbox.allowWrite` paths outside it, and act over the network when `sandbox.network` is true. In plan mode `kopi -p` runs sandboxed `Bash` without asking.
+- Plan mode keeps only the start directory read-only: commands can still write `/tmp`, the temp directory and `sandbox.allowWrite` paths outside it, and act over the network when `sandbox.network` is true. In plan mode `kopi -p` runs sandboxed `Bash` without asking. Commands started in execute mode, including background processes they leave running, keep their execute-mode access after a switch to plan mode.
 - `ps`, `pgrep` and `top` do not work in the sandbox.
 - Unix sockets (ssh-agent, Docker) are unreachable from the sandbox, even with `sandbox.network` true.
 - A background process a command leaves running (`cmd &`) can outlive the call. A running command keeps running if Kopi is killed.

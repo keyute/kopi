@@ -19,7 +19,7 @@ import (
 func newBashTool(t *testing.T) (Tool, string) {
 	t.Helper()
 	dir := t.TempDir()
-	return NewBash(NewShell(dir, nil), nil), dir
+	return NewBash(NewShell(dir, nil), NewShell(dir, nil)), dir
 }
 
 func TestBashDescribesItself(t *testing.T) {
@@ -96,7 +96,7 @@ func TestBashDoesNotStartWhenAdmissionCancels(t *testing.T) {
 	sh := NewShell(t.TempDir(), nil)
 	// A Start attempt must fail differently from cancellation.
 	sh.shell = filepath.Join(sh.dir, "missing-shell")
-	tool := NewBash(sh, nil)
+	tool := NewBash(sh, NewShell(sh.dir, nil))
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	admitted := false
@@ -135,12 +135,11 @@ func TestBashRunsInTheShellOfTheAdmittedMode(t *testing.T) {
 
 func TestBashRefusesPlanModeWithoutPlanSandbox(t *testing.T) {
 	for _, tc := range []struct {
-		name            string
-		sandboxed, plan bool
+		name      string
+		sandboxed bool
 	}{
-		{"unsandboxed, no plan shell", false, false},
-		{"sandboxed, no plan shell", true, false},
-		{"sandboxed, unsandboxed plan shell", true, true},
+		{"unsandboxed exec shell", false},
+		{"sandboxed exec shell", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			execDir, planDir := t.TempDir(), t.TempDir()
@@ -148,11 +147,7 @@ func TestBashRefusesPlanModeWithoutPlanSandbox(t *testing.T) {
 			if tc.sandboxed {
 				sb = &sandbox.Sandbox{}
 			}
-			var plan *Shell
-			if tc.plan {
-				plan = NewShell(planDir, nil)
-			}
-			tool := NewBash(NewShell(execDir, sb), plan)
+			tool := NewBash(NewShell(execDir, sb), NewShell(planDir, nil))
 
 			_, err := tool.Run(t.Context(), json.RawMessage(`{"command":"touch marker"}`), func(policy.Target) (policy.Mode, error) {
 				return policy.Plan, nil
@@ -195,7 +190,7 @@ func TestBashDisplaySummary(t *testing.T) {
 
 func TestBashDisplayPreview(t *testing.T) {
 	unsandboxed, _ := newBashTool(t)
-	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), nil)
+	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), nil))
 	oneLine := json.RawMessage(`{"command":"ls"}`)
 	twoLines := json.RawMessage(`{"command":"cd a\nls\n"}`)
 	long, err := json.Marshal(map[string]string{"command": strings.Repeat("echo\n", maxPreviewLines+5)})

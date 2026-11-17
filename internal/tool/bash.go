@@ -23,8 +23,8 @@ type bashArgs struct {
 }
 
 // NewBash runs execute-mode calls in sh and plan-mode calls in plan, which
-// must keep commands from writing the workspace; with plan nil or unsandboxed,
-// plan mode cannot run commands.
+// must keep commands from writing the workspace; with plan unsandboxed, plan
+// mode cannot run commands.
 func NewBash(sh, plan *Shell) Tool {
 	description := "Runs a shell command (bash, else sh) in the workspace and returns its combined stdout and stderr; " +
 		"long output keeps its start and end. Every call starts a fresh shell in the workspace with no input: " +
@@ -35,7 +35,7 @@ func NewBash(sh, plan *Shell) Tool {
 			"and, in execute mode, the workspace; it may block reading some paths and the network. " +
 			"A blocked operation fails with \"Operation not permitted\"."
 	}
-	planSandboxed := plan != nil && plan.Sandboxed()
+	planSandboxed := plan.Sandboxed()
 	return Tool{
 		Name:        "Bash",
 		Label:       "Bash",

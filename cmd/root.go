@@ -277,11 +277,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			ws.Close()
 		}
 	}()
-	var planShell *tool.Shell
-	if planSB != nil {
-		planShell = tool.NewShell(cwd, planSB)
-	}
-	tools := []tool.Tool{tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb), planShell)}
+	tools := []tool.Tool{tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb), tool.NewShell(cwd, planSB))}
 	rules, err := permissionRules(cwd, userHome, tools, resolved.Config.Permissions, resolved.Origins, flagRules)
 	if err != nil {
 		return err
