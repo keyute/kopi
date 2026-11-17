@@ -14,7 +14,10 @@ type Policy struct {
 	Write     []string // roots commands may write under
 	DenyRead  []string // paths commands may neither read nor write
 	DenyWrite []string // paths commands may read but not write
-	Network   bool
+	// DenyWriteNames are file names commands may not write, create, rename or
+	// remove in any directory, matched in any letter case.
+	DenyWriteNames []string
+	Network        bool
 }
 
 // Sandbox wraps commands so they run under one Policy.

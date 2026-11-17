@@ -23,6 +23,10 @@ type Source struct {
 // MCPPrefix starts the name of every tool from an MCP server.
 const MCPPrefix = "mcp__"
 
+// ProjectMCPFile is the file in which a folder declares MCP servers; Kopi
+// starts a trusted folder's servers outside the sandbox.
+const ProjectMCPFile = ".mcp.json"
+
 // ruleName also admits a trailing * for parseRule to refuse on non-MCP names.
 var ruleName = regexp.MustCompile(`^(\*|[A-Za-z_][A-Za-z0-9_-]*\*?)$`)
 
@@ -45,6 +49,9 @@ type Rules struct {
 	// fold matches case-insensitively, as the file systems of darwin and
 	// windows do by default.
 	fold bool
+	// mcpLink is the workspace's ProjectMCPFile resolved at start, which an
+	// edit reaches under another name when that file is a symlink.
+	mcpLink string
 }
 
 type effect int
@@ -124,7 +131,10 @@ func NewRules(workspace, home string, tools map[string]ToolSpec, sources ...Sour
 		}
 	}
 	ws, hm := escape(filepath.ToSlash(filepath.Clean(workspace))), escape(filepath.ToSlash(filepath.Clean(home)))
-	r := &Rules{fold: runtime.GOOS == "darwin" || runtime.GOOS == "windows"}
+	r := &Rules{
+		fold:    runtime.GOOS == "darwin" || runtime.GOOS == "windows",
+		mcpLink: Resolve(filepath.Join(workspace, ProjectMCPFile)),
+	}
 	for _, src := range sources {
 		s := source{name: src.Name}
 		for _, l := range []struct {
@@ -291,6 +301,9 @@ func (r *Rules) decide(tool string, t *Target) (eff effect, text, src string) {
 			if r.underGit(t.Path) || r.underGit(t.Real) {
 				return effectAsk, tool + "(.git)", "built-in"
 			}
+			if r.isMCPFile(t.Path) || r.isMCPFile(t.Real) {
+				return effectAsk, tool + "(" + ProjectMCPFile + ")", "built-in"
+			}
 		}
 		for _, s := range r.sources {
 			if text, ok := r.listMatches(l.rules(s), tool, t, l.tightening); ok {
@@ -307,6 +320,12 @@ func (r *Rules) underGit(p string) bool {
 		p = strings.ToLower(p)
 	}
 	return slices.Contains(strings.Split(p, "/"), ".git")
+}
+
+func (r *Rules) isMCPFile(p string) bool {
+	p = filepath.ToSlash(filepath.Clean(p))
+	same := func(a, b string) bool { return a == b || r.fold && strings.EqualFold(a, b) }
+	return same(path.Base(p), ProjectMCPFile) || same(p, filepath.ToSlash(r.mcpLink))
 }
 
 // listMatches reports whether some positive rule in rules matches and no

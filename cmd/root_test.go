@@ -631,6 +631,21 @@ func TestRootPrintExecuteAllowCannotExemptGit(t *testing.T) {
 	assert.Equal(t, "alpha\n", content)
 }
 
+func TestRootPrintExecuteAllowCannotExemptMCPFile(t *testing.T) {
+	result, content := printEdit(t, "sub/.mcp.json", "--mode", "execute", "--allowed-tools", "Edit")
+
+	assert.Contains(t, result, "Edit(.mcp.json) (built-in)")
+	assert.Equal(t, "alpha\n", content)
+
+	e := newTestEnv(t)
+	require.NoError(t, os.Symlink("servers.json", filepath.Join(e.workspace, ".mcp.json")))
+
+	result, content = printEditIn(t, e, "servers.json", "--mode", "execute", "--allowed-tools", "Edit")
+
+	assert.Contains(t, result, "Edit(.mcp.json) (built-in)")
+	assert.Equal(t, "alpha\n", content)
+}
+
 func TestRootPrintStartsInPlanByDefault(t *testing.T) {
 	result, content := printEdit(t, "docs/a.md", "--allowed-tools", "Edit(docs/**)")
 
@@ -874,6 +889,46 @@ func TestRootSandboxedBashProtectsGitMetadata(t *testing.T) {
 	}
 }
 
+func TestRootSandboxedBashProtectsMCPFile(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	for _, tc := range []struct {
+		name, path, command string
+		exists, link        bool
+	}{
+		{"cannot be created", ".mcp.json", "printf changed > .mcp.json", false, false},
+		{"cannot be replaced", ".mcp.json", "/bin/mv -f replacement .mcp.json", true, false},
+		{"nested cannot be overwritten", "sub/.mcp.json", "printf changed > sub/.mcp.json", true, false},
+		{"link target cannot be overwritten", "servers.json", "printf changed > servers.json", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			const original = `{"mcpServers":{}}` + "\n"
+			path := filepath.Join(e.workspace, tc.path)
+			if tc.exists {
+				e.writeFile(t, path, original)
+			}
+			if tc.link {
+				require.NoError(t, os.Symlink(tc.path, filepath.Join(e.workspace, ".mcp.json")))
+			}
+			e.writeFile(t, filepath.Join(e.workspace, "replacement"), "changed\n")
+
+			result, _ := printBash(t, e, tc.command, "--mode", "execute")
+
+			assert.Contains(t, result, tool.ErrExitStatus.Error())
+			assert.Contains(t, result, "Operation not permitted")
+			if tc.exists {
+				content, err := os.ReadFile(path)
+				require.NoError(t, err)
+				assert.Equal(t, original, string(content))
+			} else {
+				assert.NoFileExists(t, path)
+			}
+		})
+	}
+}
+
 func TestRootSandboxedBashHonorsConfiguredPaths(t *testing.T) {
 	if !sandboxAvailable(t) {
 		t.Skip("the sandbox is unavailable here")
@@ -949,6 +1004,7 @@ func TestSandboxPolicy(t *testing.T) {
 		}
 		return out
 	}
+	mcpFile := func(cwd string) string { return filepath.Join(cwd, ".mcp.json") }
 
 	t.Run("git directory", func(t *testing.T) {
 		cwd := t.TempDir()
@@ -963,7 +1019,8 @@ func TestSandboxPolicy(t *testing.T) {
 			assert.True(t, filepath.IsAbs(path), path)
 		}
 		assert.Equal(t, append([]string{kopiHome}, expanded...), p.DenyRead)
-		assert.Equal(t, gitFiles(cwd), p.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), mcpFile(cwd)), p.DenyWrite)
+		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 		assert.True(t, p.Network)
 	})
 
@@ -973,7 +1030,8 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".git")), p.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".git"), mcpFile(cwd)), p.DenyWrite)
+		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 	})
 
 	t.Run("no git", func(t *testing.T) {
@@ -981,7 +1039,8 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, "HEAD")), p.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, "HEAD"), mcpFile(cwd)), p.DenyWrite)
+		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 	})
 
 	t.Run("git symlink to a directory", func(t *testing.T) {
@@ -990,7 +1049,8 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, gitFiles(cwd), p.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), mcpFile(cwd)), p.DenyWrite)
+		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 	})
 }
 

@@ -35,9 +35,6 @@ const (
 	joinTimeout = 5 * time.Second
 	// historyLimit is how many prompts are kept for each workspace.
 	historyLimit = 100
-	// projectMCPFile is the standard file in which a folder declares its MCP
-	// servers.
-	projectMCPFile = ".mcp.json"
 )
 
 func Execute() {
@@ -283,7 +280,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		return err
 	}
 	if set.undecided {
-		slog.Warn("this folder is not trusted, so the MCP servers in its " + projectMCPFile + " are skipped; run kopi here in a terminal to be asked whether to trust it")
+		slog.Warn("this folder is not trusted, so the MCP servers in its " + policy.ProjectMCPFile + " are skipped; run kopi here in a terminal to be asked whether to trust it")
 	}
 	// workRunning is set when Close leaves work running; see below.
 	var workRunning bool
@@ -450,7 +447,7 @@ func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome
 	if s.servers == nil {
 		s.servers = map[string]config.MCPServer{}
 	}
-	project, invalid, err := config.ProjectServers(filepath.Join(cwd, projectMCPFile))
+	project, invalid, err := config.ProjectServers(filepath.Join(cwd, policy.ProjectMCPFile))
 	if err != nil {
 		s.notices = append(s.notices, fmt.Sprintf("Skipped this folder's MCP servers: %v", err))
 		return s, nil
@@ -586,8 +583,8 @@ func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHom
 
 // sandboxPolicy lets commands write only the workspace, temporary
 // directories and the paths the user allowed, never read Kopi's home, and
-// never write the git files that decide which config and hooks git runs, which
-// would run code outside the sandbox.
+// never write the git files that decide which config and hooks git runs, nor
+// any .mcp.json, either of which would run code outside the sandbox.
 func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.Policy {
 	expand := func(paths []string) []string {
 		out := make([]string, 0, len(paths))
@@ -618,12 +615,16 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 		// A .git file, as in a linked worktree or submodule, names the git directory.
 		denyWrite = append(denyWrite, gitDir)
 	}
+	// A .mcp.json names commands Kopi starts outside the sandbox. Its name is
+	// denied everywhere; the start directory's path adds its symlink target.
+	denyWrite = append(denyWrite, filepath.Join(cwd, policy.ProjectMCPFile))
 	write := []string{cwd, "/tmp", os.TempDir()}
 	return sandbox.Policy{
-		Write:     append(write, expand(cfg.AllowWrite)...),
-		DenyRead:  append([]string{kopiHome}, expand(cfg.DenyRead)...),
-		DenyWrite: denyWrite,
-		Network:   cfg.Network,
+		Write:          append(write, expand(cfg.AllowWrite)...),
+		DenyRead:       append([]string{kopiHome}, expand(cfg.DenyRead)...),
+		DenyWrite:      denyWrite,
+		DenyWriteNames: []string{policy.ProjectMCPFile},
+		Network:        cfg.Network,
 	}
 }
 

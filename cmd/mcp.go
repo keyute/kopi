@@ -63,7 +63,7 @@ func mcpListCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if len(set.servers) == 0 && len(set.untrusted) == 0 && len(set.invalid) == 0 {
-				_, err := fmt.Fprintf(out, "No MCP servers configured: declare them under mcpServers in %s or in %s in this folder.\n", printable(paths.ConfigFile, ""), projectMCPFile)
+				_, err := fmt.Fprintf(out, "No MCP servers configured: declare them under mcpServers in %s or in %s in this folder.\n", printable(paths.ConfigFile, ""), policy.ProjectMCPFile)
 				return err
 			}
 			servers := pigruntime.StartServers(pigruntime.ServerOptions{Servers: set.servers, CWD: cwd, Version: kopiVersion()})
@@ -74,7 +74,7 @@ func mcpListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			projectFile := filepath.Join(cwd, projectMCPFile)
+			projectFile := filepath.Join(cwd, policy.ProjectMCPFile)
 			blocks := map[string][]string{}
 			for _, st := range statuses {
 				where := "global (" + paths.ConfigFile + ")"

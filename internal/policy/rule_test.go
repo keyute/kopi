@@ -415,6 +415,87 @@ func TestBuiltInGitAskPrecedenceInsideGitWorkspace(t *testing.T) {
 	}
 }
 
+func TestBuiltInAsksForEditsOfMCPFile(t *testing.T) {
+	d := newDirs(t)
+	r := d.rules(t, Source{Name: "config", Allow: []string{"*"}})
+	ws := func(p string) string { return filepath.Join(d.ws, p) }
+	for _, tool := range []string{"Edit", "Write"} {
+		for _, tc := range []struct {
+			name   string
+			target *Target
+			want   effect
+		}{
+			{"root", at(ws(".mcp.json")), effectAsk},
+			{"nested", at(ws("sub/.mcp.json")), effectAsk},
+			{"outside workspace", at("/repo/.mcp.json"), effectAsk},
+			{"resolved alias", &Target{Path: ws("x"), Real: ws(".mcp.json")}, effectAsk},
+			{"lexical alias", &Target{Path: ws(".mcp.json"), Real: ws("servers.json")}, effectAsk},
+			{"normalized", at(d.ws + "/sub/../.mcp.json"), effectAsk},
+			{"prefix", at(ws("not.mcp.json")), effectAllow},
+			{"suffix", at(ws(".mcp.json.bak")), effectAllow},
+			{"no target", nil, effectAllow},
+		} {
+			t.Run(tool+"/"+tc.name, func(t *testing.T) {
+				eff, text, src := r.decide(tool, tc.target)
+				assert.Equal(t, tc.want, eff)
+				if tc.want == effectAsk {
+					assert.Equal(t, tool+"(.mcp.json)", text)
+					assert.Equal(t, "built-in", src)
+				}
+			})
+		}
+		for _, name := range []string{".MCP.JSON", ".mcp.jſon"} {
+			target := at(ws(name))
+			r.fold = false
+			eff, _, _ := r.decide(tool, target)
+			assert.Equal(t, effectAllow, eff, name)
+			r.fold = true
+			eff, _, _ = r.decide(tool, target)
+			assert.Equal(t, effectAsk, eff, name)
+			r.fold = false
+		}
+	}
+	eff, _, _ := r.decide("Read", at(ws(".mcp.json")))
+	assert.Equal(t, effectAllow, eff)
+}
+
+func TestBuiltInMCPFileAskPrecedence(t *testing.T) {
+	d := newDirs(t)
+	target := at(filepath.Join(d.ws, ".mcp.json"))
+	for _, tool := range []string{"Edit", "Write"} {
+		config := Source{Name: "config", Allow: []string{tool}, Ask: []string{tool, tool + "(!.mcp.json)"}}
+		eff, text, src := d.rules(t, config).decide(tool, target)
+		assert.Equal(t, effectAsk, eff)
+		assert.Equal(t, tool+"(.mcp.json)", text)
+		assert.Equal(t, "built-in", src)
+
+		deny := Source{Name: "deny", Deny: []string{tool + "(.mcp.json)"}}
+		eff, text, src = d.rules(t, config, deny).decide(tool, target)
+		assert.Equal(t, effectDeny, eff)
+		assert.Equal(t, tool+"(.mcp.json)", text)
+		assert.Equal(t, "deny", src)
+	}
+}
+
+func TestBuiltInAsksForStartMCPFileTarget(t *testing.T) {
+	d := newDirs(t)
+	ws, err := filepath.EvalSymlinks(d.ws)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(d.ws, "servers.json"), []byte("{}"), 0o600))
+	require.NoError(t, os.Symlink("servers.json", filepath.Join(d.ws, ".mcp.json")))
+	r := d.rules(t, Source{Name: "config", Allow: []string{"*"}})
+	for _, tool := range []string{"Edit", "Write"} {
+		target := &Target{Path: filepath.Join(d.ws, "servers.json"), Real: filepath.Join(ws, "servers.json")}
+		eff, text, src := r.decide(tool, target)
+		assert.Equal(t, effectAsk, eff)
+		assert.Equal(t, tool+"(.mcp.json)", text)
+		assert.Equal(t, "built-in", src)
+
+		eff, _, _ = r.decide(tool, at(filepath.Join(ws, "other.json")))
+		assert.Equal(t, effectAllow, eff)
+	}
+}
+
 // linkedDir returns a link to a new directory and the directory's resolved path.
 func linkedDir(t *testing.T) (link, resolved string) {
 	t.Helper()

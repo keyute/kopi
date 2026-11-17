@@ -302,6 +302,32 @@ func TestBuiltInGitAskSurvivesAllEditsInsideGitWorkspace(t *testing.T) {
 	}
 }
 
+func TestBuiltInMCPFileAskSurvivesAllEdits(t *testing.T) {
+	d := newDirs(t)
+	f := &approver{answer: AllowEdits}
+	a := NewAuthority()
+	g := NewGate(a, map[string]ToolSpec{
+		"Edit":  {Capability: Write, Target: pathTarget},
+		"Write": {Capability: Write, Target: pathTarget},
+	}, d.rules(t), f.approve)
+	a.EnterExecute()
+	require.NoError(t, g.Before(t.Context(), "initial", "Edit", pathArgs(filepath.Join(d.ws, "a.go"))))
+	require.NoError(t, admitApproved(g, "initial", "Edit"))
+	require.Len(t, f.reqs, 1)
+	require.True(t, f.reqs[0].Edits)
+	f.answer = Reject
+	for _, tool := range []string{"Edit", "Write"} {
+		err := g.Before(t.Context(), tool, tool, pathArgs(filepath.Join(d.ws, "sub", ".mcp.json")))
+		require.ErrorIs(t, err, ErrRejected)
+		assert.ErrorIs(t, admitApproved(g, tool, tool), ErrNoGrant)
+	}
+	require.Len(t, f.reqs, 3)
+	assert.Equal(t, "Edit(.mcp.json) (built-in)", f.reqs[1].Rule)
+	assert.Equal(t, "Write(.mcp.json) (built-in)", f.reqs[2].Rule)
+	assert.False(t, f.reqs[1].Edits)
+	assert.False(t, f.reqs[2].Edits)
+}
+
 func TestAllowEditsNotOfferedGrantsOnlyTheCall(t *testing.T) {
 	f := &approver{answer: AllowEdits}
 	a, g := newTestGate(nil, f.approve)

@@ -149,6 +149,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `Bash` returns stdout and stderr combined, keeping the first and last 15,000 bytes. A non-zero exit is an error reporting the exit code.
 - On macOS `Bash` runs inside an OS sandbox (`sandbox-exec`), configured with `sandbox` (see Configuration).
 - In the sandbox a command can write only in the start directory, `/tmp`, the temp directory and the `sandbox.allowWrite` paths, and never the files of the start directory's `.git` that choose git's config and hooks (`hooks`, `config`, `config.worktree`, `commondir`, `worktrees`, `modules`); when the start directory has no `.git`, a command cannot write `HEAD` in it.
+- In the sandbox a command cannot create, write, rename or remove a file named `.mcp.json`, in any letter case and in any directory, nor the file the start directory's `.mcp.json` links to at start; git operations that change a `.mcp.json` therefore fail in the sandbox.
 - In the sandbox a command can read everything except Kopi's home and the `sandbox.denyRead` paths, which it also cannot write, rename or remove.
 - In the sandbox a command has no network unless `sandbox.network` is true, which opens IP networking only; Unix sockets stay blocked.
 
@@ -170,7 +171,7 @@ Permission rules in `config.json` allow, ask about or deny calls:
 - A bare `Name` in `deny` removes the tool from the model.
 - `Bash` takes no path: only a bare `Bash` or `*` rule applies to it, `Bash(path)` is rejected at start, and path rules such as `*(~/.ssh)` never apply to `Bash`. `"ask": ["Bash"]` makes every command ask.
 - Deny beats ask, and ask beats allow. With no rule matching, `Read` and sandboxed `Bash` are allowed and any other call asks, including every `Bash` command without the sandbox.
-- Built in: `Edit` and `Write` under any `.git` directory always ask.
+- Built in: `Edit` and `Write` under any `.git` directory, and of any file named `.mcp.json` or the file the start directory's `.mcp.json` links to, always ask.
 - `--allowed-tools` and `--disallowed-tools` add allow and deny rules to the config's; each is repeatable and takes comma-separated rules (commas inside `()` or `{}` do not split).
 - A rule's path counts as a match on either the path as written or its resolved target when it denies, asks or exempts from an allow, and only on both when it allows or exempts from a deny or ask.
 
@@ -214,6 +215,11 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - Tools that write outside the start directory and temp directories, such as Go's build cache and package-manager caches, fail in the sandbox until those paths are in `sandbox.allowWrite`.
 - In the sandbox, `git init` in the start directory, `git config` writes, `git worktree add`, commits in a linked worktree (its git directory is outside the start directory), commits inside a submodule and commit signing through an agent socket fail.
 - The sandbox does not protect the config and hooks of repositories nested inside the start directory, or of the start directory itself when it is a bare repository or a git directory.
+- Only the start directory's `.mcp.json` is resolved, once, at start: the file a nested folder's `.mcp.json` links to under another name stays writable, as does the target of a link that is dangling at start or that reaches its target through another symlink, in a chain or a directory on its path, which a command later redirects. `Edit` and `Write` do not recognise that target when its name is spelled in a different Unicode normalization.
+- When the start directory's `.mcp.json` links to a directory, sandboxed commands cannot write anything under that directory, so a link to the start directory itself or to `/` stops them writing there.
+- A command can move into a write root a directory that already holds a `.mcp.json`.
+- The files a `.mcp.json` server runs, such as `./server.sh` or `node_modules/.bin/…`, stay writable.
+- A `.mcp.json` changed outside Kopi, such as by `git pull` or an editor, starts its servers without asking again.
 - Sandboxed commands can write anything else in the start directory, so starting Kopi in a directory holding files other programs run, such as the home directory, lets commands change them.
 - `ps`, `pgrep` and `top` do not work in the sandbox.
 - Unix sockets (ssh-agent, Docker) are unreachable from the sandbox, even with `sandbox.network` true.
