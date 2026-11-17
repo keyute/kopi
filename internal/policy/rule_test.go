@@ -34,10 +34,10 @@ func (d dirs) rules(t *testing.T, sources ...Source) *Rules {
 func at(p string) *Target { return &Target{Path: p, Real: p} }
 
 func TestValidateRule(t *testing.T) {
-	for _, s := range []string{"Read", "*", "Read(*.go)", "Edit(docs/**)", "Read(!.env.example)", "*(~/.ssh)", "Write(/etc/**)", "Read(a(1).txt)", "Bash"} {
+	for _, s := range []string{"Read", "*", "Read(*.go)", "Edit(docs/**)", "Read(!.env.example)", "*(~/.ssh)", "Write(/etc/**)", "Read(a(1).txt)", "Bash", "Re-ad", "mcp__context7__resolve-library-id", "mcp__context7__*", "mcp__github__get_*", "mcp__*"} {
 		assert.NoError(t, ValidateRule(s), s)
 	}
-	for _, s := range []string{"", "Read(", "Read()", "Read(!)", "Read([)", "Read({a)", "Re ad", "Read(a))", "Read)", "(x)", "Read(x) "} {
+	for _, s := range []string{"", "Read(", "Read()", "Read(!)", "Read([)", "Read({a)", "Re ad", "Read(a))", "Read)", "(x)", "Read(x) ", "-Read", "Read*", "*Read", "mcp__x*y", "mcp__x__**", "mcp__x__y(src/**)", "mcp__x__*(!a)"} {
 		assert.ErrorIs(t, ValidateRule(s), ErrInvalidRule, s)
 	}
 }
@@ -59,6 +59,42 @@ func TestNewRulesRejectsPathRuleForPathlessTool(t *testing.T) {
 	}
 	_, err := NewRules(d.ws, d.home, tools, Source{Name: "config", Allow: []string{"Exec"}, Deny: []string{"*(x)"}})
 	assert.NoError(t, err)
+}
+
+func TestNewRulesTakesMCPNamesWithoutKnowingTheTool(t *testing.T) {
+	d := newDirs(t)
+	_, err := NewRules(d.ws, d.home, testTools, Source{
+		Name:  "config",
+		Allow: []string{"mcp__context7__resolve-library-id"},
+		Ask:   []string{"mcp__github__get_*"},
+		Deny:  []string{"mcp__*"},
+	})
+	assert.NoError(t, err)
+}
+
+func TestNewRulesRejectsMCPNamesThatNameNoTool(t *testing.T) {
+	d := newDirs(t)
+	for _, text := range []string{"mcp__github", "mcp__", "mcp__github__", "mcp____tool", "mcp__git*", "mcp___*", "mcp____*", "mcp__a_*"} {
+		for _, src := range []Source{
+			{Name: "config", Allow: []string{text}},
+			{Name: "config", Ask: []string{text}},
+			{Name: "config", Deny: []string{text}},
+		} {
+			_, err := NewRules(d.ws, d.home, testTools, src)
+			require.ErrorIs(t, err, ErrInvalidRule, text)
+			assert.Contains(t, err.Error(), `config: rule "`+text+`": name one MCP tool as mcp__server__tool or all of a server's as mcp__server__*`)
+		}
+	}
+	for _, text := range []string{"mcp__*", "mcp__github__*", "mcp__github__get_*", "mcp__github__get_issue", "mcp__a__b__c"} {
+		assert.NoError(t, ValidateRule(text), text)
+	}
+}
+
+func TestNewRulesRejectsPathRuleForMCPTool(t *testing.T) {
+	d := newDirs(t)
+	_, err := NewRules(d.ws, d.home, testTools, Source{Name: "config", Allow: []string{"mcp__x__y(src/**)"}})
+	require.ErrorIs(t, err, ErrInvalidRule)
+	assert.Contains(t, err.Error(), `config: rule "mcp__x__y(src/**)": an MCP tool takes no path`)
 }
 
 func TestNewRulesRejectsMalformedRuleNamingSource(t *testing.T) {
@@ -145,6 +181,48 @@ func TestRuleGovernsOnlyItsTool(t *testing.T) {
 		assert.Equal(t, effectDeny, eff, tool)
 		assert.Equal(t, "*(.env)", text)
 	}
+}
+
+func TestMCPRuleNames(t *testing.T) {
+	d := newDirs(t)
+	for _, tc := range []struct {
+		rule        string
+		match, miss []string
+	}{
+		{"mcp__c7__resolve-library-id", []string{"mcp__c7__resolve-library-id"}, []string{"mcp__c7__resolve-library-idx", "mcp__c7__query"}},
+		{"mcp__c7__*", []string{"mcp__c7__resolve-library-id", "mcp__c7__query"}, []string{"mcp__c77__query", "mcp__gh__get_issue", "Read"}},
+		{"mcp__gh__get_*", []string{"mcp__gh__get_issue"}, []string{"mcp__gh__list_issues"}},
+		{"mcp__gh___*", []string{"mcp__gh___x"}, []string{"mcp__gh__x"}},
+		{"mcp__*", []string{"mcp__c7__query", "mcp__gh__get_issue"}, []string{"Read", "Edit"}},
+		{"*", []string{"mcp__c7__query", "Read"}, nil},
+	} {
+		t.Run(tc.rule, func(t *testing.T) {
+			r := d.rules(t, Source{Name: "config", Deny: []string{tc.rule}})
+			for _, tool := range tc.match {
+				eff, text, _ := r.decide(tool, nil)
+				assert.Equal(t, effectDeny, eff, tool)
+				assert.Equal(t, tc.rule, text, tool)
+				assert.True(t, r.Removes(tool), tool)
+			}
+			for _, tool := range tc.miss {
+				eff, _, _ := r.decide(tool, nil)
+				assert.Equal(t, effectNone, eff, tool)
+				assert.False(t, r.Removes(tool), tool)
+			}
+		})
+	}
+}
+
+func TestMCPPrefixRulesKeepPrecedence(t *testing.T) {
+	d := newDirs(t)
+	r := d.rules(t,
+		Source{Name: "a", Allow: []string{"mcp__gh__get_issue"}},
+		Source{Name: "b", Ask: []string{"mcp__gh__*"}},
+	)
+	eff, text, src := r.decide("mcp__gh__get_issue", nil)
+	assert.Equal(t, effectAsk, eff)
+	assert.Equal(t, "mcp__gh__*", text)
+	assert.Equal(t, "b", src)
 }
 
 func TestExceptionsExemptFromTheirListInAnyOrder(t *testing.T) {
@@ -335,6 +413,106 @@ func TestBuiltInGitAskPrecedenceInsideGitWorkspace(t *testing.T) {
 				assert.Equal(t, "deny", src)
 			}
 		})
+	}
+}
+
+func TestBuiltInAsksForEditsOfMCPFile(t *testing.T) {
+	d := newDirs(t)
+	r := d.rules(t, Source{Name: "config", Allow: []string{"*"}})
+	ws := func(p string) string { return filepath.Join(d.ws, p) }
+	for _, tool := range []string{"Edit", "Write"} {
+		for _, tc := range []struct {
+			name   string
+			target *Target
+			want   effect
+		}{
+			{"root", at(ws(".mcp.json")), effectAsk},
+			{"nested", at(ws("sub/.mcp.json")), effectAsk},
+			{"outside workspace", at("/repo/.mcp.json"), effectAsk},
+			{"resolved alias", &Target{Path: ws("x"), Real: ws(".mcp.json")}, effectAsk},
+			{"lexical alias", &Target{Path: ws(".mcp.json"), Real: ws("servers.json")}, effectAsk},
+			{"normalized", at(d.ws + "/sub/../.mcp.json"), effectAsk},
+			{"prefix", at(ws("not.mcp.json")), effectAllow},
+			{"suffix", at(ws(".mcp.json.bak")), effectAllow},
+			{"no target", nil, effectAllow},
+		} {
+			t.Run(tool+"/"+tc.name, func(t *testing.T) {
+				eff, text, src := r.decide(tool, tc.target)
+				assert.Equal(t, tc.want, eff)
+				if tc.want == effectAsk {
+					assert.Equal(t, tool+"(.mcp.json)", text)
+					assert.Equal(t, "built-in", src)
+				}
+			})
+		}
+		for _, name := range []string{".MCP.JSON", ".mcp.jſon"} {
+			target := at(ws(name))
+			r.fold = false
+			eff, _, _ := r.decide(tool, target)
+			assert.Equal(t, effectAllow, eff, name)
+			r.fold = true
+			eff, _, _ = r.decide(tool, target)
+			assert.Equal(t, effectAsk, eff, name)
+			r.fold = false
+		}
+	}
+	eff, _, _ := r.decide("Read", at(ws(".mcp.json")))
+	assert.Equal(t, effectAllow, eff)
+}
+
+func TestBuiltInAsksForEditsOfLinkedMCPFile(t *testing.T) {
+	d := newDirs(t)
+	require.NoError(t, os.WriteFile(filepath.Join(d.ws, "servers.json"), []byte("{}"), 0o600))
+	require.NoError(t, os.Symlink("servers.json", filepath.Join(d.ws, ".mcp.json")))
+	r := d.rules(t, Source{Name: "config", Allow: []string{"*"}})
+	resolved, err := filepath.EvalSymlinks(d.ws)
+	require.NoError(t, err)
+	rws := func(p string) string { return filepath.Join(resolved, p) }
+	for _, tool := range []string{"Edit", "Write"} {
+		for _, tc := range []struct {
+			name   string
+			target *Target
+			want   effect
+		}{
+			{"target", at(rws("servers.json")), effectAsk},
+			{"resolved alias", &Target{Path: filepath.Join(d.ws, "x"), Real: rws("servers.json")}, effectAsk},
+			{"other", at(rws("other.json")), effectAllow},
+		} {
+			t.Run(tool+"/"+tc.name, func(t *testing.T) {
+				eff, text, src := r.decide(tool, tc.target)
+				assert.Equal(t, tc.want, eff)
+				if tc.want == effectAsk {
+					assert.Equal(t, tool+"(.mcp.json)", text)
+					assert.Equal(t, "built-in", src)
+				}
+			})
+		}
+		target := at(rws("SERVERS.JSON"))
+		r.fold = false
+		eff, _, _ := r.decide(tool, target)
+		assert.Equal(t, effectAllow, eff)
+		r.fold = true
+		eff, _, _ = r.decide(tool, target)
+		assert.Equal(t, effectAsk, eff)
+		r.fold = false
+	}
+}
+
+func TestBuiltInMCPFileAskPrecedence(t *testing.T) {
+	d := newDirs(t)
+	target := at(filepath.Join(d.ws, ".mcp.json"))
+	for _, tool := range []string{"Edit", "Write"} {
+		config := Source{Name: "config", Allow: []string{tool}, Ask: []string{tool, tool + "(!.mcp.json)"}}
+		eff, text, src := d.rules(t, config).decide(tool, target)
+		assert.Equal(t, effectAsk, eff)
+		assert.Equal(t, tool+"(.mcp.json)", text)
+		assert.Equal(t, "built-in", src)
+
+		deny := Source{Name: "deny", Deny: []string{tool + "(.mcp.json)"}}
+		eff, text, src = d.rules(t, config, deny).decide(tool, target)
+		assert.Equal(t, effectDeny, eff)
+		assert.Equal(t, tool+"(.mcp.json)", text)
+		assert.Equal(t, "deny", src)
 	}
 }
 

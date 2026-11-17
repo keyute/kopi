@@ -16,9 +16,14 @@ type Tool struct {
 	Target func(args json.RawMessage) (policy.Target, error)
 	// Sandboxed reports that the OS confines what the tool's calls can do.
 	Sandboxed bool
+	// Ask makes calls ask by default whatever the capability.
+	Ask bool
 	// PlanSandboxed reports that in plan mode the OS keeps the tool's calls
 	// from writing the workspace.
 	PlanSandboxed bool
+	// Deferred keeps the tool out of the model's tool list until ToolSearch
+	// loads it.
+	Deferred bool
 	// Run must acquire a nonmutating operation, call admit with its bound
 	// target before reading content or modifying files, and use that operation.
 	// admit returns the mode the call is admitted under.
@@ -30,7 +35,7 @@ type Tool struct {
 func Specs(tools []Tool) map[string]policy.ToolSpec {
 	specs := make(map[string]policy.ToolSpec, len(tools))
 	for _, t := range tools {
-		specs[t.Name] = policy.ToolSpec{Capability: t.Capability, Target: t.Target, Sandboxed: t.Sandboxed, PlanSandboxed: t.PlanSandboxed}
+		specs[t.Name] = policy.ToolSpec{Capability: t.Capability, Target: t.Target, Sandboxed: t.Sandboxed, Ask: t.Ask, PlanSandboxed: t.PlanSandboxed}
 	}
 	return specs
 }

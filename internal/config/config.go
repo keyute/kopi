@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"math"
 	"os"
 	"reflect"
@@ -19,24 +20,26 @@ import (
 	"github.com/knadh/koanf/v2"
 
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/tool"
 )
 
 const Version = 1
 
 const delim = "."
 
-// Config is the effective configuration. It holds no secrets and must never
-// grow any: Entries prints every value verbatim.
+// Config is the effective configuration. MCP server env and header values may
+// be secrets; Entries never prints them, and prints every other value verbatim.
 type Config struct {
 	Version int    `koanf:"version"`
 	Model   string `koanf:"model"` // "provider/id"; empty means not configured (there is no default model)
 	// Mode is the mode sessions start in, plan or execute.
 	Mode string `koanf:"mode"`
 	// Keys maps an action from KeyActions to the keys bound to it.
-	Keys        map[string][]string `koanf:"keys"`
-	StatusLine  StatusLine          `koanf:"statusline"`
-	Permissions Permissions         `koanf:"permissions"`
-	Sandbox     Sandbox             `koanf:"sandbox"`
+	Keys        map[string][]string  `koanf:"keys"`
+	StatusLine  StatusLine           `koanf:"statusline"`
+	Permissions Permissions          `koanf:"permissions"`
+	Sandbox     Sandbox              `koanf:"sandbox"`
+	MCPServers  map[string]MCPServer `koanf:"mcpServers"`
 }
 
 // Permissions holds rule strings checked only for syntax here; a later layer's
@@ -54,6 +57,36 @@ type Sandbox struct {
 	Network    bool     `koanf:"network"`
 }
 
+// MCPServer is one entry of the standard mcpServers object.
+type MCPServer struct {
+	Type    string            `koanf:"type" json:"type"` // "", "stdio" or "http"
+	Command string            `koanf:"command" json:"command"`
+	Args    []string          `koanf:"args" json:"args"`
+	Env     map[string]string `koanf:"env" json:"env"`
+	URL     string            `koanf:"url" json:"url"`
+	Headers map[string]string `koanf:"headers" json:"headers"`
+}
+
+func (s MCPServer) Validate() error {
+	switch {
+	case s.Command == "" && s.URL == "":
+		return fmt.Errorf("%w: want command or url", ErrInvalidValue)
+	case s.Command != "" && s.URL != "":
+		return fmt.Errorf("%w: want command or url, not both", ErrInvalidValue)
+	case s.Type != "" && s.Type != "stdio" && s.Type != "http":
+		return fmt.Errorf("%w: unsupported transport type %q", ErrInvalidValue, s.Type)
+	case s.Type == "stdio" && s.Command == "":
+		return fmt.Errorf("%w: type stdio needs command", ErrInvalidValue)
+	case s.Type == "http" && s.URL == "":
+		return fmt.Errorf("%w: type http needs url", ErrInvalidValue)
+	case s.Command == "" && (len(s.Args) > 0 || len(s.Env) > 0):
+		return fmt.Errorf("%w: args and env need command", ErrInvalidValue)
+	case s.URL == "" && len(s.Headers) > 0:
+		return fmt.Errorf("%w: headers need url", ErrInvalidValue)
+	}
+	return nil
+}
+
 type Layer struct {
 	Name     string
 	Provider koanf.Provider
@@ -66,6 +99,7 @@ func Defaults() Layer {
 	values["mode"] = policy.Plan.String()
 	values["permissions"] = map[string]any{"allow": []string{}, "ask": []string{}, "deny": []string{}}
 	values["sandbox"] = map[string]any{"allowWrite": []string{}, "denyRead": []string{}, "network": false}
+	values["mcpServers"] = map[string]any{}
 	return Map("default", values)
 }
 
@@ -128,6 +162,9 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 		if err := validateSandbox(c.Sandbox); err != nil {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
+		if err := validateMCPServers(c.MCPServers); err != nil {
+			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
+		}
 		for _, key := range k.Keys() {
 			origins[key] = l.Name
 		}
@@ -174,17 +211,22 @@ func decode(k *koanf.Koanf, c *Config) error {
 // rejectWrongShape exists because mapstructure reports a scalar where a list or
 // object belongs as an untyped error, which decode would misfile as an unknown
 // key. DecodeNil routes JSON null here too, so null cannot wipe a block or
-// reset an optional value to unset.
+// reset an optional value to unset. Its errors name kinds, never the data,
+// because a value under an MCP server's env or headers may be a secret.
 func rejectWrongShape(from, to reflect.Type, data any) (any, error) {
 	v := reflect.ValueOf(data)
 	switch to.Kind() {
 	case reflect.Slice:
 		if from.Kind() != reflect.Slice || v.IsNil() {
-			return nil, fmt.Errorf("%w: %v is not a list", ErrInvalidValue, data)
+			return nil, fmt.Errorf("%w: want a list, got %s", ErrInvalidValue, kindOf(v))
 		}
 	case reflect.Map, reflect.Struct:
 		if from.Kind() != reflect.Map || v.IsNil() {
-			return nil, fmt.Errorf("%w: %v is not an object", ErrInvalidValue, data)
+			return nil, fmt.Errorf("%w: want an object, got %s", ErrInvalidValue, kindOf(v))
+		}
+	case reflect.String:
+		if v.Kind() != reflect.String {
+			return nil, fmt.Errorf("%w: want a string, got %s", ErrInvalidValue, kindOf(v))
 		}
 	case reflect.Pointer:
 		if from.Kind() == reflect.Pointer && v.IsNil() {
@@ -192,6 +234,34 @@ func rejectWrongShape(from, to reflect.Type, data any) (any, error) {
 		}
 	}
 	return data, nil
+}
+
+func kindOf(v reflect.Value) string {
+	switch v.Kind() {
+	case reflect.Invalid:
+		return "null"
+	case reflect.String:
+		return "a string"
+	case reflect.Bool:
+		return "a boolean"
+	case reflect.Slice:
+		if v.IsNil() {
+			return "null"
+		}
+		return "a list"
+	case reflect.Map:
+		if v.IsNil() {
+			return "null"
+		}
+		return "an object"
+	case reflect.Pointer:
+		if v.IsNil() {
+			return "null"
+		}
+		return kindOf(v.Elem())
+	default:
+		return "a number"
+	}
 }
 
 // rejectFractionalInt exists because the JSON parser yields float64 and
@@ -231,6 +301,18 @@ func validateSandbox(s Sandbox) error {
 	return nil
 }
 
+func validateMCPServers(servers map[string]MCPServer) error {
+	for _, name := range slices.Sorted(maps.Keys(servers)) {
+		if err := tool.ValidateMCPServerName(name); err != nil {
+			return fmt.Errorf("%w: mcpServers.%s: %w", ErrInvalidValue, name, err)
+		}
+		if err := servers[name].Validate(); err != nil {
+			return fmt.Errorf("mcpServers.%s: %w", name, err)
+		}
+	}
+	return nil
+}
+
 func originOf(origins map[string]string, key string) string {
 	if o, ok := origins[key]; ok {
 		return o
@@ -241,7 +323,8 @@ func originOf(origins map[string]string, key string) string {
 type Entry struct{ Key, Value, Origin string }
 
 // Entries returns every schema key sorted by key, including unset ones (empty
-// Value, Origin "unset"). Lists are shown as compact JSON.
+// Value, Origin "unset"), plus one entry per MCP server showing only its
+// transport and command or URL. Lists are shown as compact JSON.
 func (r *Resolved) Entries() []Entry {
 	c := r.Config
 	values := map[string]any{
@@ -266,6 +349,15 @@ func (r *Resolved) Entries() []Entry {
 		e := Entry{Key: key, Origin: originOf(r.Origins, key)}
 		if _, ok := r.Origins[key]; ok {
 			e.Value = formatValue(v)
+		}
+		entries = append(entries, e)
+	}
+	for name, s := range c.MCPServers {
+		prefix := "mcpServers." + name + "."
+		e := Entry{Key: "mcpServers." + name, Value: "http: " + s.URL, Origin: originOf(r.Origins, prefix+"url")}
+		if s.Command != "" {
+			e.Value = "stdio: " + strings.Join(append([]string{s.Command}, s.Args...), " ")
+			e.Origin = originOf(r.Origins, prefix+"command")
 		}
 		entries = append(entries, e)
 	}

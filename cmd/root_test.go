@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -24,6 +26,8 @@ import (
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/sandbox"
 	"github.com/keyute/kopi/internal/tool"
+	"github.com/keyute/kopi/internal/trust"
+	"github.com/keyute/kopi/internal/tui"
 )
 
 const (
@@ -194,6 +198,40 @@ func TestRootRejectsInvalidRuleInConfig(t *testing.T) {
 	assert.Contains(t, err.Error(), configFile)
 	assert.Contains(t, err.Error(), `unknown tool "Nope"`)
 	assert.NoDirExists(t, e.agentDir)
+}
+
+func TestRootToolSearchRules(t *testing.T) {
+	for _, tc := range []struct {
+		name, config, flag string
+	}{
+		{name: "flag allow", flag: "--allowed-tools"},
+		{name: "flag deny", flag: "--disallowed-tools"},
+		{name: "config allow", config: "allow"},
+		{name: "config ask", config: "ask"},
+		{name: "config deny", config: "deny"},
+	} {
+		for _, rule := range []string{"ToolSearch", "ToolSearch(docs/**)"} {
+			t.Run(tc.name+"/"+rule, func(t *testing.T) {
+				e := newTestEnv(t)
+				args := []string{"--model", "nosuch/model-1", "-p", "hi"}
+				if tc.flag != "" {
+					args = append(args, tc.flag, rule)
+				} else {
+					e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), fmt.Sprintf(`{"permissions":{%q:[%q]}}`, tc.config, rule))
+				}
+
+				_, _, err := execute(t, "", args...)
+
+				require.Error(t, err)
+				if rule == "ToolSearch" {
+					assert.EqualError(t, err, `unknown model "nosuch/model-1": check --model`)
+				} else {
+					assert.Contains(t, err.Error(), `tool "ToolSearch" takes no path`)
+					assert.NoDirExists(t, e.agentDir)
+				}
+			})
+		}
+	}
 }
 
 func TestRootRejectsPathRuleForBash(t *testing.T) {
@@ -398,6 +436,76 @@ func TestRootStreamsTurnFromMockServer(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(e.kopiHome, "history.jsonl"), "headless runs record no prompt history")
 }
 
+func TestRootPrintMCPTool(t *testing.T) {
+	for _, allowed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("allowed=%t", allowed), func(t *testing.T) {
+			e := newTestEnv(t)
+			e.writeServers(t, filepath.Join(e.kopiHome, "config.json"), map[string]any{"fake": map[string]any{
+				"command": os.Args[0],
+				"args":    []string{"-test.run=^TestMCPStdioHelper$"},
+				"env":     map[string]string{stdioHelperEnv: "serve"},
+			}})
+			callTool := func(w http.ResponseWriter, id, name, arguments string) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				writeChunk(w, map[string]any{"role": "assistant", "content": ""}, nil)
+				writeChunk(w, map[string]any{"tool_calls": []any{map[string]any{
+					"index": 0, "id": id, "type": "function",
+					"function": map[string]any{"name": name, "arguments": arguments},
+				}}}, nil)
+				writeChunk(w, map[string]any{}, "tool_calls")
+				fmt.Fprint(w, "data: [DONE]\n\n")
+			}
+			var calls atomic.Int32
+			server := newMockProvider(t, func(w http.ResponseWriter) {
+				switch calls.Add(1) {
+				case 1:
+					callTool(w, "call_search", "ToolSearch", `{"query":"mcp__fake__search"}`)
+				case 2:
+					callTool(w, "call_0", "mcp__fake__search", "{}")
+				default:
+					streamText(w, "done")
+				}
+			})
+			e.writeMockModels(t, server.URL)
+			args := []string{"--model", mockModel, "-p", "search"}
+			if allowed {
+				args = append(args, "--allowed-tools", "mcp__fake__search")
+			}
+
+			stdout, _, err := execute(t, "", args...)
+
+			require.NoError(t, err)
+			assert.Equal(t, "done\n", stdout)
+			declared := func(body map[string]any) []string {
+				var tools []string
+				for _, tl := range body["tools"].([]any) {
+					tools = append(tools, tl.(map[string]any)["function"].(map[string]any)["name"].(string))
+				}
+				return tools
+			}
+			first := declared(server.next(t).body)
+			assert.Contains(t, first, "ToolSearch")
+			assert.NotContains(t, first, "mcp__fake__search")
+			assert.Contains(t, declared(server.next(t).body), "mcp__fake__search")
+			var results []string
+			for _, m := range server.next(t).body["messages"].([]any) {
+				if msg := m.(map[string]any); msg["role"] == "tool" && msg["tool_call_id"] == "call_0" {
+					results = append(results, fmt.Sprint(msg["content"]))
+				}
+			}
+			require.Len(t, results, 1)
+			if allowed {
+				assert.Contains(t, results[0], "synthetic MCP result from search")
+				assert.NotContains(t, results[0], "needs approval")
+			} else {
+				assert.Contains(t, results[0], `tool "mcp__fake__search" needs approval`)
+				assert.Contains(t, results[0], "--allowed-tools")
+				assert.NotContains(t, results[0], "synthetic MCP result")
+			}
+		})
+	}
+}
+
 func TestRootReportsProviderFailure(t *testing.T) {
 	e := newTestEnv(t)
 	server := newMockProvider(t, func(w http.ResponseWriter) {
@@ -582,6 +690,23 @@ func TestRootPrintExecuteAllowCannotExemptGit(t *testing.T) {
 	result, content := printEdit(t, ".git/hooks/pre-commit", "--mode", "execute", "--allowed-tools", "Edit")
 
 	assert.Contains(t, result, "Edit(.git) (built-in)")
+	assert.Equal(t, "alpha\n", content)
+}
+
+func TestRootPrintExecuteAllowCannotExemptMCPFile(t *testing.T) {
+	result, content := printEdit(t, "sub/.mcp.json", "--mode", "execute", "--allowed-tools", "Edit")
+
+	assert.Contains(t, result, "Edit(.mcp.json) (built-in)")
+	assert.Equal(t, "alpha\n", content)
+}
+
+func TestRootPrintExecuteAllowCannotExemptLinkedMCPFile(t *testing.T) {
+	e := newTestEnv(t)
+	require.NoError(t, os.Symlink("servers.json", filepath.Join(e.workspace, ".mcp.json")))
+
+	result, content := printEditIn(t, e, "servers.json", "--mode", "execute", "--allowed-tools", "Edit")
+
+	assert.Contains(t, result, "Edit(.mcp.json) (built-in)")
 	assert.Equal(t, "alpha\n", content)
 }
 
@@ -838,6 +963,50 @@ func TestRootSandboxedBashProtectsGitMetadata(t *testing.T) {
 	}
 }
 
+func TestRootSandboxedBashProtectsMCPFile(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	for _, tc := range []struct {
+		name, path, command string
+		link                string
+		exists              bool
+	}{
+		{"cannot be created", ".mcp.json", "printf changed > .mcp.json", "", false},
+		{"cannot be replaced", ".mcp.json", "/bin/mv -f replacement .mcp.json", "", true},
+		{"nested cannot be overwritten", "sub/.mcp.json", "printf changed > sub/.mcp.json", "", true},
+		{"linked cannot be overwritten", "servers.json", "printf changed > servers.json", "servers.json", true},
+		{"linked cannot be replaced", "servers.json", "/bin/mv -f replacement servers.json", "servers.json", true},
+		{"linked directory cannot be written", "conf/keep", "printf changed > conf/keep", "conf", true},
+		{"linked directory cannot be replaced", "conf/keep", "/bin/mv conf moved", "conf", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			const original = `{"mcpServers":{}}` + "\n"
+			path := filepath.Join(e.workspace, tc.path)
+			if tc.exists {
+				e.writeFile(t, path, original)
+			}
+			if tc.link != "" {
+				require.NoError(t, os.Symlink(tc.link, filepath.Join(e.workspace, ".mcp.json")))
+			}
+			e.writeFile(t, filepath.Join(e.workspace, "replacement"), "changed\n")
+
+			result, _ := printBash(t, e, tc.command, "--mode", "execute")
+
+			assert.Contains(t, result, tool.ErrExitStatus.Error())
+			assert.Contains(t, result, "Operation not permitted")
+			if tc.exists {
+				content, err := os.ReadFile(path)
+				require.NoError(t, err)
+				assert.Equal(t, original, string(content))
+			} else {
+				assert.NoFileExists(t, path)
+			}
+		})
+	}
+}
+
 func TestRootSandboxedBashHonorsConfiguredPaths(t *testing.T) {
 	if !sandboxAvailable(t) {
 		t.Skip("the sandbox is unavailable here")
@@ -962,7 +1131,8 @@ func TestSandboxPolicy(t *testing.T) {
 			assert.True(t, filepath.IsAbs(path), path)
 		}
 		assert.Equal(t, append([]string{kopiHome}, expanded...), p.DenyRead)
-		assert.Equal(t, gitFiles(cwd), p.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".mcp.json")), p.DenyWrite)
+		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 		assert.True(t, p.Network)
 	})
 
@@ -972,7 +1142,8 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".git")), p.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".git"), filepath.Join(cwd, ".mcp.json")), p.DenyWrite)
+		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 	})
 
 	t.Run("no git", func(t *testing.T) {
@@ -980,7 +1151,8 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, "HEAD")), p.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, "HEAD"), filepath.Join(cwd, ".mcp.json")), p.DenyWrite)
+		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 	})
 
 	t.Run("git symlink to a directory", func(t *testing.T) {
@@ -989,7 +1161,8 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, gitFiles(cwd), p.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".mcp.json")), p.DenyWrite)
+		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 	})
 
 	t.Run("plan", func(t *testing.T) {
@@ -999,12 +1172,13 @@ func TestSandboxPolicy(t *testing.T) {
 
 		plan := planPolicy(p, cwd)
 
-		assert.Equal(t, append(gitFiles(cwd), cwd), plan.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".mcp.json"), cwd), plan.DenyWrite)
+		assert.Equal(t, p.DenyWriteNames, plan.DenyWriteNames)
 		assert.Equal(t, p.Write, plan.Write)
 		assert.Equal(t, p.DenyRead, plan.DenyRead)
 		assert.Equal(t, p.Network, plan.Network)
 		plan.DenyWrite[0] = "changed"
-		assert.Equal(t, gitFiles(cwd), p.DenyWrite)
+		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".mcp.json")), p.DenyWrite)
 	})
 }
 
@@ -1026,4 +1200,404 @@ func TestSandboxPolicyPreservesSymlinkParent(t *testing.T) {
 			assert.Equal(t, tc.want, p.DenyRead[len(p.DenyRead)-1])
 		})
 	}
+}
+
+// trustFolders is the folders object of the trust file, nil when there is none.
+func trustFolders(t *testing.T, path string) map[string]string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	require.NoError(t, err)
+	var f struct{ Folders map[string]string }
+	require.NoError(t, json.Unmarshal(b, &f))
+	return f.Folders
+}
+
+func canonical(t *testing.T, dir string) string {
+	t.Helper()
+	p, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	return p
+}
+
+const projectMCP = `{"mcpServers":{"shared":{"command":"npx","args":["-y","docs-mcp"],"env":{"TOKEN":"${TOKEN}"}},"remote":{"type":"http","url":"https://example.com/mcp"}},"other":true}`
+
+var globalServers = map[string]config.MCPServer{
+	"shared": {URL: "https://global.example.com/mcp"},
+	"solo":   {Command: "solo-mcp"},
+}
+
+func noAsk(t *testing.T) askTrust {
+	return func(tui.TrustRequest) (tui.TrustChoice, error) {
+		t.Error("asked whether to trust the folder")
+		return tui.TrustCancelled, nil
+	}
+}
+
+func TestResolveServersWithoutProjectFile(t *testing.T) {
+	e := newTestEnv(t)
+	trustFile := filepath.Join(e.kopiHome, "trust.json")
+
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, noAsk(t))
+
+	require.NoError(t, err)
+	assert.Equal(t, globalServers, set.servers)
+	assert.Empty(t, set.project)
+	assert.Empty(t, set.untrusted)
+	assert.Empty(t, set.errs)
+	assert.NoFileExists(t, trustFile)
+
+	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), `{"mcpServers":{}}`)
+	_, err = resolveServers(globalServers, trustFile, e.workspace, e.home, noAsk(t))
+	require.NoError(t, err)
+	assert.NoFileExists(t, trustFile, "a file declaring no servers needs no decision")
+}
+
+func TestResolveServersTrustedProjectReplacesGlobal(t *testing.T) {
+	e := newTestEnv(t)
+	trustFile := filepath.Join(e.kopiHome, "trust.json")
+	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), projectMCP)
+	b, err := json.Marshal(map[string]any{"version": 1, "folders": map[string]string{canonical(t, e.root): "trusted"}})
+	require.NoError(t, err)
+	e.writeFile(t, trustFile, string(b))
+
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, noAsk(t))
+
+	require.NoError(t, err)
+	assert.Equal(t, map[string]config.MCPServer{
+		"shared": {Command: "npx", Args: []string{"-y", "docs-mcp"}, Env: map[string]string{"TOKEN": "${TOKEN}"}},
+		"remote": {Type: "http", URL: "https://example.com/mcp"},
+		"solo":   {Command: "solo-mcp"},
+	}, set.servers)
+	assert.Equal(t, map[string]bool{"shared": true, "remote": true}, set.project)
+	assert.Empty(t, set.untrusted)
+	assert.False(t, set.undecided)
+}
+
+func TestResolveServersUntrustedSkipsProject(t *testing.T) {
+	e := newTestEnv(t)
+	trustFile := filepath.Join(e.kopiHome, "trust.json")
+	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), projectMCP)
+	b, err := json.Marshal(map[string]any{"version": 1, "folders": map[string]string{canonical(t, e.workspace): "untrusted"}})
+	require.NoError(t, err)
+	e.writeFile(t, trustFile, string(b))
+
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, noAsk(t))
+
+	require.NoError(t, err)
+	assert.Equal(t, globalServers, set.servers)
+	assert.Empty(t, set.project)
+	assert.Len(t, set.untrusted, 2)
+	assert.False(t, set.undecided)
+	assert.Empty(t, set.errs)
+}
+
+func TestResolveServersUndecidedWithoutAsk(t *testing.T) {
+	e := newTestEnv(t)
+	trustFile := filepath.Join(e.kopiHome, "trust.json")
+	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), projectMCP)
+
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, globalServers, set.servers)
+	assert.Len(t, set.untrusted, 2)
+	assert.True(t, set.undecided)
+	assert.NoFileExists(t, trustFile)
+}
+
+func TestResolveServersAsksAndSaves(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		choice  tui.TrustChoice
+		trusted bool
+		saved   func(e testEnv) map[string]string
+	}{
+		{"folder", tui.TrustFolder, true, func(e testEnv) map[string]string { return map[string]string{canonical(t, e.workspace): "trusted"} }},
+		{"parent", tui.TrustParent, true, func(e testEnv) map[string]string { return map[string]string{canonical(t, e.root): "trusted"} }},
+		{"deny", tui.TrustDeny, false, func(e testEnv) map[string]string { return map[string]string{canonical(t, e.workspace): "untrusted"} }},
+		{"cancel", tui.TrustCancelled, false, func(testEnv) map[string]string { return nil }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			trustFile := filepath.Join(e.kopiHome, "trust.json")
+			e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), projectMCP)
+			var asked []tui.TrustRequest
+			ask := func(req tui.TrustRequest) (tui.TrustChoice, error) {
+				asked = append(asked, req)
+				return tt.choice, nil
+			}
+
+			set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, ask)
+
+			require.NoError(t, err)
+			assert.Equal(t, []tui.TrustRequest{{
+				Folder:  canonical(t, e.workspace),
+				Parent:  canonical(t, e.root),
+				Servers: []string{"remote: https://example.com/mcp", "shared: npx -y docs-mcp (env: TOKEN)"},
+			}}, asked)
+			assert.Equal(t, tt.saved(e), trustFolders(t, trustFile))
+			assert.Equal(t, tt.trusted, set.project["shared"])
+			assert.Equal(t, !tt.trusted, len(set.untrusted) == 2)
+			assert.False(t, set.undecided)
+		})
+	}
+}
+
+// askOnce records the request and cancels, which saves nothing.
+func askOnce(asked *tui.TrustRequest) askTrust {
+	return func(req tui.TrustRequest) (tui.TrustChoice, error) {
+		*asked = req
+		return tui.TrustCancelled, nil
+	}
+}
+
+func TestDecideTrustOffersNoParentAtHomeOrRoot(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	proj := filepath.Join(home, "proj")
+	require.NoError(t, os.MkdirAll(proj, 0o755))
+	homeLink := filepath.Join(root, "home-link")
+	require.NoError(t, os.Symlink(home, homeLink))
+	for _, tt := range []struct{ name, cwd, home string }{
+		{"home", proj, home},
+		{"at home", home, home},
+		{"at home through a symlink", homeLink, home},
+		{"home with a trailing slash", proj, home + string(filepath.Separator)},
+		{"home through a symlink", proj, homeLink},
+		{"working directory through a symlinked home", filepath.Join(homeLink, "proj"), home},
+		{"root", "/", home},
+		{"directly under root", "/usr", home},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var asked tui.TrustRequest
+			_, err := decideTrust(nil, tt.cwd, tt.home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, askOnce(&asked))
+			require.NoError(t, err)
+			assert.Equal(t, canonical(t, tt.cwd), asked.Folder)
+			assert.Empty(t, asked.Parent)
+		})
+	}
+}
+
+func TestDecideTrustTreatsHomeTypedInAnotherCaseAsHome(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("case-insensitive folders are checked on darwin")
+	}
+	home := filepath.Join(canonical(t, t.TempDir()), "home")
+	require.NoError(t, os.Mkdir(home, 0o755))
+	upper := filepath.Join(filepath.Dir(home), "HOME")
+	if _, err := os.Stat(upper); err != nil {
+		t.Skip("the temporary directory is on a case-sensitive volume")
+	}
+	trustFile := filepath.Join(t.TempDir(), "trust.json")
+	store, err := trust.Open(trustFile)
+	require.NoError(t, err)
+
+	d, err := decideTrust(store, upper, home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, func(tui.TrustRequest) (tui.TrustChoice, error) { return tui.TrustFolder, nil })
+
+	require.NoError(t, err)
+	assert.Equal(t, trust.Trusted, d)
+	assert.Nil(t, trustFolders(t, trustFile), "an answer at home holds for this run only")
+}
+
+func TestServerTargetNamesEnvAndHeadersWithoutValues(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		server config.MCPServer
+		want   string
+	}{
+		{"command", config.MCPServer{Command: "npx", Args: []string{"-y", "pkg"}}, "npx -y pkg"},
+		{"env", config.MCPServer{Command: "npx", Args: []string{"-y", "pkg"}, Env: map[string]string{"TOKEN": "secret", "NODE_OPTIONS": "--require x"}}, "npx -y pkg (env: NODE_OPTIONS, TOKEN)"},
+		{"headers", config.MCPServer{URL: "https://x", Headers: map[string]string{"X-Api-Key": "secret", "Authorization": "Bearer secret"}}, "https://x (headers: Authorization, X-Api-Key)"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, serverTarget(tt.server))
+		})
+	}
+}
+
+func TestDecideTrustAtHomeOrRootTrustsForThisRunOnly(t *testing.T) {
+	home := canonical(t, t.TempDir())
+	for _, tt := range []struct {
+		name, cwd string
+		choice    tui.TrustChoice
+		want      trust.Decision
+		saved     map[string]string
+	}{
+		{"home trusted", home, tui.TrustFolder, trust.Trusted, nil},
+		{"root trusted", "/", tui.TrustFolder, trust.Trusted, nil},
+		{"home denied", home, tui.TrustDeny, trust.Untrusted, nil},
+		{"root denied", "/", tui.TrustDeny, trust.Untrusted, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			trustFile := filepath.Join(t.TempDir(), "trust.json")
+			store, err := trust.Open(trustFile)
+			require.NoError(t, err)
+
+			d, err := decideTrust(store, tt.cwd, home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, func(tui.TrustRequest) (tui.TrustChoice, error) { return tt.choice, nil })
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, d)
+			assert.Equal(t, tt.saved, trustFolders(t, trustFile))
+		})
+	}
+}
+
+func TestDecideTrustResolvesASymlinkedWorkingDirectory(t *testing.T) {
+	e := newTestEnv(t)
+	real := filepath.Join(e.root, "real", "proj")
+	require.NoError(t, os.MkdirAll(real, 0o755))
+	link := filepath.Join(e.root, "links", "proj")
+	require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o755))
+	require.NoError(t, os.Symlink(real, link))
+	trustFile := filepath.Join(e.kopiHome, "trust.json")
+	store, err := trust.Open(trustFile)
+	require.NoError(t, err)
+	var asked tui.TrustRequest
+	ask := func(req tui.TrustRequest) (tui.TrustChoice, error) {
+		asked = req
+		return tui.TrustParent, nil
+	}
+
+	d, err := decideTrust(store, link, e.home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, ask)
+
+	require.NoError(t, err)
+	assert.Equal(t, trust.Trusted, d)
+	assert.Equal(t, canonical(t, real), asked.Folder)
+	assert.Equal(t, canonical(t, filepath.Dir(real)), asked.Parent, "the parent of the real folder, not of the link")
+	assert.Equal(t, map[string]string{asked.Parent: "trusted"}, trustFolders(t, trustFile), "exactly the path shown is saved")
+	again, err := trust.Open(trustFile)
+	require.NoError(t, err)
+	got, ok, err := again.Lookup(link)
+	require.NoError(t, err)
+	assert.True(t, ok, "the saved entry covers the folder on the next run")
+	assert.Equal(t, trust.Trusted, got)
+}
+
+func TestDecideTrustFailsOnAnUnresolvableHome(t *testing.T) {
+	_, err := decideTrust(nil, t.TempDir(), filepath.Join(t.TempDir(), "missing"), map[string]config.MCPServer{"a": {Command: "a"}}, nil, noAsk(t))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to resolve")
+}
+
+func TestWaitServersFailsWhenInterrupted(t *testing.T) {
+	servers := pigruntime.StartServers(pigruntime.ServerOptions{Servers: map[string]config.MCPServer{"missing": {Command: "kopi-no-such-command-7f3a"}}, CWD: t.TempDir()})
+	t.Cleanup(servers.Close)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	statuses, err := waitServers(ctx, servers)
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Contains(t, err.Error(), "startup was interrupted")
+	assert.Nil(t, statuses)
+}
+
+func TestRootPrintStripsControlsFromNotices(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), `{"mcpServers":{"evil\u001b[31mRED\u001b[0m":{"command":5}}}`)
+
+	_, stderr, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "failed to decode MCP server")
+	assert.Contains(t, stderr, "evil[31mRED[0m")
+	assert.NotContains(t, stderr, "\x1b")
+}
+
+func TestResolveServersInvalidDeclarations(t *testing.T) {
+	for _, decision := range []string{"trusted", "untrusted", "undecided", "ask"} {
+		t.Run(decision, func(t *testing.T) {
+			e := newTestEnv(t)
+			trustFile := filepath.Join(e.kopiHome, "trust.json")
+			e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), `{"mcpServers":{"shared":{"command":42},"bad":{"args":false},"healthy":{"command":"healthy-mcp"}}}`)
+			if decision == "trusted" || decision == "untrusted" {
+				b, err := json.Marshal(map[string]any{"version": 1, "folders": map[string]string{canonical(t, e.workspace): decision}})
+				require.NoError(t, err)
+				e.writeFile(t, trustFile, string(b))
+			}
+			var ask askTrust
+			if decision == "ask" {
+				ask = func(req tui.TrustRequest) (tui.TrustChoice, error) {
+					assert.Equal(t, []string{"bad: invalid, will not start", "healthy: healthy-mcp", "shared: invalid, will not start"}, req.Servers)
+					return tui.TrustCancelled, nil
+				}
+			}
+
+			set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, ask)
+
+			require.NoError(t, err)
+			require.Len(t, set.errs, 2)
+			assert.ErrorContains(t, set.errs[0], "MCP server bad: failed to decode")
+			assert.ErrorContains(t, set.errs[1], "MCP server shared: failed to decode")
+			if decision == "trusted" {
+				assert.Equal(t, map[string]config.MCPServer{"solo": {Command: "solo-mcp"}, "healthy": {Command: "healthy-mcp"}}, set.servers)
+				assert.Len(t, set.invalid, 2)
+				assert.True(t, set.project["shared"])
+			} else {
+				assert.Equal(t, globalServers, set.servers)
+				assert.Len(t, set.untrusted, 3)
+				assert.Empty(t, set.invalid)
+				assert.Equal(t, decision == "undecided", set.undecided)
+			}
+		})
+	}
+}
+
+func TestResolveServersMalformedProjectFileIsANotice(t *testing.T) {
+	e := newTestEnv(t)
+	trustFile := filepath.Join(e.kopiHome, "trust.json")
+	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), `{"mcpServers":`)
+
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, noAsk(t))
+
+	require.NoError(t, err)
+	assert.Equal(t, globalServers, set.servers)
+	require.Len(t, set.errs, 1)
+	assert.ErrorContains(t, set.errs[0], "skipped this folder's MCP servers: failed to parse MCP config "+filepath.Join(e.workspace, ".mcp.json"))
+	assert.NoFileExists(t, trustFile)
+}
+
+func TestResolveServersInvalidTrustFileIsFatal(t *testing.T) {
+	e := newTestEnv(t)
+	trustFile := filepath.Join(e.kopiHome, "trust.json")
+	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), projectMCP)
+	e.writeFile(t, trustFile, `{"version":1,"folders":{"/x":"maybe"}}`)
+
+	_, err := resolveServers(globalServers, trustFile, e.workspace, e.home, noAsk(t))
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), trustFile)
+}
+
+func TestRootPrintWarnsOnceInUndecidedFolder(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), `{"mcpServers":{"proj":{"command":"kopi-no-such-command-7f3a"}}}`)
+
+	stdout, stderr, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok\n", stdout)
+	assert.Equal(t, 1, strings.Count(stderr, "this folder is not trusted, so the MCP servers in its .mcp.json are skipped; run kopi here in a terminal to be asked whether to trust it"), stderr)
+	assert.NotContains(t, stderr, "kopi-no-such-command-7f3a", "the project's server is not started")
+	assert.NoFileExists(t, filepath.Join(e.kopiHome, "trust.json"))
+}
+
+func TestRootPrintLogsServerFailures(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"mcpServers":{"broken":{"command":"kopi-no-such-command-7f3a"}}}`)
+
+	_, stderr, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "MCP server broken failed to start: ")
+	assert.Contains(t, stderr, "kopi-no-such-command-7f3a")
 }

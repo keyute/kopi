@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/keyute/kopi/internal/policy"
 )
@@ -41,8 +43,9 @@ func probe(ctx context.Context) error {
 	return nil
 }
 
-// seatbeltPrefix returns the sandbox-exec argv that applies p. Paths reach the
-// profile only as -D parameters, so the profile text never needs escaping.
+// seatbeltPrefix returns the sandbox-exec argv that applies p. Paths and name
+// patterns reach the profile only as -D parameters, so the profile text never
+// needs escaping.
 // Seatbelt applies the last matching rule: each section may only narrow the
 // ones before it, and the rename protection stays last.
 func seatbeltPrefix(p Policy) []string {
@@ -60,6 +63,7 @@ func seatbeltPrefix(p Policy) []string {
 	denyRead := define("DENY_READ", forms(p.DenyRead))
 	denyWrite := define("DENY_WRITE", protected)
 	ancestors := define("ANCESTOR", ancestors(protected))
+	names := define("DENY_WRITE_NAME", nameRegexes(p.DenyWriteNames))
 
 	literal := func(k string) string { return `(literal (param "` + k + `"))` }
 	subpath := func(k string) string { return `(subpath (param "` + k + `"))` }
@@ -76,6 +80,7 @@ func seatbeltPrefix(p Policy) []string {
 	rule(&b, "allow file-write*", write, subpath)
 	// literal beside subpath also stops first-time creation of a missing path.
 	rule(&b, "deny file-write*", denyWrite, exact)
+	rule(&b, "deny file-write*", names, func(k string) string { return `(regex (param "` + k + `"))` })
 	if p.Network {
 		b.WriteString(networkPolicy)
 	}
@@ -116,6 +121,31 @@ func forms(lists ...[]string) []string {
 			}
 			out = appendNew(out, resolved)
 		}
+	}
+	return out
+}
+
+// nameRegexes match a path ending in one of names in any letter case, as
+// APFS compares names, under every directory: a file made under any write
+// root could otherwise be moved in with its directory.
+func nameRegexes(names []string) []string {
+	out := make([]string, len(names))
+	for i, name := range names {
+		var b strings.Builder
+		b.WriteString("/")
+		for _, c := range name {
+			if unicode.SimpleFold(c) == c {
+				b.WriteString(regexp.QuoteMeta(string(c)))
+				continue
+			}
+			b.WriteString("(" + string(c))
+			for f := unicode.SimpleFold(c); f != c; f = unicode.SimpleFold(f) {
+				b.WriteString("|" + string(f))
+			}
+			b.WriteString(")")
+		}
+		b.WriteString("$")
+		out[i] = b.String()
 	}
 	return out
 }

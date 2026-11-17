@@ -23,8 +23,8 @@ const (
 	// chromeRows is the rows below the transcript besides the input: the
 	// blank row, the composer's two shaded rows and the status line.
 	chromeRows = 4
-	// busyRows is what a running turn adds: the working row and the blank
-	// row below it.
+	// busyRows is what the working row adds: the row and the blank row
+	// below it.
 	busyRows = 2
 	flashFor = 2 * time.Second
 )
@@ -88,6 +88,8 @@ type model struct {
 
 	status app.Status
 	busy   bool
+	// activity is the Controller's latest event.Activity text.
+	activity string
 	// queued is the input queued for the running turn; pending is its rows.
 	queued       []string
 	pending      []string
@@ -166,7 +168,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case eventsMsg:
 		return m.applyBatch(msg)
 	case spinner.TickMsg:
-		if !m.busy {
+		if _, shown := m.workingText(); !shown {
 			return nil
 		}
 		var cmd tea.Cmd
@@ -355,7 +357,7 @@ func (m *model) submitted(err error) tea.Cmd {
 	case err == nil:
 		m.composer.reset()
 	case errors.Is(err, app.ErrBusy):
-		return m.flash("busy switching sessions")
+		return m.flash("busy opening a session")
 	default:
 		m.tr.Apply(event.Error{Err: err})
 		m.relayout()
@@ -371,9 +373,10 @@ func (m *model) editQueue() {
 }
 
 // applyBatch applies events in order, refreshes the status when one of them
-// can change it, and starts the spinner when a turn starts.
+// can change it, and starts the spinner when the working row appears.
 func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
-	wasBusy, refresh := m.busy, false
+	_, wasShown := m.workingText()
+	refresh := false
 	pureThinking := len(evs) > 0
 	for _, ev := range evs {
 		if _, ok := ev.(event.ThinkingDelta); !ok {
@@ -392,7 +395,7 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 		m.relayout()
 	}
 	cmds := []tea.Cmd{m.bridge.wait()}
-	if m.busy && !wasBusy {
+	if _, shown := m.workingText(); shown && !wasShown {
 		cmds = append(cmds, m.spinner.Tick)
 	}
 	return tea.Batch(cmds...)
@@ -414,6 +417,9 @@ func (m *model) apply(ev event.Event) {
 		return
 	case event.QueueChanged:
 		m.queued = ev.Pending
+		return
+	case event.Activity:
+		m.activity = ev.Text
 		return
 	case event.ApprovalRequested:
 		m.approval, m.dialog = &ev, newApprovalDialog(&ev, &m.keys, m.th)
@@ -518,7 +524,8 @@ func (m *model) place() {
 		return
 	}
 	free := m.height - chromeRows
-	if m.busy {
+	working, shown := m.workingText()
+	if shown {
 		free -= busyRows
 	}
 	input := m.composer.height()
@@ -534,13 +541,9 @@ func (m *model) place() {
 	m.geo.transcript = max(0, free-len(m.pending))
 
 	rows := append([]string{""}, m.pending...)
-	if m.busy {
-		text := m.verb.ing + "… " + formatDuration(time.Since(m.turnStart))
-		if m.approval != nil {
-			text = "Waiting for you…"
-		}
+	if shown {
 		m.geo.working = len(rows)
-		rows = append(rows, workingRow(&m.spinner, text, m.th), "")
+		rows = append(rows, workingRow(&m.spinner, working, m.th), "")
 	}
 	// The +1 is the shaded top row that the composer and the prompt both draw.
 	m.geo.composerTop = m.geo.transcript + len(rows) + 1

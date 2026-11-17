@@ -5,11 +5,14 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -25,6 +28,105 @@ import (
 
 	"github.com/keyute/kopi/internal/history"
 )
+
+func TestRootSIGINTDuringMCPStartup(t *testing.T) {
+	const helperEnv = "KOPI_STARTUP_INTERRUPT_HELPER"
+	switch os.Getenv(helperEnv) {
+	case "cli":
+		os.Args = []string{"kopi", "--model", mockModel, "-p", "unused prompt"}
+		Execute()
+		os.Exit(0)
+	case "server":
+		var request struct{ Method string }
+		require.NoError(t, json.NewDecoder(os.Stdin).Decode(&request))
+		require.Equal(t, "initialize", request.Method)
+		ready, err := os.OpenFile(os.Getenv("KOPI_STARTUP_READY"), os.O_WRONLY, 0)
+		require.NoError(t, err)
+		require.NoError(t, json.NewEncoder(ready).Encode(os.Getpid()))
+		require.NoError(t, ready.Close())
+		// Never answer initialization or exit on stdin closure: Kopi must stop us.
+		hang := make(chan os.Signal, 1)
+		signal.Notify(hang, syscall.SIGUSR1)
+		<-hang
+		os.Exit(0)
+	}
+
+	e := newTestEnv(t)
+	binary, err := os.Executable()
+	require.NoError(t, err)
+	fifo := filepath.Join(e.root, "ready")
+	require.NoError(t, syscall.Mkfifo(fifo, 0o600))
+	ready, err := os.OpenFile(fifo, os.O_RDWR, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ready.Close() })
+	e.writeMockModels(t, "http://unused.invalid")
+	e.writeServers(t, filepath.Join(e.kopiHome, "config.json"), map[string]any{"hanging": map[string]any{
+		"command": binary,
+		"args":    []string{"-test.run=^TestRootSIGINTDuringMCPStartup$"},
+		"env":     map[string]string{helperEnv: "server", "KOPI_STARTUP_READY": fifo},
+	}})
+
+	cli := exec.Command(binary, "-test.run=^TestRootSIGINTDuringMCPStartup$")
+	cli.Env = []string{"HOME=" + e.home, "KOPI_HOME=" + e.kopiHome, "PATH=", helperEnv + "=cli"}
+	cli.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var output bytes.Buffer
+	cli.Stdout, cli.Stderr = &output, &output
+	require.NoError(t, cli.Start())
+	done := make(chan error, 1)
+	stopped := make(chan struct{})
+	go func() {
+		done <- cli.Wait()
+		close(stopped)
+	}()
+	serverPID := 0
+	t.Cleanup(func() {
+		if serverPID != 0 {
+			_ = syscall.Kill(serverPID, syscall.SIGKILL)
+		}
+		_ = cli.Process.Kill()
+		select {
+		case <-stopped:
+		case <-time.After(waitLimit):
+			t.Error("timed out cleaning up CLI subprocess")
+		}
+	})
+	type readiness struct {
+		pid int
+		err error
+	}
+	started := make(chan readiness, 1)
+	go func() {
+		var pid int
+		err := json.NewDecoder(ready).Decode(&pid)
+		started <- readiness{pid, err}
+	}()
+	select {
+	case r := <-started:
+		require.NoError(t, r.err)
+		serverPID = r.pid
+	case err := <-done:
+		t.Fatalf("CLI exited before MCP initialization: %v; output: %s", err, output.String())
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for MCP initialization")
+	}
+	pgid, err := syscall.Getpgid(serverPID)
+	require.NoError(t, err)
+	require.Equal(t, serverPID, pgid, "stdio server must have its own process group")
+	require.NotEqual(t, cli.Process.Pid, pgid)
+	require.NoError(t, cli.Process.Signal(os.Interrupt))
+	select {
+	case err := <-done:
+		var exit *exec.ExitError
+		require.ErrorAs(t, err, &exit, "output: %s", output.String())
+		assert.Equal(t, 1, exit.ExitCode(), "SIGINT must unwind startup, not terminate Kopi directly")
+		assert.Contains(t, output.String(), "startup was interrupted")
+	case <-time.After(5 * time.Second):
+		t.Fatal("SIGINT did not stop MCP startup before its normal timeout")
+	}
+	require.ErrorIs(t, syscall.Kill(serverPID, 0), syscall.ESRCH, "Kopi must stop and reap its stdio server")
+	t.Logf("Kopi exited after SIGINT; independently grouped MCP server %d was reaped (ESRCH)", serverPID)
+	serverPID = 0
+}
 
 func openTestTerminal(t *testing.T) (master, slave *os.File) {
 	t.Helper()
@@ -306,5 +408,124 @@ func TestRootFullscreenStartupSubmitExit(t *testing.T) {
 		assert.NotContains(t, result.text, syntheticKey)
 	case <-time.After(waitLimit):
 		t.Fatal("timed out draining fullscreen terminal")
+	}
+}
+
+func TestRootFullscreenTrustPromptStartsTheProjectServers(t *testing.T) {
+	e := newTestEnv(t)
+	t.Setenv("TERM", "xterm-256color")
+	logger := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(logger) })
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "trusted-response") })
+	e.writeMockModels(t, server.URL)
+	e.writeServers(t, filepath.Join(e.workspace, ".mcp.json"), map[string]any{"fake": map[string]any{
+		"command": os.Args[0],
+		"args":    []string{"-test.run=^TestMCPStdioHelper$"},
+		"env":     map[string]string{stdioHelperEnv: "serve"},
+	}})
+	master, slave := openTestTerminal(t)
+	asked, ready, answered := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	drained := make(chan struct{})
+	var result terminalDrainResult
+	go func() {
+		var output strings.Builder
+		buf := make([]byte, 4096)
+		var sawAsk, sawReady, sawAnswer bool
+		askedAt := 0
+		for {
+			n, err := master.Read(buf)
+			output.Write(buf[:n])
+			plain := ansi.Strip(output.String())
+			if !sawAsk {
+				if i := strings.Index(plain, "Do you trust this folder?"); i >= 0 {
+					sawAsk, askedAt = true, i
+					close(asked)
+				}
+			}
+			// The main interface's status line names the model; the trust
+			// prompt, whose paths may contain "kopi", never does.
+			if sawAsk && !sawReady && strings.Contains(plain[askedAt:], "mock-1") {
+				sawReady = true
+				close(ready)
+			}
+			if !sawAnswer && strings.Contains(plain, "trusted-response") {
+				sawAnswer = true
+				close(answered)
+			}
+			if err != nil {
+				result = terminalDrainResult{text: output.String(), err: err}
+				close(drained)
+				return
+			}
+		}
+	}()
+	root := newRoot()
+	root.SetIn(slave)
+	root.SetOut(slave)
+	var stderr bytes.Buffer
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"--model", mockModel})
+	done := make(chan error, 1)
+	stopped := make(chan struct{})
+	go func() {
+		done <- root.ExecuteContext(ctx)
+		close(stopped)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-stopped:
+		case <-time.After(waitLimit):
+			t.Error("timed out cleaning up fullscreen command")
+			return
+		}
+		// Close the last slave first: closing a master with a blocked read can hang on Darwin.
+		_ = slave.Close()
+		select {
+		case <-drained:
+		case <-time.After(waitLimit):
+			t.Error("timed out cleaning up fullscreen terminal drain")
+			return
+		}
+		_ = master.Close()
+	})
+	waitFor := func(name string, ch <-chan struct{}) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-drained:
+			t.Fatalf("terminal drain ended before %s: %v; output: %q", name, result.err, result.text)
+		case err := <-done:
+			t.Fatalf("fullscreen exited before %s: %v; stderr: %s", name, err, stderr.String())
+		case <-time.After(waitLimit):
+			t.Fatalf("timed out waiting for %s", name)
+		}
+	}
+	waitFor("the trust prompt", asked)
+	_, err := io.WriteString(master, "1") // Yes, trust this folder
+	require.NoError(t, err)
+	waitFor("the main interface", ready)
+	assert.Equal(t, map[string]string{canonical(t, e.workspace): "trusted"}, trustFolders(t, filepath.Join(e.kopiHome, "trust.json")))
+
+	_, err = io.WriteString(master, "what can you use?\r")
+	require.NoError(t, err)
+	req := server.next(t)
+	var tools []string
+	for _, tl := range req.body["tools"].([]any) {
+		tools = append(tools, tl.(map[string]any)["function"].(map[string]any)["name"].(string))
+	}
+	assert.Contains(t, tools, "ToolSearch")
+	system := req.body["messages"].([]any)[0].(map[string]any)
+	assert.Contains(t, system["content"], "mcp__fake__search")
+	waitFor("the rendered response", answered)
+	_, err = master.Write([]byte{4}) // ctrl-d quits with an empty composer.
+	require.NoError(t, err)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for fullscreen exit")
 	}
 }

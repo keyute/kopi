@@ -19,7 +19,8 @@ import (
 type Config struct {
 	Model     string // "provider/id"
 	Workspace string
-	Tools     []tool.Tool
+	// Tools are the built-in tools; the MCP servers' tools come from Servers.
+	Tools []tool.Tool
 	// JoinTimeout bounds how long a session switch or Close waits for running
 	// work to stop.
 	JoinTimeout time.Duration
@@ -30,10 +31,19 @@ type Config struct {
 	// Unattended means no human can answer, so every call that would ask for
 	// approval is denied.
 	Unattended bool
-	// Mode is the mode every session starts in.
+	// Mode is the controller's initial mode, which the first session starts
+	// in, and the mode every later session starts in.
 	Mode policy.Mode
 	// Files lists the entries that @ references complete to; nil offers none.
 	Files *tool.Workspace
+	// Errors are reported once as Error events, after the first session
+	// opens, before those about the MCP servers.
+	Errors []error
+	// Servers waits for the MCP servers to settle and returns their statuses;
+	// Open or Start calls it once, before the first session. Open returns its
+	// error unchanged; Start reports it as an Error event. Nil means there are
+	// no servers.
+	Servers func(ctx context.Context) ([]pigruntime.ServerStatus, error)
 }
 
 const maxReferenceEntries = 10000
@@ -46,12 +56,21 @@ const maxReferenceEntries = 10000
 // delivering events, which is safe because subscribers must not call back into
 // the Controller.
 type Controller struct {
-	rt        *pigruntime.Runtime
-	cfg       Config
+	rt  *pigruntime.Runtime
+	cfg Config
+	// tools and prompt are what every session opens with; set before the
+	// first session and not changed after.
+	tools     []tool.Tool
 	prompt    string
 	authority *policy.Authority
 	relay     relay
 	wg        sync.WaitGroup
+	// startup is what the first open that succeeds reports, so a failed first
+	// open does not lose it; life guards it once a session can be opened.
+	startup []event.Event
+	// attempted is set once the first open has been tried or its wait for the
+	// servers has failed; life guards it.
+	attempted bool
 
 	// life serialises session start, switch and close.
 	life sync.Mutex
@@ -61,7 +80,9 @@ type Controller struct {
 	// pending, so nothing may call into PiG with queue held.
 	queue sync.Mutex
 	// pending is the input queued for the running turn, the only source of
-	// QueueChanged. It is non-empty only while a turn is registered.
+	// QueueChanged. It is non-empty only while a turn is registered, or once
+	// the first open was started by Start and until a session opens and takes
+	// it.
 	pending []pigruntime.Prompt
 
 	mu     sync.Mutex
@@ -87,16 +108,72 @@ type Controller struct {
 type sessionSwitch struct {
 	work *Work
 	emit func(event.Event)
+	// cancelWait is set only for the first open started by Start, during which
+	// prompts are queued rather than refused; Close calls it to end the wait
+	// for the servers.
+	cancelWait context.CancelFunc
 }
 
 func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
 	cfg.Tools = slices.DeleteFunc(slices.Clone(cfg.Tools), func(t tool.Tool) bool { return cfg.Rules.Removes(t.Name) })
-	return &Controller{
-		rt:        rt,
-		cfg:       cfg,
-		prompt:    systemPrompt(cfg.Workspace, cfg.Tools),
-		authority: policy.NewAuthority(),
+	c := &Controller{rt: rt, cfg: cfg, authority: policy.NewAuthority()}
+	if cfg.Mode == policy.Execute {
+		c.authority.EnterExecute()
 	}
+	c.setup(nil)
+	return c
+}
+
+// setup sets the session tools and prompt from the built-in tools and
+// statuses, and returns the events about the servers.
+func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
+	var events []event.Event
+	var serverTools []tool.Tool
+	var servers []mcpServer
+	for _, st := range statuses {
+		if st.Err != nil {
+			events = append(events, event.Error{Err: fmt.Errorf("MCP server %s failed to start: %w", st.Name, st.Err)})
+			continue
+		}
+		server := mcpServer{name: st.Name, instructions: st.Instructions}
+		for _, t := range st.Tools {
+			if c.cfg.Rules.Removes(t.Name) {
+				continue
+			}
+			serverTools = append(serverTools, t)
+			server.tools = append(server.tools, t.Name)
+		}
+		for _, skipped := range st.Skipped {
+			events = append(events, event.Notice{Text: fmt.Sprintf("MCP server %s: skipped tool %s", st.Name, skipped)})
+		}
+		servers = append(servers, server)
+	}
+	tools := slices.Clone(c.cfg.Tools)
+	if len(serverTools) > 0 {
+		search := tool.NewToolSearch(serverTools, pigruntime.RankTools, pigruntime.LoadTools)
+		if c.cfg.Rules.Removes(search.Name) {
+			// ToolSearch is the only way to load deferred tools.
+			serverTools = nil
+			for i := range servers {
+				servers[i].tools = nil
+			}
+		} else {
+			tools = append(tools, search)
+		}
+	}
+	tools = append(tools, serverTools...)
+	c.tools = tools
+	c.prompt = systemPrompt(c.cfg.Workspace, c.tools, servers)
+	return events
+}
+
+// prepareStartup sets up the first session from statuses and keeps what it
+// reports once open: Config.Errors, then the events about the servers.
+func (c *Controller) prepareStartup(statuses []pigruntime.ServerStatus) {
+	for _, err := range c.cfg.Errors {
+		c.startup = append(c.startup, event.Error{Err: err})
+	}
+	c.startup = append(c.startup, c.setup(statuses)...)
 }
 
 // Subscribe registers fn for every event of the current session plus
@@ -111,8 +188,72 @@ type OpenRequest struct {
 	Continue bool
 }
 
+// Open checks that req can be opened, waits for the MCP servers, opens the
+// first session with their tools, then emits each of Config.Errors and the
+// events about the servers.
 func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
+	if err := c.check(ctx, req); err != nil {
+		return err
+	}
+	statuses, err := c.servers(ctx)
+	if err != nil {
+		return err
+	}
+	c.prepareStartup(statuses)
 	return c.start(ctx, req)
+}
+
+// Start is Open without waiting: it returns the check's error, and otherwise
+// returns at once and opens the session in the background, reporting failure
+// as an Error event. Prompts given until the session opens are queued and
+// start its first turn; /new and /resume are refused with ErrBusy meanwhile.
+// The wait for the servers runs without life, so Close can end it.
+func (c *Controller) Start(ctx context.Context, req OpenRequest) error {
+	if err := c.check(ctx, req); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	op, err := c.beginSwitch(cancel)
+	if err != nil {
+		cancel()
+		return err
+	}
+	if c.cfg.Servers != nil {
+		c.relay.emit(event.Activity{Text: "Connecting to MCP servers…"})
+	}
+	go func() {
+		defer cancel()
+		statuses, err := c.servers(ctx)
+		if c.cfg.Servers != nil {
+			c.relay.emit(event.Activity{})
+		}
+		c.life.Lock()
+		defer c.life.Unlock()
+		if err == nil {
+			c.prepareStartup(statuses)
+			err = c.startSwitch(ctx, req, op)
+		} else {
+			c.attempted = true
+			c.mu.Lock()
+			c.switching = nil
+			c.mu.Unlock()
+		}
+		if err != nil {
+			c.relay.emit(event.Error{Err: err})
+		}
+	}()
+	return nil
+}
+
+func (c *Controller) check(ctx context.Context, req OpenRequest) error {
+	return c.rt.Check(ctx, pigruntime.OpenOptions{Model: c.cfg.Model, ResumeID: req.ResumeID, Continue: req.Continue})
+}
+
+func (c *Controller) servers(ctx context.Context) ([]pigruntime.ServerStatus, error) {
+	if c.cfg.Servers == nil {
+		return nil, nil
+	}
+	return c.cfg.Servers(ctx)
 }
 
 func (c *Controller) NewSession(ctx context.Context) error {
@@ -130,7 +271,7 @@ func (c *Controller) Resume(ctx context.Context, id string) error {
 // life. start refuses once closed, and Close shuts the relay before releasing
 // life, so nothing reaches the runtime or a subscriber after Close.
 func (c *Controller) switchTo(ctx context.Context, req OpenRequest) error {
-	op, err := c.beginSwitch()
+	op, err := c.beginSwitch(nil)
 	if err != nil {
 		return err
 	}
@@ -241,23 +382,25 @@ func (c *Controller) Files() ([]Candidate, error) {
 	return out, nil
 }
 
-// submitPrompt starts a turn with p or queues p for the running one. It never
-// waits for a turn to end: input given after an interrupt starts the next turn
-// once the stopped one ends.
+// submitPrompt starts a turn with p or queues p for the running one or, during
+// the first open started by Start, for the first session. It never waits for
+// a turn to end: input given after an interrupt starts the next turn once the
+// stopped one ends.
 func (c *Controller) submitPrompt(ctx context.Context, p pigruntime.Prompt, now bool) (*Work, error) {
 	c.queue.Lock()
 	defer c.queue.Unlock()
 	c.mu.Lock()
-	if c.sess == nil || c.closed {
+	first := c.switching != nil && c.switching.cancelWait != nil
+	if c.sess == nil && !first || c.closed {
 		c.mu.Unlock()
 		return nil, ErrNoSession
 	}
-	if c.switching != nil {
+	if c.switching != nil && !first {
 		c.mu.Unlock()
 		return nil, ErrBusy
 	}
 	w, emit := c.turn, c.emit
-	if w == nil {
+	if w == nil && !first {
 		if p.Text == "" {
 			c.mu.Unlock()
 			return nil, nil
@@ -265,11 +408,14 @@ func (c *Controller) submitPrompt(ctx context.Context, p pigruntime.Prompt, now 
 		return c.startTurn(ctx, []pigruntime.Prompt{p}), nil
 	}
 	c.mu.Unlock()
+	if emit == nil {
+		emit = c.relay.emit
+	}
 	if p.Text != "" {
 		c.pending = append(c.pending, p)
 		c.queueChanged(emit)
 	}
-	if now && !w.stopped && len(c.pending) > 0 {
+	if now && w != nil && !w.stopped && len(c.pending) > 0 {
 		// Not stopped: the end of the send continues the Work with pending.
 		w.cancel()
 	}
@@ -296,13 +442,17 @@ func (c *Controller) queueChanged(emit func(event.Event)) {
 	emit(event.QueueChanged{Pending: texts})
 }
 
-// TakeQueued removes and returns the input queued for the running turn.
+// TakeQueued removes and returns the input queued for the running turn or
+// the first session.
 func (c *Controller) TakeQueued() []event.Input {
 	c.queue.Lock()
 	defer c.queue.Unlock()
 	c.mu.Lock()
 	emit := c.emit
 	c.mu.Unlock()
+	if emit == nil {
+		emit = c.relay.emit
+	}
 	return inputs(c.take(emit))
 }
 
@@ -417,6 +567,9 @@ func (c *Controller) Close(ctx context.Context) error {
 	c.mu.Lock()
 	c.closed = true
 	sess, unsubscribe, w := c.sess, c.unsubscribe, c.turn
+	if c.switching != nil && c.switching.cancelWait != nil {
+		c.switching.cancelWait()
+	}
 	if c.switching != nil && c.switching.work != nil {
 		w = c.switching.work
 		w.discard = true
@@ -591,14 +744,14 @@ func inputs(ps []pigruntime.Prompt) []event.Input {
 	return out
 }
 
-// start opens a session for req and makes it current. Running work is
-// stopped and joined first; if it will not stop the switch is refused. The new
-// session is opened before the old one is closed, so a failed open leaves the
-// old session in place.
+// start opens a session for req and makes it current, then emits events.
+// Running work is stopped and joined first; if it will not stop the switch is
+// refused. The new session is opened before the old one is closed, so a failed
+// open leaves the old session in place.
 func (c *Controller) start(ctx context.Context, req OpenRequest) error {
 	c.life.Lock()
 	defer c.life.Unlock()
-	op, err := c.beginSwitch()
+	op, err := c.beginSwitch(nil)
 	if err != nil {
 		return err
 	}
@@ -606,8 +759,9 @@ func (c *Controller) start(ctx context.Context, req OpenRequest) error {
 }
 
 // beginSwitch marks and stops in one queue section, before settlement can
-// drain input queued after an earlier Interrupt.
-func (c *Controller) beginSwitch() (*sessionSwitch, error) {
+// drain input queued after an earlier Interrupt. cancelWait is non-nil only
+// for the first open started by Start.
+func (c *Controller) beginSwitch(cancelWait context.CancelFunc) (*sessionSwitch, error) {
 	c.queue.Lock()
 	defer c.queue.Unlock()
 	c.mu.Lock()
@@ -619,7 +773,7 @@ func (c *Controller) beginSwitch() (*sessionSwitch, error) {
 		c.mu.Unlock()
 		return nil, ErrBusy
 	}
-	op := &sessionSwitch{work: c.turn, emit: c.emit}
+	op := &sessionSwitch{work: c.turn, emit: c.emit, cancelWait: cancelWait}
 	c.switching = op
 	c.mu.Unlock()
 	if op.work != nil {
@@ -630,12 +784,28 @@ func (c *Controller) beginSwitch() (*sessionSwitch, error) {
 }
 
 // startSwitch runs with life held and resolves the captured operation, not
-// the current turn, which may already have deregistered.
-func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessionSwitch) error {
+// the current turn, which may already have deregistered. Once the session is
+// open, input still pending, which only the first open started by Start or a
+// later open after it failed can leave, starts the session's first turn in the
+// same queue section that ends the switch, ahead of any input given later.
+func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessionSwitch) (err error) {
 	defer func() {
+		c.queue.Lock()
+		defer c.queue.Unlock()
+		var parts []pigruntime.Prompt
+		if err == nil {
+			c.mu.Lock()
+			emit := c.emit
+			c.mu.Unlock()
+			parts = c.take(emit)
+		}
 		c.mu.Lock()
 		c.switching = nil
-		c.mu.Unlock()
+		if len(parts) == 0 {
+			c.mu.Unlock()
+			return
+		}
+		c.startTurn(ctx, parts)
 	}()
 	c.mu.Lock()
 	if c.closed {
@@ -656,13 +826,15 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 	}
 
-	d := newDisplay(c.cfg.Tools)
+	later := c.attempted
+	c.attempted = true
+	d := newDisplay(c.tools)
 	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
 		Model:        c.cfg.Model,
 		ResumeID:     req.ResumeID,
 		Continue:     req.Continue,
 		SystemPrompt: c.prompt,
-		Tools:        c.cfg.Tools,
+		Tools:        c.tools,
 		Authority:    c.authority,
 		Rules:        c.cfg.Rules,
 		Approve:      c.approver(d),
@@ -685,12 +857,15 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 		cancel()
 	}
-	// A session starts in the configured mode, never in the mode the previous
-	// session was left in.
-	if c.cfg.Mode == policy.Execute {
-		c.EnterExecute()
-	} else {
-		c.EnterPlan()
+	// A session opened after the first open was tried, even one that failed,
+	// starts in the configured mode, never in the mode it was left in; the
+	// first keeps the mode chosen while it was opening.
+	if later {
+		if c.cfg.Mode == policy.Execute {
+			c.EnterExecute()
+		} else {
+			c.EnterPlan()
+		}
 	}
 
 	bound := c.relay.bind()
@@ -711,6 +886,10 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 	}
 	c.relay.emit(changed)
+	for _, ev := range c.startup {
+		c.relay.emit(ev)
+	}
+	c.startup = nil
 	return nil
 }
 

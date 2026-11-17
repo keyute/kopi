@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -128,16 +129,15 @@ func orphan(t *testing.T, dir string) (command string, exited <-chan int, dead <
 		_, _ = io.Copy(io.Discard, f)
 		close(deadCh)
 	}()
+	// O_RDWR never blocks on a FIFO, and holding a write end keeps the
+	// shell's line buffered after it closes fd 4.
+	exitedFile, err := os.OpenFile(exitedFIFO, os.O_RDWR, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = exitedFile.Close() })
 	go func() {
-		f, err := os.Open(exitedFIFO)
-		if err != nil {
-			t.Errorf("failed to open fifo: %v", err)
-			return
-		}
-		defer f.Close()
-		b, _ := io.ReadAll(f)
+		line, _ := bufio.NewReader(exitedFile).ReadString('\n')
 		var shell, child int
-		if fields := strings.Fields(string(b)); len(fields) == 2 {
+		if fields := strings.Fields(line); len(fields) == 2 {
 			shell, _ = strconv.Atoi(fields[0])
 			child, _ = strconv.Atoi(fields[1])
 		}
@@ -159,7 +159,7 @@ func orphan(t *testing.T, dir string) (command string, exited <-chan int, dead <
 		default:
 		}
 	})
-	// Only the shell holds fd 4, so EOF on it means the shell is exiting.
+	// The shell's last act is writing its PID and the child's to fd 4.
 	command = "exec 3>'" + deadFIFO + "'; sleep 600 & exec 3>&- 4>'" + exitedFIFO + "'; echo \"$$ $!\" >&4"
 	return command, exitedCh, deadCh
 }

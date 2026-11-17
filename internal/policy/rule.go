@@ -20,7 +20,22 @@ type Source struct {
 	Allow, Ask, Deny []string
 }
 
-var ruleName = regexp.MustCompile(`^(\*|[A-Za-z_][A-Za-z0-9_]*)$`)
+// MCPPrefix starts the name of every tool from an MCP server.
+const MCPPrefix = "mcp__"
+
+// ProjectMCPFile is the file in which a folder declares MCP servers; Kopi
+// starts a trusted folder's servers outside the sandbox. Loading follows a
+// symlink, as every peer does, so protection covers the name in every
+// directory and whatever the start directory's .mcp.json resolves to at
+// startup, with no file-or-directory check: skipping a linked directory let
+// Bash swap it for a file. Deliberately not chased: another link on the way,
+// a link broken at startup, an existing hard link, and other folders' link
+// targets. Codex and Claude Code's sandbox stop at the resolved target too
+// (anthropics/sandbox-runtime#790); reopen only with new evidence.
+const ProjectMCPFile = ".mcp.json"
+
+// ruleName also admits a trailing * for parseRule to refuse on non-MCP names.
+var ruleName = regexp.MustCompile(`^(\*|[A-Za-z_][A-Za-z0-9_-]*\*?)$`)
 
 type rule struct {
 	text   string
@@ -41,6 +56,9 @@ type Rules struct {
 	// fold matches case-insensitively, as the file systems of darwin and
 	// windows do by default.
 	fold bool
+	// mcpFile is the file the workspace's .mcp.json resolves to when the
+	// rules are built.
+	mcpFile string
 }
 
 type effect int
@@ -63,8 +81,25 @@ func parseRule(s string) (name, spec string, except bool, err error) {
 	if !ruleName.MatchString(name) {
 		return "", "", false, fmt.Errorf("rule %q: the name must be a tool name or *: %w", s, ErrInvalidRule)
 	}
+	mcp := strings.HasPrefix(name, MCPPrefix)
+	if name != "*" && strings.HasSuffix(name, "*") && !mcp {
+		return "", "", false, fmt.Errorf("rule %q: only a name starting with %s may end in *: %w", s, MCPPrefix, ErrInvalidRule)
+	}
+	if mcp {
+		suffix, star := strings.CutSuffix(strings.TrimPrefix(name, MCPPrefix), "*")
+		server, tool, cut := strings.Cut(suffix, "__")
+		// A prefix that ends inside the server name, such as mcp__git*, would
+		// also cover other servers' tools. Past the first __ it cannot, as a
+		// server name never contains __ or ends in _.
+		if valid := star && suffix == "" || cut && server != "" && (star || tool != ""); !valid {
+			return "", "", false, fmt.Errorf("rule %q: name one MCP tool as mcp__server__tool or all of a server's as mcp__server__*: %w", s, ErrInvalidRule)
+		}
+	}
 	if !hasSpec {
 		return name, "", false, nil
+	}
+	if mcp {
+		return "", "", false, fmt.Errorf("rule %q: an MCP tool takes no path: %w", s, ErrInvalidRule)
 	}
 	spec, ok := strings.CutSuffix(rest, ")")
 	if !ok || !balanced(spec) {
@@ -96,9 +131,10 @@ func balanced(s string) bool {
 	return depth == 0
 }
 
-// NewRules parses every source's rules; a rule name must be * or one of tools,
-// and a rule with a path must name * or a tool that acts on a path. Workspace
-// and home must be absolute.
+// NewRules parses every source's rules; a rule name must be *, one of tools or
+// start with MCPPrefix, whose server may be absent in this run, and a rule with
+// a path must name * or a tool that acts on a path. Workspace and home must be
+// absolute.
 func NewRules(workspace, home string, tools map[string]ToolSpec, sources ...Source) (*Rules, error) {
 	for _, d := range []struct{ name, dir string }{{"workspace", workspace}, {"home", home}} {
 		if _, err := filepath.EvalSymlinks(d.dir); err != nil {
@@ -106,7 +142,10 @@ func NewRules(workspace, home string, tools map[string]ToolSpec, sources ...Sour
 		}
 	}
 	ws, hm := escape(filepath.ToSlash(filepath.Clean(workspace))), escape(filepath.ToSlash(filepath.Clean(home)))
-	r := &Rules{fold: runtime.GOOS == "darwin" || runtime.GOOS == "windows"}
+	r := &Rules{
+		fold:    runtime.GOOS == "darwin" || runtime.GOOS == "windows",
+		mcpFile: Resolve(filepath.Join(workspace, ProjectMCPFile)),
+	}
 	for _, src := range sources {
 		s := source{name: src.Name}
 		for _, l := range []struct {
@@ -118,7 +157,7 @@ func NewRules(workspace, home string, tools map[string]ToolSpec, sources ...Sour
 				if err != nil {
 					return nil, fmt.Errorf("%s: %w", src.Name, err)
 				}
-				if name != "*" {
+				if name != "*" && !strings.HasPrefix(name, MCPPrefix) {
 					ts, ok := tools[name]
 					if !ok {
 						return nil, fmt.Errorf("%s: rule %q: unknown tool %q: %w", src.Name, text, name, ErrInvalidRule)
@@ -244,7 +283,7 @@ func (r *Rules) Removes(tool string) bool {
 	for _, s := range r.sources {
 		bare, exempt := false, false
 		for _, ru := range s.deny {
-			if ru.name != "*" && ru.name != tool {
+			if !nameMatches(ru.name, tool) {
 				continue
 			}
 			bare = bare || (!ru.except && ru.patterns == nil)
@@ -273,6 +312,9 @@ func (r *Rules) decide(tool string, t *Target) (eff effect, text, src string) {
 			if r.underGit(t.Path) || r.underGit(t.Real) {
 				return effectAsk, tool + "(.git)", "built-in"
 			}
+			if r.isMCPFile(t.Path) || r.isMCPFile(t.Real) {
+				return effectAsk, tool + "(" + ProjectMCPFile + ")", "built-in"
+			}
 		}
 		for _, s := range r.sources {
 			if text, ok := r.listMatches(l.rules(s), tool, t, l.tightening); ok {
@@ -291,13 +333,22 @@ func (r *Rules) underGit(p string) bool {
 	return slices.Contains(strings.Split(p, "/"), ".git")
 }
 
+func (r *Rules) isMCPFile(p string) bool {
+	p = filepath.Clean(p)
+	if p == r.mcpFile || r.fold && strings.EqualFold(p, r.mcpFile) {
+		return true
+	}
+	base := path.Base(filepath.ToSlash(p))
+	return base == ProjectMCPFile || r.fold && strings.EqualFold(base, ProjectMCPFile)
+}
+
 // listMatches reports whether some positive rule in rules matches and no
 // exception does. An exception loosens what its positive rules tighten and
 // vice versa.
 func (r *Rules) listMatches(rules []rule, tool string, t *Target, tightening bool) (string, bool) {
 	text, found := "", false
 	for _, ru := range rules {
-		if ru.name != "*" && ru.name != tool {
+		if !nameMatches(ru.name, tool) {
 			continue
 		}
 		if ru.except {
@@ -311,6 +362,13 @@ func (r *Rules) listMatches(rules []rule, tool string, t *Target, tightening boo
 		}
 	}
 	return text, found
+}
+
+// nameMatches reports whether a rule's name covers tool: the same name, or a
+// name ending in * as a prefix of tool, which makes a lone * cover every tool.
+func nameMatches(name, tool string) bool {
+	prefix, star := strings.CutSuffix(name, "*")
+	return name == tool || (star && strings.HasPrefix(tool, prefix))
 }
 
 // matches requires either the lexical or the resolved path to match when the

@@ -403,6 +403,32 @@ func TestBuiltInGitAskSurvivesAllEditsInsideGitWorkspace(t *testing.T) {
 	}
 }
 
+func TestBuiltInMCPFileAskSurvivesAllEdits(t *testing.T) {
+	d := newDirs(t)
+	f := &approver{answer: AllowEdits}
+	a := NewAuthority()
+	g := NewGate(a, map[string]ToolSpec{
+		"Edit":  {Capability: Write, Target: pathTarget},
+		"Write": {Capability: Write, Target: pathTarget},
+	}, d.rules(t), f.approve)
+	a.EnterExecute()
+	require.NoError(t, g.Before(t.Context(), "initial", "Edit", pathArgs(filepath.Join(d.ws, "a.go"))))
+	require.NoError(t, admitApproved(g, "initial", "Edit"))
+	require.Len(t, f.reqs, 1)
+	require.True(t, f.reqs[0].Edits)
+	f.answer = Reject
+	for _, tool := range []string{"Edit", "Write"} {
+		err := g.Before(t.Context(), tool, tool, pathArgs(filepath.Join(d.ws, "sub", ".mcp.json")))
+		require.ErrorIs(t, err, ErrRejected)
+		assert.ErrorIs(t, admitApproved(g, tool, tool), ErrNoGrant)
+	}
+	require.Len(t, f.reqs, 3)
+	assert.Equal(t, "Edit(.mcp.json) (built-in)", f.reqs[1].Rule)
+	assert.Equal(t, "Write(.mcp.json) (built-in)", f.reqs[2].Rule)
+	assert.False(t, f.reqs[1].Edits)
+	assert.False(t, f.reqs[2].Edits)
+}
+
 func TestAllowEditsNotOfferedGrantsOnlyTheCall(t *testing.T) {
 	f := &approver{answer: AllowEdits}
 	a, g := newTestGate(nil, f.approve)
@@ -572,4 +598,77 @@ func TestGrantCopiesArgumentsBeforeApproval(t *testing.T) {
 	copy(args, pathArgs("/changed"))
 	_, err := g.Admit("call", "Edit", original, &Target{Path: "/allowed", Real: "/allowed"})
 	assert.NoError(t, err)
+}
+
+// mcpGate is a gate with an Ask read tool and an Ask exec tool, as MCP
+// servers' tools are, and rules that may name them.
+func mcpGate(t *testing.T, approve Approver, src Source) (*Authority, *Gate) {
+	t.Helper()
+	specs := map[string]ToolSpec{
+		"mcp__s__read": {Capability: Read, Ask: true},
+		"mcp__s__exec": {Capability: Exec, Ask: true},
+	}
+	d := newDirs(t)
+	rules, err := NewRules(d.ws, d.home, specs, src)
+	require.NoError(t, err)
+	a := NewAuthority()
+	return a, NewGate(a, specs, rules, approve)
+}
+
+func TestAskToolAsksWithNoRuleEvenForRead(t *testing.T) {
+	f := &approver{answer: Allow}
+	_, g := mcpGate(t, f.approve, Source{Name: "config"})
+	require.NoError(t, g.Before(t.Context(), "c1", "mcp__s__read", nil))
+	assert.Equal(t, []Request{{CallID: "c1", Tool: "mcp__s__read"}}, f.reqs)
+	assert.NoError(t, admitApproved(g, "c1", "mcp__s__read"))
+
+	f = &approver{answer: Allow}
+	a, g := mcpGate(t, f.approve, Source{Name: "config"})
+	a.EnterExecute()
+	require.NoError(t, g.Before(t.Context(), "c2", "mcp__s__exec", nil))
+	assert.Equal(t, []Request{{CallID: "c2", Tool: "mcp__s__exec"}}, f.reqs)
+	assert.NoError(t, admitApproved(g, "c2", "mcp__s__exec"))
+
+	_, g = mcpGate(t, nil, Source{Name: "config"})
+	err := g.Before(t.Context(), "c1", "mcp__s__read", nil)
+	require.ErrorIs(t, err, ErrDenied)
+	assert.Contains(t, err.Error(), "or pass --allowed-tools, such as mcp__s__read: ")
+}
+
+func TestAskToolFollowsRules(t *testing.T) {
+	for _, tc := range []struct{ tool, rule string }{
+		{"mcp__s__read", "mcp__s__read"},
+		{"mcp__s__read", "mcp__s__*"},
+		{"mcp__s__read", "mcp__*"},
+		{"mcp__s__exec", "mcp__s__exec"},
+		{"mcp__s__exec", "mcp__s__*"},
+	} {
+		f := &approver{answer: Reject}
+		a, g := mcpGate(t, f.approve, Source{Name: "config", Allow: []string{tc.rule}})
+		if tc.tool == "mcp__s__exec" {
+			a.EnterExecute()
+		}
+		require.NoError(t, g.Before(t.Context(), "c1", tc.tool, nil), tc.rule)
+		assert.Empty(t, f.reqs, tc.rule)
+	}
+
+	f := &approver{answer: Allow}
+	_, g := mcpGate(t, f.approve, Source{Name: "config", Deny: []string{"mcp__s__*"}})
+	err := g.Before(t.Context(), "c1", "mcp__s__read", nil)
+	require.ErrorIs(t, err, ErrDenied)
+	assert.Contains(t, err.Error(), "mcp__s__* (config)")
+	assert.Empty(t, f.reqs)
+}
+
+func TestPlanRefusesAskExecButAsksAboutAskRead(t *testing.T) {
+	f := &approver{answer: Allow}
+	_, g := mcpGate(t, f.approve, Source{Name: "config", Allow: []string{"mcp__s__exec"}})
+	err := g.Before(t.Context(), "c1", "mcp__s__exec", nil)
+	require.ErrorIs(t, err, ErrDenied)
+	assert.Contains(t, err.Error(), "needs execute mode")
+	assert.NotContains(t, err.Error(), "sandbox")
+	assert.Empty(t, f.reqs)
+
+	require.NoError(t, g.Before(t.Context(), "c2", "mcp__s__read", nil))
+	assert.Equal(t, []Request{{CallID: "c2", Tool: "mcp__s__read"}}, f.reqs)
 }

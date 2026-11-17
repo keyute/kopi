@@ -715,6 +715,47 @@ func TestOpenMissingSessionFails(t *testing.T) {
 	}
 }
 
+func TestCheckReportsWhatOpenWould(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	models := r.svcs.ModelRuntime().GetAllModels("openai-codex")
+	require.NotEmpty(t, models)
+	codex, ok := models[0].(*ai.Model)
+	require.True(t, ok)
+
+	for _, tc := range []struct {
+		name     string
+		opts     OpenOptions
+		sentinel error
+	}{
+		{name: "unknown model", opts: OpenOptions{Model: fauxProvider + "/missing"}, sentinel: ErrUnknownModel},
+		{name: "missing credential", opts: OpenOptions{Model: "openai-codex/" + codex.ID}, sentinel: ErrNoCredential},
+		{name: "missing session to resume", opts: OpenOptions{Model: fauxModel, ResumeID: "no-such-session"}, sentinel: ErrSessionNotFound},
+		{name: "nothing to continue", opts: OpenOptions{Model: fauxModel, Continue: true}, sentinel: ErrSessionNotFound},
+		{name: "resume with continue", opts: OpenOptions{Model: fauxModel, ResumeID: "x", Continue: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.opts.Authority = policy.NewAuthority()
+			checkErr := r.Check(t.Context(), tc.opts)
+			_, openErr := r.Open(t.Context(), tc.opts)
+			require.Error(t, checkErr)
+			require.Error(t, openErr)
+			if tc.sentinel != nil {
+				assert.ErrorIs(t, checkErr, tc.sentinel)
+				assert.ErrorIs(t, openErr, tc.sentinel)
+			}
+			assert.Equal(t, openErr.Error(), checkErr.Error())
+		})
+	}
+
+	t.Run("valid request", func(t *testing.T) {
+		require.NoError(t, r.Check(t.Context(), OpenOptions{Model: fauxModel, Authority: policy.NewAuthority()}))
+		infos, err := r.Sessions()
+		require.NoError(t, err)
+		assert.Empty(t, infos)
+	})
+}
+
 func TestCloseReportsJoinTimeout(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)

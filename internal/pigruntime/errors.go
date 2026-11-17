@@ -11,4 +11,10 @@ var (
 	ErrNotLoggedIn     = errors.New("not logged in")
 	ErrSessionNotFound = errors.New("session not found")
 	ErrSendInProgress  = errors.New("session send already in progress")
+	ErrNoTurn          = errors.New("no turn in progress")
+
+	ErrServerStartTimeout = errors.New("MCP server did not start in time")
+	ErrServerNameClash    = errors.New("MCP server names give the same tool names")
+	ErrServerClosed       = errors.New("MCP server is closed")
+	ErrToolError          = errors.New("MCP tool returned an error")
 )

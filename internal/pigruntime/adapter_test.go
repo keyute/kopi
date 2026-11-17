@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest/mcpfake"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
 )
@@ -473,4 +474,60 @@ func TestFailedPreparationConsumesGrant(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, toolResultContentText(result.Content), policy.ErrNoGrant.Error())
 	assert.NotContains(t, toolResultContentText(result.Content), "now exists")
+}
+
+func TestSessionMCPAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		approve   policy.Approver
+		allow     []string
+		wantCalls int32
+	}{
+		{name: "default denied"},
+		{name: "approved", approve: allowAll, wantCalls: 1},
+		{name: "different server rule", allow: []string{"mcp__github__*"}},
+		{name: "same server rule", allow: []string{"mcp__github-other__*"}, wantCalls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			fake := &mcpfake.Server{
+				Tools: []map[string]any{{"name": "read", "inputSchema": map[string]any{"type": "object"}, "annotations": map[string]any{"readOnlyHint": true}}},
+				Reply: func(string, json.RawMessage) map[string]any {
+					calls.Add(1)
+					return map[string]any{"content": []any{map[string]any{"type": "text", "text": "MCP reply"}}}
+				},
+			}
+			servers, _ := startFakes(t, map[string]*mcpfake.Server{"github-other": fake})
+			st := servers.Wait(t.Context())[0]
+			require.NoError(t, st.Err)
+			sb := newSandbox(t)
+			r, faux := newTestRuntime(t, sb)
+			requests := make(chan []ai.Message, 1)
+			search := ai.FauxAssistantMessage(
+				ai.FauxContentBlocks{ai.FauxToolCall("ToolSearch", map[string]any{"query": st.Tools[0].Name}, &ai.FauxToolCallOptions{ID: "search"})},
+				ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)},
+			)
+			faux.SetResponses([]ai.FauxResponseStep{search, callTool(st.Tools[0].Name, "mcp-call"), captureRequest(requests, "done")})
+			rules, err := policy.NewRules(sb.ws, sb.kopiHome, tool.Specs(st.Tools), policy.Source{Name: "test", Allow: tc.allow})
+			require.NoError(t, err)
+			tools := append([]tool.Tool{tool.NewToolSearch(st.Tools, RankTools, LoadTools)}, st.Tools...)
+			sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, Tools: tools, Authority: policy.NewAuthority(), Approve: tc.approve, Rules: rules})
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+			_, err = sess.Send(t.Context(), Prompt{Text: "read"}, nil)
+			require.NoError(t, err)
+			msgs := <-requests
+			texts := toolResultTexts(msgs)
+			require.Len(t, texts, 2)
+			assert.Contains(t, texts[0], "Loaded 1 tool")
+			result := lastToolResult(t, msgs)
+			assert.Equal(t, tc.wantCalls, calls.Load())
+			if tc.wantCalls == 1 {
+				assert.Equal(t, "MCP reply", result)
+			} else {
+				assert.Contains(t, result, policy.ErrDenied.Error())
+				assert.NotContains(t, result, "MCP reply")
+			}
+		})
+	}
 }

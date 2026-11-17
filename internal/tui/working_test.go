@@ -52,3 +52,27 @@ func TestWorkingRowShowsWhileTurnRuns(t *testing.T) {
 		require.Nil(t, cmd, "ticking stops once idle")
 	})
 }
+
+func TestWorkingRowShowsActivity(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 40, 20)
+		idle := m.transcriptHeight()
+		working := func() string { s := screen(m); return s[len(s)-6] }
+
+		send(m, event.Activity{Text: "Connecting to MCP servers…"})
+		assert.Equal(t, "⠋ Connecting to MCP servers…", working())
+		assert.Equal(t, idle-busyRows, m.transcriptHeight())
+		_, cmd := m.Update(m.spinner.Tick())
+		assert.NotNil(t, cmd, "the spinner ticks during the activity")
+
+		send(m, event.TurnStart{Prompt: "go"})
+		assert.Equal(t, "⠙ Working… 0s", working(), "a running turn's text wins")
+		send(m, event.TurnEnd{})
+		assert.Equal(t, "⠙ Connecting to MCP servers…", working())
+
+		send(m, event.Activity{})
+		assert.Equal(t, idle, m.transcriptHeight())
+		_, cmd = m.Update(m.spinner.Tick())
+		require.Nil(t, cmd, "ticking stops once the activity ends")
+	})
+}

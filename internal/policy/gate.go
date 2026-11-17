@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -21,6 +22,8 @@ type ToolSpec struct {
 	// Sandboxed reports that the OS confines what a call can do, so a call no
 	// rule matches runs without asking.
 	Sandboxed bool
+	// Ask makes calls ask by default whatever the capability.
+	Ask bool
 	// PlanSandboxed reports that in plan mode the OS keeps a call from writing
 	// the workspace, so plan mode admits it.
 	PlanSandboxed bool
@@ -93,7 +96,7 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 	}
 	_, gen, ok := g.authority.Permits(spec)
 	if !ok {
-		if spec.Capability == Exec {
+		if spec.Capability == Exec && !strings.HasPrefix(tool, MCPPrefix) {
 			return fmt.Errorf("tool %q needs execute mode; the session is in plan mode, where it runs only in the OS sandbox, which is off or unavailable: %w", tool, ErrDenied)
 		}
 		return fmt.Errorf("tool %q needs execute mode; the session is in %s mode: %w", tool, Plan, ErrDenied)
@@ -117,7 +120,7 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 		}
 	case effectAllow:
 	default:
-		if spec.Capability != Read && !spec.Sandboxed && (spec.Capability != Write || !g.editsGranted()) {
+		if spec.Ask || (spec.Capability != Read && !spec.Sandboxed && (spec.Capability != Write || !g.editsGranted())) {
 			req.Edits = spec.Capability == Write
 			allow := tool
 			if target != nil {
