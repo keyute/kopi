@@ -693,7 +693,7 @@ func TestRootSandboxUnavailableWarns(t *testing.T) {
 	_, stderr, err := execute(t, "", "--model", mockModel, "-p", "hi")
 
 	require.NoError(t, err)
-	assert.Contains(t, stderr, "sandbox is unavailable; Bash runs without it and needs approval or an allow rule")
+	assert.Contains(t, stderr, "sandbox is unavailable; Bash runs without it and needs approval or an allow rule, and plan mode refuses it")
 }
 
 func TestRootSandboxDisabledBashNeedsApproval(t *testing.T) {

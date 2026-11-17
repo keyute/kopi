@@ -206,12 +206,12 @@ func TestSeatbeltDenyReadIsAlsoDenyWrite(t *testing.T) {
 // itself already runs inside a Seatbelt sandbox.
 func newSandbox(t *testing.T, p Policy) *Sandbox {
 	t.Helper()
-	sb, err := New(t.Context(), p)
+	sbs, err := New(t.Context(), p)
 	if errors.Is(err, ErrUnavailable) {
 		t.Skip(err)
 	}
 	require.NoError(t, err)
-	return sb
+	return sbs[0]
 }
 
 // bash runs script in sb with env added to the test's environment.

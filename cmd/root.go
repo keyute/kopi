@@ -298,7 +298,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	}
 	// Logged only now so that in fullscreen it goes to the log file.
 	if unavailable != nil {
-		slog.Warn("sandbox is unavailable; Bash runs without it and needs approval or an allow rule", "err", unavailable)
+		slog.Warn("sandbox is unavailable; Bash runs without it and needs approval or an allow rule, and plan mode refuses it", "err", unavailable)
 	}
 
 	rt, err := openRuntime(ctx, paths, cwd)
@@ -373,17 +373,14 @@ func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHom
 		return nil, nil, nil, nil
 	}
 	p := sandboxPolicy(cfg, cwd, userHome, kopiHome)
-	sb, err = sandbox.New(ctx, p)
-	if err == nil {
-		plan, err = sandbox.New(ctx, planPolicy(p, cwd))
-	}
+	sandboxes, err := sandbox.New(ctx, p, planPolicy(p, cwd))
 	switch {
 	case cfg.Enabled == nil && errors.Is(err, sandbox.ErrUnavailable):
 		return nil, nil, err, nil
 	case err != nil:
 		return nil, nil, nil, fmt.Errorf("failed to start the sandbox: %w", err)
 	}
-	return sb, plan, nil, nil
+	return sandboxes[0], sandboxes[1], nil, nil
 }
 
 // sandboxPolicy lets commands write only the workspace, temporary
