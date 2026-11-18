@@ -34,14 +34,15 @@
 
 ## State
 
-- Kopi reads and writes only under its home (`$KOPI_HOME`, default `~/.kopi`). Never read or write `~/.pi`, `~/.pig`, `~/.claude` or any other tool's store, in code or in tests. The one exception is `~/.agents/skills`, the directory agents share for skills, which Kopi only reads.
+- Kopi reads and writes only under its home (`$KOPI_HOME`, default `~/.kopi`). Never read or write `~/.pi`, `~/.pig`, `~/.claude` or any other tool's store, in code or in tests. A shared place outside the project (see Built in or configured), such as `~/.agents/skills`, is not another tool's store; Kopi only reads it.
 - `trust.json` under Kopi's home holds trust decisions; the binary never writes `config.json`.
 - Tests use `t.TempDir()`, synthetic credentials and no network, and synchronise on channels, never sleeps.
 
 ## Built in or configured
 
 - The binary owns how Kopi works: mechanics, tool contracts and their limits, model-facing text about Kopi's own tools, the default look, and protection of Kopi's home and of the gate itself. These are constants, not config keys.
-- The binary assumes nothing that differs from one user's machine to the next: no built-in list of paths outside Kopi's home, other tools' stores, credential locations, providers, models or personal rules. The user states those in `config.json`. The one exception is `~/.agents/skills`, which Kopi only reads.
+- The binary assumes nothing that differs from one user's machine to the next: no built-in list of paths outside Kopi's home, other tools' stores, credential locations, providers, models or personal rules. The user states those in `config.json`. A shared place outside the project, such as `~/.agents/skills`, is the exception, and Kopi only reads it.
+- What agents share in one format and place is read there, in that format: a project's `AGENTS.md`, `.agents/skills` and `~/.agents/skills`, `.mcp.json` and the `mcpServers` entry shape. Kopi's home holds only what has no shared place, such as the global `AGENTS.md`, or what only Kopi reads. A place is shared when most peers read it. Kopi adds no fields of its own to a shared format; its extras live in `config.json`.
 - A behaviour users reasonably set differently is a `config.json` key with its default in `config.Defaults()`. A flag that overrides a key is a config layer over the file, never a separate code path.
 - Add a key only for a setting someone needs to change, never to move mechanics out of the binary.
 - When it is unclear which side something is on, check what peer agents build in and follow the majority.
