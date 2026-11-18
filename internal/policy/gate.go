@@ -176,9 +176,13 @@ func (g *Gate) ask(ctx context.Context, r Request, allow string) error {
 	case d.Answer == AllowEdits && r.Edits:
 		g.mu.Lock()
 		g.edits = true
+		g.consecutiveDenials = 0
 		g.mu.Unlock()
 		return nil
 	case d.Answer == Allow || d.Answer == AllowEdits:
+		g.mu.Lock()
+		g.consecutiveDenials = 0
+		g.mu.Unlock()
 		return nil
 	case d.Reason != "":
 		return fmt.Errorf("tool %q: %w, with this feedback:\n%s", r.Tool, ErrRejected, d.Reason)
@@ -225,13 +229,7 @@ func (g *Gate) reviewed(ctx context.Context, r Request, allow string) error {
 		}
 	}
 	r.Review = &rev
-	if err := g.ask(ctx, r, allow); err != nil {
-		return err
-	}
-	g.mu.Lock()
-	g.consecutiveDenials = 0
-	g.mu.Unlock()
-	return nil
+	return g.ask(ctx, r, allow)
 }
 
 // Admit consumes the grant and compares the execution arguments and the

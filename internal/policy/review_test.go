@@ -196,6 +196,39 @@ func TestReviewCountersReset(t *testing.T) {
 		assert.Len(t, h.reqs, 2)
 	})
 
+	for _, tc := range []struct {
+		name string
+		src  Source
+		path string
+	}{
+		{"explicit ask approval", Source{Name: "config", Ask: []string{"Edit"}}, "a.go"},
+		{"built-in ask approval", Source{Name: "config"}, filepath.Join(".git", "config")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, h := &reviewer{reviews: []Review{deny}}, &approver{answer: Allow}
+			d := newDirs(t)
+			rules, err := NewRules(d.ws, d.home, reviewSpecs, tc.src)
+			require.NoError(t, err)
+			a := NewAuthority()
+			a.EnterExecute()
+			g := NewGate(a, reviewSpecs, rules, h.approve, f.review)
+			for _, id := range []string{"c1", "c2"} {
+				require.ErrorIs(t, call(g, id), ErrDenied)
+			}
+			require.NoError(t, g.Before(t.Context(), "approval", "Edit", pathArgs(filepath.Join(d.ws, tc.path))))
+			require.Len(t, h.reqs, 1)
+			assert.NotEmpty(t, h.reqs[0].Rule)
+			assert.Nil(t, h.reqs[0].Review)
+			for _, id := range []string{"c3", "c4"} {
+				require.ErrorIs(t, call(g, id), ErrDenied)
+			}
+			assert.Len(t, h.reqs, 1)
+			assert.Equal(t, 4, g.totalDenials)
+			require.NoError(t, call(g, "c5"))
+			assert.Len(t, h.reqs, 2)
+		})
+	}
+
 	t.Run("human rejection", func(t *testing.T) {
 		f, h := &reviewer{reviews: []Review{deny}}, &approver{answer: Reject}
 		_, g := newReviewGate(t, f, h.approve)
