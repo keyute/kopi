@@ -161,7 +161,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 ```
 
 - `classifier.enabled` (default `false`) has the classifier review calls that would otherwise ask, in both modes (see Modes and tools).
-- `classifier.model` (`provider/id`) is the model that reviews; unset, it is `model`. When the classifier is enabled, a wrong value, an unknown model or one whose provider has no credential fails at start.
+- `classifier.model` (`provider/id`) is the model that reviews; unset, it is `model`. A value that is not `provider/id` fails at start; when the classifier is enabled, so does an unknown model or one whose provider has no credential.
 - `classifier.instructions` lists your own rules for the classifier, added after Kopi's; a blank entry is rejected at start. A later layer's list replaces an earlier one's whole.
 
 ## Providers

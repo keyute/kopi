@@ -51,7 +51,7 @@ func systemPrompt(workspace string, tools []tool.Tool, groups []instruction.Grou
 		}
 		lines = append(lines, line)
 		if reviewed {
-			lines = append(lines, "Tool calls that would need the user's approval are first reviewed by a classifier model, which can allow them, deny them with a reason, or leave them to the user.")
+			lines = append(lines, "Tool calls that would need the user's approval and that no permission rule decides are first reviewed by a classifier model, which can allow them, deny them with a reason, or leave them to the user.")
 		}
 	}
 	lines = append(lines, "A tool call that is refused or that the user rejects returns an error saying so; when the rejection carries the user's feedback, act on it; never retry a rejected call unchanged.")

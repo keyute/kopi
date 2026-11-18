@@ -884,11 +884,13 @@ func TestClassifierInterruptWhileReviewingEndsTurnWithoutApproval(t *testing.T) 
 func TestClassifierDoesNotReviewUnruledEdits(t *testing.T) {
 	prompts := make(chan string, 8)
 	h, sb := editHarness(t, Config{Classifier: reviewing(replyDeny, prompts)})
-	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(editCall("call-1", "a.txt")), pigruntimetest.Text("done")})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(editCall("call-1", "a.txt")), pigruntimetest.Capture(t, requests, "done")})
 
 	h.turn(t, "edit a.txt")
 
 	assert.Equal(t, "beta\n", fileText(t, sb, "a.txt"))
 	assert.Empty(t, ofType[event.ApprovalRequested](h.rec.all()))
 	assert.Empty(t, prompts)
+	assert.Contains(t, receive(t, requests).SystemPrompt, "and that no permission rule decides are first reviewed by a classifier model")
 }

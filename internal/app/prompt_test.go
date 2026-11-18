@@ -126,7 +126,7 @@ func TestPromptPlacesInstructionGroupsBetweenPreambleAndServers(t *testing.T) {
 }
 
 func TestPromptMentionsClassifierOnlyWhenOnAndApprovalCanBeNeeded(t *testing.T) {
-	const sentence = "Tool calls that would need the user's approval are first reviewed by a classifier model, which can allow them, deny them with a reason, or leave them to the user."
+	const sentence = "Tool calls that would need the user's approval and that no permission rule decides are first reviewed by a classifier model, which can allow them, deny them with a reason, or leave them to the user."
 	exec := []tool.Tool{{Name: "Probe", Capability: policy.Exec}}
 	read := []tool.Tool{{Name: "Probe", Capability: policy.Read}}
 

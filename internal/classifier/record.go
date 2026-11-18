@@ -11,7 +11,7 @@ import (
 const (
 	maxTask     = 8000
 	maxArgs     = 2000
-	keptCalls   = 21
+	keptCalls   = historySize + 1
 	historySize = 20
 )
 
@@ -67,8 +67,15 @@ func (r *Record) Conversation(exclude string) Conversation {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	conv := Conversation{Task: r.task}
-	for _, c := range r.calls {
-		if c.id != exclude {
+	skip := -1
+	for i := len(r.calls) - 1; i >= 0; i-- {
+		if r.calls[i].id == exclude {
+			skip = i
+			break
+		}
+	}
+	for i, c := range r.calls {
+		if i != skip {
 			conv.History = append(conv.History, c.Call)
 		}
 	}
@@ -99,9 +106,10 @@ func (r *Record) addCall(c recorded) {
 func (r *Record) markEnd(id string, failed bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for i := range r.calls {
+	for i := len(r.calls) - 1; i >= 0; i-- {
 		if r.calls[i].id == id {
 			r.calls[i].Failed = failed
+			return
 		}
 	}
 }

@@ -71,6 +71,17 @@ func TestRecordToolEndMarksFailed(t *testing.T) {
 	assert.False(t, conv.History[1].Failed)
 }
 
+func TestRecordDuplicateCallIDsActOnNewest(t *testing.T) {
+	var r Record
+	r.Observe(event.ToolStart{CallID: "a", Name: "Read"})
+	r.Observe(event.ToolEnd{CallID: "a"})
+	r.Observe(event.ToolStart{CallID: "a", Name: "Bash"})
+	r.Observe(event.ToolEnd{CallID: "a", IsError: true})
+	assert.False(t, r.calls[0].Failed)
+	assert.True(t, r.calls[1].Failed)
+	assert.Equal(t, []Call{{Tool: "Read"}}, r.Conversation("a").History)
+}
+
 func TestRecordNil(t *testing.T) {
 	var r *Record
 	assert.NotPanics(t, func() {
