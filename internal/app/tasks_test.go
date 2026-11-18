@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -32,6 +33,8 @@ type fakeTasks struct {
 	detaches     int
 	stopAlls     int
 	stops        []string
+	stop         func(tool.TaskInfo) (tool.TaskInfo, error)
+	stopAll      func(int)
 }
 
 func (f *fakeTasks) OnChange(fn func(tool.TaskInfo)) {
@@ -86,24 +89,33 @@ func (f *fakeTasks) Output(id string) (tool.TaskInfo, error) {
 
 func (f *fakeTasks) Stop(id string) (tool.TaskInfo, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.stops = append(f.stops, id)
 	i := slices.IndexFunc(f.infos, func(info tool.TaskInfo) bool { return info.ID == id })
 	if i < 0 {
+		f.mu.Unlock()
 		return tool.TaskInfo{}, fmt.Errorf("failed to find task %q: %w", id, tool.ErrUnknownTask)
 	}
 	if f.infos[i].Status == tool.TaskRunning {
 		f.infos[i].Status = tool.TaskStopped
 		f.infos[i].Ended = f.infos[i].Started.Add(3 * time.Second)
 	}
-	return f.infos[i], nil
+	info, stop := f.infos[i], f.stop
+	f.mu.Unlock()
+	if stop != nil {
+		return stop(info)
+	}
+	return info, nil
 }
 
 func (f *fakeTasks) StopAll() {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.stopAlls++
+	n, stopAll := f.stopAlls, f.stopAll
 	f.infos = nil
+	f.mu.Unlock()
+	if stopAll != nil {
+		stopAll(n)
+	}
 }
 
 func (f *fakeTasks) set(info tool.TaskInfo) {
@@ -168,6 +180,178 @@ func gated(gate <-chan struct{}, text string) ai.FauxResponseStep {
 		<-gate
 		return ai.FauxAssistantMessage(ai.FauxContentString(text), ai.FauxAssistantMessageOptions{}), nil
 	})
+}
+
+func TestDelayedStopTaskAcrossReplacement(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failed=%t", failed), func(t *testing.T) {
+			entered, release := make(chan struct{}), make(chan struct{})
+			f := &fakeTasks{stop: func(info tool.TaskInfo) (tool.TaskInfo, error) {
+				close(entered)
+				<-release
+				return info, nil
+			}}
+			h, _ := openHarness(t, Config{Tasks: f, Wake: true})
+			f.set(runningTask("t1"))
+			result := make(chan error, 1)
+			go func() { result <- h.c.StopTask("t1") }()
+			wait(t, entered)
+			if failed {
+				require.ErrorIs(t, h.c.Resume(t.Context(), "no-such-session"), pigruntime.ErrSessionNotFound)
+			} else {
+				require.NoError(t, h.c.NewSession(t.Context()))
+			}
+			close(release)
+			require.NoError(t, receiveError(t, result))
+			assert.True(t, h.idle())
+			if failed {
+				queued := h.queuedNotices()
+				require.Len(t, queued, 1)
+				assert.False(t, queued[0].wake)
+			} else {
+				assert.Empty(t, h.queuedNotices())
+			}
+		})
+	}
+}
+
+func receiveError(t *testing.T, results <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-results:
+		return err
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for result")
+		return nil
+	}
+}
+
+func TestCloseBoundsTaskCleanupAndReusesPendingSweep(t *testing.T) {
+	for _, callerCancel := range []bool{false, true} {
+		t.Run(fmt.Sprintf("caller-cancel=%t", callerCancel), func(t *testing.T) {
+			entered, release := make(chan struct{}), make(chan struct{})
+			f := &fakeTasks{stopAll: func(n int) {
+				if n == 1 {
+					close(entered)
+					<-release
+				}
+			}}
+			h, _ := openHarness(t, Config{Tasks: f, JoinTimeout: 50 * time.Millisecond})
+			id := h.c.Status().SessionID
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			result := make(chan error, 1)
+			go func() { result <- h.c.Close(ctx) }()
+			wait(t, entered)
+			if callerCancel {
+				cancel()
+			}
+			require.ErrorIs(t, receiveError(t, result), pigruntime.ErrJoinTimeout)
+			assert.Equal(t, id, h.c.Status().SessionID)
+			assert.Empty(t, f.List(), "cleanup may clear the list before its callbacks drain")
+			delivered := len(h.rec.all())
+			cancelled, stop := context.WithCancel(t.Context())
+			stop()
+			require.ErrorIs(t, h.c.Close(cancelled), pigruntime.ErrJoinTimeout)
+			_, sweeps, _ := f.counts()
+			assert.Equal(t, 1, sweeps, "retry must not overlap a pending sweep")
+			f.end(endedTask("late"))
+			assert.Len(t, h.rec.all(), delivered)
+			close(release)
+			require.NoError(t, h.c.Close(t.Context()))
+			assert.Empty(t, h.c.Status().SessionID)
+			assert.Empty(t, f.List())
+			_, sweeps, _ = f.counts()
+			assert.Equal(t, 2, sweeps, "a fresh sweep drains adoption after pending cleanup")
+			assert.Len(t, h.rec.all(), delivered)
+		})
+	}
+}
+
+// The tool adopts only after the first sweep has emptied the manager. This
+// controls the same boundary as asynchronous abort without relying on PiG timing.
+func TestCloseDrainsTaskAdoptedAfterFirstSweep(t *testing.T) {
+	started, swept := make(chan struct{}), make(chan struct{})
+	f := &fakeTasks{}
+	var w *Work
+	f.stopAll = func(n int) {
+		if n == 1 {
+			close(swept)
+		} else {
+			select {
+			case <-w.Done():
+			default:
+				t.Error("final sweep preceded turn join")
+			}
+			f.end(endedTask("callback"))
+			f.mu.Lock()
+			f.infos = nil
+			f.mu.Unlock()
+		}
+	}
+	adopt := testTool("Adopt", policy.Read, func(context.Context, json.RawMessage) (string, error) {
+		close(started)
+		<-swept
+		f.set(runningTask("late"))
+		return "adopted", nil
+	})
+	h, _ := openHarness(t, Config{Tasks: f, Tools: []tool.Tool{adopt}})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Adopt", "call-1")), pigruntimetest.Text("done")})
+	var err error
+	w, err = h.c.Submit(t.Context(), "adopt")
+	require.NoError(t, err)
+	wait(t, started)
+	require.NoError(t, h.c.Close(t.Context()))
+	assert.Empty(t, f.List())
+	_, sweeps, _ := f.counts()
+	assert.Equal(t, 2, sweeps)
+	assert.Empty(t, h.c.Status().SessionID)
+	delivered := len(h.rec.all())
+	f.end(endedTask("after"))
+	assert.Len(t, h.rec.all(), delivered)
+}
+
+func TestCloseRetryJoinsPendingFinalSweep(t *testing.T) {
+	started, swept := make(chan struct{}), make(chan struct{})
+	final, release := make(chan struct{}), make(chan struct{})
+	f := &fakeTasks{stopAll: func(n int) {
+		switch n {
+		case 1:
+			close(swept)
+		case 2:
+			close(final)
+			<-release
+		}
+	}}
+	adopt := testTool("Adopt", policy.Read, func(context.Context, json.RawMessage) (string, error) {
+		close(started)
+		<-swept
+		f.set(runningTask("late"))
+		return "adopted", nil
+	})
+	h, _ := openHarness(t, Config{Tasks: f, Tools: []tool.Tool{adopt}, JoinTimeout: 50 * time.Millisecond})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Adopt", "call-1")), pigruntimetest.Text("done")})
+	w, err := h.c.Submit(t.Context(), "adopt")
+	require.NoError(t, err)
+	wait(t, started)
+	id := h.c.Status().SessionID
+	result := make(chan error, 1)
+	go func() { result <- h.c.Close(t.Context()) }()
+	wait(t, final)
+	require.ErrorIs(t, receiveError(t, result), pigruntime.ErrJoinTimeout)
+	wait(t, w.Done())
+	assert.Equal(t, id, h.c.Status().SessionID)
+	assert.Empty(t, f.List())
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, h.c.Close(cancelled), pigruntime.ErrJoinTimeout)
+	_, sweeps, _ := f.counts()
+	assert.Equal(t, 2, sweeps)
+	close(release)
+	require.NoError(t, h.c.Close(t.Context()))
+	_, sweeps, _ = f.counts()
+	assert.Equal(t, 2, sweeps, "retry awaits the invisible pending final sweep")
+	assert.Empty(t, h.c.Status().SessionID)
 }
 
 func TestTaskEndWakesIdleController(t *testing.T) {

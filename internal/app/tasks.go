@@ -159,6 +159,9 @@ func (c *Controller) TaskOutput(id string) (tool.TaskInfo, error) {
 // with the next request but is not woken for it. Stopping a task that has
 // already ended does nothing.
 func (c *Controller) StopTask(id string) error {
+	c.mu.Lock()
+	owner := c.sess
+	c.mu.Unlock()
 	info, err := c.cfg.Tasks.Output(id)
 	if err != nil {
 		return err
@@ -174,6 +177,12 @@ func (c *Controller) StopTask(id string) error {
 		return nil
 	}
 	head := fmt.Sprintf("Background task %s stopped by the user: %s", info.ID, commandLine(info.Command))
-	c.queueNotice(notice(info, head), false)
+	c.queue.Lock()
+	defer c.queue.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.closed && owner != nil && c.sess == owner {
+		c.notices = append(c.notices, pendingNotice{n: notice(info, head)})
+	}
 	return nil
 }

@@ -85,6 +85,8 @@ type Controller struct {
 
 	// life serialises session start, switch and close.
 	life sync.Mutex
+	// stopAllDone retains a task cleanup across timed-out Close calls; life guards it.
+	stopAllDone chan struct{}
 	// queue makes queueing input atomic with taking it from pending and with
 	// deciding to stop, continue or end the running Work; it guards pending
 	// and the Work's queue fields. PiG calls back under its own lock to take
@@ -615,18 +617,15 @@ func (c *Controller) Close(ctx context.Context) error {
 		c.stop(w, emit)
 	}
 	c.queue.Unlock()
-	// After the stop, so the work is already being cancelled, and before the
-	// join, so a join that times out leaves running no command StopAll can
-	// reach. The abort reaches a running tool call asynchronously, so a
-	// command can still be adopted just after StopAll returns; cmd/root.go
-	// stops the tasks again at exit.
-	c.cfg.Tasks.StopAll()
+	ctx, cancel := context.WithTimeout(ctx, c.cfg.JoinTimeout)
+	defer cancel()
+	if err := c.stopTasks(ctx); err != nil {
+		return err
+	}
 	if sess == nil {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, c.cfg.JoinTimeout)
-	defer cancel()
 	if w != nil {
 		select {
 		case <-w.done:
@@ -635,6 +634,12 @@ func (c *Controller) Close(ctx context.Context) error {
 		}
 	}
 	c.wg.Wait()
+	// Abort reaches tools asynchronously: adoption can follow the first sweep.
+	if len(c.cfg.Tasks.List()) > 0 {
+		if err := c.stopTasks(ctx); err != nil {
+			return err
+		}
+	}
 	unsubscribe()
 	c.mu.Lock()
 	c.sess, c.sessID, c.emit, c.unsubscribe = nil, "", nil, nil
@@ -643,6 +648,26 @@ func (c *Controller) Close(ctx context.Context) error {
 		return fmt.Errorf("failed to close controller: %w", err)
 	}
 	return nil
+}
+
+// stopTasks runs with life held. A retry joins unfinished cleanup rather than
+// overlapping it, even when StopAll has already emptied the visible task list.
+func (c *Controller) stopTasks(ctx context.Context) error {
+	if c.stopAllDone == nil {
+		done := make(chan struct{})
+		c.stopAllDone = done
+		go func() {
+			c.cfg.Tasks.StopAll()
+			close(done)
+		}()
+	}
+	select {
+	case <-c.stopAllDone:
+		c.stopAllDone = nil
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("failed to close controller: tasks did not stop: %w", pigruntime.ErrJoinTimeout)
+	}
 }
 
 // startTurn must be called with queue and mu held; it releases mu. The turn
@@ -929,13 +954,8 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 		cancel()
 		// The tasks and their notices belong to the old session; a failed
-		// open keeps both. Cleared after StopAll so that no notice queued
-		// while it ran survives.
+		// open keeps both. Notices are cleared atomically with installation.
 		c.cfg.Tasks.StopAll()
-		c.queue.Lock()
-		c.notices = nil
-		c.hold = false
-		c.queue.Unlock()
 		c.relay.emit(event.TasksChanged{})
 	}
 	// A session opened after the first open was tried, even one that failed,
@@ -953,9 +973,15 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	emit := func(ev event.Event) { bound(d.apply(ev)) }
 	unsubscribe := sess.Subscribe(emit)
 	id := sess.ID()
+	c.queue.Lock()
 	c.mu.Lock()
+	if old != nil {
+		c.notices = nil
+		c.hold = false
+	}
 	c.sess, c.sessID, c.emit, c.unsubscribe = sess, id, emit, unsubscribe
 	c.mu.Unlock()
+	c.queue.Unlock()
 	changed := event.SessionChanged{
 		SessionID:    id,
 		Resumed:      req.ResumeID != "" || req.Continue,
