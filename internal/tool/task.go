@@ -316,9 +316,8 @@ func (m *Tasks) Stop(id string) (TaskInfo, error) {
 		info.Output = t.a.text()
 		return info, nil
 	}
-	j := t.job()
-	done := j.finished()
-	j.stop(ErrStopped)
+	done := t.p.finished()
+	t.p.stop(ErrStopped)
 	<-done
 	return t.report(), nil
 }
@@ -406,9 +405,9 @@ func (t *task) infoOutcome(o jobOutcome) TaskInfo {
 	return info
 }
 
-func ended(j job) bool {
+func ended(p *process) bool {
 	select {
-	case <-j.finished():
+	case <-p.done:
 		return true
 	default:
 		return false

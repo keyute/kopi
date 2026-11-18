@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -154,7 +155,7 @@ func TestNoDefinitionsMeansNoAgentTools(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read"}, req.ToolNames)
-	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, []tool.Tool{read}, nil, nil, false)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read}, nil, nil, false, nil)), req.SystemPrompt)
 }
 
 func TestDefinitionsAddAgentAndSendMessageUnlessRuleRemovesThem(t *testing.T) {
@@ -224,17 +225,6 @@ func TestAgentToolsAreResolvedPerDefinition(t *testing.T) {
 		assert.Equal(t, []string{"Read", "Exec", "Gone"}, toolNames(a.c.agents[0].tools), "the deferred tools cannot be loaded, so the child has none")
 		assert.Equal(t, []string{"preamble"}, partNames(a.c.agents[0].prompt))
 	})
-}
-
-func TestBadEffortFailsOpenNamingTheFile(t *testing.T) {
-	def := agentDef("bad")
-	def.Effort, def.Path = "huge", "/home/agents/bad.md"
-	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Agents: []subagent.Definition{def}})
-
-	err := h.c.Open(t.Context(), OpenRequest{})
-
-	require.ErrorIs(t, err, pigruntime.ErrUnknownEffort)
-	assert.ErrorContains(t, err, def.Path)
 }
 
 func TestLaunchReturnsAtOnceWhileChildRunsWithItsDefinition(t *testing.T) {
@@ -349,7 +339,7 @@ func TestMessageToRunningChildArrivesAtItsNextTurnBoundary(t *testing.T) {
 	assert.Contains(t, a.info(t, id).Output, "› also check b\n")
 }
 
-func TestFailedTurnDropsAMessageQueuedMeanwhile(t *testing.T) {
+func TestFailedTurnReportsAMessageQueuedMeanwhileAsUndelivered(t *testing.T) {
 	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
 	started, gate := make(chan struct{}), make(chan struct{})
 	childRequests := make(chan pigruntimetest.Request, 1)
@@ -376,7 +366,7 @@ func TestFailedTurnDropsAMessageQueuedMeanwhile(t *testing.T) {
 	receiveEnd(t, ends)
 
 	assert.Equal(t, "boom", a.info(t, id).Reason)
-	assert.Equal(t, []string{fmt.Sprintf("Agent %s (explorer) failed (boom): find it", id)}, receive(t, rootRequests).UserTexts)
+	assert.Equal(t, []string{fmt.Sprintf("Agent %s (explorer) failed (boom): find it\nUndelivered messages:\nalso check b", id)}, receive(t, rootRequests).UserTexts)
 	assert.Empty(t, childRequests, "a failed turn is not continued with the queued message")
 	assert.Empty(t, rootRequests, "one end notice")
 }
@@ -489,33 +479,36 @@ func TestSwitchAndCloseStopChildrenAndCloseTheirSessions(t *testing.T) {
 	}
 }
 
-// startHook is a task registry that runs onStart as an agent task is
-// registered.
-type startHook struct {
-	*tool.Tasks
-	onStart func()
+// switchProbe begins a session switch when the context is first used, which
+// is while the session is being opened for the child.
+type switchProbe struct {
+	context.Context
+	once   sync.Once
+	onUsed func()
 }
 
-func (h *startHook) StartAgent(agent, description string, stop func()) *tool.AgentTask {
-	at := h.Tasks.StartAgent(agent, description, stop)
-	h.onStart()
-	return at
-}
+func (p *switchProbe) use() { p.once.Do(p.onUsed) }
+
+func (p *switchProbe) Done() <-chan struct{} { p.use(); return p.Context.Done() }
+
+func (p *switchProbe) Err() error { p.use(); return p.Context.Err() }
+
+func (p *switchProbe) Value(key any) any { p.use(); return p.Context.Value(key) }
 
 func TestLaunchRacingASwitchLeavesNothingRunning(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
-	hook := &startHook{Tasks: tool.NewTasks()}
-	h := newHarness(t, sb, Config{Agents: []subagent.Definition{agentDef("explorer")}, Tasks: hook})
+	tasks := tool.NewTasks()
+	h := newHarness(t, sb, Config{Agents: []subagent.Definition{agentDef("explorer")}, Tasks: tasks})
 	child := ai.NewFauxProvider(ai.FauxConfig{ProviderID: childProvider, Model: "faux-1"})
 	require.NoError(t, h.c.rt.RegisterProvider(child.Provider()))
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
-	hook.onStart = func() {
+	ctx := &switchProbe{Context: t.Context(), onUsed: func() {
 		h.c.mu.Lock()
 		h.c.switching = &sessionSwitch{}
 		h.c.mu.Unlock()
-	}
+	}}
 
-	_, err := h.c.launch(t.Context(), "explorer", "find it", "go")
+	_, err := h.c.launch(ctx, "explorer", "find it", "go")
 
 	require.ErrorIs(t, err, ErrBusy)
 	h.c.mu.Lock()
@@ -525,9 +518,7 @@ func TestLaunchRacingASwitchLeavesNothingRunning(t *testing.T) {
 	assert.Empty(t, h.c.children)
 	assert.Zero(t, h.c.live)
 	h.c.queue.Unlock()
-	info, err := hook.Output("t1")
-	require.NoError(t, err)
-	assert.Equal(t, tool.TaskStopped, info.Status, "the registered task is ended, not left running")
+	assert.Empty(t, tasks.List(), "a child that did not start leaves no task behind")
 }
 
 func TestPlanPinnedChildIsRefusedWritesWhileOthersFollowTheMode(t *testing.T) {
@@ -627,12 +618,14 @@ func TestPendingAcrossLaunchEndAndWake(t *testing.T) {
 	a.faux.SetResponses([]ai.FauxResponseStep{gated(rootGate, "woken")})
 	ends := turnEnds(a.c)
 
-	w, live, _ := a.c.Pending()
+	q := a.c.FollowWork()
+	defer q.Close()
+	w, live, _ := q.Next()
 	assert.Nil(t, w)
 	assert.False(t, live)
 
 	a.launch(t, "explorer", "find it", "go")
-	w, live, changed := a.c.Pending()
+	w, live, changed := q.Next()
 	assert.Nil(t, w)
 	assert.True(t, live)
 
@@ -643,14 +636,14 @@ func TestPendingAcrossLaunchEndAndWake(t *testing.T) {
 		case <-time.After(waitLimit):
 			t.Fatal("timed out waiting for the child to end")
 		}
-		w, live, changed = a.c.Pending()
+		w, live, changed = q.Next()
 	}
 	require.NotNil(t, w, "no running child is never seen without the turn its notice woke")
 
 	close(rootGate)
 	wait(t, w.Done())
 	receiveEnd(t, ends)
-	w, live, _ = a.c.Pending()
+	w, live, _ = q.Next()
 	assert.Nil(t, w)
 	assert.False(t, live)
 }
@@ -724,12 +717,24 @@ func TestEndNoticeIsNotQueuedIntoTheNextSession(t *testing.T) {
 	for _, status := range []tool.TaskStatus{tool.TaskCompleted, tool.TaskFailed, tool.TaskStopped} {
 		ch.userStopped = true
 		a.c.queue.Lock()
-		a.c.queueEndNoticeLocked(ch, tool.TaskInfo{ID: id, Agent: "explorer", Command: "find it", Status: status, Result: "late"})
+		a.c.queueEndNoticeLocked(ch, tool.TaskInfo{ID: id, Agent: "explorer", Command: "find it", Status: status, Result: "late"}, nil)
 		a.c.queue.Unlock()
 	}
 
 	assert.Empty(t, a.queuedNotices())
 	assert.True(t, a.idle(), "nothing woke the new session")
+}
+
+// doneProbe reports when Done is first read.
+type doneProbe struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (p *doneProbe) Done() <-chan struct{} {
+	p.once.Do(func() { close(p.entered) })
+	return p.Context.Done()
 }
 
 func TestMessageToACancelledRunIsNotLost(t *testing.T) {
@@ -760,12 +765,24 @@ func TestMessageToACancelledRunIsNotLost(t *testing.T) {
 		err     error
 	}
 	done := make(chan result, 1)
+	waiting := &doneProbe{Context: t.Context(), entered: make(chan struct{})}
 	go func() {
-		r, err := a.c.message(t.Context(), id, "more work")
+		r, err := a.c.message(waiting, id, "more work")
 		done <- result{r, err}
 	}()
+	// Done is read as the message starts waiting for the run to end; the run
+	// cannot end before release is closed.
+	wait(t, waiting.entered)
+	a.c.queue.Lock()
+	assert.True(t, ch.running && ch.runCtx.Err() != nil)
+	a.c.queue.Unlock()
 	close(release)
-	res := <-done
+	var res result
+	select {
+	case res = <-done:
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for the message")
+	}
 	require.NoError(t, res.err)
 	assert.True(t, res.resumed, "the child runs again with the message")
 	a.untilStatus(t, id, tool.TaskCompleted)
@@ -845,7 +862,7 @@ func TestDelayedChildStopDoesNotCancelReplacement(t *testing.T) {
 	id := a.launch(t, "explorer", "find it", "go")
 	receiveChild(t, requests)
 	ch := a.childOf(id)
-	selectedStop := ch.stopFn
+	selectedStop := ch.cancel
 	close(firstGate)
 	a.until(t, func() bool { return a.live() == 0 })
 	resumed, err := a.c.message(t.Context(), id, "again")

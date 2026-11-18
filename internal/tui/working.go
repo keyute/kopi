@@ -46,12 +46,15 @@ func (m *model) workingText() (string, bool) {
 func (m *model) waiting() bool { return !m.busy && m.status.Agents+m.status.Shells > 0 }
 
 // waitingOn is the running work as "2 agents, 1 shell".
-func (m *model) waitingOn() string {
+func (m *model) waitingOn() string { return taskCounts(m.status.Agents, m.status.Shells) }
+
+// taskCounts joins the nonzero counts as "2 agents, 1 shell", "" when both are zero.
+func taskCounts(agents, shells int) string {
 	var parts []string
 	for _, p := range []struct {
 		n    int
 		noun string
-	}{{m.status.Agents, "agent"}, {m.status.Shells, "shell"}} {
+	}{{agents, "agent"}, {shells, "shell"}} {
 		if p.n == 0 {
 			continue
 		}

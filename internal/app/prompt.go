@@ -24,17 +24,14 @@ type mcpServer struct {
 	tools              []string
 }
 
-// systemPrompt lists only tools that are not deferred as available; the
+// buildPrompt lists only tools that are not deferred as available; the
 // read-only and execute-mode sentence still counts the deferred ones, which
 // the model can load and call. The parts run from what changes least to
 // most: Kopi's own text, the instruction groups, then what the MCP servers
 // report.
-func systemPrompt(workspace string, tools []tool.Tool, groups []instruction.Group, servers []mcpServer, reviewed bool) []pigruntime.PromptPart {
-	return buildPrompt(workspace, tools, groups, servers, reviewed, nil)
-}
-
-// buildPrompt is systemPrompt for the root session, or for the subagent def:
-// its preamble says who it is, and its own part follows the preamble.
+//
+// def is nil for the root session; a subagent's preamble says who it is, and
+// its own part follows the preamble.
 func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group, servers []mcpServer, reviewed bool, def *subagent.Definition) []pigruntime.PromptPart {
 	names := make([]string, 0, len(tools))
 	for _, t := range tools {

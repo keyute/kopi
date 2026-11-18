@@ -366,6 +366,57 @@ func TestRootOffersAgentToolForDefinition(t *testing.T) {
 	}
 }
 
+// streamAgentCall answers with one Agent tool call for the subagent scout.
+func streamAgentCall(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	writeChunk(w, map[string]any{"role": "assistant", "content": ""}, nil)
+	args, _ := json.Marshal(map[string]any{"description": "look", "prompt": "look around", "subagent_type": "scout"})
+	writeChunk(w, map[string]any{"tool_calls": []any{map[string]any{
+		"index": 0, "id": "call_0", "type": "function",
+		"function": map[string]any{"name": "Agent", "arguments": string(args)},
+	}}}, nil)
+	writeChunk(w, map[string]any{}, "tool_calls")
+	fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
+func TestSubagentToolsNeverBackgroundOrDelegate(t *testing.T) {
+	e := newTestEnv(t)
+	var calls atomic.Int32
+	server := newMockProvider(t, func(w http.ResponseWriter) {
+		if calls.Add(1) == 1 {
+			streamAgentCall(w)
+			return
+		}
+		streamText(w, "ok")
+	})
+	e.writeMockModels(t, server.URL)
+	e.writeAgent(t, "")
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	var child mockRequest
+	for range 3 {
+		req := server.next(t)
+		if strings.Contains(fmt.Sprint(req.body["messages"].([]any)[0].(map[string]any)["content"]), "You are the subagent scout") {
+			child = req
+			break
+		}
+	}
+	require.NotNil(t, child.body, "the subagent made no request")
+	tools := toolNames(child)
+	for _, name := range []string{"Agent", "SendMessage", "TaskOutput", "TaskStop"} {
+		assert.NotContains(t, tools, name)
+	}
+	require.Contains(t, tools, "Bash")
+	for _, tl := range child.body["tools"].([]any) {
+		fn := tl.(map[string]any)["function"].(map[string]any)
+		if fn["name"] == "Bash" {
+			assert.NotContains(t, fn["parameters"].(map[string]any)["properties"], "run_in_background")
+		}
+	}
+}
+
 func TestRootRejectsInvalidAgentDefinition(t *testing.T) {
 	e := newTestEnv(t)
 	path := e.writeAgent(t, "color: red\n")
@@ -408,8 +459,6 @@ func TestRootAgentModelWithoutCredentialFailsAtStart(t *testing.T) {
 	assert.Empty(t, server.requests)
 }
 
-// The controller reports a bad effort from Open and Start alike, before either
-// opens a session, so no check of its own is needed here.
 func TestRootAgentEffortFailsAtStart(t *testing.T) {
 	e := newTestEnv(t)
 	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })

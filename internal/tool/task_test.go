@@ -451,7 +451,11 @@ func TestTasksStopRetainsSelectedRunAcrossRestart(t *testing.T) {
 		assert.NoError(t, err)
 		result <- info
 	}()
-	<-entered
+	select {
+	case <-entered:
+	case <-time.After(testTimeout):
+		t.Fatal("the agent run did not start")
+	}
 	select {
 	case <-result:
 		t.Fatal("Stop returned before the selected run ended")

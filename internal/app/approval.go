@@ -36,24 +36,14 @@ func (p *pendingApproval) stale() bool {
 	return p.work != nil && p.work.stopped || p.sendCtx.Err() != nil || p.ctx.Err() != nil
 }
 
-// approver returns the Approver for the root session displayed by d; nil when
-// no human can answer.
-func (c *Controller) approver(d *display) policy.Approver {
+// approver returns the Approver for the session displayed by d, which is the
+// subagent ch or, when ch is nil, the root; nil when no human can answer.
+func (c *Controller) approver(d *display, ch *child) policy.Approver {
 	if c.cfg.Unattended {
 		return nil
 	}
 	return func(ctx context.Context, r policy.Request) (policy.Decision, error) {
-		return c.ask(ctx, d, r, nil)
-	}
-}
-
-// childApprover is approver for the subagent ch.
-func (c *Controller) childApprover(ch *child) policy.Approver {
-	if c.cfg.Unattended {
-		return nil
-	}
-	return func(ctx context.Context, r policy.Request) (policy.Decision, error) {
-		return c.ask(ctx, ch.d, r, ch)
+		return c.ask(ctx, d, r, ch)
 	}
 }
 

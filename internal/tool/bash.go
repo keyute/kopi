@@ -49,18 +49,16 @@ func NewBash(sh, plan *Shell, tasks *Tasks) Tool {
 			"run_in_background starts it as one at once. The result then gives the task id: read its output with TaskOutput " +
 			"and stop it with TaskStop; you are told when it ends."
 		timeoutText = "Milliseconds before the command moves to the background; default 120000, at most 600000."
+		properties["run_in_background"] = map[string]any{
+			"type":        "boolean",
+			"description": "Start the command as a background task and return its id at once; timeout does not apply.",
+		}
 	}
 	properties["timeout"] = map[string]any{
 		"type":        "integer",
 		"minimum":     1,
 		"maximum":     maxBashTimeoutMS,
 		"description": timeoutText,
-	}
-	if tasks != nil {
-		properties["run_in_background"] = map[string]any{
-			"type":        "boolean",
-			"description": "Start the command as a background task and return its id at once; timeout does not apply.",
-		}
 	}
 	if sh.Sandboxed() {
 		description += " Commands run in an OS sandbox that allows writing only in temporary directories, paths the user allowed " +

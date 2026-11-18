@@ -3,7 +3,6 @@
 package subagent
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -85,7 +84,7 @@ func parse(path string, tools []string) (Definition, error) {
 		return Definition{}, fmt.Errorf("%w: %s: %w", ErrInvalidDefinition, path, err)
 	}
 	var fm frontmatter
-	dec := yaml.NewDecoder(bytes.NewReader([]byte(head)))
+	dec := yaml.NewDecoder(strings.NewReader(head))
 	dec.KnownFields(true)
 	if err := dec.Decode(&fm); err != nil {
 		return Definition{}, fmt.Errorf("%w: %s: failed to decode frontmatter: %w", ErrInvalidDefinition, path, err)
@@ -154,7 +153,7 @@ func build(fm frontmatter, body, path string, tools []string) (Definition, error
 				return Definition{}, fmt.Errorf("duplicate tool %q", t)
 			}
 		}
-		def.Tools = slices.Clone(*fm.Tools)
+		def.Tools = *fm.Tools
 	}
 	return def, nil
 }

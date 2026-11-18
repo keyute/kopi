@@ -285,9 +285,11 @@ func gatedText(gate <-chan struct{}, text string) ai.FauxResponseStep {
 // untilIdleWaiting waits until the run has only running subagents to wait for.
 func untilIdleWaiting(t *testing.T, c *app.Controller) {
 	t.Helper()
+	q := c.FollowWork()
+	defer q.Close()
 	for {
-		w, live, changed := c.Pending()
-		if w == nil && live {
+		live, changed := settled(t, q)
+		if live {
 			return
 		}
 		select {
@@ -295,6 +297,19 @@ func untilIdleWaiting(t *testing.T, c *app.Controller) {
 		case <-time.After(waitLimit):
 			t.Fatal("timed out waiting for the run to wait on subagents")
 		}
+	}
+}
+
+// settled consumes q's turns once each has ended and reports whether any
+// subagent is still running, with a channel that closes when that may change.
+func settled(t *testing.T, q *app.WorkQueue) (bool, <-chan struct{}) {
+	t.Helper()
+	for {
+		w, live, changed := q.Next()
+		if w == nil {
+			return live, changed
+		}
+		waitClosed(t, w.Done())
 	}
 }
 
@@ -445,18 +460,18 @@ func TestCompletedWakesAreConsumedBeforeIdle(t *testing.T) {
 			ctx := &pausedPoll{Context: t.Context(), entered: make(chan struct{}), release: make(chan struct{})}
 			var out bytes.Buffer
 			result := make(chan error, 1)
+			q := c.FollowWork()
+			defer q.Close()
 			go func() { result <- New(c, "go", &out).Run(ctx, nil) }()
 			waitClosed(t, ctx.entered)
 			waitClosed(t, ends)
-			// Pending waits for the terminal queue transition after TurnEnd.
-			w, _, _ := c.Pending()
-			require.Nil(t, w)
+			// settled waits for the terminal queue transition after TurnEnd.
+			settled(t, q)
 			for range 2 {
 				_, err := tasks.Start(t.Context(), tool.NewShell(sb.Workspace, nil), "true")
 				require.NoError(t, err)
 				waitClosed(t, ends)
-				w, _, _ = c.Pending()
-				require.Nil(t, w)
+				settled(t, q)
 			}
 			close(ctx.release)
 			select {

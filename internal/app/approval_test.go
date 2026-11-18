@@ -210,7 +210,7 @@ func TestApprovalClaimedAnswerSurvivesCancellation(t *testing.T) {
 				defer cancel()
 				rec := &recorder{}
 				c := &Controller{turn: &Work{sendCtx: ctx, cancel: cancel}, emit: rec.add}
-				approve := c.approver(newDisplay(nil))
+				approve := c.approver(newDisplay(nil), nil)
 				done := make(chan struct{})
 				var answer policy.Decision
 				var err error
@@ -263,7 +263,7 @@ func TestApprovalCancellationBeforeAnswer(t *testing.T) {
 					c := &Controller{turn: &Work{sendCtx: ctx, cancel: cancel}, emit: rec.add}
 					done := make(chan struct{})
 					go func() {
-						answer, err := c.approver(newDisplay(nil))(ctx, policy.Request{Tool: "Edit"})
+						answer, err := c.approver(newDisplay(nil), nil)(ctx, policy.Request{Tool: "Edit"})
 						assert.Equal(t, policy.Decision{}, answer)
 						assert.ErrorIs(t, err, context.Canceled)
 						close(done)
@@ -299,7 +299,7 @@ func TestApprovalRegistrationAfterCancellation(t *testing.T) {
 			} else {
 				cancel()
 			}
-			answer, err := c.approver(newDisplay(nil))(ctx, policy.Request{Tool: "Edit"})
+			answer, err := c.approver(newDisplay(nil), nil)(ctx, policy.Request{Tool: "Edit"})
 			assert.Equal(t, policy.Decision{}, answer)
 			assert.ErrorIs(t, err, context.Canceled)
 			assert.Empty(t, rec.all())
@@ -318,7 +318,7 @@ func TestApprovalAnswerBeforeCancellation(t *testing.T) {
 				c := &Controller{turn: &Work{sendCtx: ctx, cancel: cancel}, emit: rec.add}
 				done := make(chan struct{})
 				go func() {
-					answer, err := c.approver(newDisplay(nil))(ctx, policy.Request{Tool: "Edit"})
+					answer, err := c.approver(newDisplay(nil), nil)(ctx, policy.Request{Tool: "Edit"})
 					assert.Equal(t, a, answer)
 					assert.NoError(t, err)
 					close(done)
@@ -349,7 +349,7 @@ func TestApprovalSendCancellationBeforeForwarding(t *testing.T) {
 					rec := &recorder{}
 					w := &Work{sendCtx: sendCtx, cancel: cancelSend}
 					c := &Controller{sess: &pigruntime.Session{}, turn: w, emit: rec.add}
-					approve := c.approver(newDisplay(nil))
+					approve := c.approver(newDisplay(nil), nil)
 					cancel := func() {
 						if sendNow {
 							require.NoError(t, c.SendNow(t.Context(), "continue"))

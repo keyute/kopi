@@ -15,6 +15,8 @@ func TestWorkQueueRetainsCompletedWakesInOrder(t *testing.T) {
 	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
 	q := a.c.FollowWork()
 	defer q.Close()
+	idle := a.c.FollowWork()
+	defer idle.Close()
 	a.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("initial"), pigruntimetest.ProviderError("wake failed"), pigruntimetest.Text("last")})
 	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("one"), pigruntimetest.Text("two")})
 	initial := a.turn(t, "go")
@@ -22,9 +24,7 @@ func TestWorkQueueRetainsCompletedWakesInOrder(t *testing.T) {
 	for range 2 {
 		a.launch(t, "explorer", "find it", "go")
 		receiveEnd(t, ends)
-		w, live, _ := a.c.Pending()
-		require.Nil(t, w)
-		require.False(t, live)
+		require.False(t, settled(t, idle))
 	}
 	for i, status := range []event.Status{event.Completed, event.Failed, event.Completed} {
 		w, _, _ := q.Next()
@@ -39,5 +39,19 @@ func TestWorkQueueRetainsCompletedWakesInOrder(t *testing.T) {
 	assert.Nil(t, w)
 	assert.False(t, live)
 	q.Close()
+	idle.Close()
 	assert.Empty(t, a.c.followers)
+}
+
+// settled consumes q's turns once each has ended and reports whether any
+// subagent is still running.
+func settled(t *testing.T, q *WorkQueue) bool {
+	t.Helper()
+	for {
+		w, live, _ := q.Next()
+		if w == nil {
+			return live
+		}
+		wait(t, w.Done())
+	}
 }

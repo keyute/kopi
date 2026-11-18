@@ -38,9 +38,6 @@ import (
 	"github.com/keyute/kopi/internal/tui"
 )
 
-// taskToolNames are the tools of the shared task registry, which subagents do not get.
-var taskToolNames = []string{"TaskOutput", "TaskStop"}
-
 const (
 	joinTimeout = 5 * time.Second
 	// historyLimit is how many prompts are kept for each workspace.
@@ -391,6 +388,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	}
 	// A subagent can have every built-in the root can, whether or not this run
 	// offers it, except the tools of the shared task registry.
+	taskToolNames := []string{"TaskOutput", "TaskStop"}
 	var subagentTools []string
 	for _, t := range slices.Concat(tools, []tool.Tool{tool.NewWebSearch(nil), tool.NewSkill(nil, "")}) {
 		if !slices.Contains(taskToolNames, t.Name) {
@@ -454,6 +452,11 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		}
 	}
 	for _, def := range agents {
+		if def.Effort != "" {
+			if _, err := pigruntime.ParseEffort(def.Effort); err != nil {
+				return fmt.Errorf("failed to use effort in %s: %w", def.Path, err)
+			}
+		}
 		if def.Model == "" {
 			continue
 		}
@@ -484,9 +487,8 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	if len(agents) > 0 {
 		cfg.Agents = agents
 		for _, t := range tools {
-			switch {
-			case slices.Contains(taskToolNames, t.Name):
-			case t.Name == "Bash":
+			switch t.Name {
+			case "Bash":
 				cfg.AgentTools = append(cfg.AgentTools, tool.NewBash(shell, planShell, nil))
 			default:
 				cfg.AgentTools = append(cfg.AgentTools, t)

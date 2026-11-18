@@ -37,8 +37,8 @@ func (f *fakeAgents) Message(_ context.Context, id, message string) (bool, error
 }
 
 var testDefs = []subagent.Definition{
-	{Name: "review", Description: "Reviews\na change."},
 	{Name: "explore", Description: "Finds things."},
+	{Name: "review", Description: "Reviews a change."},
 }
 
 func TestAgentDescribesItself(t *testing.T) {

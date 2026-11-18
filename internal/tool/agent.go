@@ -31,7 +31,6 @@ func NewAgent(defs []subagent.Definition, agents Agents) Tool {
 	for i, d := range defs {
 		names[i] = d.Name
 	}
-	slices.Sort(names)
 	return Tool{
 		Name:        "Agent",
 		Label:       "Agent",
@@ -101,7 +100,7 @@ func NewAgent(defs []subagent.Definition, agents Agents) Tool {
 	}
 }
 
-// agentDescription lists the subagents, sorted by name.
+// agentDescription lists the subagents in the order given.
 func agentDescription(defs []subagent.Definition) string {
 	desc := "A subagent is another agent with its own context, instructions and tools; it sees only the prompt it is given. " +
 		"A call returns at once with a task id while the subagent runs in the background; when it ends, you are told, with its final message. " +
@@ -109,12 +108,10 @@ func agentDescription(defs []subagent.Definition) string {
 	if len(defs) == 0 {
 		return desc
 	}
-	sorted := slices.Clone(defs)
-	slices.SortFunc(sorted, func(a, b subagent.Definition) int { return strings.Compare(a.Name, b.Name) })
 	var b strings.Builder
 	b.WriteString(desc + " Subagents:")
-	for _, d := range sorted {
-		b.WriteString("\n" + d.Name + ": " + strings.NewReplacer("\r\n", " ", "\n", " ").Replace(d.Description))
+	for _, d := range defs {
+		b.WriteString("\n" + d.Name + ": " + d.Description)
 	}
 	return b.String()
 }

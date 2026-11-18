@@ -90,10 +90,8 @@ type Controller struct {
 	// first session and not changed after.
 	tools  []tool.Tool
 	prompt []pigruntime.PromptPart
-	// agents are the subagents' tools and prompts, set with tools; configErr
-	// is the first error in their definitions, which Open and Start return.
-	agents    []agentSpec
-	configErr error
+	// agents are the subagents' tools and prompts, set with tools.
+	agents []agentSpec
 	// skills is what users can type; skillErrs reports the skills it left out.
 	skills    *skill.Set
 	skillErrs []error
@@ -246,7 +244,7 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	}
 	tools = append(tools, serverTools...)
 	c.tools = tools
-	c.prompt = systemPrompt(c.cfg.Workspace, c.tools, c.cfg.Instructions, servers, c.cfg.Classifier != nil)
+	c.prompt = buildPrompt(c.cfg.Workspace, c.tools, c.cfg.Instructions, servers, c.cfg.Classifier != nil, nil)
 	c.agents = c.buildAgents(serverTools, servers)
 	return events
 }
@@ -348,9 +346,6 @@ func (c *Controller) startFirst(ctx context.Context, req OpenRequest, notices []
 }
 
 func (c *Controller) check(ctx context.Context, req OpenRequest) error {
-	if c.configErr != nil {
-		return c.configErr
-	}
 	return c.rt.Check(ctx, pigruntime.OpenOptions{Model: c.cfg.Model, ResumeID: req.ResumeID, Continue: req.Continue})
 }
 
@@ -598,22 +593,6 @@ func (c *Controller) Commands() []Command {
 // Spans returns the input's highlighted runs.
 func (c *Controller) Spans(text string) []Span {
 	return Spans(text, c.skills)
-}
-
-// Pending returns the running root turn, if any, whether any subagent is
-// running, and a channel that closes when either may have changed: a turn
-// started or ended, or a subagent's run ended. A subagent's end and the turn its notice
-// wakes are one step, so no read sees no turn and no running subagent between
-// them; with neither, nothing is left to wait for.
-func (c *Controller) Pending() (w *Work, live bool, changed <-chan struct{}) {
-	c.queue.Lock()
-	defer c.queue.Unlock()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.changed == nil {
-		c.changed = make(chan struct{})
-	}
-	return c.turn, c.live > 0, c.changed
 }
 
 // signalLocked must be called with queue held.
@@ -1107,7 +1086,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		Tools:        c.tools,
 		Authority:    c.authority,
 		Rules:        c.cfg.Rules,
-		Approve:      c.approver(d),
+		Approve:      c.approver(d, nil),
 		Review:       c.reviewer(rec),
 	})
 	if err != nil {

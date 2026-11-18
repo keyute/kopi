@@ -112,10 +112,11 @@ func notice(info tool.TaskInfo, head string) pigruntime.Notice {
 	if tail := outputTail(info.Output); tail != "" {
 		text += "\n" + tail
 	}
-	return pigruntime.Notice{
-		Text:  text,
-		Shown: event.TaskEnded{ID: info.ID, Agent: info.Agent, Command: info.Command, Status: string(info.Status), Elapsed: info.Ended.Sub(info.Started)},
-	}
+	return pigruntime.Notice{Text: text, Shown: taskEnded(info)}
+}
+
+func taskEnded(info tool.TaskInfo) event.TaskEnded {
+	return event.TaskEnded{ID: info.ID, Agent: info.Agent, Command: info.Command, Status: string(info.Status), Elapsed: info.Ended.Sub(info.Started)}
 }
 
 func commandLine(command string) string {
@@ -181,7 +182,7 @@ func (c *Controller) StopTask(id string) error {
 	}
 	head := fmt.Sprintf("Background task %s stopped by the user: %s", info.ID, commandLine(info.Command))
 	if info.Agent != "" {
-		head = fmt.Sprintf("Agent %s (%s) stopped by the user: %s", info.ID, info.Agent, commandLine(info.Command))
+		head = agentStoppedHead(info)
 	}
 	c.queue.Lock()
 	defer c.queue.Unlock()

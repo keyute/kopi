@@ -41,13 +41,8 @@ func (c *Controller) buildAgents(serverTools []tool.Tool, servers []mcpServer) [
 	for _, def := range c.cfg.Agents {
 		effort := pigruntime.DefaultEffort
 		if def.Effort != "" {
-			var err error
-			if effort, err = pigruntime.ParseEffort(def.Effort); err != nil {
-				if c.configErr == nil {
-					c.configErr = fmt.Errorf("failed to read subagent %s: %w", def.Path, err)
-				}
-				continue
-			}
+			// The definition's effort was validated when it was loaded.
+			effort, _ = pigruntime.ParseEffort(def.Effort)
 		}
 		named := func(t tool.Tool) bool { return def.Tools == nil || slices.Contains(def.Tools, t.Name) }
 		tools := slices.DeleteFunc(slices.Clone(base), func(t tool.Tool) bool { return !named(t) })
@@ -98,7 +93,6 @@ type child struct {
 	sess        *pigruntime.Session
 	unsubscribe func()
 	task        *tool.AgentTask
-	stopFn      func()
 
 	outMu   sync.Mutex
 	midLine bool
@@ -202,7 +196,6 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 
 	ch := &child{spec: spec, parent: parent, d: newDisplay(spec.tools)}
 	ch.runCtx, ch.cancel = context.WithCancel(context.Background())
-	ch.stopFn = ch.cancel
 	if c.cfg.Classifier != nil {
 		ch.rec = &classifier.Record{}
 	}
@@ -222,18 +215,17 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 		Tools:        spec.tools,
 		Authority:    authority,
 		Rules:        c.cfg.Rules,
-		Approve:      c.childApprover(ch),
+		Approve:      c.approver(ch.d, ch),
 		Review:       c.reviewer(ch.rec),
 	})
 	if err != nil {
 		ch.cancel()
-		c.release()
+		c.queue.Lock()
+		c.live--
+		c.queue.Unlock()
 		return "", fmt.Errorf("failed to start subagent %s: %w", agent, err)
 	}
 	ch.sess = sess
-	ch.task = c.cfg.Tasks.StartAgent(spec.def.Name, description, ch.stopFn)
-	ch.unsubscribe = sess.Subscribe(ch.observe)
-	ch.givePrompt(prompt)
 
 	// A switch or Close that began meanwhile has run, or will run, StopAll
 	// without a child to stop; it must not be left running. One that begins
@@ -249,11 +241,13 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 		c.mu.Unlock()
 		c.queue.Unlock()
 		ch.cancel()
-		ch.task.End(tool.TaskStopped, "", "")
 		c.closeChild(ch)
 		return "", fmt.Errorf("failed to start subagent %s: %w", agent, err)
 	}
 	c.mu.Unlock()
+	ch.task = c.cfg.Tasks.StartAgent(spec.def.Name, description, ch.cancel)
+	ch.unsubscribe = sess.Subscribe(ch.observe)
+	ch.givePrompt(prompt)
 	if c.children == nil {
 		c.children = map[string]*child{}
 	}
@@ -264,13 +258,6 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 	c.queue.Unlock()
 	c.relay.emit(event.TasksChanged{})
 	return ch.task.ID(), nil
-}
-
-// release gives back a slot reserved for a subagent that did not start.
-func (c *Controller) release() {
-	c.queue.Lock()
-	defer c.queue.Unlock()
-	c.live--
 }
 
 // message delivers message to the subagent task id.
@@ -387,11 +374,12 @@ func (c *Controller) runChild(ch *child, ctx context.Context, prompt string) {
 		// observer sees neither a running child nor the notice.
 		c.queue.Lock()
 		ch.running, ch.ending = false, false
+		unread := ch.inbox
 		ch.inbox = nil
 		c.live--
 		close(ch.endDone)
 		if reported {
-			c.queueEndNoticeLocked(ch, info)
+			c.queueEndNoticeLocked(ch, info, unread)
 		}
 		c.signalLocked()
 		c.queue.Unlock()
@@ -404,7 +392,7 @@ func (c *Controller) runChild(ch *child, ctx context.Context, prompt string) {
 // session the child belongs to is still the current one: a switch that
 // installed another session after End must not receive it. It must be called
 // with queue held.
-func (c *Controller) queueEndNoticeLocked(ch *child, info tool.TaskInfo) {
+func (c *Controller) queueEndNoticeLocked(ch *child, info tool.TaskInfo, unread []string) {
 	c.mu.Lock()
 	current := c.sess == ch.parent
 	c.mu.Unlock()
@@ -413,23 +401,34 @@ func (c *Controller) queueEndNoticeLocked(ch *child, info tool.TaskInfo) {
 	}
 	switch {
 	case info.Status == tool.TaskCompleted || info.Status == tool.TaskFailed:
-		c.queueNoticeLocked(agentNotice(info))
+		c.queueNoticeLocked(agentNotice(info, unread))
 	case info.Status == tool.TaskStopped && ch.userStopped:
-		c.queueNoticeLocked(notice(info, fmt.Sprintf("Agent %s (%s) stopped by the user: %s", info.ID, info.Agent, commandLine(info.Command))))
+		c.queueNoticeLocked(withUndelivered(notice(info, agentStoppedHead(info)), unread))
 	}
 }
 
+// agentStoppedHead is the first line of the notice for an agent the human stopped.
+func agentStoppedHead(info tool.TaskInfo) string {
+	return fmt.Sprintf("Agent %s (%s) stopped by the user: %s", info.ID, info.Agent, commandLine(info.Command))
+}
+
+// withUndelivered appends the messages a run ended without reading, which
+// SendMessage had reported as queued.
+func withUndelivered(n pigruntime.Notice, unread []string) pigruntime.Notice {
+	if len(unread) > 0 {
+		n.Text += "\nUndelivered messages:\n" + strings.Join(unread, "\n\n")
+	}
+	return n
+}
+
 // agentNotice is what the model reads when a subagent's run completed or
-// failed.
-func agentNotice(info tool.TaskInfo) pigruntime.Notice {
+// failed; unread are the messages a failed run never read.
+func agentNotice(info tool.TaskInfo, unread []string) pigruntime.Notice {
 	text := fmt.Sprintf("Agent %s (%s) failed (%s): %s", info.ID, info.Agent, info.Reason, commandLine(info.Command))
 	if info.Status == tool.TaskCompleted {
 		text = fmt.Sprintf("Agent %s (%s) completed: %s\n%s", info.ID, info.Agent, commandLine(info.Command), info.Result)
 	}
-	return pigruntime.Notice{
-		Text:  text,
-		Shown: event.TaskEnded{ID: info.ID, Agent: info.Agent, Command: info.Command, Status: string(info.Status), Elapsed: info.Ended.Sub(info.Started)},
-	}
+	return withUndelivered(pigruntime.Notice{Text: text, Shown: taskEnded(info)}, unread)
 }
 
 // closeChildren ends the children of the session being replaced or closed:
@@ -452,10 +451,12 @@ func (c *Controller) closeChildren() {
 }
 
 func (c *Controller) closeChild(ch *child) {
-	ch.unsubscribe()
+	if ch.unsubscribe != nil {
+		ch.unsubscribe()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), c.cfg.JoinTimeout)
 	defer cancel()
 	if err := ch.sess.Close(ctx); err != nil {
-		slog.Warn("failed to close subagent session", "task", ch.task.ID(), "err", err)
+		slog.Warn("failed to close subagent session", "agent", ch.spec.def.Name, "err", err)
 	}
 }

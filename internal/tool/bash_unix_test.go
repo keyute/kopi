@@ -165,9 +165,6 @@ func TestBashCancelKillsForegroundCommand(t *testing.T) {
 
 func TestForegroundBashStopsCommandAtTimeout(t *testing.T) {
 	dir := t.TempDir()
-	tasks := NewTasks()
-	t.Cleanup(tasks.StopAll)
-	signals := foregroundSignals(tasks)
 	tool := NewBash(NewShell(dir, nil), NewShell(dir, nil), nil)
 	command, started, dead := holdFIFO(t, dir)
 	args, err := json.Marshal(map[string]any{"command": "echo partial; " + command, "timeout": 500})
@@ -175,15 +172,11 @@ func TestForegroundBashStopsCommandAtTimeout(t *testing.T) {
 
 	result := runBashAsync(t.Context(), tool, string(args))
 	waitFor(t, started, "the command to start")
-	assert.False(t, tasks.Foreground())
-	assert.False(t, tasks.Detach())
 
 	r := waitBash(t, result)
 	require.ErrorIs(t, r.err, ErrCommandTimeout)
 	assert.Contains(t, r.err.Error(), "partial")
 	waitFor(t, dead, "the grandchild to die")
-	assert.Empty(t, tasks.List())
-	assert.Empty(t, signals)
 }
 
 func TestForegroundBashCancelKillsCommand(t *testing.T) {

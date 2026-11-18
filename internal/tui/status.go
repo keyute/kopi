@@ -69,19 +69,8 @@ var segments = map[string]segment{
 		return fg(th.muted).Render(tildePath(s.Workspace, s.home)), s.Workspace != ""
 	},
 	"tasks": func(s statusInput, th theme) (string, bool) {
-		var parts []string
-		for _, p := range []struct {
-			n    int
-			noun string
-		}{{s.Agents, "agent"}, {s.Shells, "shell"}} {
-			switch {
-			case p.n == 1:
-				parts = append(parts, "1 "+p.noun)
-			case p.n > 1:
-				parts = append(parts, fmt.Sprintf("%d %ss", p.n, p.noun))
-			}
-		}
-		return fg(th.dim).Render(strings.Join(parts, ", ")), len(parts) > 0
+		text := taskCounts(s.Agents, s.Shells)
+		return fg(th.dim).Render(text), text != ""
 	},
 }
 
