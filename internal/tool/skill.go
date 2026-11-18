@@ -29,11 +29,12 @@ type skillArgs struct {
 // refuses to read.
 func NewSkill(skills []skill.Skill, home string) Tool {
 	// Files are read only from the directory a skill was loaded from; nil marks
-	// one that could not be identified.
-	loaded := make([]os.FileInfo, len(skills))
+	// one that could not be identified. The held root pins the directory, so a
+	// replacement cannot reuse its inode.
+	loaded := make([]*os.Root, len(skills))
 	for i, sk := range skills {
-		if info, err := os.Stat(sk.Dir); err == nil {
-			loaded[i] = info
+		if root, err := os.OpenRoot(sk.Dir); err == nil {
+			loaded[i] = root
 		}
 	}
 	return Tool{
@@ -189,7 +190,7 @@ func decodeSkillArgs(raw json.RawMessage) (skillArgs, error) {
 	return args, nil
 }
 
-func readSkillFile(ctx context.Context, s skill.Skill, loaded os.FileInfo, home string, args skillArgs, target policy.Target) (Result, error) {
+func readSkillFile(ctx context.Context, s skill.Skill, loaded *os.Root, home string, args skillArgs, target policy.Target) (Result, error) {
 	if loaded == nil {
 		return Result{}, fmt.Errorf("%w: %s", ErrSkillChanged, s.Name)
 	}
@@ -204,7 +205,11 @@ func readSkillFile(ctx context.Context, s skill.Skill, loaded os.FileInfo, home 
 	if err != nil {
 		return Result{}, fmt.Errorf("failed to stat skill %s: %w", s.Name, err)
 	}
-	if !os.SameFile(loaded, now) {
+	was, err := loaded.Stat(".")
+	if err != nil {
+		return Result{}, fmt.Errorf("failed to stat skill %s: %w", s.Name, err)
+	}
+	if !os.SameFile(was, now) {
 		return Result{}, fmt.Errorf("%w: %s", ErrSkillChanged, s.Name)
 	}
 	// O_NONBLOCK stops a FIFO open from waiting for a writer, which nothing
