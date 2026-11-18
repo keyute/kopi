@@ -168,6 +168,56 @@ func TestFetchReturnsCrossHostRedirect(t *testing.T) {
 	assert.Equal(t, []string{"example.com"}, requested)
 }
 
+func TestFetchReturnsPortChangeAndDowngradeRedirects(t *testing.T) {
+	for _, tc := range []struct {
+		name, from, to string
+	}{
+		{name: "port change", from: "http://example.com:8080/old", to: "http://example.com:8081/new"},
+		{name: "https to http", from: "https://example.com/old", to: "http://example.com/new"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := make(chan string, 4)
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests <- r.Host + r.URL.Path
+				if r.URL.Path == "/old" {
+					http.Redirect(w, r, tc.to, http.StatusFound)
+					return
+				}
+				_, _ = w.Write([]byte("destination page"))
+			})
+			plain := httptest.NewServer(handler)
+			defer plain.Close()
+			secure := httptest.NewTLSServer(handler)
+			defer secure.Close()
+			f := newFetcher("Kopi/test", func(ctx context.Context, network, addr string) (net.Conn, error) {
+				srv := plain
+				if strings.HasSuffix(addr, ":443") {
+					srv = secure
+				}
+				return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+			})
+			roots := x509.NewCertPool()
+			roots.AddCert(secure.Certificate())
+			f.transport.TLSClientConfig = &tls.Config{RootCAs: roots}
+
+			page, err := f.fetch(t.Context(), mustURL(t, tc.from))
+
+			require.NoError(t, err)
+			close(requests)
+			var requested []string
+			for request := range requests {
+				requested = append(requested, request)
+			}
+			from := mustURL(t, tc.from)
+			assert.Equal(t, []string{from.Host + from.Path}, requested)
+			require.NotNil(t, page.redirect)
+			assert.Equal(t, tc.to, page.redirect.String())
+			assert.Equal(t, http.StatusFound, page.status)
+			assert.Equal(t, tc.from, page.url.String())
+		})
+	}
+}
+
 func TestFetchStopsAfterFiveRedirects(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/"))
