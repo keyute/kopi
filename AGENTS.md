@@ -17,7 +17,7 @@
 - Only `internal/pigruntime` (and tests) import `github.com/MichaelKinsy/PiG`; depguard enforces it.
 - `internal/pigruntime` may use PiG's `mcp` client packages; never PiG's MCP extension `coding/mcpext`.
 - Never import PiG `internal/` packages, never use `coding/cli`, never add a `replace` for PiG, and never copy upstream code.
-- Create every PiG session with every input explicit: agent dir, in-memory settings, `coding.NoResources`, `SkipBuiltinTools`, and explicit tool names for both `AllowedTools` and `InitialActiveToolNames`. A nil there turns on ambient discovery or stock tools.
+- Create every PiG session with every input explicit: agent dir, in-memory settings, `coding.NoResources`, the system prompt as sections, `SkipBuiltinTools`, and explicit tool names for both `AllowedTools` and `InitialActiveToolNames`. A nil there turns on ambient discovery, PiG's stock prompt or stock tools. Never name a prompt part `tools` or `rules`; PiG rewrites those.
 - Never call PiG's `Session.ListSessions` or `Session.Events`.
 - `internal/pigruntime`'s exported API is stated in Kopi's terms; nothing exported may exist only because of how PiG works internally.
 
@@ -26,6 +26,7 @@
 - Every model-facing tool goes through `internal/policy`: `Gate.Before` in the pre-dispatch hook and `Gate.Admit` inside execution.
 - Only human control input changes mode. Sessions start and resume in the configured `mode` (default plan); `--mode` overrides the config file.
 - MCP servers start only from `mcpServers` in `config.json` and from a trusted folder's `.mcp.json`. Every MCP tool call asks unless a rule allows it; a tool is Read only when its server marks it read-only.
+- `$KOPI_HOME/AGENTS.md` always loads. Project instruction files (`AGENTS.md`, else the first name in `instructionFallbacks`, one per directory from the git root down to the start directory) load only from a trusted folder.
 - File-modifying tools act only through `tool.Workspace` (os.Root confinement, Kopi's home refused before any side effect) and the permission rules. `Bash` runs commands only through `tool.Shell`: under the OS sandbox when it is enabled or available, otherwise only after approval or an allow rule. In plan mode `Bash` runs only under the sandbox's plan profile (workspace read-only), chosen from the mode `Gate.Admit` returns; without the sandbox, plan mode refuses it.
 
 ## State
@@ -41,6 +42,17 @@
 - A behaviour users reasonably set differently is a `config.json` key with its default in `config.Defaults()`. A flag that overrides a key is a config layer over the file, never a separate code path.
 - Add a key only for a setting someone needs to change, never to move mechanics out of the binary.
 - When it is unclear which side something is on, check what peer agents build in and follow the majority.
+
+## Model-facing text
+
+- The text Kopi ships, which users can add to but not change, is minimal: it says what exists and how it works, enough for the agent to use it, and never how to behave. Preferences are the user's to state in their instruction files. For a subagent tool, say what subagents are and how a call works; do not say to delegate as much as possible.
+- The system prompt is built once per process from named parts, ordered from what changes least to most: Kopi's text, `$KOPI_HOME/AGENTS.md`, a trusted folder's instruction files, what MCP servers report. Nothing in it depends on the time, git state, the mode or the turn.
+- Never rewrite text the model has been sent: a mid-session change replaces or removes one named part through `internal/pigruntime`, or arrives as a message. Mode is enforced by the gate, not by prompt text.
+- Whatever is listed for the model (tools, servers, files) is in a fixed order: sorted, or the order discovery defines; never map order.
+- Instruction files are read once at startup. `internal/instruction` finds them; PiG places them.
+- Always-loaded text is what every session needs. Guidance for one tool goes in its description; what is needed only sometimes loads on demand, as deferred MCP tools do.
+- Text is injected on an event, once; no per-turn reminders.
+- Kopi sets no size budget on instruction files; text from an MCP server is capped.
 
 ## TUI
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/history"
+	"github.com/keyute/kopi/internal/instruction"
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
@@ -36,6 +37,9 @@ type Config struct {
 	Mode policy.Mode
 	// Files lists the entries that @ references complete to; nil offers none.
 	Files *tool.Workspace
+	// Instructions are added to the system prompt in order: the global
+	// file's group first, then each root's.
+	Instructions []instruction.Group
 	// Errors are reported once as Error events, after the first session
 	// opens, before those about the MCP servers.
 	Errors []error
@@ -68,7 +72,7 @@ type Controller struct {
 	// tools and prompt are what every session opens with; set before the
 	// first session and not changed after.
 	tools     []tool.Tool
-	prompt    string
+	prompt    []pigruntime.PromptPart
 	authority *policy.Authority
 	relay     relay
 	wg        sync.WaitGroup
@@ -182,7 +186,7 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	}
 	tools = append(tools, serverTools...)
 	c.tools = tools
-	c.prompt = systemPrompt(c.cfg.Workspace, c.tools, servers)
+	c.prompt = systemPrompt(c.cfg.Workspace, c.tools, c.cfg.Instructions, servers)
 	return events
 }
 

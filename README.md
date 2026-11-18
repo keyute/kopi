@@ -84,6 +84,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `config.json` in the home; precedence is default < config file < flags.
 - `kopi config` shows each value and its origin; unknown keys are rejected.
 - The fullscreen interface logs to `kopi.log` in the home; print mode logs to stderr.
+- `AGENTS.md` in the home, when present, is added to the system prompt in every folder, whether or not you trust it.
 - `trust.json` holds which folders you trust (see MCP servers); Kopi writes it and never writes `config.json`.
 - `history.jsonl` holds input history per working directory, written by the fullscreen interface; the last 100 entries are recalled.
 - `images/` holds pasted clipboard images, removed after a day.
@@ -91,6 +92,8 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `agent/` is PiG's agent directory, created on first run: its credential file (`auth.json`), session logs (`sessions/`), other PiG state and an optional `models.json`.
 
 `mode` is the mode sessions start in: `plan` (default) or `execute`.
+
+`instructionFallbacks` lists bare file names a directory's project instruction file is read from when it has no `AGENTS.md`, the first present winning (default `["CLAUDE.md"]`); `[]` turns the fallback off. Project instruction files load only in a trusted folder (see MCP servers).
 
 `keys` maps each fullscreen action to a list of key strings, and `statusline` lists the status line's `left` and `right` segments from `model`, `context`, `branch`, `mode`, `notice`, which shows transient hints such as `Copied`, and `sandbox`, which shows `sandboxed` or `unsandboxed` when Bash is available, and `tasks`, which shows `1 shell` or `N shells` while background tasks run (default left `model, context, branch`, right `notice, sandbox, tasks, mode`):
 
@@ -222,8 +225,9 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - A stdio server has `command`, optional `args` and `env` (added to Kopi's environment), and `type` absent or `"stdio"`. A remote server has `"type": "http"` (streamable HTTP), `url` and optional `headers`.
 - `${VAR}` and `${VAR:-default}` expand in `command`, `args`, `env` values, `url` and `headers` values. An unset variable with no default fails that server only.
 - A `.mcp.json` in the start directory adds its `mcpServers`, only once you trust the folder; a server there replaces the `config.json` server of the same name whole. Its unknown keys are ignored, and a server of an unsupported type (`sse`, `ws`) fails alone.
-- When the start directory's `.mcp.json` declares a server and you have not decided about the folder, the fullscreen interface lists its servers and asks before the session opens: `Yes, trust this folder`, `Yes, trust the parent folder` (not offered when the parent is the root or your home directory), or `No, don't trust`. The answer is saved in `trust.json` and covers the folders below; the closest saved folder decides. In your home directory or the root no parent is offered, and the answer, yes or no, holds for this run only and is not saved. Cancelling saves nothing and skips the servers for this run.
-- Print mode never asks: in a folder with no decision it skips the `.mcp.json` servers and warns on stderr.
+- A trusted folder's project instruction files are added to the system prompt after the home's `AGENTS.md`: one file per directory from the directory holding `.git` (a directory or a file) down to the start directory (its symlinks resolved first), outermost first, or the start directory alone when none holds `.git`. Each directory's file is `AGENTS.md`, else the first `instructionFallbacks` name present; a symlinked file is followed. Instruction files are read once at startup and have no size limit.
+- When the start directory's `.mcp.json` declares a server or the folder has project instruction files, and you have not decided about the folder, the fullscreen interface lists its instruction files and servers and asks before the session opens: `Yes, trust this folder`, `Yes, trust the parent folder` (not offered when the parent is the root or your home directory), or `No, don't trust`. The answer is saved in `trust.json` and covers the folders below; the closest saved folder decides. In your home directory or the root no parent is offered, and the answer, yes or no, holds for this run only and is not saved. Cancelling saves nothing and skips the servers and instruction files for this run.
+- Print mode never asks: in a folder with no decision it skips the `.mcp.json` servers and project instruction files and warns on stderr.
 - To change a saved answer, remove the folder's entry from `trust.json`.
 - Servers start at startup. The fullscreen interface shows at once with "Connecting to MCP servers…", and the session opens when the servers have settled or after 10 seconds; a prompt sent before then is queued and sent when the session opens. Print mode waits for the servers before it runs. A server that fails or is late is reported and its tools are absent for the run; the fullscreen interface shows the reasons in the transcript, print mode on stderr.
 - A server's tools are named `mcp__<server>__<tool>`, with characters outside `A-Z`, `a-z`, `0-9`, `_` and `-` turned into `_`. The normalized server component must be nonempty, must not contain `__`, and must not end in `_`, so a whole-server permission prefix cannot match another server. Invalid server names fail before connecting. A name over 64 characters, or one that two tools share, is skipped and reported.
@@ -282,7 +286,7 @@ Manual live check: `kopi login openai-codex`, run with a model, ask it to read a
 
 ## Not implemented
 
-Project-level config, loading project instruction files, a Linux sandbox, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approval classification, delegation and workflows, a Kopi provider identity, and release packaging and self-update.
+Project-level config, a Linux sandbox, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approval classification, delegation and workflows, a Kopi provider identity, and release packaging and self-update.
 
 MCP: OAuth for remote servers, the SSE transport, resources and prompts, `tools/list_changed`, image results, sandboxing servers or giving them a restricted environment, and a command or flag to set or change a folder's trust.
 

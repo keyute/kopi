@@ -22,6 +22,8 @@ type TrustRequest struct {
 	Parent string
 	// Servers has one line per server, such as "name: command args".
 	Servers []string
+	// Instructions are the paths of the folder's instruction files.
+	Instructions []string
 }
 
 type TrustChoice int
@@ -117,9 +119,10 @@ func (m *trustModel) View() tea.View {
 		return v
 	}
 	rows := append(m.rows(), m.hint())
-	// rows caps the servers to the height; only when the other rows alone do
-	// not fit is the top cut so the options stay visible. Short of the height,
-	// blank rows above put the dialog at the bottom, where approvals are drawn.
+	// rows caps both lists to the height; only when the fixed rows and minimum
+	// summaries do not fit is the top cut so the options stay visible. Short of
+	// the height, blank rows above put the dialog at the bottom, where approvals
+	// are drawn.
 	rows = rows[max(0, len(rows)-m.height):]
 	v.SetContent(strings.Join(append(make([]string, m.height-len(rows)), rows...), "\n"))
 	return v
@@ -143,14 +146,55 @@ func (m *trustModel) hint() string {
 func (m *trustModel) rows() []string {
 	none, width := lipgloss.NewStyle(), m.width-2
 	body := hang("", none, oneLine(m.req.Folder), none.Bold(true), width)
-	body = append(body, "")
-	body = append(body, hang("", none, "Its .mcp.json declares MCP servers that Kopi would start. They run with your permissions.", none, width)...)
+	if len(m.req.Instructions) > 0 {
+		body = append(body, "")
+		body = append(body, hang("", none, "Kopi would add these instruction files to the model's instructions:", none, width)...)
+	}
+	var servers []string
+	if len(m.req.Servers) > 0 {
+		servers = append(servers, "")
+		servers = append(servers, hang("", none, "Its .mcp.json declares MCP servers that Kopi would start. They run with your permissions.", none, width)...)
+	}
 	m.dialog.body = body
+	m.dialog.body = append(m.dialog.body, servers...)
 	// The footer row is the one below the dialog.
 	fixed := len(m.dialog.rows(m.width, m.height, 1, m.th)) + 1
-	body = append(body, m.serverRows(m.height-fixed, width)...)
+	limit := m.height - fixed
+	if len(m.req.Servers) > 0 {
+		limit-- // Keep at least the server summary below the instructions.
+	}
+	instructions := m.instructionRows(limit, width)
+	body = append(body, instructions...)
+	body = append(body, servers...)
+	body = append(body, m.serverRows(m.height-fixed-len(instructions), width)...)
 	m.dialog.body = body
 	return m.dialog.rows(m.width, m.height, 1, m.th)
+}
+
+// instructionRows keeps wrapped paths whole and counts paths left out, even
+// when the fixed rows leave no room for the count.
+func (m *trustModel) instructionRows(limit, width int) []string {
+	var rows []string
+	var ends []int
+	for _, path := range m.req.Instructions {
+		ends = append(ends, len(rows))
+		rows = append(rows, hang("  ", lipgloss.NewStyle(), oneLine(path), fg(m.th.muted), width)...)
+	}
+	if len(rows) <= limit {
+		return rows
+	}
+	for i := len(ends) - 1; i >= 0; i-- {
+		rows = rows[:ends[i]]
+		more := fmt.Sprintf("… %d more instruction files", len(ends)-i)
+		if len(ends)-i == 1 {
+			more = "… 1 more instruction file"
+		}
+		marker := hang("  ", fg(m.th.dim), more, fg(m.th.dim), width)
+		if len(rows)+len(marker) <= limit || i == 0 {
+			return append(rows, marker...)
+		}
+	}
+	return rows
 }
 
 // serverRows draws whole server lines within limit rows; when they do not all

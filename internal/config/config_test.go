@@ -24,6 +24,7 @@ func globalLayer(t *testing.T, content string) Layer {
 // withDefaults returns c with the default UI blocks filled in.
 func withDefaults(c Config) Config {
 	c.Mode = "plan"
+	c.InstructionFallbacks = []string{"CLAUDE.md"}
 	c.Keys = DefaultKeys()
 	c.StatusLine = DefaultStatusLine()
 	c.Permissions = Permissions{Allow: []string{}, Ask: []string{}, Deny: []string{}}
@@ -59,6 +60,35 @@ func TestResolveRejectsInvalidModeNamingLayer(t *testing.T) {
 			require.ErrorIs(t, err, ErrInvalidValue)
 			assert.Contains(t, err.Error(), global.Name)
 			assert.Contains(t, err.Error(), "want plan or execute")
+		})
+	}
+}
+
+func TestResolveInstructionFallbacks(t *testing.T) {
+	r, err := Resolve(Defaults())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"CLAUDE.md"}, r.Config.InstructionFallbacks)
+
+	global := globalLayer(t, `{"instructionFallbacks": ["GEMINI.md", ".cursorrules"]}`)
+	r, err = Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"GEMINI.md", ".cursorrules"}, r.Config.InstructionFallbacks)
+
+	global = globalLayer(t, `{"instructionFallbacks": []}`)
+	r, err = Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Empty(t, r.Config.InstructionFallbacks)
+	assert.Equal(t, global.Name, r.Origins["instructionFallbacks"])
+}
+
+func TestResolveRejectsInstructionFallbackNotAFileName(t *testing.T) {
+	for _, name := range []string{"", ".", "..", "docs/AGENTS.md", "/AGENTS.md", "CLAUDE.md/", `docs\AGENTS.md`} {
+		t.Run(name, func(t *testing.T) {
+			global := globalLayer(t, fmt.Sprintf(`{"instructionFallbacks": ["CLAUDE.md", %q]}`, name))
+			_, err := Resolve(Defaults(), global)
+			require.ErrorIs(t, err, ErrInvalidValue)
+			assert.Contains(t, err.Error(), global.Name)
+			assert.Contains(t, err.Error(), "instructionFallbacks[1]")
 		})
 	}
 }
@@ -242,6 +272,8 @@ func TestResolveRejectsInvalidUIValueNamingLayer(t *testing.T) {
 		{"string sandbox network", `{"sandbox": {"network": "true"}}`},
 		{"null sandbox list", `{"sandbox": {"allowWrite": null}}`},
 		{"null sandbox", `{"sandbox": null}`},
+		{"instruction fallbacks not a list", `{"instructionFallbacks": "CLAUDE.md"}`},
+		{"null instruction fallbacks", `{"instructionFallbacks": null}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			global := globalLayer(t, tc.content)
@@ -435,11 +467,12 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	r, err := Resolve(Defaults())
 	require.NoError(t, err)
 	entries := r.Entries()
-	assert.Len(t, entries, 12+len(KeyActions))
+	assert.Len(t, entries, 13+len(KeyActions))
 	assert.IsIncreasing(t, entryKeys(entries))
 	assert.Contains(t, entries, Entry{Key: "model", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "version", Value: "1", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "mode", Value: "plan", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "instructionFallbacks", Value: `["CLAUDE.md"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "keys.submit", Value: `["enter"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "keys.newline", Value: `["shift+enter","alt+enter","ctrl+j"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "statusline.left", Value: `["model","context","branch"]`, Origin: "default"})
@@ -453,16 +486,18 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "sandbox.network", Value: "false", Origin: "default"})
 
 	r, err = Resolve(Defaults(), Map("flags", map[string]any{
-		"model":       "a/b",
-		"mode":        "execute",
-		"statusline":  map[string]any{"right": []any{}},
-		"permissions": map[string]any{"deny": []any{"Read(.env)", "*(~/.ssh)"}},
-		"sandbox":     map[string]any{"enabled": false, "denyRead": []any{"~/.aws"}, "network": true},
+		"model":                "a/b",
+		"mode":                 "execute",
+		"instructionFallbacks": []any{},
+		"statusline":           map[string]any{"right": []any{}},
+		"permissions":          map[string]any{"deny": []any{"Read(.env)", "*(~/.ssh)"}},
+		"sandbox":              map[string]any{"enabled": false, "denyRead": []any{"~/.aws"}, "network": true},
 	}))
 	require.NoError(t, err)
 	entries = r.Entries()
 	assert.Contains(t, entries, Entry{Key: "model", Value: "a/b", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "mode", Value: "execute", Origin: "flags"})
+	assert.Contains(t, entries, Entry{Key: "instructionFallbacks", Value: "[]", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "statusline.right", Value: "[]", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "permissions.deny", Value: `["Read(.env)","*(~/.ssh)"]`, Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "permissions.allow", Value: "[]", Origin: "default"})
