@@ -21,7 +21,7 @@ const (
 	// besideWidth is the narrowest screen that shows a preview beside the options.
 	besideWidth = 64
 	// previewGap is the columns between the options and a preview beside them.
-	previewGap = 2
+	previewGap = 4
 	// minPreviewBox is the narrowest a preview box is drawn.
 	minPreviewBox = 12
 	// headerWidth is the widest a header is drawn in the tab strip.
@@ -363,7 +363,7 @@ func (q *questionDialog) pageRows(width, maxPreview, avail int, th theme) []stri
 	listWidth := width
 	if beside {
 		q.label(p, qu, width, th)
-		listWidth = min(naturalWidth(d), (width-2)/2)
+		listWidth = min(naturalWidth(d), (width-previewGap)/2)
 	}
 	q.label(p, qu, listWidth, th)
 	fieldCap := max(1, maxPreview)
