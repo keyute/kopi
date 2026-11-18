@@ -207,7 +207,7 @@ func (c *Controller) loginTask(run *loginRun, ctx context.Context, missing error
 	if req != nil {
 		// The open reports the notices itself: its SessionChanged wipes the transcript.
 		var chosen []event.Event
-		chosen, err = c.checkResolved(context.WithoutCancel(ctx), *req)
+		chosen, err = c.check(context.WithoutCancel(ctx), *req)
 		notices = append(notices, chosen...)
 		if err == nil {
 			err = c.startFirst(ctx, *req, notices)
@@ -244,14 +244,7 @@ func (c *Controller) chooseProvider(ctx context.Context) (string, error) {
 	for _, cand := range candidates {
 		prompt.Options = append(prompt.Options, pigruntime.LoginOption{ID: cand.Value, Label: cand.Value, Description: cand.Description})
 	}
-	answer, err := c.askLogin(ctx, "", prompt)
-	if err != nil {
-		return "", err
-	}
-	if !slices.ContainsFunc(prompt.Options, func(o pigruntime.LoginOption) bool { return o.ID == answer }) {
-		return "", fmt.Errorf("failed to choose a provider: %q is not one of the providers", answer)
-	}
-	return answer, nil
+	return c.askLogin(ctx, "", prompt)
 }
 
 // endLogin deregisters the login and wakes the model for the notices that

@@ -290,20 +290,11 @@ func (c *Controller) resolveModel(ctx context.Context) ([]event.Event, error) {
 	return []event.Event{event.Notice{Text: fmt.Sprintf("Using %s. Set \"model\" in %s to choose another.", ref, c.cfg.ConfigFile)}}, nil
 }
 
-// checkResolved is resolveModel followed by check; it returns the notices.
-func (c *Controller) checkResolved(ctx context.Context, req OpenRequest) ([]event.Event, error) {
-	notices, err := c.resolveModel(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return notices, c.check(ctx, req)
-}
-
 // Open checks that req can be opened, waits for the MCP servers, opens the
 // first session with their tools, then emits each of Config.Errors and the
 // events about the servers.
 func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
-	notices, err := c.checkResolved(ctx, req)
+	notices, err := c.check(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -329,7 +320,7 @@ func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
 // in to. If the login is cancelled or fails, no session opens and a later
 // /login that succeeds retries the open.
 func (c *Controller) Start(ctx context.Context, req OpenRequest) error {
-	notices, err := c.checkResolved(ctx, req)
+	notices, err := c.check(ctx, req)
 	if err != nil {
 		if !c.canLoginFirst(ctx, err) {
 			return err
@@ -379,8 +370,14 @@ func (c *Controller) startFirst(ctx context.Context, req OpenRequest, notices []
 	return nil
 }
 
-func (c *Controller) check(ctx context.Context, req OpenRequest) error {
-	return c.rt.Check(ctx, pigruntime.OpenOptions{Model: c.Model(), ResumeID: req.ResumeID, Continue: req.Continue})
+// check resolves the model, then checks that req can be opened; it returns the
+// notices.
+func (c *Controller) check(ctx context.Context, req OpenRequest) ([]event.Event, error) {
+	notices, err := c.resolveModel(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return notices, c.rt.Check(ctx, pigruntime.OpenOptions{Model: c.Model(), ResumeID: req.ResumeID, Continue: req.Continue})
 }
 
 func (c *Controller) servers(ctx context.Context) ([]pigruntime.ServerStatus, error) {
@@ -1099,6 +1096,8 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 			return err
 		}
 		c.startup = append(c.startup, notices...)
+		// The tools were built without a model, so WebSearch was not offered.
+		c.setup(nil)
 	}
 
 	later := c.attempted

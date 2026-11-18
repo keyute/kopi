@@ -54,7 +54,7 @@ func loginRows(d *dialog, width, maxFieldRows, maxRows int, th theme) []string {
 		return rows[:maxRows]
 	}
 	if d.options[0].field == nil {
-		return pinnedRows(d, rows, maxRows, th)
+		return pinnedRows(d, rows, width, maxRows, th)
 	}
 	room := maxRows - 2
 	start := min(d.optionStarts[d.sel], len(rows)-1-room)
@@ -76,7 +76,7 @@ func loginRows(d *dialog, width, maxFieldRows, maxRows int, th theme) []string {
 // the selection, a dim position row as the menu draws one, and the bottom rule.
 // Fewer rows above the options stay, and no position row is drawn, when
 // maxRows leaves no room for them.
-func pinnedRows(d *dialog, rows []string, maxRows int, th theme) []string {
+func pinnedRows(d *dialog, rows []string, width, maxRows int, th theme) []string {
 	d.areas = nil
 	last := len(rows) - 1
 	pos := 0
@@ -89,7 +89,7 @@ func pinnedRows(d *dialog, rows []string, maxRows int, th theme) []string {
 	start := min(max(d.optionStarts[d.sel]-room/2, first), max(first, last-room))
 	out := append(append([]string{}, head...), rows[start:min(start+room, last)]...)
 	if pos == 1 {
-		out = append(out, fg(th.dim).Render(fmt.Sprintf("  %d of %d", d.sel+1, len(d.options))))
+		out = append(out, fg(th.dim).Render(ansi.Truncate(fmt.Sprintf("  %d of %d", d.sel+1, len(d.options)), width, "")))
 	}
 	return append(out, rows[last])
 }

@@ -489,7 +489,7 @@ func TestStartUnsetModelAsksWhichProviderThenOpens(t *testing.T) {
 	assert.Empty(t, ofType[event.Error](h.rec.all()))
 }
 
-func TestStartUnsetModelRejectsAnAnswerThatIsNoProvider(t *testing.T) {
+func TestStartUnsetModelFailsOnAnAnswerThatIsNoProvider(t *testing.T) {
 	h := unsetLoginHarness(t, Config{}, false)
 	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
 	run := h.loginRun()
@@ -500,7 +500,7 @@ func TestStartUnsetModelRejectsAnAnswerThatIsNoProvider(t *testing.T) {
 
 	isError := func(ev event.Event) bool { _, ok := ev.(event.Error); return ok }
 	cause := h.next(t, isError).(event.Error)
-	assert.ErrorContains(t, cause.Err, `"nope" is not one of the providers`)
+	assert.ErrorIs(t, cause.Err, pigruntime.ErrUnknownProvider)
 	missing := h.next(t, isError).(event.Error)
 	assert.ErrorIs(t, missing.Err, pigruntime.ErrNoCredential)
 	assert.ErrorContains(t, missing.Err, "run /login <provider>")
@@ -552,4 +552,29 @@ func TestUnsetModelNewAfterCancelledPickReportsMissingCredential(t *testing.T) {
 	require.ErrorIs(t, err, pigruntime.ErrNoCredential)
 	assert.ErrorContains(t, err, "run /login <provider>")
 	assert.NotContains(t, err.Error(), "unknown model")
+}
+
+func TestUnsetModelNewAfterCancelledPickOffersWebSearch(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	sb := pigruntimetest.NewSandbox(t)
+	rt := pigruntimetest.NewRuntime(t, sb)
+	pigruntimetest.RegisterLoginProvider(t, rt, loginProvider)
+	lh := &loginHarness{harness: buildHarness(t, rt, nil, sb, Config{ConfigFile: "/kopi/config.json"}), events: make(chan event.Event, 64)}
+	lh.c.Subscribe(func(ev event.Event) { lh.events <- ev })
+	require.NoError(t, lh.c.Start(t.Context(), OpenRequest{}))
+	run := lh.loginRun()
+	require.NotNil(t, run)
+	lh.request(t)
+	assert.True(t, lh.c.Interrupt())
+	wait(t, run.done)
+	require.Empty(t, toolNames(lh.c.tools))
+
+	t.Setenv("OPENAI_API_KEY", "synthetic-key")
+	require.NoError(t, lh.c.NewSession(t.Context()))
+
+	lh.next(t, func(ev event.Event) bool {
+		n, ok := ev.(event.Notice)
+		return ok && strings.HasPrefix(n.Text, "Using openai/")
+	})
+	assert.Equal(t, []string{"WebSearch"}, toolNames(lh.c.tools))
 }

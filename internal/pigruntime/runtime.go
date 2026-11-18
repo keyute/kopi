@@ -35,7 +35,6 @@ type Runtime struct {
 	svcs             *coding.AgentSessionServices
 	rt               *coding.Runtime
 	installationFile string
-	cwd, agentDir    string
 	// openURL opens a sign-in URL in the user's browser.
 	openURL func(string) error
 }
@@ -74,8 +73,6 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		svcs:             svcs,
 		rt:               rt,
 		installationFile: filepath.Join(opts.Home, "installation_id"),
-		cwd:              opts.CWD,
-		agentDir:         opts.AgentDir,
 		openURL:          browser.OpenURL,
 	}, nil
 }
@@ -297,13 +294,13 @@ func (r *Runtime) DefaultModel(ctx context.Context) (string, error) {
 	if _, err := r.svcs.ModelRuntime().GetAvailable(ctx); err != nil {
 		return "", fmt.Errorf("failed to choose a model: %w", reword(err))
 	}
-	sm, err := coding.NewInMemorySessionManager(r.cwd)
+	sm, err := coding.NewInMemorySessionManager(r.svcs.CWD())
 	if err != nil {
 		return "", fmt.Errorf("failed to choose a model: %w", reword(err))
 	}
 	res, err := coding.CreateAgentSession(coding.CreateAgentSessionOptions{
-		CWD:             r.cwd,
-		AgentDir:        r.agentDir,
+		CWD:             r.svcs.CWD(),
+		AgentDir:        r.svcs.AgentDir(),
 		ModelRuntime:    r.svcs.ModelRuntime(),
 		SettingsManager: r.svcs.SettingsManager(),
 		ResourceLoader:  coding.NoResources,
