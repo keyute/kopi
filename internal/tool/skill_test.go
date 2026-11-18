@@ -392,6 +392,23 @@ func TestSkillRefusesHomeOutsideSkills(t *testing.T) {
 	}
 }
 
+func TestSkillRefusesFilesAfterHomeEntryLinksToSkillDirectory(t *testing.T) {
+	home := skillHome(t)
+	sk := skillDir(t)
+	tool := NewSkill([]skill.Skill{sk}, home)
+	raw := json.RawMessage(`{"name":"deploy","file":"ref.md"}`)
+
+	out, err := tool.Run(t.Context(), raw, admitAll)
+	require.NoError(t, err)
+	assert.Equal(t, "     1\tone\n     2\ttwo\n     3\tthree\n", out.Text)
+
+	require.NoError(t, os.Symlink(sk.Dir, filepath.Join(home, "linked")))
+	out, err = tool.Run(t.Context(), raw, admitAll)
+
+	assert.ErrorIs(t, err, ErrProtected)
+	assert.Empty(t, out.Text)
+}
+
 func TestSkillReadsSkillsAndUnrelatedFilesFromDirectoryHoldingHome(t *testing.T) {
 	home := skillHome(t)
 	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(home), "beside.md"), []byte("beside"), 0o644))

@@ -626,19 +626,25 @@ func TestContextUsageMirrorsPiG(t *testing.T) {
 func TestHistoryAndSessionListOmitSkills(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)
-	faux.SetResponses([]ai.FauxResponseStep{reply("done")})
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{reply("done"), captureRequest(requests, "again")})
 	sess := openTestSession(t, r)
 
 	_, err := sess.Send(t.Context(), Prompt{Text: "go", Skills: []string{"SKILL-TEXT"}}, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, sess.Close(t.Context()))
 
+	resumed := resume(t, r, sess.ID())
 	assert.Equal(t, []event.Event{
 		event.TurnStart{Prompt: "go"},
 		event.TextDelta{Text: "done"},
-	}, resume(t, r, sess.ID()).History())
+	}, resumed.History())
 	infos, err := r.Sessions()
 	require.NoError(t, err)
 	require.Len(t, infos, 1)
 	assert.Equal(t, "go", infos[0].FirstMessage)
+
+	_, err = resumed.Send(t.Context(), Prompt{Text: "next"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, countOf(userTexts(<-requests), "SKILL-TEXT"))
 }
