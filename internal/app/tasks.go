@@ -33,13 +33,6 @@ const (
 	noticeCommandRunes = 80
 )
 
-// pendingNotice is a notice waiting for the model; wake reports whether it
-// may start or continue a turn on its own.
-type pendingNotice struct {
-	n    pigruntime.Notice
-	wake bool
-}
-
 // taskChanged is the task manager's OnChange callback. A task the model stops
 // gets no notice: the model's own tool result already says so.
 func (c *Controller) taskChanged(info tool.TaskInfo) {
@@ -48,14 +41,14 @@ func (c *Controller) taskChanged(info tool.TaskInfo) {
 		return
 	}
 	head := fmt.Sprintf("Background task %s %s (%s): %s", info.ID, info.Status, info.Reason, commandLine(info.Command))
-	c.queueNotice(notice(info, head), true)
+	c.queueNotice(notice(info, head))
 }
 
-// queueNotice queues n for the model and, for a waking notice while no turn
-// runs and no session switch is under way, starts a turn with no human prompt.
+// queueNotice queues n for the model and, while no turn runs and no session
+// switch is under way, starts a turn with no human prompt.
 // It drops n once closed or with no session. A switch that commits clears what
 // was queued; one that fails keeps it for the next prompt or wake.
-func (c *Controller) queueNotice(n pigruntime.Notice, wake bool) {
+func (c *Controller) queueNotice(n pigruntime.Notice) {
 	c.queue.Lock()
 	defer c.queue.Unlock()
 	c.mu.Lock()
@@ -63,8 +56,8 @@ func (c *Controller) queueNotice(n pigruntime.Notice, wake bool) {
 		c.mu.Unlock()
 		return
 	}
-	c.notices = append(c.notices, pendingNotice{n: n, wake: wake})
-	if !wake || c.turn != nil || c.switching != nil || !c.cfg.Wake || c.hold {
+	c.notices = append(c.notices, n)
+	if c.turn != nil || c.switching != nil || !c.cfg.Wake || c.hold {
 		c.mu.Unlock()
 		return
 	}
@@ -76,32 +69,25 @@ func (c *Controller) takeNotices() []pigruntime.Notice {
 	if len(c.notices) == 0 {
 		return nil
 	}
-	out := make([]pigruntime.Notice, 0, len(c.notices))
-	for _, p := range c.notices {
-		out = append(out, p.n)
-	}
+	out := c.notices
 	c.notices = nil
 	return out
 }
 
 // waking reports whether a queued notice may continue a turn; it must be
-// called with queue held.
+// called with queue held. Only the notice StopTask queues for a stopped task
+// does not wake.
 func (c *Controller) waking() bool {
-	return slices.ContainsFunc(c.notices, func(p pendingNotice) bool { return p.wake })
+	return slices.ContainsFunc(c.notices, func(n pigruntime.Notice) bool { return n.Shown.Status != string(tool.TaskStopped) })
 }
 
 // requeue puts notices the model never read back ahead of those queued since;
-// it must be called with queue held. Only StopTask queues a stopped notice, so
-// one comes back non-waking and every other waking.
+// it must be called with queue held.
 func (c *Controller) requeue(ns []pigruntime.Notice) {
 	if len(ns) == 0 {
 		return
 	}
-	back := make([]pendingNotice, 0, len(ns)+len(c.notices))
-	for _, n := range ns {
-		back = append(back, pendingNotice{n: n, wake: n.Shown.Status != string(tool.TaskStopped)})
-	}
-	c.notices = append(back, c.notices...)
+	c.notices = append(slices.Clone(ns), c.notices...)
 }
 
 func notice(info tool.TaskInfo, head string) pigruntime.Notice {
@@ -182,7 +168,7 @@ func (c *Controller) StopTask(id string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.closed && owner != nil && c.sess == owner {
-		c.notices = append(c.notices, pendingNotice{n: notice(info, head)})
+		c.notices = append(c.notices, notice(info, head))
 	}
 	return nil
 }

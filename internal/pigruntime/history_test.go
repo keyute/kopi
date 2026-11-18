@@ -183,6 +183,29 @@ func TestHistoryRestoresNotices(t *testing.T) {
 	assert.Equal(t, []string{"go", n.Text, "next"}, userTexts(<-requests))
 }
 
+func TestHistoryRestoresDeliveredNotices(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{reply("done"), reply("noted")})
+	sess := openTestSession(t, r)
+	n1, n2, n3 := testNotice("t1"), testNotice("t2"), testNotice("t3")
+
+	_, err := sess.Send(t.Context(), Prompt{Text: "go"}, []Notice{n1}, nil)
+	require.NoError(t, err)
+	_, err = sess.Send(t.Context(), Prompt{}, []Notice{n2, n3}, nil)
+	require.NoError(t, err)
+	require.NoError(t, sess.Close(t.Context()))
+
+	assert.Equal(t, []event.Event{
+		event.TurnStart{Prompt: "go"},
+		n1.Shown,
+		event.TextDelta{Text: "done"},
+		n2.Shown,
+		n3.Shown,
+		event.TextDelta{Text: "noted"},
+	}, resume(t, r, sess.ID()).History())
+}
+
 func TestHistorySkipsForeignCustomMessages(t *testing.T) {
 	sb := newSandbox(t)
 	r, _ := newTestRuntime(t, sb)

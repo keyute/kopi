@@ -558,6 +558,24 @@ func TestSendNoticeOnlyStartsRun(t *testing.T) {
 	assert.Equal(t, []event.Event{n.Shown}, drain(evs))
 }
 
+func TestSendWakeWithTwoNotices(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "noted")})
+	sess := openTestSession(t, r)
+	evs := recordDelivered(t, sess)
+	n1, n2 := testNotice("t1"), testNotice("t2")
+
+	res, err := sess.Send(t.Context(), Prompt{}, []Notice{n1, n2}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, event.Completed, res.Outcome.Status)
+	assert.True(t, res.Sent)
+	assert.Empty(t, res.UndeliveredNotices)
+	assert.Equal(t, []string{n1.Text, n2.Text}, userTexts(<-requests))
+	assert.Equal(t, []event.Event{n1.Shown, n2.Shown}, drain(evs))
+}
+
 func TestSendPromptThenNotices(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)

@@ -100,7 +100,7 @@ type Controller struct {
 	// notices are the task notices waiting for the model, also guarded by
 	// queue. They are never part of pending: they are not the human's input,
 	// so they are never reported, handed back or taken.
-	notices []pendingNotice
+	notices []pigruntime.Notice
 	// hold, guarded by queue, keeps notices from waking the model after an
 	// Interrupt until a human prompt starts a turn.
 	hold bool

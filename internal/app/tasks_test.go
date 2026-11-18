@@ -158,7 +158,7 @@ func endText(id string) string {
 	return "Background task " + id + " completed (exit code 0): make " + id + "\nbuilt " + id
 }
 
-func (h *harness) queuedNotices() []pendingNotice {
+func (h *harness) queuedNotices() []pigruntime.Notice {
 	h.c.queue.Lock()
 	defer h.c.queue.Unlock()
 	return slices.Clone(h.c.notices)
@@ -207,7 +207,7 @@ func TestDelayedStopTaskAcrossReplacement(t *testing.T) {
 			if failed {
 				queued := h.queuedNotices()
 				require.Len(t, queued, 1)
-				assert.False(t, queued[0].wake)
+				assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.Status)
 			} else {
 				assert.Empty(t, h.queuedNotices())
 			}
@@ -489,7 +489,9 @@ func TestTaskEndAfterInterruptWaitsForNextPrompt(t *testing.T) {
 	started := make(chan struct{})
 	h, _ := openHarness(t, Config{Wake: true, Tools: []tool.Tool{blockTool(started)}})
 	requests := make(chan pigruntimetest.Request, 1)
-	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "call-1")), pigruntimetest.Capture(t, requests, "next")})
+	gate := make(chan struct{})
+	ends := turnEnds(h.c)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "call-1")), pigruntimetest.Capture(t, requests, "next"), gated(gate, "woken")})
 
 	w, err := h.c.Submit(t.Context(), "block")
 	require.NoError(t, err)
@@ -510,6 +512,12 @@ func TestTaskEndAfterInterruptWaitsForNextPrompt(t *testing.T) {
 
 	h.tasks.end(endedTask("t2"))
 	assert.False(t, h.idle(), "a human prompt lifts the hold")
+
+	close(gate)
+	for range 3 {
+		receiveEnd(t, ends)
+	}
+	assert.True(t, h.idle())
 }
 
 func TestTaskEndWithoutWakeRidesWithNextPrompt(t *testing.T) {
@@ -565,7 +573,7 @@ func TestStopTaskQueuesNonWakingNotice(t *testing.T) {
 	assert.Equal(t, []string{"t1"}, stops, "an ended task is not stopped again")
 	queued := h.queuedNotices()
 	require.Len(t, queued, 1)
-	assert.False(t, queued[0].wake)
+	assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.Status)
 
 	h.turn(t, "hi")
 	want := "Background task t1 stopped by the user: make t1\nbuilt t1"
@@ -763,16 +771,15 @@ func TestNoticeText(t *testing.T) {
 		tail = append(tail, fmt.Sprintf("line %d", i))
 	}
 	want := "Background task t7 failed (exit status 2): " + strings.Repeat("é", 80) + "\n" + strings.Join(tail, "\n")
-	assert.Equal(t, want, queued[0].n.Text)
-	assert.True(t, queued[0].wake)
-	assert.Equal(t, event.TaskEnded{ID: "t7", Command: info.Command, Status: "failed", Elapsed: 90 * time.Second}, queued[0].n.Shown)
+	assert.Equal(t, want, queued[0].Text)
+	assert.Equal(t, event.TaskEnded{ID: "t7", Command: info.Command, Status: "failed", Elapsed: 90 * time.Second}, queued[0].Shown)
 
 	info.Output = ""
 	info.ID = "t8"
 	h.tasks.end(info)
 	queued = h.queuedNotices()
 	require.Len(t, queued, 2)
-	assert.Equal(t, "Background task t8 failed (exit status 2): "+strings.Repeat("é", 80), queued[1].n.Text)
+	assert.Equal(t, "Background task t8 failed (exit status 2): "+strings.Repeat("é", 80), queued[1].Text)
 }
 
 func TestForegroundSignalReportsTasksChanged(t *testing.T) {
@@ -820,7 +827,7 @@ func TestUndeliveredStopNoticeDoesNotContinueTurn(t *testing.T) {
 	assert.True(t, h.idle())
 	queued := h.queuedNotices()
 	require.Len(t, queued, 1)
-	assert.False(t, queued[0].wake)
+	assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.Status)
 	h.turn(t, "hi")
 	assert.Equal(t, []string{"hi", stopText}, receive(t, requests).UserTexts)
 }
@@ -829,13 +836,17 @@ func TestRequeueKeepsStopNoticesNonWaking(t *testing.T) {
 	h, _ := openHarness(t, Config{})
 	stopped := runningTask("t1")
 	stopped.Status = tool.TaskStopped
+	stop, end := notice(stopped, "stop"), notice(endedTask("t2"), "end")
 	h.c.queue.Lock()
-	h.c.requeue([]pigruntime.Notice{notice(stopped, "stop"), notice(endedTask("t2"), "end")})
-	queued := slices.Clone(h.c.notices)
-	h.c.queue.Unlock()
-	require.Len(t, queued, 2)
-	assert.False(t, queued[0].wake)
-	assert.True(t, queued[1].wake)
+	defer h.c.queue.Unlock()
+
+	h.c.requeue([]pigruntime.Notice{stop})
+	assert.False(t, h.c.waking())
+
+	h.c.takeNotices()
+	h.c.requeue([]pigruntime.Notice{stop, end})
+	assert.Equal(t, []pigruntime.Notice{stop, end}, h.c.notices)
+	assert.True(t, h.c.waking())
 }
 
 // A human stop during the final reply is not handed over alone, so the run

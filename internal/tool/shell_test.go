@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var ErrTimedOut = errors.New("command timed out")
 
 // Run returns the command's combined output. The error of a command that
 // failed or timed out carries the output, then the reason on a final line.
