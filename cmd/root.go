@@ -247,10 +247,6 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	if err != nil {
 		return err
 	}
-	model := resolved.Config.Model
-	if model == "" {
-		return config.ErrNoModel
-	}
 	mode, err := policy.ParseMode(resolved.Config.Mode)
 	if err != nil {
 		return err
@@ -357,20 +353,17 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// rt opens only once the rules are checked, so a bad rule creates nothing;
 	// WebFetch's calls come after that.
 	var rt *pigruntime.Runtime
-	smallModel := resolved.Config.SmallModel
-	if smallModel == "" {
-		smallModel = model
-	}
+	// c resolves the session model, which the closures read when a call runs.
+	var c *app.Controller
 	answer := func(ctx context.Context, system, prompt string) (string, error) {
-		return rt.Answer(ctx, smallModel, pigruntime.DefaultEffort, system, prompt)
+		return rt.Answer(ctx, c.SmallModel(), pigruntime.DefaultEffort, system, prompt)
 	}
 	classifierOn := resolved.Config.Classifier.Enabled
-	classifierModel := cmp.Or(resolved.Config.Classifier.Model, model)
 	var review *classifier.Classifier
 	if classifierOn {
 		stage := func(effort pigruntime.Effort) classifier.Answer {
 			return func(ctx context.Context, system, prompt string) (string, error) {
-				return rt.Answer(ctx, classifierModel, effort, system, prompt)
+				return rt.Answer(ctx, cmp.Or(resolved.Config.Classifier.Model, c.Model()), effort, system, prompt)
 			}
 		}
 		review = classifier.New(stage(pigruntime.LowestEffort), stage(pigruntime.MediumEffort), resolved.Config.Classifier.Instructions)
@@ -414,7 +407,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	}()
 	checkModel := func(key, ref string) error {
 		err := rt.Check(startCtx, pigruntime.OpenOptions{Model: ref})
-		if err == nil || fullscreen && sameProviderNoCredential(err, model, ref) {
+		if err == nil || fullscreen && sameProviderNoCredential(err, resolved.Config.Model, ref) {
 			return nil
 		}
 		if errors.Is(err, pigruntime.ErrNoCredential) {
@@ -428,19 +421,14 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		return fmt.Errorf("failed to use %q in %s: %w", key, paths.ConfigFile, err)
 	}
 	if resolved.Config.SmallModel != "" {
-		if err := checkModel("smallModel", smallModel); err != nil {
+		if err := checkModel("smallModel", resolved.Config.SmallModel); err != nil {
 			return err
 		}
 	}
 	if classifierOn && resolved.Config.Classifier.Model != "" {
-		if err := checkModel("classifier.model", classifierModel); err != nil {
+		if err := checkModel("classifier.model", resolved.Config.Classifier.Model); err != nil {
 			return err
 		}
-	}
-	if rt.CanSearch(smallModel) {
-		tools = append(tools, tool.NewWebSearch(func(ctx context.Context, system, query string) (tool.SearchResult, error) {
-			return rt.Search(ctx, smallModel, system, query)
-		}))
 	}
 	var skillDirs []string
 	if set.trusted {
@@ -453,7 +441,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	}
 	// Only the fullscreen interface has a human to answer approvals.
 	cfg := app.Config{
-		Model: model, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
+		Model: resolved.Config.Model, SmallModel: resolved.Config.SmallModel, ConfigFile: paths.ConfigFile, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
 		Errors: slices.Concat(set.errs, instructionErrs, skillErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review,
 		Skills: skills, SkillPrefix: resolved.Config.Skills.Prefix,
 	}
@@ -468,7 +456,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		}
 		cfg.History = store
 	}
-	c := app.NewController(rt, cfg)
+	c = app.NewController(rt, cfg)
 	var f frontend
 	if fullscreen {
 		// Created before Start so the TUI shows the events Start emits.
@@ -508,7 +496,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		if listErr != nil {
 			return errors.Join(err, listErr)
 		}
-		return diagnose(err, model, resolved.Origins["model"], paths, req, providers)
+		return diagnose(err, c.Model(), resolved.Origins["model"], paths, req, providers)
 	}
 	// SIGINT is a channel rather than part of the context because it must
 	// keep firing: each one interrupts the running turn, and only one at
@@ -801,6 +789,8 @@ func sameProviderNoCredential(err error, model, sub string) bool {
 // diagnose turns the open failures a user can fix into Kopi's own advice.
 func diagnose(err error, model, origin string, paths config.Paths, req app.OpenRequest, providers []pigruntime.Provider) error {
 	switch {
+	case errors.Is(err, pigruntime.ErrNoCredential) && model == "":
+		return errors.New("no credential for any provider: run \"kopi login\" to list the providers that offer login, or set a provider's API key in the environment")
 	case errors.Is(err, pigruntime.ErrNoCredential):
 		id, _, _ := config.ParseModelRef(model)
 		i := slices.IndexFunc(providers, func(p pigruntime.Provider) bool { return p.ID == id })

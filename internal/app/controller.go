@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -20,8 +21,14 @@ import (
 )
 
 type Config struct {
-	Model     string // "provider/id"
-	Workspace string
+	// Model is "provider/id"; empty means the runtime's default model of a
+	// provider with a credential, chosen when the first session opens.
+	Model string
+	// SmallModel is "provider/id"; empty means the session model.
+	SmallModel string
+	// ConfigFile is the path the notice about a chosen model names.
+	ConfigFile string
+	Workspace  string
 	// Tools are the built-in tools; the MCP servers' tools come from Servers.
 	Tools []tool.Tool
 	// JoinTimeout bounds how long a session switch or Close waits for running
@@ -117,7 +124,9 @@ type Controller struct {
 	// Interrupt until a human prompt starts a turn.
 	hold bool
 
-	mu     sync.Mutex
+	mu sync.Mutex
+	// model is the session model: Config.Model, or the runtime's default once resolved.
+	model  string
 	sess   *pigruntime.Session
 	sessID string
 	// emit is bound to sess's relay epoch.
@@ -158,7 +167,7 @@ func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
 	if cfg.Tasks == nil {
 		cfg.Tasks = tool.NewTasks()
 	}
-	c := &Controller{rt: rt, cfg: cfg, authority: policy.NewAuthority()}
+	c := &Controller{rt: rt, cfg: cfg, model: cfg.Model, authority: policy.NewAuthority()}
 	var reserved []string
 	for _, cmd := range commandTable() {
 		reserved = append(reserved, cmd.Name)
@@ -202,6 +211,11 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 		servers = append(servers, server)
 	}
 	tools := slices.Clone(c.cfg.Tools)
+	if small := c.SmallModel(); small != "" && c.rt.CanSearch(small) && !c.cfg.Rules.Removes("WebSearch") {
+		tools = append(tools, tool.NewWebSearch(func(ctx context.Context, system, query string) (tool.SearchResult, error) {
+			return c.rt.Search(ctx, small, system, query)
+		}))
+	}
 	if len(serverTools) > 0 {
 		search := tool.NewToolSearch(serverTools, pigruntime.RankTools, pigruntime.LoadTools)
 		if c.cfg.Rules.Removes(search.Name) {
@@ -241,17 +255,63 @@ type OpenRequest struct {
 	Continue bool
 }
 
+// Model is the session model, empty until resolved when none is configured.
+func (c *Controller) Model() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.model
+}
+
+// SmallModel is the model for side questions: Config.SmallModel, else Model.
+func (c *Controller) SmallModel() string {
+	if c.cfg.SmallModel != "" {
+		return c.cfg.SmallModel
+	}
+	return c.Model()
+}
+
+// resolveModel chooses the runtime's default model when none is configured and
+// returns the notice naming it, again on a retry. It does nothing when a model
+// is configured.
+func (c *Controller) resolveModel(ctx context.Context) ([]event.Event, error) {
+	if c.cfg.Model != "" {
+		return nil, nil
+	}
+	ref := c.Model()
+	if ref == "" {
+		var err error
+		if ref, err = c.rt.DefaultModel(ctx); err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		c.model = ref
+		c.mu.Unlock()
+	}
+	return []event.Event{event.Notice{Text: fmt.Sprintf("Using %s. Set \"model\" in %s to choose another.", ref, c.cfg.ConfigFile)}}, nil
+}
+
+// checkResolved is resolveModel followed by check; it returns the notices.
+func (c *Controller) checkResolved(ctx context.Context, req OpenRequest) ([]event.Event, error) {
+	notices, err := c.resolveModel(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return notices, c.check(ctx, req)
+}
+
 // Open checks that req can be opened, waits for the MCP servers, opens the
 // first session with their tools, then emits each of Config.Errors and the
 // events about the servers.
 func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
-	if err := c.check(ctx, req); err != nil {
+	notices, err := c.checkResolved(ctx, req)
+	if err != nil {
 		return err
 	}
 	statuses, err := c.servers(ctx)
 	if err != nil {
 		return err
 	}
+	c.startup = append(c.startup, notices...)
 	c.prepareStartup(statuses)
 	return c.start(ctx, req)
 }
@@ -264,16 +324,19 @@ func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
 //
 // When the check fails only because the model's provider has no credential,
 // an attended Start instead returns nil and runs that provider's login, as
-// /login does; the open follows once it succeeds. If the login is cancelled or
-// fails, no session opens and a later /login that succeeds retries the open.
+// /login does; the open follows once it succeeds. With no model configured and
+// no provider holding a credential, the login first asks which provider to log
+// in to. If the login is cancelled or fails, no session opens and a later
+// /login that succeeds retries the open.
 func (c *Controller) Start(ctx context.Context, req OpenRequest) error {
-	if err := c.check(ctx, req); err != nil {
+	notices, err := c.checkResolved(ctx, req)
+	if err != nil {
 		if !c.canLoginFirst(ctx, err) {
 			return err
 		}
 		return c.loginFirst(ctx, req, c.withLoginHint(err))
 	}
-	return c.startFirst(ctx, req, nil)
+	return c.startFirst(ctx, req, notices)
 }
 
 // startFirst opens the first session in the background; notices are reported
@@ -317,7 +380,7 @@ func (c *Controller) startFirst(ctx context.Context, req OpenRequest, notices []
 }
 
 func (c *Controller) check(ctx context.Context, req OpenRequest) error {
-	return c.rt.Check(ctx, pigruntime.OpenOptions{Model: c.cfg.Model, ResumeID: req.ResumeID, Continue: req.Continue})
+	return c.rt.Check(ctx, pigruntime.OpenOptions{Model: c.Model(), ResumeID: req.ResumeID, Continue: req.Continue})
 }
 
 func (c *Controller) servers(ctx context.Context) ([]pigruntime.ServerStatus, error) {
@@ -642,7 +705,7 @@ func (c *Controller) Status() Status {
 	c.mu.Unlock()
 
 	mode, _ := c.authority.Snapshot()
-	s := Status{SessionID: sessID, Mode: mode, Model: c.cfg.Model, Busy: busy, Branch: gitBranch(c.cfg.Workspace), Workspace: c.cfg.Workspace}
+	s := Status{SessionID: sessID, Mode: mode, Model: c.Model(), Busy: busy, Branch: gitBranch(c.cfg.Workspace), Workspace: c.cfg.Workspace}
 	if sess != nil {
 		s.MessageCount = sess.MessageCount()
 		if tokens, window, ok := sess.ContextUsage(); ok {
@@ -1025,6 +1088,19 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 	}
 
+	// A first open that never got a model leaves it unset; its notice is
+	// reported with the session's other startup events.
+	if c.Model() == "" {
+		notices, err := c.resolveModel(ctx)
+		if errors.Is(err, pigruntime.ErrNoCredential) {
+			err = c.withLoginHint(err)
+		}
+		if err != nil {
+			return err
+		}
+		c.startup = append(c.startup, notices...)
+	}
+
 	later := c.attempted
 	c.attempted = true
 	d := newDisplay(c.tools)
@@ -1033,7 +1109,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		rec = &classifier.Record{}
 	}
 	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
-		Model:        c.cfg.Model,
+		Model:        c.Model(),
 		ResumeID:     req.ResumeID,
 		Continue:     req.Continue,
 		SystemPrompt: c.prompt,

@@ -20,6 +20,7 @@
 - `/logout <provider>` removes a credential.
 - `kopi login` and `kopi logout` remain for headless and scripted use.
 - When the configured model has no credential and its provider offers a sign-in or an API key, Kopi opens a login for that provider before the session opens. Headless use exits with the `kopi login` hint.
+- With no `model` and no credential for any provider, the fullscreen interface lists the providers that offer a login, sorted by id; the one you choose is logged in, then the session opens with that provider's default model. Cancelling leaves no session, and `/login <provider>` opens it. Headless use exits with the `kopi login` hint.
 
 ## Identity
 

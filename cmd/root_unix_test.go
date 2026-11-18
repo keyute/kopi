@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/history"
+	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 )
 
 func TestRootSIGINTDuringMCPStartup(t *testing.T) {
@@ -503,6 +504,84 @@ func TestRootFullscreenSameProviderModelWithoutCredentialReachesLogin(t *testing
 			assert.JSONEq(t, `{}`, string(credentials), "cancelling login must store no credentials")
 		})
 	}
+}
+
+func TestRootFullscreenWithoutModelOrCredentialAsksWhichProvider(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	e := newTestEnv(t)
+	t.Setenv("TERM", "xterm-256color")
+	logger := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(logger) })
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	master, slave := openTestTerminal(t)
+	asked, drained := make(chan struct{}), make(chan struct{})
+	var result terminalDrainResult
+	go func() {
+		var output strings.Builder
+		buf := make([]byte, 4096)
+		sawAsk := false
+		for {
+			n, err := master.Read(buf)
+			output.Write(buf[:n])
+			if !sawAsk && strings.Contains(ansi.Strip(output.String()), "Log in to a provider:") {
+				sawAsk = true
+				close(asked)
+			}
+			if err != nil {
+				result = terminalDrainResult{text: output.String(), err: err}
+				close(drained)
+				return
+			}
+		}
+	}()
+	root := newRoot()
+	root.SetIn(slave)
+	root.SetOut(slave)
+	var stderr bytes.Buffer
+	root.SetErr(&stderr)
+	done := make(chan error, 1)
+	stopped := make(chan struct{})
+	go func() {
+		done <- root.ExecuteContext(ctx)
+		close(stopped)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-stopped:
+		case <-time.After(waitLimit):
+			t.Error("timed out cleaning up fullscreen command")
+			return
+		}
+		// Close the slave first: a blocked master read can hang on Darwin.
+		_ = slave.Close()
+		select {
+		case <-drained:
+			assert.True(t, errors.Is(result.err, io.EOF) || runtime.GOOS == "linux" && errors.Is(result.err, syscall.EIO), "terminal read: %v; output: %q", result.err, result.text)
+		case <-time.After(waitLimit):
+			t.Error("timed out cleaning up fullscreen terminal drain")
+			return
+		}
+		_ = master.Close()
+	})
+	select {
+	case <-asked:
+	case <-drained:
+		t.Fatalf("terminal drain ended before the provider list: %v; output: %q", result.err, result.text)
+	case err := <-done:
+		t.Fatalf("fullscreen exited before the provider list: %v; stderr: %s", err, stderr.String())
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for the provider list")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for fullscreen exit")
+	}
+	assert.NoFileExists(t, filepath.Join(e.kopiHome, "config.json"))
 }
 
 func TestRootFullscreenDifferentProviderSmallModelWithoutCredentialFailsAtStart(t *testing.T) {

@@ -94,6 +94,28 @@ func newHarness(t *testing.T, sb pigruntimetest.Sandbox, cfg Config) *harness {
 	if cfg.Model == "" {
 		cfg.Model = model
 	}
+	return buildHarness(t, rt, faux, sb, cfg)
+}
+
+// newUnsetHarness is a harness whose model is unset, in an environment with no
+// ambient credential. The faux provider, which holds a credential, is
+// registered only when withFaux is set.
+func newUnsetHarness(t *testing.T, cfg Config, withFaux bool) *harness {
+	t.Helper()
+	pigruntimetest.ClearEnv(t)
+	sb := pigruntimetest.NewSandbox(t)
+	rt := pigruntimetest.NewRuntime(t, sb)
+	var faux *ai.FauxProviderHandle
+	if withFaux {
+		faux, _ = pigruntimetest.RegisterFaux(t, rt, fauxProvider)
+	}
+	cfg.Model = ""
+	cfg.ConfigFile = "/kopi/config.json"
+	return buildHarness(t, rt, faux, sb, cfg)
+}
+
+func buildHarness(t *testing.T, rt *pigruntime.Runtime, faux *ai.FauxProviderHandle, sb pigruntimetest.Sandbox, cfg Config) *harness {
+	t.Helper()
 	cfg.Workspace = sb.Workspace
 	if cfg.JoinTimeout == 0 {
 		cfg.JoinTimeout = waitLimit
@@ -1792,6 +1814,70 @@ func TestOpenEmitsConfigErrorsAfterTheSession(t *testing.T) {
 
 	require.NoError(t, h.c.NewSession(t.Context()))
 	assert.Len(t, ofType[event.Error](h.rec.all()), 2, "a later session does not repeat them")
+}
+
+func TestOpenUnsetModelReportsTheDefaultAfterTheSession(t *testing.T) {
+	first := errors.New("first")
+	h := newUnsetHarness(t, Config{Errors: []error{first}}, true)
+
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+
+	const using = `Using kopi-faux/faux-1. Set "model" in /kopi/config.json to choose another.`
+	assert.Equal(t, "kopi-faux/faux-1", h.c.Model())
+	assert.Equal(t, "kopi-faux/faux-1", h.c.SmallModel())
+	assert.Equal(t, "kopi-faux/faux-1", h.c.Status().Model)
+	evs := h.rec.all()
+	i := slices.IndexFunc(evs, func(ev event.Event) bool { _, ok := ev.(event.SessionChanged); return ok })
+	require.GreaterOrEqual(t, i, 0)
+	assert.Equal(t, []event.Event{event.Notice{Text: using}, event.Error{Err: first}}, evs[i+1:])
+}
+
+func TestOpenUnsetModelWithoutCredentialFails(t *testing.T) {
+	h := newUnsetHarness(t, Config{}, false)
+
+	require.ErrorIs(t, h.c.Open(t.Context(), OpenRequest{}), pigruntime.ErrNoCredential)
+	assert.Empty(t, h.c.Model())
+}
+
+func TestOpenConfiguredModelReportsNoNotice(t *testing.T) {
+	h, _ := openHarness(t, Config{ConfigFile: "/kopi/config.json"})
+
+	assert.Empty(t, ofType[event.Notice](h.rec.all()))
+	assert.Equal(t, "kopi-faux/faux-1", h.c.Model())
+}
+
+func TestSmallModelFollowsConfigThenSessionModel(t *testing.T) {
+	h, _ := openHarness(t, Config{SmallModel: "other/small-1"})
+	assert.Equal(t, "other/small-1", h.c.SmallModel())
+	assert.Equal(t, "kopi-faux/faux-1", h.c.Model())
+}
+
+func searchSandbox(t *testing.T) pigruntimetest.Sandbox {
+	t.Helper()
+	sb := pigruntimetest.NewSandbox(t)
+	models := `{"providers":{"kopi-search":{"baseUrl":"http://127.0.0.1:1","api":"openai-responses","apiKey":"synthetic-key","models":[{"id":"search-1"}]}}}`
+	require.NoError(t, os.WriteFile(filepath.Join(sb.AgentDir, "models.json"), []byte(models), 0o600))
+	return sb
+}
+
+func TestWebSearchIsOfferedForASearchingSmallModel(t *testing.T) {
+	h := newHarness(t, searchSandbox(t), Config{SmallModel: "kopi-search/search-1"})
+	assert.Equal(t, []string{"WebSearch"}, toolNames(h.c.tools))
+}
+
+func TestWebSearchIsAbsentForANonSearchingModel(t *testing.T) {
+	h := newHarness(t, searchSandbox(t), Config{})
+	assert.Empty(t, toolNames(h.c.tools))
+}
+
+func TestWebSearchIsAbsentWhenRulesRemoveIt(t *testing.T) {
+	sb := searchSandbox(t)
+	rules, err := policy.NewRules(sb.Workspace, sb.Home, map[string]policy.ToolSpec{"WebSearch": {}}, policy.Source{Name: "test", Deny: []string{"WebSearch"}})
+	require.NoError(t, err)
+
+	h := newHarness(t, sb, Config{SmallModel: "kopi-search/search-1", Rules: rules})
+
+	assert.Empty(t, toolNames(h.c.tools))
 }
 
 func serverTool(name string) tool.Tool {

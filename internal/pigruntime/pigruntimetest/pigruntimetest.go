@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -61,6 +62,21 @@ func RestoreEnv(t testing.TB) {
 			require.NoError(t, os.Unsetenv(k))
 		}
 	})
+}
+
+// ClearEnv unsets every environment variable for t but the ones the OS needs
+// for temporary files, so that no ambient credential makes a provider usable.
+// Call it before NewSandbox, which sets HOME and PATH.
+func ClearEnv(t testing.TB) {
+	t.Helper()
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if slices.Contains([]string{"TMPDIR", "TMP", "TEMP", "SystemRoot"}, k) {
+			continue
+		}
+		t.Setenv(k, "") // registers restoration of the original value
+		require.NoError(t, os.Unsetenv(k))
+	}
 }
 
 func pigEnv() []string {

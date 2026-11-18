@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -123,19 +124,20 @@ func (c *Controller) loginCommand(ctx context.Context, provider string) error {
 }
 
 func (c *Controller) modelProvider() string {
-	provider, _, _ := strings.Cut(c.cfg.Model, "/")
+	provider, _, _ := strings.Cut(c.Model(), "/")
 	return provider
 }
 
-// withLoginHint is err, a missing credential of the session model's provider,
-// pointing at /login.
+// withLoginHint is err, a missing credential of the session model's provider
+// or, with no model yet, of every provider, pointing at /login.
 func (c *Controller) withLoginHint(err error) error {
-	return fmt.Errorf("%w: run /login %s", err, c.modelProvider())
+	provider := cmp.Or(c.modelProvider(), "<provider>")
+	return fmt.Errorf("%w: run /login %s", err, provider)
 }
 
 // canLoginFirst reports whether err, the check's error, is only that the
 // session model's provider has no credential, that provider offers a login and
-// a human can run it.
+// a human can run it. With no model yet, any provider offering a login will do.
 func (c *Controller) canLoginFirst(ctx context.Context, err error) bool {
 	if c.cfg.Unattended || !errors.Is(err, pigruntime.ErrNoCredential) {
 		return false
@@ -146,12 +148,13 @@ func (c *Controller) canLoginFirst(ctx context.Context, err error) bool {
 	}
 	provider := c.modelProvider()
 	return slices.ContainsFunc(providers, func(p pigruntime.Provider) bool {
-		return p.ID == provider && len(LoginMethods(p)) > 0
+		return (provider == "" || p.ID == provider) && len(LoginMethods(p)) > 0
 	})
 }
 
-// loginFirst starts the login of the session model's provider for the first
-// open req, which Start put off. missing is the Error reported when the login
+// loginFirst starts the login of the session model's provider, or of one the
+// human picks when there is no model yet, for the first open req, which Start
+// put off. missing is the Error reported when the login
 // does not end in a session.
 func (c *Controller) loginFirst(ctx context.Context, req OpenRequest, missing error) error {
 	run, ctx, err := c.beginLogin(ctx, c.modelProvider())
@@ -174,7 +177,15 @@ func (c *Controller) loginTask(run *loginRun, ctx context.Context, missing error
 	defer close(run.done)
 	defer run.cancel()
 	defer c.endLogin()
-	notice, err := c.runLogin(ctx, run.provider)
+	provider := run.provider
+	var notice string
+	var err error
+	if provider == "" {
+		provider, err = c.chooseProvider(ctx)
+	}
+	if err == nil {
+		notice, err = c.runLogin(ctx, provider)
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			c.relay.emit(event.Notice{Text: "Login cancelled."})
@@ -186,7 +197,7 @@ func (c *Controller) loginTask(run *loginRun, ctx context.Context, missing error
 		}
 		return
 	}
-	notices := []event.Event{event.Notice{Text: fmt.Sprintf("Logged in to %s.", run.provider)}}
+	notices := []event.Event{event.Notice{Text: fmt.Sprintf("Logged in to %s.", provider)}}
 	if notice != "" {
 		notices = append(notices, event.Notice{Text: notice})
 	}
@@ -195,7 +206,9 @@ func (c *Controller) loginTask(run *loginRun, ctx context.Context, missing error
 	c.mu.Unlock()
 	if req != nil {
 		// The open reports the notices itself: its SessionChanged wipes the transcript.
-		err = c.check(context.WithoutCancel(ctx), *req)
+		var chosen []event.Event
+		chosen, err = c.checkResolved(context.WithoutCancel(ctx), *req)
+		notices = append(notices, chosen...)
 		if err == nil {
 			err = c.startFirst(ctx, *req, notices)
 			if err == nil {
@@ -218,6 +231,27 @@ func (c *Controller) loginTask(run *loginRun, ctx context.Context, missing error
 		}
 		c.relay.emit(event.Error{Err: err})
 	}
+}
+
+// chooseProvider asks which provider to log in to, among those that offer a
+// login.
+func (c *Controller) chooseProvider(ctx context.Context) (string, error) {
+	candidates, err := c.loginCandidates()
+	if err != nil {
+		return "", err
+	}
+	prompt := pigruntime.LoginPrompt{Message: "Log in to a provider:"}
+	for _, cand := range candidates {
+		prompt.Options = append(prompt.Options, pigruntime.LoginOption{ID: cand.Value, Label: cand.Value, Description: cand.Description})
+	}
+	answer, err := c.askLogin(ctx, "", prompt)
+	if err != nil {
+		return "", err
+	}
+	if !slices.ContainsFunc(prompt.Options, func(o pigruntime.LoginOption) bool { return o.ID == answer }) {
+		return "", fmt.Errorf("failed to choose a provider: %q is not one of the providers", answer)
+	}
+	return answer, nil
 }
 
 // endLogin deregisters the login and wakes the model for the notices that

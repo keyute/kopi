@@ -116,6 +116,12 @@ func TestStatusLineShowsCwdUnderHome(t *testing.T) {
 	assert.Empty(t, strings.TrimSpace(statusLine(statusInput{}, layout, 40, th)))
 }
 
+func TestStatusLineHidesAnEmptyModel(t *testing.T) {
+	th := mocha()
+	got := statusLine(statusInput{Status: app.Status{Branch: "main"}}, statusLayout{left: []string{"model", "branch"}, separator: " | "}, 20, th)
+	assert.Equal(t, "  main", strings.TrimRight(ansi.Strip(got), " "))
+}
+
 func TestStatusLineSeparator(t *testing.T) {
 	th := mocha()
 	in := statusInput{Status: app.Status{Model: "a/b", Branch: "main"}}

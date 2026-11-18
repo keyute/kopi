@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -89,6 +90,19 @@ func restorePigEnv(t *testing.T) {
 			require.NoError(t, os.Unsetenv(k))
 		}
 	})
+}
+
+// clearEnv mirrors pigruntimetest.ClearEnv, which this package cannot import.
+func clearEnv(t *testing.T) {
+	t.Helper()
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if slices.Contains([]string{"TMPDIR", "TMP", "TEMP", "SystemRoot"}, k) {
+			continue
+		}
+		t.Setenv(k, "") // registers restoration of the original value
+		require.NoError(t, os.Unsetenv(k))
+	}
 }
 
 func pigEnv() []string {
@@ -588,6 +602,44 @@ func TestOpenWithoutCredentialFails(t *testing.T) {
 	_, err := r.Open(t.Context(), OpenOptions{Model: "openai-codex/" + model.ID, Authority: policy.NewAuthority()})
 	require.ErrorIs(t, err, ErrNoCredential)
 	assert.Contains(t, err.Error(), "openai-codex")
+}
+
+func TestDefaultModelChoosesProviderWithCredential(t *testing.T) {
+	clearEnv(t)
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	before := snapshot(t, sb.home, sb.kopiHome, sb.ws)
+
+	model, err := r.DefaultModel(t.Context())
+
+	require.NoError(t, err)
+	assert.Equal(t, fauxModel, model)
+	assert.Equal(t, before, snapshot(t, sb.home, sb.kopiHome, sb.ws))
+}
+
+func TestDefaultModelWithoutCredentialFails(t *testing.T) {
+	clearEnv(t)
+	sb := newSandbox(t)
+	r, err := New(t.Context(), Options{Home: sb.kopiHome, AgentDir: sb.agentDir, CWD: sb.ws})
+	require.NoError(t, err)
+	t.Cleanup(r.Close)
+
+	_, err = r.DefaultModel(t.Context())
+
+	require.ErrorIs(t, err, ErrNoCredential)
+}
+
+func TestOpenWorksAfterDefaultModel(t *testing.T) {
+	clearEnv(t)
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+
+	model, err := r.DefaultModel(t.Context())
+	require.NoError(t, err)
+
+	s, err := r.Open(t.Context(), OpenOptions{Model: model, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	require.NoError(t, s.Close(t.Context()))
 }
 
 func TestOpenRejectsResumeWithContinue(t *testing.T) {

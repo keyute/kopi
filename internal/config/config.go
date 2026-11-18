@@ -33,7 +33,7 @@ const delim = "."
 // be secrets; Entries never prints them, and prints every other value verbatim.
 type Config struct {
 	Version    int    `koanf:"version"`
-	Model      string `koanf:"model"`      // "provider/id"; empty means not configured (there is no default model)
+	Model      string `koanf:"model"`      // "provider/id"; empty means the default model of a provider with a credential
 	SmallModel string `koanf:"smallModel"` // "provider/id"; empty means model
 	// Mode is the mode sessions start in, plan or execute.
 	Mode string `koanf:"mode"`

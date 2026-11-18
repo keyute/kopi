@@ -103,13 +103,28 @@ func TestHelpVersionAndConfigCreateNothing(t *testing.T) {
 	}
 }
 
-func TestRootWithoutModelFails(t *testing.T) {
+func TestRootPrintsWithUnsetModelAndSavesNothing(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+
+	stdout, _, err := execute(t, "", "-p", "hi")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok\n", stdout)
+	assert.Equal(t, "mock-1", server.next(t).body["model"])
+	assert.NoFileExists(t, filepath.Join(e.kopiHome, "config.json"))
+}
+
+func TestRootWithoutModelAndCredentialFails(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
 	newTestEnv(t)
 
-	_, _, err := execute(t, "")
+	_, _, err := execute(t, "", "-p", "hi")
 
-	require.ErrorIs(t, err, config.ErrNoModel)
-	assert.Contains(t, err.Error(), "--model")
+	require.Error(t, err)
+	assert.Equal(t, `no credential for any provider: run "kopi login" to list the providers that offer login, or set a provider's API key in the environment`, err.Error())
 }
 
 func TestRootRejectsContinueWithResume(t *testing.T) {
@@ -460,6 +475,12 @@ func TestRootWithoutCredentialSuggestsLoginOrAPIKey(t *testing.T) {
 		require.Error(t, err)
 		assert.Equal(t, fmt.Sprintf(`no credential for provider %q: run "kopi login %s" or set its API key in the environment`, provider, provider), err.Error())
 	}
+}
+
+func TestDiagnoseWithoutModelOrCredential(t *testing.T) {
+	err := diagnose(fmt.Errorf("failed to choose a model: %w for any provider", pigruntime.ErrNoCredential), "", "", config.Paths{}, app.OpenRequest{}, nil)
+
+	assert.Equal(t, `no credential for any provider: run "kopi login" to list the providers that offer login, or set a provider's API key in the environment`, err.Error())
 }
 
 func TestDiagnoseProviderWithoutLogin(t *testing.T) {

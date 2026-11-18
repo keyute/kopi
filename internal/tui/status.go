@@ -33,7 +33,7 @@ type segment func(statusInput, theme) (string, bool)
 // segments is keyed by the config's status segment names.
 var segments = map[string]segment{
 	"model": func(s statusInput, th theme) (string, bool) {
-		return fg(th.accent).Render(modelID(s.Model)), true
+		return fg(th.accent).Render(modelID(s.Model)), s.Model != ""
 	},
 	"context": func(s statusInput, th theme) (string, bool) {
 		if s.ContextWindow <= 0 {
