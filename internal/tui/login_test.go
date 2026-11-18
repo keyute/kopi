@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -85,6 +86,72 @@ func TestLoginRowsKeepTheSelectionBetweenRules(t *testing.T) {
 		d.key(key, &km)
 		rows := plainRows(loginRows(d, 40, 3, 5, mocha()))
 		assert.Contains(t, strings.Join(rows, "\n"), fmt.Sprintf("❭ %d. Method %d", d.sel+1, d.sel+1))
+	}
+}
+
+func TestLoginRowsPinTheTitleAndWindowALongChoice(t *testing.T) {
+	km := newKeyMap(config.DefaultKeys())
+	ev := event.LoginRequested{Message: "Choose a provider"}
+	for i := range 40 {
+		ev.Options = append(ev.Options, event.LoginOption{Label: fmt.Sprintf("Provider %d", i+1)})
+	}
+	d := newLoginDialog(ev, &km, mocha())
+	for _, sel := range []int{0, 20, 39, 7} {
+		d.move(sel)
+		for _, height := range []int{3, 4, 5, 6, 9, 20} {
+			rows := plainRows(loginRows(d, 40, 3, height, mocha()))
+			require.LessOrEqual(t, len(rows), height)
+			assert.Equal(t, rule40, rows[0])
+			assert.Equal(t, rule40, rows[len(rows)-1])
+			assert.Contains(t, rows, fmt.Sprintf("❭ %d. Provider %d", sel+1, sel+1))
+			if height == 3 {
+				assert.Len(t, rows, 3)
+				assert.NotContains(t, rows, "  "+fmt.Sprintf("%d of 40", sel+1))
+			} else {
+				assert.Contains(t, rows, fmt.Sprintf("  %d of 40", sel+1))
+			}
+			assert.Empty(t, d.areas)
+			if height >= 5 {
+				assert.Equal(t, "  Choose a provider", rows[1])
+			}
+		}
+	}
+}
+
+func TestLoginRowsWindowIsContiguousAndCentredOnTheSelection(t *testing.T) {
+	km := newKeyMap(config.DefaultKeys())
+	ev := event.LoginRequested{Message: "Choose a provider"}
+	for i := range 40 {
+		ev.Options = append(ev.Options, event.LoginOption{Label: fmt.Sprintf("Provider %d", i+1)})
+	}
+	d := newLoginDialog(ev, &km, mocha())
+	d.move(20)
+
+	rows := plainRows(loginRows(d, 40, 3, 9, mocha()))
+
+	assert.Equal(t, []string{
+		rule40,
+		"  Choose a provider",
+		"",
+		"  19. Provider 19",
+		"  20. Provider 20",
+		"❭ 21. Provider 21",
+		"  22. Provider 22",
+		"  21 of 40",
+		rule40,
+	}, rows)
+}
+
+func TestLoginRowsTruncatePositionRowToWidth(t *testing.T) {
+	km := newKeyMap(config.DefaultKeys())
+	ev := event.LoginRequested{Message: "Choose a provider"}
+	for i := range 40 {
+		ev.Options = append(ev.Options, event.LoginOption{Label: fmt.Sprintf("Provider %d", i+1)})
+	}
+	d := newLoginDialog(ev, &km, mocha())
+
+	for _, row := range loginRows(d, 5, 3, 9, mocha()) {
+		assert.LessOrEqual(t, ansi.StringWidth(row), 5)
 	}
 }
 

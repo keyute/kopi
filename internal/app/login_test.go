@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -429,4 +430,151 @@ func TestFirstRunLoginDoesNotRetryAnOpenThatStarted(t *testing.T) {
 
 	assert.Equal(t, int32(1), calls.Load())
 	assert.Empty(t, h.c.Status().SessionID)
+}
+
+// unsetLoginHarness is an unset-model harness with a login provider and a
+// channel of every event delivered after it.
+func unsetLoginHarness(t *testing.T, cfg Config, withFaux bool) *loginHarness {
+	t.Helper()
+	h := newUnsetHarness(t, cfg, withFaux)
+	pigruntimetest.RegisterLoginProvider(t, h.c.rt, loginProvider)
+	lh := &loginHarness{harness: h, events: make(chan event.Event, 64)}
+	h.c.Subscribe(func(ev event.Event) { lh.events <- ev })
+	return lh
+}
+
+func (h *loginHarness) request(t *testing.T) event.LoginRequested {
+	t.Helper()
+	return h.next(t, func(ev event.Event) bool { _, ok := ev.(event.LoginRequested); return ok }).(event.LoginRequested)
+}
+
+const usingLogin = `Using kopi-login/login-1. Set "model" in /kopi/config.json to choose another.`
+
+func TestStartUnsetModelWithCredentialOpensAndReportsNotice(t *testing.T) {
+	h := unsetLoginHarness(t, Config{}, true)
+
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+
+	h.next(t, func(ev event.Event) bool { _, ok := ev.(event.SessionChanged); return ok })
+	h.notice(t, `Using kopi-faux/faux-1. Set "model" in /kopi/config.json to choose another.`)
+	assert.Nil(t, h.loginRun())
+	assert.Equal(t, "kopi-faux/faux-1", h.c.Status().Model)
+}
+
+func TestStartUnsetModelAsksWhichProviderThenOpens(t *testing.T) {
+	h := unsetLoginHarness(t, Config{}, false)
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	run := h.loginRun()
+	require.NotNil(t, run)
+
+	pick := h.request(t)
+
+	assert.Empty(t, pick.Provider)
+	assert.Equal(t, "Log in to a provider:", pick.Message)
+	assert.True(t, slices.IsSortedFunc(pick.Options, func(a, b event.LoginOption) int { return strings.Compare(a.ID, b.ID) }))
+	i := slices.IndexFunc(pick.Options, func(o event.LoginOption) bool { return o.ID == loginProvider })
+	require.GreaterOrEqual(t, i, 0)
+	assert.Equal(t, event.LoginOption{ID: loginProvider, Label: loginProvider, Description: "Test sign-in"}, pick.Options[i])
+
+	require.True(t, h.c.AnswerLogin(pick.Token, loginProvider))
+	code := h.request(t)
+	assert.Equal(t, loginProvider, code.Provider)
+	require.True(t, h.c.AnswerLogin(code.Token, "synthetic-code"))
+
+	h.next(t, func(ev event.Event) bool { _, ok := ev.(event.SessionChanged); return ok })
+	h.notice(t, "Logged in to "+loginProvider+".")
+	h.notice(t, usingLogin)
+	wait(t, run.done)
+	assert.Equal(t, "kopi-login/login-1", h.c.Status().Model)
+	assert.Empty(t, ofType[event.Error](h.rec.all()))
+}
+
+func TestStartUnsetModelFailsOnAnAnswerThatIsNoProvider(t *testing.T) {
+	h := unsetLoginHarness(t, Config{}, false)
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	run := h.loginRun()
+	require.NotNil(t, run)
+	pick := h.request(t)
+
+	require.True(t, h.c.AnswerLogin(pick.Token, "nope"))
+
+	isError := func(ev event.Event) bool { _, ok := ev.(event.Error); return ok }
+	cause := h.next(t, isError).(event.Error)
+	assert.ErrorIs(t, cause.Err, pigruntime.ErrUnknownProvider)
+	missing := h.next(t, isError).(event.Error)
+	assert.ErrorIs(t, missing.Err, pigruntime.ErrNoCredential)
+	assert.ErrorContains(t, missing.Err, "run /login <provider>")
+	wait(t, run.done)
+}
+
+func TestUnsetModelInterruptAtThePickThenLoginOpens(t *testing.T) {
+	h := unsetLoginHarness(t, Config{}, false)
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	run := h.loginRun()
+	require.NotNil(t, run)
+	h.request(t)
+
+	assert.True(t, h.c.Interrupt())
+
+	h.notice(t, "Login cancelled.")
+	ev := h.next(t, func(ev event.Event) bool { _, ok := ev.(event.Error); return ok }).(event.Error)
+	assert.ErrorIs(t, ev.Err, pigruntime.ErrNoCredential)
+	assert.ErrorContains(t, ev.Err, "run /login <provider>")
+	wait(t, run.done)
+	assert.Empty(t, h.c.Status().SessionID)
+
+	run, req := h.startLogin(t)
+	require.True(t, h.c.AnswerLogin(req.Token, "synthetic-code"))
+	h.next(t, func(ev event.Event) bool { _, ok := ev.(event.SessionChanged); return ok })
+	h.notice(t, usingLogin)
+	wait(t, run.done)
+	assert.NotEmpty(t, h.c.Status().SessionID)
+}
+
+func TestStartUnsetModelUnattendedKeepsMissingCredentialError(t *testing.T) {
+	h := unsetLoginHarness(t, Config{Unattended: true}, false)
+
+	require.ErrorIs(t, h.c.Start(t.Context(), OpenRequest{}), pigruntime.ErrNoCredential)
+	assert.Nil(t, h.loginRun())
+}
+
+func TestUnsetModelNewAfterCancelledPickReportsMissingCredential(t *testing.T) {
+	h := unsetLoginHarness(t, Config{}, false)
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	run := h.loginRun()
+	require.NotNil(t, run)
+	h.request(t)
+	assert.True(t, h.c.Interrupt())
+	wait(t, run.done)
+
+	err := h.c.NewSession(t.Context())
+
+	require.ErrorIs(t, err, pigruntime.ErrNoCredential)
+	assert.ErrorContains(t, err, "run /login <provider>")
+	assert.NotContains(t, err.Error(), "unknown model")
+}
+
+func TestUnsetModelNewAfterCancelledPickOffersWebSearch(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	sb := pigruntimetest.NewSandbox(t)
+	rt := pigruntimetest.NewRuntime(t, sb)
+	pigruntimetest.RegisterLoginProvider(t, rt, loginProvider)
+	lh := &loginHarness{harness: buildHarness(t, rt, nil, sb, Config{ConfigFile: "/kopi/config.json"}), events: make(chan event.Event, 64)}
+	lh.c.Subscribe(func(ev event.Event) { lh.events <- ev })
+	require.NoError(t, lh.c.Start(t.Context(), OpenRequest{}))
+	run := lh.loginRun()
+	require.NotNil(t, run)
+	lh.request(t)
+	assert.True(t, lh.c.Interrupt())
+	wait(t, run.done)
+	require.Empty(t, toolNames(lh.c.tools))
+
+	t.Setenv("OPENAI_API_KEY", "synthetic-key")
+	require.NoError(t, lh.c.NewSession(t.Context()))
+
+	lh.next(t, func(ev event.Event) bool {
+		n, ok := ev.(event.Notice)
+		return ok && strings.HasPrefix(n.Text, "Using openai/")
+	})
+	assert.Equal(t, []string{"WebSearch"}, toolNames(lh.c.tools))
 }

@@ -99,10 +99,10 @@ The fullscreen interface asks before a call that needs approval.
 ```
 
 - `classifier.enabled` (default `false`) has the classifier review calls that would otherwise ask, in both modes.
-- `classifier.model` (`provider/id`) is the model that reviews; unset, it is `model`.
+- `classifier.model` (`provider/id`) is the model that reviews; unset, it is the session model.
   - A value that is not `provider/id` fails at start.
   - When the classifier is enabled, an unknown model or one whose provider has no credential also fails at start.
-  - In the fullscreen interface, a `classifier.model` that shares `model`'s provider without a credential gets the first-run login instead when that provider offers a sign-in or an API key.
+  - In the fullscreen interface, a `classifier.model` that shares the provider of a configured `model` without a credential gets the first-run login instead when that provider offers a sign-in or an API key.
 - `classifier.instructions` lists your own rules for the classifier, added after Kopi's. A blank entry is rejected at start. A later layer's list replaces an earlier one's whole.
 
 Behaviour with `classifier.enabled`:

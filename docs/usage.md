@@ -3,14 +3,15 @@
 ## Running
 
 ```sh
-bin/kopi --model provider/id
-bin/kopi --model provider/id -c    # continue the latest session in this directory
-bin/kopi --model provider/id -r <id>
-bin/kopi --model provider/id -p "explain main.go"
-bin/kopi --model provider/id --mode execute --allowed-tools "Edit(docs/**)" -p "fix the typos in docs"
-git diff | bin/kopi --model provider/id -p "review this"
+bin/kopi
+bin/kopi -c    # continue the latest session in this directory
+bin/kopi -r <id>
+bin/kopi -p "explain main.go"
+bin/kopi --mode execute --allowed-tools "Edit(docs/**)" -p "fix the typos in docs"
+git diff | bin/kopi -p "review this"
 ```
 
+- `--model provider/id` picks the model for one run; see [`model`](configuration.md#model).
 - With stdin and stdout both terminals and no `-p`, Kopi opens the fullscreen interface; otherwise it prints the response to one prompt and exits.
 - The prompt is the argument, piped stdin, or both (stdin, a blank line, then the argument).
 - A prompt is always sent as a prompt, never run as a command; a [skill](skills.md) it names is loaded.

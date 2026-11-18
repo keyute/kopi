@@ -298,6 +298,50 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	return &Session{inner: sess}, nil
 }
 
+// DefaultModel returns the "provider/id" a session uses when none is
+// configured. It fails wrapping ErrNoCredential when no provider has a
+// credential.
+//
+// PiG chooses its default model only when a session is created without one,
+// and keeps its list internal, so a throwaway in-memory session with no model,
+// no tools and no resources is created to read it. It is never prompted and
+// writes nothing; the runtime's own services stay open.
+func (r *Runtime) DefaultModel(ctx context.Context) (string, error) {
+	// PiG chooses from the availability it last published, which may predate
+	// the credentials; a full pass first makes the choice follow them.
+	if _, err := r.svcs.ModelRuntime().GetAvailable(ctx); err != nil {
+		return "", fmt.Errorf("failed to choose a model: %w", reword(err))
+	}
+	sm, err := coding.NewInMemorySessionManager(r.svcs.CWD())
+	if err != nil {
+		return "", fmt.Errorf("failed to choose a model: %w", reword(err))
+	}
+	res, err := coding.CreateAgentSession(coding.CreateAgentSessionOptions{
+		CWD:             r.svcs.CWD(),
+		AgentDir:        r.svcs.AgentDir(),
+		ModelRuntime:    r.svcs.ModelRuntime(),
+		SettingsManager: r.svcs.SettingsManager(),
+		ResourceLoader:  coding.NoResources,
+		SessionManager:  sm,
+		NoTools:         "all",
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to choose a model: %w", reword(err))
+	}
+	defer func() {
+		if err := res.Session.Close(); err != nil {
+			slog.Warn("failed to close the session that reads the default model", "error", err)
+		}
+	}()
+	// PiG reports a fallback message exactly when it chose no model, leaving
+	// a placeholder model in the session.
+	if res.ModelFallbackMessage != "" {
+		return "", fmt.Errorf("failed to choose a model: %w for any provider", ErrNoCredential)
+	}
+	model := res.Session.Model()
+	return model.ProviderMeta.ProviderID + "/" + model.ID, nil
+}
+
 // newChild starts a new session that has an extension runner of its own.
 // Runtime.New would hand it the runtime's single extension runner, which every
 // session started through the runtime rebinds in NewSession; that write races

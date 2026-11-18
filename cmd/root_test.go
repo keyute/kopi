@@ -103,13 +103,28 @@ func TestHelpVersionAndConfigCreateNothing(t *testing.T) {
 	}
 }
 
-func TestRootWithoutModelFails(t *testing.T) {
+func TestRootPrintsWithUnsetModelAndSavesNothing(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+
+	stdout, _, err := execute(t, "", "-p", "hi")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok\n", stdout)
+	assert.Equal(t, "mock-1", server.next(t).body["model"])
+	assert.NoFileExists(t, filepath.Join(e.kopiHome, "config.json"))
+}
+
+func TestRootWithoutModelAndCredentialFails(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
 	newTestEnv(t)
 
-	_, _, err := execute(t, "")
+	_, _, err := execute(t, "", "-p", "hi")
 
-	require.ErrorIs(t, err, config.ErrNoModel)
-	assert.Contains(t, err.Error(), "--model")
+	require.Error(t, err)
+	assert.Equal(t, `no credential for any provider: run "kopi login" to list the providers that offer login, or set a provider's API key in the environment`, err.Error())
 }
 
 func TestRootRejectsContinueWithResume(t *testing.T) {
@@ -605,6 +620,7 @@ func TestSameProviderNoCredential(t *testing.T) {
 		{name: "same provider", err: noCredential, model: "a/m1", sub: "a/m2", want: true},
 		{name: "other provider", err: noCredential, model: "a/m1", sub: "b/m2"},
 		{name: "other error", err: pigruntime.ErrUnknownModel, model: "a/m1", sub: "a/m2"},
+		{name: "unset model", err: noCredential, model: "", sub: "a/m2", want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, sameProviderNoCredential(tc.err, tc.model, tc.sub))
@@ -642,6 +658,12 @@ func TestRootWithoutCredentialSuggestsLoginOrAPIKey(t *testing.T) {
 		require.Error(t, err)
 		assert.Equal(t, fmt.Sprintf(`no credential for provider %q: run "kopi login %s" or set its API key in the environment`, provider, provider), err.Error())
 	}
+}
+
+func TestDiagnoseWithoutModelOrCredential(t *testing.T) {
+	err := diagnose(fmt.Errorf("failed to choose a model: %w for any provider", pigruntime.ErrNoCredential), "", "", config.Paths{}, app.OpenRequest{}, nil)
+
+	assert.Equal(t, `no credential for any provider: run "kopi login" to list the providers that offer login, or set a provider's API key in the environment`, err.Error())
 }
 
 func TestDiagnoseProviderWithoutLogin(t *testing.T) {
@@ -1363,6 +1385,48 @@ func TestRootClassifierAllowRunsBashThatPrintModeWouldDeny(t *testing.T) {
 
 	server.next(t)
 	server.next(t)
+	var results []string
+	for _, m := range server.next(t).body["messages"].([]any) {
+		if msg := m.(map[string]any); msg["role"] == "tool" {
+			results = append(results, fmt.Sprint(msg["content"]))
+		}
+	}
+	require.Len(t, results, 1)
+	assert.Contains(t, results[0], "classified")
+	assert.NotContains(t, results[0], "needs approval")
+}
+
+func TestRootClassifierAllowRunsBashWithUnsetModel(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"sandbox":{"enabled":false},"classifier":{"enabled":true}}`)
+	var calls atomic.Int32
+	server := newMockProvider(t, func(w http.ResponseWriter) {
+		switch calls.Add(1) {
+		case 1:
+			streamBash(w, "echo classified")
+		case 2:
+			streamText(w, `{"decision":"allow","reason":"asked for"}`)
+		default:
+			streamText(w, "done")
+		}
+	})
+	e.writeMockModels(t, server.URL)
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := execute(t, "", "--mode", "execute", "-p", "run it")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for the print run to finish")
+	}
+
+	assert.Equal(t, "mock-1", server.next(t).body["model"])
+	assert.Equal(t, "mock-1", server.next(t).body["model"])
 	var results []string
 	for _, m := range server.next(t).body["messages"].([]any) {
 		if msg := m.(map[string]any); msg["role"] == "tool" {

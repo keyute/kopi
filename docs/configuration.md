@@ -26,7 +26,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | Key | Meaning |
 | --- | --- |
 | `version` | `1` |
-| `model` | `provider/id` of the model |
+| `model` | `provider/id` of the model, optional, see [`model`](#model) |
 | `mode` | Mode sessions start in, see [`mode`](#mode) |
 | `smallModel` | Model that answers `WebFetch` and `WebSearch`, see [`smallModel`](#smallmodel) |
 | `instructionFallbacks` | Fallback names for project instruction files, see [`instructionFallbacks`](#instructionfallbacks) |
@@ -39,6 +39,13 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `sandbox` | The OS sandbox `Bash` runs in, see [sandbox](sandbox.md#configuration) |
 | `mcpServers` | MCP servers, see [MCP](mcp.md) |
 
+## `model`
+
+- `provider/id` of the session model; `--model` overrides it.
+- Unset, each start uses the default model of a provider with a credential, environment credentials included. Nothing is saved, and a notice names the model and the config file to set it in.
+- With credentials for several providers, the default depends on the order the runtime prefers; set `model` to pin it.
+- With no credential at all, the fullscreen interface asks which provider to log in to, then opens the session; print mode fails with a hint to run `kopi login`. Start fails first, naming the provider, when `smallModel`, an enabled `classifier.model` or a [subagent](subagents.md) definition's `model` names a provider with no credential.
+
 ## `mode`
 
 `plan` (default) or `execute`: the mode sessions start in. See [modes](tools.md#modes).
@@ -46,9 +53,9 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 ## `smallModel`
 
 - `provider/id` of the model that answers `WebFetch` and `WebSearch` calls.
-- Unset, it is `model`, so set it to a cheaper model.
+- Unset, it is the session model, so set it to a cheaper model.
 - A wrong value, an unknown model or one whose provider has no credential fails at start.
-- In the fullscreen interface, a `smallModel` that shares `model`'s provider without a credential gets the first-run login instead when that provider offers a sign-in or an API key.
+- In the fullscreen interface, a `smallModel` that shares the provider of a configured `model` without a credential gets the first-run login instead when that provider offers a sign-in or an API key.
 
 ## `instructionFallbacks`
 

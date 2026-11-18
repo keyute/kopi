@@ -268,6 +268,30 @@ func TestChildWithoutModelUsesTheRootsModel(t *testing.T) {
 	assert.Contains(t, receive(t, requests).UserTexts[0], "completed: find it")
 }
 
+func TestSubagentsAreOfferedWebSearchForASearchingSmallModel(t *testing.T) {
+	plain, named := agentDef("plain"), agentDef("named")
+	named.Tools = []string{"Read"}
+	a := newAgentHarness(t, searchSandbox(t), Config{SmallModel: "kopi-search/search-1"}, plain, named)
+
+	assert.Equal(t, []string{"WebSearch"}, toolNames(a.c.agents[0].tools))
+	assert.Empty(t, a.c.agents[1].tools)
+}
+
+func TestChildWithoutModelRunsUnderTheResolvedDefaultModel(t *testing.T) {
+	def := agentDef("explorer")
+	def.Model = ""
+	h := newUnsetHarness(t, Config{Agents: []subagent.Definition{def}, Tasks: tool.NewTasks()}, true)
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	requests := make(chan pigruntimetest.Request, 2)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "final"), pigruntimetest.Capture(t, requests, "ack")})
+
+	_, err := h.c.launch(t.Context(), "explorer", "find it", "go")
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"go"}, receive(t, requests).UserTexts)
+	assert.Contains(t, receive(t, requests).UserTexts[0], "completed: find it")
+}
+
 func TestCompletionNoticeCarriesFullFinalMessageAndWakesRoot(t *testing.T) {
 	for _, wake := range []bool{false, true} {
 		t.Run(fmt.Sprintf("wake=%t", wake), func(t *testing.T) {

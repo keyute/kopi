@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"unicode/utf8"
 
@@ -35,7 +36,8 @@ func newLoginDialog(ev event.LoginRequested, km *keyMap, th theme) *dialog {
 }
 
 // loginRows draws d in place of the composer, within maxRows. On overflow,
-// both rules surround a window of the interior containing the selected label.
+// both rules surround a window of the interior containing the selected label;
+// a dialog of plain options keeps its title and shows a position row.
 func loginRows(d *dialog, width, maxFieldRows, maxRows int, th theme) []string {
 	if maxRows <= 0 {
 		return nil
@@ -51,6 +53,9 @@ func loginRows(d *dialog, width, maxFieldRows, maxRows int, th theme) []string {
 		}
 		return rows[:maxRows]
 	}
+	if d.options[0].field == nil {
+		return pinnedRows(d, rows, width, maxRows, th)
+	}
 	room := maxRows - 2
 	start := min(d.optionStarts[d.sel], len(rows)-1-room)
 	end := start + room
@@ -64,6 +69,29 @@ func loginRows(d *dialog, width, maxFieldRows, maxRows int, th theme) []string {
 	}
 	d.areas = areas
 	return append(append([]string{rows[0]}, rows[start:end]...), rows[len(rows)-1])
+}
+
+// pinnedRows is rows for a dialog of plain options within maxRows (3 or more):
+// the rows above the first option stay, then a window of option rows centred on
+// the selection, a dim position row as the menu draws one, and the bottom rule.
+// Fewer rows above the options stay, and no position row is drawn, when
+// maxRows leaves no room for them.
+func pinnedRows(d *dialog, rows []string, width, maxRows int, th theme) []string {
+	d.areas = nil
+	last := len(rows) - 1
+	pos := 0
+	if maxRows >= 4 {
+		pos = 1
+	}
+	head := rows[:max(1, min(d.optionStarts[0], maxRows-2-pos))]
+	room := maxRows - len(head) - 1 - pos
+	first := d.optionStarts[0]
+	start := min(max(d.optionStarts[d.sel]-room/2, first), max(first, last-room))
+	out := append(append([]string{}, head...), rows[start:min(start+room, last)]...)
+	if pos == 1 {
+		out = append(out, fg(th.dim).Render(ansi.Truncate(fmt.Sprintf("  %d of %d", d.sel+1, len(d.options)), width, "")))
+	}
+	return append(out, rows[last])
 }
 
 // clear empties every field, so an answered or ended prompt keeps no text.

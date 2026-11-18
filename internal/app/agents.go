@@ -32,9 +32,11 @@ type agentSpec struct {
 }
 
 // buildAgents computes the tools and prompt of each definition, in order.
-// serverTools and servers are the root's, already filtered by the rules.
-func (c *Controller) buildAgents(serverTools []tool.Tool, servers []mcpServer) []agentSpec {
-	base := slices.DeleteFunc(slices.Clone(c.cfg.AgentTools), func(t tool.Tool) bool {
+// extra are built-in tools created with the root's session tools rather than
+// in Config.AgentTools; serverTools and servers are the root's. All are
+// already filtered by the rules.
+func (c *Controller) buildAgents(extra, serverTools []tool.Tool, servers []mcpServer) []agentSpec {
+	base := slices.DeleteFunc(slices.Concat(c.cfg.AgentTools, extra), func(t tool.Tool) bool {
 		return c.cfg.Rules.Removes(t.Name) || slices.Contains(neverChild, t.Name)
 	})
 	var specs []agentSpec
@@ -205,7 +207,7 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 	}
 	model := spec.def.Model
 	if model == "" {
-		model = c.cfg.Model
+		model = c.Model()
 	}
 	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
 		Model:        model,
