@@ -59,6 +59,9 @@ type ApprovalRequested struct {
 	Review *policy.Review
 	// Edits reports that "allow all edits this session" may be offered.
 	Edits bool
+	// Agent names the subagent whose call this is, and TaskID is that call's
+	// background task; both are "" for the root session.
+	Agent, TaskID string
 }
 
 // ApprovalEnded follows every ApprovalRequested, whether it was answered or
@@ -113,8 +116,11 @@ type TurnEnd struct {
 }
 
 // TaskEnded is a background task's end, at the point the model reads about it.
+// Agent names the subagent that ran; it is "" for a shell command, whose
+// Command is the command. For an agent, Command is the call's description.
 type TaskEnded struct {
 	ID, Command, Status string
+	Agent               string
 	Elapsed             time.Duration
 }
 

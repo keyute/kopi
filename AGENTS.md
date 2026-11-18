@@ -19,9 +19,9 @@
 - Only `internal/pigruntime` (and tests) import `github.com/MichaelKinsy/PiG`; depguard enforces it.
 - `internal/pigruntime` may use PiG's `mcp` client packages and, from `coding/mcpext`, only what works without the extension: a server connection, OAuth credentials and sign-in, and result conversion. Never register the extension, load its config, or use its tool definitions, commands or prompt sections: they read PiG's `mcp.json` and run tools outside `Gate.Admit`.
 - Never import PiG `internal/` packages, never use `coding/cli`, never add a `replace` for PiG, and never copy upstream code.
-- Create every PiG session with every input explicit: agent dir, in-memory settings, `coding.NoResources`, the system prompt as sections, `SkipBuiltinTools`, and explicit tool names for both `AllowedTools` and `InitialActiveToolNames`. A nil there turns on ambient discovery, PiG's stock prompt or stock tools. Never name a prompt part `tools` or `rules`; PiG rewrites those.
+- Create every PiG session with every input explicit: agent dir, in-memory settings, `coding.NoResources`, the system prompt as sections, `SkipBuiltinTools`, and explicit tool names for both `AllowedTools` and `InitialActiveToolNames`. A nil there turns on ambient discovery, PiG's stock prompt or stock tools. The one exception is the session `Runtime.DefaultModel` creates only to read PiG's default model: in memory, no model, `coding.NoResources`, `NoTools: "all"`, never prompted, closed at once. Never name a prompt part `tools` or `rules`; PiG rewrites those.
 - Skills are loaded by a PiG resource loader that is never attached to a session and is created with every input explicit and the project untrusted; sessions keep `coding.NoResources`.
-- List sessions with `Runtime.ListSessions` and observe a session with `Subscribe`. Never call `Session.ListSessions` (it resolves PiG's default agent dir, not the runtime's) or `Session.Events` (an undrained channel stalls the agent loop).
+- List sessions with `Runtime.Sessions` and observe a session with `Subscribe`. Never call `Session.ListSessions` (it resolves PiG's default agent dir, not the runtime's) or `Session.Events` (an undrained channel stalls the agent loop).
 - A workaround for PiG behaviour lives in `internal/pigruntime` with a comment naming that behaviour. Recheck them when PiG is bumped.
 - `internal/pigruntime`'s exported API is stated in Kopi's terms; nothing exported may exist only because of how PiG works internally.
 
@@ -29,6 +29,7 @@
 
 - Every model-facing tool goes through `internal/policy`: `Gate.Before` in the pre-dispatch hook and `Gate.Admit` inside execution.
 - Skills load only from `$KOPI_HOME/skills`, `~/.agents/skills` and a trusted folder's `.agents/skills`; the `Skill` tool reads only a loaded skill's text and files inside the directory that skill was loaded from, and on every read refuses a file in Kopi's home outside `skills/`.
+- Subagent definitions load only from `$KOPI_HOME/agents`, once at startup. A subagent's session has its own gate over the same rules and shares the mode holder unless its definition pins plan mode. A subagent never gets `Agent`, `SendMessage`, `AskUserQuestion`, `TaskOutput` or `TaskStop`, and its `Bash` never backgrounds.
 - Only human control input changes mode. Sessions start and resume in the configured `mode` (default plan); `--mode` overrides the config file.
 - MCP servers start only from `mcpServers` in `config.json` and from a trusted folder's `.mcp.json`. Every MCP tool call asks unless a rule allows it or the opt-in classifier reviews an unmatched call; deny rules take precedence, and explicit and built-in ask rules always ask the human. A tool is Read only when its server marks it read-only.
 - `$KOPI_HOME/AGENTS.md` always loads. Project instruction files (`AGENTS.md`, else the first name in `instructionFallbacks`, one per directory from the git root down to the start directory) load only from a trusted folder.
@@ -47,6 +48,7 @@
 - What agents share in one format and place is read there, in that format: a project's `AGENTS.md`, `.agents/skills` and `~/.agents/skills`, `.mcp.json` and the `mcpServers` entry shape. Kopi's home holds only what has no shared place, such as the global `AGENTS.md`, or what only Kopi reads. A place is shared when most peers read it. Kopi adds no fields of its own to a shared format; its extras live in `config.json`.
 - A behaviour users reasonably set differently is a `config.json` key with its default in `config.Defaults()`. A flag that overrides a key is a config layer over the file, never a separate code path.
 - Add a key only for a setting someone needs to change, never to move mechanics out of the binary.
+- An unset `model` is PiG's default model for a provider with a credential, chosen at each start and never saved.
 - When it is unclear which side something is on, check what peer agents build in and follow the majority.
 
 ## Model-facing text

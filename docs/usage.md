@@ -3,14 +3,15 @@
 ## Running
 
 ```sh
-bin/kopi --model provider/id
-bin/kopi --model provider/id -c    # continue the latest session in this directory
-bin/kopi --model provider/id -r <id>
-bin/kopi --model provider/id -p "explain main.go"
-bin/kopi --model provider/id --mode execute --allowed-tools "Edit(docs/**)" -p "fix the typos in docs"
-git diff | bin/kopi --model provider/id -p "review this"
+bin/kopi
+bin/kopi -c    # continue the latest session in this directory
+bin/kopi -r <id>
+bin/kopi -p "explain main.go"
+bin/kopi --mode execute --allowed-tools "Edit(docs/**)" -p "fix the typos in docs"
+git diff | bin/kopi -p "review this"
 ```
 
+- `--model provider/id` picks the model for one run; see [`model`](configuration.md#model).
 - With stdin and stdout both terminals and no `-p`, Kopi opens the fullscreen interface; otherwise it prints the response to one prompt and exits.
 - The prompt is the argument, piped stdin, or both (stdin, a blank line, then the argument).
 - A prompt is always sent as a prompt, never run as a command; a [skill](skills.md) it names is loaded.
@@ -33,7 +34,7 @@ Commands in the fullscreen interface:
 | `/resume <id>` | Resume a session |
 | `/login <provider>` | Log in to a provider |
 | `/logout <provider>` | Remove a provider's stored credential |
-| `/tasks` | List background tasks, show one's output and stop it |
+| `/tasks` | List background tasks and [subagents](subagents.md), show one's output and stop it |
 | `/skill:<name>` | Load a skill with the prompt ([skills](skills.md)) |
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
@@ -49,7 +50,8 @@ Defaults; change them with [`keys`](configuration.md#keys).
 - Ctrl+Enter sends now: it stops the current response and continues the turn with the queued messages plus the draft.
 - Alt+Enter, Shift+Enter or Ctrl+J inserts a newline. Ctrl+Enter and Shift+Enter need a terminal that reports modified Enter.
 - Up at the top of the input pulls queued messages back into it for editing; with nothing queued it browses input history, and Down goes back.
-- Esc interrupts the running turn.
+- Esc interrupts the running turn, not running [subagents](subagents.md#use).
+- While the turn is idle and background tasks or subagents run, the row above the input reads `Waiting on 2 agents, 1 shell… 1m 5s`.
 - Ctrl+C interrupts the running turn, else clears the draft, else a second press within two seconds exits.
 - After an interrupt, queued messages return to the input; `/new`, `/resume` and exiting discard them.
 - Ctrl+D exits when the input is empty.

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -89,6 +90,19 @@ func restorePigEnv(t *testing.T) {
 			require.NoError(t, os.Unsetenv(k))
 		}
 	})
+}
+
+// clearEnv mirrors pigruntimetest.ClearEnv, which this package cannot import.
+func clearEnv(t *testing.T) {
+	t.Helper()
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if slices.Contains([]string{"TMPDIR", "TMP", "TEMP", "SystemRoot"}, k) {
+			continue
+		}
+		t.Setenv(k, "") // registers restoration of the original value
+		require.NoError(t, os.Unsetenv(k))
+	}
 }
 
 func pigEnv() []string {
@@ -590,6 +604,44 @@ func TestOpenWithoutCredentialFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "openai-codex")
 }
 
+func TestDefaultModelChoosesProviderWithCredential(t *testing.T) {
+	clearEnv(t)
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	before := snapshot(t, sb.home, sb.kopiHome, sb.ws)
+
+	model, err := r.DefaultModel(t.Context())
+
+	require.NoError(t, err)
+	assert.Equal(t, fauxModel, model)
+	assert.Equal(t, before, snapshot(t, sb.home, sb.kopiHome, sb.ws))
+}
+
+func TestDefaultModelWithoutCredentialFails(t *testing.T) {
+	clearEnv(t)
+	sb := newSandbox(t)
+	r, err := New(t.Context(), Options{Home: sb.kopiHome, AgentDir: sb.agentDir, CWD: sb.ws})
+	require.NoError(t, err)
+	t.Cleanup(r.Close)
+
+	_, err = r.DefaultModel(t.Context())
+
+	require.ErrorIs(t, err, ErrNoCredential)
+}
+
+func TestOpenWorksAfterDefaultModel(t *testing.T) {
+	clearEnv(t)
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+
+	model, err := r.DefaultModel(t.Context())
+	require.NoError(t, err)
+
+	s, err := r.Open(t.Context(), OpenOptions{Model: model, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	require.NoError(t, s.Close(t.Context()))
+}
+
 func TestOpenRejectsResumeWithContinue(t *testing.T) {
 	sb := newSandbox(t)
 	r, _ := newTestRuntime(t, sb)
@@ -1050,4 +1102,65 @@ func TestResumePromptRepairRetiresOnlyAfterCommit(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestOpenEffortReachesProviderRequest(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "faux-thinker", Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, r.RegisterProvider(thinker.Provider()))
+	levels := make(chan ai.ThinkingLevel, 1)
+	thinker.SetResponses([]ai.FauxResponseStep{
+		ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+			levels <- o.Thinking
+			return ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{}), nil
+		}),
+	})
+	sess, err := r.Open(t.Context(), OpenOptions{Model: "faux-thinker/thinker", Effort: LowEffort, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+	_, err = sess.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, ai.ThinkingLevelLow, <-levels)
+}
+
+func TestOpenWithParentSavesBesideParentUnlisted(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	parent := sendOnce(t, r, faux, "parent question", "parent answer")
+
+	faux.SetResponses([]ai.FauxResponseStep{reply("child answer")})
+	child, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, Parent: parent, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, child.Close(context.Background())) })
+	_, err = child.Send(t.Context(), Prompt{Text: "child question"}, nil, nil)
+	require.NoError(t, err)
+
+	parentFile := parent.inner.Path()
+	files, err := filepath.Glob(filepath.Join(filepath.Dir(parentFile), parent.ID(), "*.jsonl"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	assert.Equal(t, child.inner.Path(), files[0])
+
+	infos, err := r.Sessions()
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+	assert.Equal(t, parent.ID(), infos[0].ID)
+
+	fresh, _ := newTestRuntime(t, sb)
+	continued, err := fresh.Open(t.Context(), OpenOptions{Model: fauxModel, Continue: true, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, continued.Close(context.Background())) })
+	assert.Equal(t, parent.ID(), continued.ID())
+}
+
+func TestOpenRejectsParentWithResumeOrContinue(t *testing.T) {
+	r, faux := newTestRuntime(t, newSandbox(t))
+	parent := sendOnce(t, r, faux, "q", "a")
+	for _, o := range []OpenOptions{{ResumeID: parent.ID()}, {Continue: true}} {
+		o.Model, o.Parent, o.Authority = fauxModel, parent, policy.NewAuthority()
+		assert.ErrorIs(t, r.Check(t.Context(), o), ErrParentResume)
+		_, err := r.Open(t.Context(), o)
+		assert.ErrorIs(t, err, ErrParentResume)
+	}
+	assert.NoError(t, r.Check(t.Context(), OpenOptions{Model: fauxModel, Parent: parent, Effort: MaxEffort, Authority: policy.NewAuthority()}))
 }

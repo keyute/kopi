@@ -103,13 +103,28 @@ func TestHelpVersionAndConfigCreateNothing(t *testing.T) {
 	}
 }
 
-func TestRootWithoutModelFails(t *testing.T) {
+func TestRootPrintsWithUnsetModelAndSavesNothing(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+
+	stdout, _, err := execute(t, "", "-p", "hi")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok\n", stdout)
+	assert.Equal(t, "mock-1", server.next(t).body["model"])
+	assert.NoFileExists(t, filepath.Join(e.kopiHome, "config.json"))
+}
+
+func TestRootWithoutModelAndCredentialFails(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
 	newTestEnv(t)
 
-	_, _, err := execute(t, "")
+	_, _, err := execute(t, "", "-p", "hi")
 
-	require.ErrorIs(t, err, config.ErrNoModel)
-	assert.Contains(t, err.Error(), "--model")
+	require.Error(t, err)
+	assert.Equal(t, `no credential for any provider: run "kopi login" to list the providers that offer login, or set a provider's API key in the environment`, err.Error())
 }
 
 func TestRootRejectsContinueWithResume(t *testing.T) {
@@ -336,6 +351,188 @@ func toolNames(req mockRequest) []string {
 	return names
 }
 
+// writeAgent writes a subagent definition named "scout" under Kopi's home and
+// returns its path.
+func (e testEnv) writeAgent(t *testing.T, frontmatter string) string {
+	t.Helper()
+	path := filepath.Join(e.kopiHome, "agents", "scout.md")
+	e.writeFile(t, path, "---\nname: scout\ndescription: Looks around\n"+frontmatter+"---\n")
+	return path
+}
+
+func TestRootWithoutAgentsOffersNoAgentTool(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	tools := toolNames(server.next(t))
+	assert.NotContains(t, tools, "Agent")
+	assert.NotContains(t, tools, "SendMessage")
+}
+
+func TestRootOffersAgentToolForDefinition(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+	e.writeAgent(t, "model: "+mockModel+"\n")
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	req := server.next(t)
+	assert.Contains(t, toolNames(req), "Agent")
+	assert.Contains(t, toolNames(req), "SendMessage")
+	for _, tl := range req.body["tools"].([]any) {
+		fn := tl.(map[string]any)["function"].(map[string]any)
+		if fn["name"] == "Agent" {
+			assert.Contains(t, fn["description"], "scout")
+		}
+	}
+}
+
+// streamAgentCall answers with one Agent tool call for the subagent scout.
+func streamAgentCall(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	writeChunk(w, map[string]any{"role": "assistant", "content": ""}, nil)
+	args, _ := json.Marshal(map[string]any{"description": "look", "prompt": "look around", "subagent_type": "scout"})
+	writeChunk(w, map[string]any{"tool_calls": []any{map[string]any{
+		"index": 0, "id": "call_0", "type": "function",
+		"function": map[string]any{"name": "Agent", "arguments": string(args)},
+	}}}, nil)
+	writeChunk(w, map[string]any{}, "tool_calls")
+	fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
+func TestSubagentToolsNeverBackgroundOrDelegate(t *testing.T) {
+	e := newTestEnv(t)
+	var calls atomic.Int32
+	server := newMockProvider(t, func(w http.ResponseWriter) {
+		if calls.Add(1) == 1 {
+			streamAgentCall(w)
+			return
+		}
+		streamText(w, "ok")
+	})
+	e.writeMockModels(t, server.URL)
+	e.writeAgent(t, "")
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	var child mockRequest
+	for range 3 {
+		req := server.next(t)
+		if strings.Contains(fmt.Sprint(req.body["messages"].([]any)[0].(map[string]any)["content"]), "You are the subagent scout") {
+			child = req
+			break
+		}
+	}
+	require.NotNil(t, child.body, "the subagent made no request")
+	tools := toolNames(child)
+	for _, name := range []string{"Agent", "SendMessage", "TaskOutput", "TaskStop"} {
+		assert.NotContains(t, tools, name)
+	}
+	require.Contains(t, tools, "Bash")
+	for _, tl := range child.body["tools"].([]any) {
+		fn := tl.(map[string]any)["function"].(map[string]any)
+		if fn["name"] == "Bash" {
+			assert.NotContains(t, fn["parameters"].(map[string]any)["properties"], "run_in_background")
+		}
+	}
+}
+
+func TestRootRejectsInvalidAgentDefinition(t *testing.T) {
+	e := newTestEnv(t)
+	path := e.writeAgent(t, "color: red\n")
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), path)
+	assert.NoDirExists(t, e.agentDir)
+}
+
+func TestRootAgentModelFailsAtStart(t *testing.T) {
+	for _, model := range []string{"nosuch/model-1", "malformed"} {
+		t.Run(model, func(t *testing.T) {
+			e := newTestEnv(t)
+			server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
+			e.writeMockModels(t, server.URL)
+			path := e.writeAgent(t, "model: "+model+"\n")
+
+			_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), fmt.Sprintf("failed to use model %q in %s", model, path))
+			assert.Empty(t, server.requests)
+		})
+	}
+}
+
+func TestRootAgentModelWithoutCredentialFailsAtStart(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
+	e.writeMockModels(t, server.URL)
+	path := e.writeAgent(t, "model: "+builtinModel(t, "openai-codex")+"\n")
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "in "+path)
+	assert.Contains(t, err.Error(), `run "kopi login openai-codex"`)
+	assert.Empty(t, server.requests)
+}
+
+func TestRootAgentEffortFailsAtStart(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
+	e.writeMockModels(t, server.URL)
+	path := e.writeAgent(t, "effort: huge\n")
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.ErrorIs(t, err, pigruntime.ErrUnknownEffort)
+	assert.Contains(t, err.Error(), path)
+	assert.Empty(t, server.requests)
+}
+
+func TestRootAgentRules(t *testing.T) {
+	t.Run("accepted without definitions", func(t *testing.T) {
+		e := newTestEnv(t)
+		server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+		e.writeMockModels(t, server.URL)
+
+		_, _, err := execute(t, "", "--model", mockModel, "--disallowed-tools", "Agent,SendMessage", "-p", "hi")
+
+		require.NoError(t, err)
+	})
+	t.Run("deny removes the tools", func(t *testing.T) {
+		e := newTestEnv(t)
+		server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+		e.writeMockModels(t, server.URL)
+		e.writeAgent(t, "")
+
+		_, _, err := execute(t, "", "--model", mockModel, "--disallowed-tools", "Agent", "-p", "hi")
+
+		require.NoError(t, err)
+		tools := toolNames(server.next(t))
+		assert.NotContains(t, tools, "Agent")
+		assert.NotContains(t, tools, "SendMessage")
+	})
+	t.Run("path rejected", func(t *testing.T) {
+		e := newTestEnv(t)
+
+		_, _, err := execute(t, "", "--model", mockModel, "--allowed-tools", "Agent(x)", "-p", "hi")
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `tool "Agent" takes no path`)
+		assert.NoDirExists(t, e.agentDir)
+	})
+}
+
 func TestRootUnknownSmallModelFailsAtStart(t *testing.T) {
 	e := newTestEnv(t)
 	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
@@ -435,6 +632,7 @@ func TestSameProviderNoCredential(t *testing.T) {
 		{name: "same provider", err: noCredential, model: "a/m1", sub: "a/m2", want: true},
 		{name: "other provider", err: noCredential, model: "a/m1", sub: "b/m2"},
 		{name: "other error", err: pigruntime.ErrUnknownModel, model: "a/m1", sub: "a/m2"},
+		{name: "unset model", err: noCredential, model: "", sub: "a/m2", want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, sameProviderNoCredential(tc.err, tc.model, tc.sub))
@@ -472,6 +670,12 @@ func TestRootWithoutCredentialSuggestsLoginOrAPIKey(t *testing.T) {
 		require.Error(t, err)
 		assert.Equal(t, fmt.Sprintf(`no credential for provider %q: run "kopi login %s" or set its API key in the environment`, provider, provider), err.Error())
 	}
+}
+
+func TestDiagnoseWithoutModelOrCredential(t *testing.T) {
+	err := diagnose(fmt.Errorf("failed to choose a model: %w for any provider", pigruntime.ErrNoCredential), "", "", config.Paths{}, app.OpenRequest{}, nil)
+
+	assert.Equal(t, `no credential for any provider: run "kopi login" to list the providers that offer login, or set a provider's API key in the environment`, err.Error())
 }
 
 func TestDiagnoseProviderWithoutLogin(t *testing.T) {
@@ -1193,6 +1397,48 @@ func TestRootClassifierAllowRunsBashThatPrintModeWouldDeny(t *testing.T) {
 
 	server.next(t)
 	server.next(t)
+	var results []string
+	for _, m := range server.next(t).body["messages"].([]any) {
+		if msg := m.(map[string]any); msg["role"] == "tool" {
+			results = append(results, fmt.Sprint(msg["content"]))
+		}
+	}
+	require.Len(t, results, 1)
+	assert.Contains(t, results[0], "classified")
+	assert.NotContains(t, results[0], "needs approval")
+}
+
+func TestRootClassifierAllowRunsBashWithUnsetModel(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"sandbox":{"enabled":false},"classifier":{"enabled":true}}`)
+	var calls atomic.Int32
+	server := newMockProvider(t, func(w http.ResponseWriter) {
+		switch calls.Add(1) {
+		case 1:
+			streamBash(w, "echo classified")
+		case 2:
+			streamText(w, `{"decision":"allow","reason":"asked for"}`)
+		default:
+			streamText(w, "done")
+		}
+	})
+	e.writeMockModels(t, server.URL)
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := execute(t, "", "--mode", "execute", "-p", "run it")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for the print run to finish")
+	}
+
+	assert.Equal(t, "mock-1", server.next(t).body["model"])
+	assert.Equal(t, "mock-1", server.next(t).body["model"])
 	var results []string
 	for _, m := range server.next(t).body["messages"].([]any) {
 		if msg := m.(map[string]any); msg["role"] == "tool" {

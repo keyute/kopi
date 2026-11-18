@@ -16,7 +16,7 @@ func TestTaskStopDescribesItself(t *testing.T) {
 
 	assert.Equal(t, "TaskStop", tool.Name)
 	assert.Equal(t, "TaskStop", tool.Label)
-	assert.Equal(t, "Stops a running background task, killing its command and the processes it started.", tool.Description)
+	assert.Equal(t, "Stops a running background task, a command or a subagent; a command is killed with the processes it started.", tool.Description)
 	assert.Equal(t, []string{"task_id"}, tool.Parameters["required"])
 	assert.Equal(t, false, tool.Parameters["additionalProperties"])
 	assert.Contains(t, tool.Parameters["properties"], "task_id")
@@ -59,6 +59,28 @@ func TestTaskStopReportsEndedTask(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "Task t1 already completed (exit code 0).", out.Text)
+}
+
+func TestTaskStopStopsAgentTask(t *testing.T) {
+	tasks, _ := newTasks(t)
+	var agent *AgentTask
+	agent = tasks.StartAgent("explore", "find it", func() { agent.End(TaskCompleted, "", "late") })
+	tool := NewTaskStop(tasks)
+
+	out, err := tool.Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
+	require.NoError(t, err)
+	assert.Equal(t, "Task t1 stopped.", out.Text)
+
+	out, err = tool.Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
+	require.NoError(t, err)
+	assert.Equal(t, "Task t1 stopped.", out.Text)
+
+	done := startAgent(tasks, "again")
+	_, ok := done.End(TaskFailed, "boom", "")
+	require.True(t, ok)
+	out, err = tool.Run(t.Context(), json.RawMessage(`{"task_id":"t2"}`), allowTarget)
+	require.NoError(t, err)
+	assert.Equal(t, "Task t2 already failed (boom).", out.Text)
 }
 
 func TestTaskStopRefusesUnknownTask(t *testing.T) {

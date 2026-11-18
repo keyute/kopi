@@ -110,7 +110,11 @@ type OpenOptions struct {
 	// ResumeID resumes the session with exactly this id.
 	ResumeID string
 	// Continue resumes the most recent session of the workspace.
-	Continue     bool
+	Continue bool
+	// Effort is how much the model reasons; DefaultEffort keeps the model's default.
+	Effort Effort
+	// Parent is the session this one works for; the transcript is saved beside the parent's, where Sessions does not list it.
+	Parent       *Session
 	SystemPrompt []PromptPart
 	Tools        []tool.Tool
 	Authority    *policy.Authority
@@ -143,6 +147,9 @@ func (r *Runtime) Check(ctx context.Context, o OpenOptions) error {
 func (r *Runtime) check(ctx context.Context, o OpenOptions) (*ai.Model, error) {
 	if o.ResumeID != "" && o.Continue {
 		return nil, errors.New("failed to open session: resume id and continue are mutually exclusive")
+	}
+	if o.Parent != nil && (o.ResumeID != "" || o.Continue) {
+		return nil, fmt.Errorf("failed to open session: %w", ErrParentResume)
 	}
 	model, err := r.usableModel(ctx, o.Model)
 	switch {
@@ -206,9 +213,20 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 		AllowedTools:           allowed,
 		InitialActiveToolNames: names,
 		BeforeToolCall:         []agent.BeforeToolCallHook{beforeToolCall(gate)},
+		ThinkingLevel:          o.Effort.thinkingLevel(),
+	}
+	if o.Parent != nil {
+		// PiG lists, resumes and continues only the *.jsonl files directly in a
+		// session directory, so a transcript in a subdirectory is never listed,
+		// and PiG's public API cannot record a parent on a new session: the
+		// directory is the link.
+		parentFile := o.Parent.inner.Path()
+		start.SessionDir = filepath.Join(filepath.Dir(parentFile), o.Parent.ID())
 	}
 	var sess *coding.Session
 	switch {
+	case o.Parent != nil:
+		sess, err = r.newChild(start)
 	case o.ResumeID != "":
 		sess, err = r.rt.Resume(o.ResumeID, start)
 	case o.Continue:
@@ -278,6 +296,76 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 		})
 	}
 	return &Session{inner: sess}, nil
+}
+
+// DefaultModel returns the "provider/id" a session uses when none is
+// configured. It fails wrapping ErrNoCredential when no provider has a
+// credential.
+//
+// PiG chooses its default model only when a session is created without one,
+// and keeps its list internal, so a throwaway in-memory session with no model,
+// no tools and no resources is created to read it. It is never prompted and
+// writes nothing; the runtime's own services stay open.
+func (r *Runtime) DefaultModel(ctx context.Context) (string, error) {
+	// PiG chooses from the availability it last published, which may predate
+	// the credentials; a full pass first makes the choice follow them.
+	if _, err := r.svcs.ModelRuntime().GetAvailable(ctx); err != nil {
+		return "", fmt.Errorf("failed to choose a model: %w", reword(err))
+	}
+	sm, err := coding.NewInMemorySessionManager(r.svcs.CWD())
+	if err != nil {
+		return "", fmt.Errorf("failed to choose a model: %w", reword(err))
+	}
+	res, err := coding.CreateAgentSession(coding.CreateAgentSessionOptions{
+		CWD:             r.svcs.CWD(),
+		AgentDir:        r.svcs.AgentDir(),
+		ModelRuntime:    r.svcs.ModelRuntime(),
+		SettingsManager: r.svcs.SettingsManager(),
+		ResourceLoader:  coding.NoResources,
+		SessionManager:  sm,
+		NoTools:         "all",
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to choose a model: %w", reword(err))
+	}
+	defer func() {
+		if err := res.Session.Close(); err != nil {
+			slog.Warn("failed to close the session that reads the default model", "error", err)
+		}
+	}()
+	// PiG reports a fallback message exactly when it chose no model, leaving
+	// a placeholder model in the session.
+	if res.ModelFallbackMessage != "" {
+		return "", fmt.Errorf("failed to choose a model: %w for any provider", ErrNoCredential)
+	}
+	model := res.Session.Model()
+	return model.ProviderMeta.ProviderID + "/" + model.ID, nil
+}
+
+// newChild starts a new session that has an extension runner of its own.
+// Runtime.New would hand it the runtime's single extension runner, which every
+// session started through the runtime rebinds in NewSession; that write races
+// with the reads of other live sessions' tool calls, and leaves the runner
+// bound to the newest session. NewSession with a nil Runner builds a private
+// one, and the explicit NoResources keeps it from discovering resources.
+func (r *Runtime) newChild(start coding.SessionStartOptions) (*coding.Session, error) {
+	manager, err := coding.SessionManagerFor(r.svcs, start)
+	if err != nil {
+		return nil, err
+	}
+	return coding.NewSession(r.svcs, coding.SessionOptions{
+		SessionManager:         manager,
+		Model:                  start.Model,
+		ThinkingLevel:          start.ThinkingLevel,
+		SystemPromptSections:   start.SystemPromptSections,
+		ResourceLoader:         start.ResourceLoader,
+		Tools:                  start.ExtraTools,
+		AllowedTools:           start.AllowedTools,
+		InitialActiveToolNames: start.InitialActiveToolNames,
+		SkipBuiltinTools:       start.SkipBuiltinTools,
+		BeforeToolCall:         start.BeforeToolCall,
+		Transport:              ai.Transport(r.svcs.Settings().Transport),
+	})
 }
 
 // usableModel returns the model ref ("provider/id") names once its provider

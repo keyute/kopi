@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -16,12 +17,19 @@ import (
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/skill"
+	"github.com/keyute/kopi/internal/subagent"
 	"github.com/keyute/kopi/internal/tool"
 )
 
 type Config struct {
-	Model     string // "provider/id"
-	Workspace string
+	// Model is "provider/id"; empty means the runtime's default model of a
+	// provider with a credential, chosen when the first session opens.
+	Model string
+	// SmallModel is "provider/id"; empty means the session model.
+	SmallModel string
+	// ConfigFile is the path the notice about a chosen model names.
+	ConfigFile string
+	Workspace  string
 	// Tools are the built-in tools; the MCP servers' tools come from Servers.
 	Tools []tool.Tool
 	// JoinTimeout bounds how long a session switch or Close waits for running
@@ -63,6 +71,13 @@ type Config struct {
 	// Classifier reviews the calls that would otherwise ask; nil means none
 	// are reviewed.
 	Classifier *classifier.Classifier
+	// Agents are the subagents the model can start; none means there is no
+	// Agent or SendMessage tool.
+	Agents []subagent.Definition
+	// AgentTools are the tools a subagent may have, besides the MCP servers'
+	// tools; Agent, SendMessage, TaskOutput, TaskStop and ToolSearch are never
+	// given to one.
+	AgentTools []tool.Tool
 }
 
 const maxReferenceEntries = 10000
@@ -82,6 +97,8 @@ type Controller struct {
 	// first session and not changed after.
 	tools  []tool.Tool
 	prompt []pigruntime.PromptPart
+	// agents are the subagents' tools and prompts, set with tools.
+	agents []agentSpec
 	// skills is what users can type; skillErrs reports the skills it left out.
 	skills    *skill.Set
 	skillErrs []error
@@ -116,8 +133,19 @@ type Controller struct {
 	// hold, guarded by queue, keeps notices from waking the model after an
 	// Interrupt until a human prompt starts a turn.
 	hold bool
+	// children are the subagents of the current session by task id, and live
+	// counts the running ones; both are guarded by queue.
+	children map[string]*child
+	live     int
+	// changed closes, and is replaced, whenever a turn starts or ends or a
+	// subagent's run ends; queue guards it.
+	changed chan struct{}
+	// followers retain turns only for frontends that consume their results.
+	followers map[*WorkQueue]struct{}
 
-	mu     sync.Mutex
+	mu sync.Mutex
+	// model is the session model: Config.Model, or the runtime's default once resolved.
+	model  string
 	sess   *pigruntime.Session
 	sessID string
 	// emit is bound to sess's relay epoch.
@@ -131,14 +159,16 @@ type Controller struct {
 	closed  bool
 	turn    *Work
 	turnSeq int
-	// approval is the call waiting for Answer; nil when none is.
-	approval    *pendingApproval
+	// approvals are the calls waiting for Answer, oldest first.
+	approvals   []*pendingApproval
 	approvalSeq uint64
 	// question is the AskUserQuestion call waiting for AnswerQuestion; nil when none is.
 	question    *pendingQuestion
 	questionSeq uint64
-	// login is the running login; nil when none is. A login and a turn never
-	// run together: each is refused while the other is registered.
+	// login is the running login; nil when none is. A login and a turn or a
+	// running subagent never run together: each is refused while the other is
+	// registered. The login's questions and an approval would otherwise share
+	// the one dialog the frontend has.
 	login    *loginRun
 	loginSeq uint64
 	// deferred is the first open that Start put off for a login; cleared once
@@ -161,7 +191,7 @@ func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
 	if cfg.Tasks == nil {
 		cfg.Tasks = tool.NewTasks()
 	}
-	c := &Controller{rt: rt, cfg: cfg, authority: policy.NewAuthority()}
+	c := &Controller{rt: rt, cfg: cfg, model: cfg.Model, authority: policy.NewAuthority()}
 	var reserved []string
 	for _, cmd := range commandTable() {
 		reserved = append(reserved, cmd.Name)
@@ -208,21 +238,36 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	if ask := tool.NewAskUserQuestion(c.askQuestion); !c.cfg.Unattended && !c.cfg.Rules.Removes(ask.Name) {
 		tools = append(tools, ask)
 	}
+	var search []tool.Tool
+	if small := c.SmallModel(); small != "" && c.rt.CanSearch(small) && !c.cfg.Rules.Removes("WebSearch") {
+		search = append(search, tool.NewWebSearch(func(ctx context.Context, system, query string) (tool.SearchResult, error) {
+			return c.rt.Search(ctx, small, system, query)
+		}))
+		tools = append(tools, search...)
+	}
+	if len(c.cfg.Agents) > 0 && !c.cfg.Rules.Removes("Agent") {
+		launcher := agentLauncher{c}
+		tools = append(tools, tool.NewAgent(c.cfg.Agents, launcher))
+		if send := tool.NewSendMessage(launcher); !c.cfg.Rules.Removes(send.Name) {
+			tools = append(tools, send)
+		}
+	}
 	if len(serverTools) > 0 {
-		search := tool.NewToolSearch(serverTools, pigruntime.RankTools, pigruntime.LoadTools)
-		if c.cfg.Rules.Removes(search.Name) {
+		toolSearch := tool.NewToolSearch(serverTools, pigruntime.RankTools, pigruntime.LoadTools)
+		if c.cfg.Rules.Removes(toolSearch.Name) {
 			// ToolSearch is the only way to load deferred tools.
 			serverTools = nil
 			for i := range servers {
 				servers[i].tools = nil
 			}
 		} else {
-			tools = append(tools, search)
+			tools = append(tools, toolSearch)
 		}
 	}
 	tools = append(tools, serverTools...)
 	c.tools = tools
-	c.prompt = systemPrompt(c.cfg.Workspace, c.tools, c.cfg.Instructions, servers, c.cfg.Classifier != nil)
+	c.prompt = buildPrompt(c.cfg.Workspace, c.tools, c.cfg.Instructions, servers, c.cfg.Classifier != nil, nil)
+	c.agents = c.buildAgents(search, serverTools, servers)
 	return events
 }
 
@@ -247,17 +292,54 @@ type OpenRequest struct {
 	Continue bool
 }
 
+// Model is the session model, empty until resolved when none is configured.
+func (c *Controller) Model() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.model
+}
+
+// SmallModel is the model for side questions: Config.SmallModel, else Model.
+func (c *Controller) SmallModel() string {
+	if c.cfg.SmallModel != "" {
+		return c.cfg.SmallModel
+	}
+	return c.Model()
+}
+
+// resolveModel chooses the runtime's default model when none is configured and
+// returns the notice naming it, again on a retry. It does nothing when a model
+// is configured.
+func (c *Controller) resolveModel(ctx context.Context) ([]event.Event, error) {
+	if c.cfg.Model != "" {
+		return nil, nil
+	}
+	ref := c.Model()
+	if ref == "" {
+		var err error
+		if ref, err = c.rt.DefaultModel(ctx); err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		c.model = ref
+		c.mu.Unlock()
+	}
+	return []event.Event{event.Notice{Text: fmt.Sprintf("Using %s. Set \"model\" in %s to choose another.", ref, c.cfg.ConfigFile)}}, nil
+}
+
 // Open checks that req can be opened, waits for the MCP servers, opens the
 // first session with their tools, then emits each of Config.Errors and the
 // events about the servers.
 func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
-	if err := c.check(ctx, req); err != nil {
+	notices, err := c.check(ctx, req)
+	if err != nil {
 		return err
 	}
 	statuses, err := c.servers(ctx)
 	if err != nil {
 		return err
 	}
+	c.startup = append(c.startup, notices...)
 	c.prepareStartup(statuses)
 	return c.start(ctx, req)
 }
@@ -270,16 +352,19 @@ func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
 //
 // When the check fails only because the model's provider has no credential,
 // an attended Start instead returns nil and runs that provider's login, as
-// /login does; the open follows once it succeeds. If the login is cancelled or
-// fails, no session opens and a later /login that succeeds retries the open.
+// /login does; the open follows once it succeeds. With no model configured and
+// no provider holding a credential, the login first asks which provider to log
+// in to. If the login is cancelled or fails, no session opens and a later
+// /login that succeeds retries the open.
 func (c *Controller) Start(ctx context.Context, req OpenRequest) error {
-	if err := c.check(ctx, req); err != nil {
+	notices, err := c.check(ctx, req)
+	if err != nil {
 		if !c.canLoginFirst(ctx, err) {
 			return err
 		}
 		return c.loginFirst(ctx, req, c.withLoginHint(err))
 	}
-	return c.startFirst(ctx, req, nil)
+	return c.startFirst(ctx, req, notices)
 }
 
 // startFirst opens the first session in the background; notices are reported
@@ -322,8 +407,14 @@ func (c *Controller) startFirst(ctx context.Context, req OpenRequest, notices []
 	return nil
 }
 
-func (c *Controller) check(ctx context.Context, req OpenRequest) error {
-	return c.rt.Check(ctx, pigruntime.OpenOptions{Model: c.cfg.Model, ResumeID: req.ResumeID, Continue: req.Continue})
+// check resolves the model, then checks that req can be opened; it returns the
+// notices.
+func (c *Controller) check(ctx context.Context, req OpenRequest) ([]event.Event, error) {
+	notices, err := c.resolveModel(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return notices, c.rt.Check(ctx, pigruntime.OpenOptions{Model: c.Model(), ResumeID: req.ResumeID, Continue: req.Continue})
 }
 
 func (c *Controller) servers(ctx context.Context) ([]pigruntime.ServerStatus, error) {
@@ -572,6 +663,14 @@ func (c *Controller) Spans(text string) []Span {
 	return Spans(text, c.skills)
 }
 
+// signalLocked must be called with queue held.
+func (c *Controller) signalLocked() {
+	if c.changed != nil {
+		close(c.changed)
+		c.changed = nil
+	}
+}
+
 // Interrupt requests abort of the running root turn or of a running login,
 // without waiting for it, and reports whether there was one. Input still queued
 // is handed back in the turn's TurnEnd.Unsent; task notices are not, and wait
@@ -599,9 +698,7 @@ func (c *Controller) stop(w *Work, emit func(event.Event)) {
 	w.handBack = append(w.handBack, c.take(emit)...)
 	w.stopped = true
 	c.mu.Lock()
-	if c.approval != nil && c.approval.work == w {
-		c.approval = nil
-	}
+	c.approvals = slices.DeleteFunc(c.approvals, func(p *pendingApproval) bool { return p.work == w })
 	if c.question != nil && c.question.work == w {
 		c.question = nil
 	}
@@ -651,7 +748,7 @@ func (c *Controller) Status() Status {
 	c.mu.Unlock()
 
 	mode, _ := c.authority.Snapshot()
-	s := Status{SessionID: sessID, Mode: mode, Model: c.cfg.Model, Busy: busy, Branch: gitBranch(c.cfg.Workspace), Workspace: c.cfg.Workspace}
+	s := Status{SessionID: sessID, Mode: mode, Model: c.Model(), Busy: busy, Branch: gitBranch(c.cfg.Workspace), Workspace: c.cfg.Workspace}
 	if sess != nil {
 		s.MessageCount = sess.MessageCount()
 		if tokens, window, ok := sess.ContextUsage(); ok {
@@ -666,7 +763,11 @@ func (c *Controller) Status() Status {
 	}
 	for _, info := range c.cfg.Tasks.List() {
 		if info.Status == tool.TaskRunning {
-			s.Tasks++
+			if info.Agent != "" {
+				s.Agents++
+			} else {
+				s.Shells++
+			}
 		}
 	}
 	s.Foreground = c.cfg.Tasks.Foreground()
@@ -688,6 +789,7 @@ func (c *Controller) Close(ctx context.Context) error {
 	c.mu.Lock()
 	c.closed = true
 	c.notices = nil
+	c.approvals = nil
 	sess, unsubscribe, w, emit, login := c.sess, c.unsubscribe, c.turn, c.emit, c.login
 	if login != nil {
 		login.cancel()
@@ -740,6 +842,7 @@ func (c *Controller) Close(ctx context.Context) error {
 			return err
 		}
 	}
+	c.closeChildren()
 	unsubscribe()
 	c.mu.Lock()
 	c.sess, c.sessID, c.emit, c.unsubscribe = nil, "", nil, nil
@@ -785,9 +888,13 @@ func (c *Controller) startTurn(ctx context.Context, parts []pigruntime.Prompt) *
 	// send.
 	base := context.WithoutCancel(ctx)
 	sendCtx, cancel := context.WithCancel(base)
+	c.signalLocked()
 	c.turnSeq++
 	w := &Work{id: fmt.Sprintf("turn-%d", c.turnSeq), sendCtx: sendCtx, cancel: cancel, done: make(chan struct{})}
 	c.turn = w
+	for q := range c.followers {
+		q.works = append(q.works, w)
+	}
 	c.mu.Unlock()
 
 	emit(event.TurnStart{WorkID: w.id, Prompt: joined(parts).Text})
@@ -825,7 +932,7 @@ func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session
 		}
 		// A failed or unsent send never continues for notices alone, so a
 		// failing provider cannot be woken in a loop.
-		wake := !w.stopped && c.cfg.Wake && (cancelled || res.Outcome.Status == event.Completed && res.Sent) && c.waking()
+		wake := !w.stopped && (cancelled || res.Outcome.Status == event.Completed && res.Sent) && c.waking()
 		if len(next) > 0 || wake {
 			ctx, w.cancel = context.WithCancel(base)
 			w.sendCtx = ctx
@@ -869,7 +976,7 @@ func (c *Controller) pull(ctx context.Context, emit func(event.Event)) func() ([
 			return nil, nil
 		}
 		prompts := c.take(emit)
-		if len(prompts) == 0 && (!c.cfg.Wake || !c.waking()) {
+		if len(prompts) == 0 && !c.waking() {
 			return nil, nil
 		}
 		return prompts, c.takeNotices()
@@ -886,6 +993,7 @@ func (c *Controller) finish(base context.Context, w *Work, emit func(event.Event
 	c.mu.Lock()
 	if c.turn == w {
 		c.turn = nil
+		c.signalLocked()
 	}
 	if len(parts) == 0 || c.closed || c.switching != nil {
 		c.mu.Unlock()
@@ -1034,6 +1142,21 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 	}
 
+	// A first open that never got a model leaves it unset; its notice is
+	// reported with the session's other startup events.
+	if c.Model() == "" {
+		notices, err := c.resolveModel(ctx)
+		if errors.Is(err, pigruntime.ErrNoCredential) {
+			err = c.withLoginHint(err)
+		}
+		if err != nil {
+			return err
+		}
+		c.startup = append(c.startup, notices...)
+		// The tools were built without a model, so WebSearch was not offered.
+		c.setup(nil)
+	}
+
 	later := c.attempted
 	c.attempted = true
 	d := newDisplay(c.tools)
@@ -1042,14 +1165,14 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		rec = &classifier.Record{}
 	}
 	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
-		Model:        c.cfg.Model,
+		Model:        c.Model(),
 		ResumeID:     req.ResumeID,
 		Continue:     req.Continue,
 		SystemPrompt: c.prompt,
 		Tools:        c.tools,
 		Authority:    c.authority,
 		Rules:        c.cfg.Rules,
-		Approve:      c.approver(d),
+		Approve:      c.approver(d, nil),
 		Review:       c.reviewer(rec),
 	})
 	if err != nil {
@@ -1072,12 +1195,14 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		// The tasks and their notices belong to the old session; a failed
 		// open keeps both. Notices are cleared atomically with installation.
 		c.cfg.Tasks.StopAll()
+		c.closeChildren()
 		c.relay.emit(event.TasksChanged{})
 	}
 	// A session opened after the first open was tried, even one that failed,
 	// starts in the configured mode, never in the mode it was left in; the
 	// first keeps the mode chosen while it was opening.
 	if later {
+		c.authority.ClearEdits()
 		if c.cfg.Mode == policy.Execute {
 			c.EnterExecute()
 		} else {

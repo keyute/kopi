@@ -68,7 +68,9 @@ type Turn struct {
 type Task struct {
 	key                 string
 	ID, Command, Status string
-	Elapsed             time.Duration
+	// Agent is the subagent's name, "" for a shell command.
+	Agent   string
+	Elapsed time.Duration
 }
 
 func (b User) Key() string      { return b.key }
@@ -114,7 +116,7 @@ func (t *Transcript) Blocks() []Block {
 		case turnItem:
 			blocks = append(blocks, Turn{key: key, Outcome: it.outcome, Elapsed: it.elapsed})
 		case taskItem:
-			blocks = append(blocks, Task{key: key, ID: it.task.ID, Command: it.task.Command, Status: it.task.Status, Elapsed: it.task.Elapsed})
+			blocks = append(blocks, Task{key: key, ID: it.task.ID, Command: it.task.Command, Agent: it.task.Agent, Status: it.task.Status, Elapsed: it.task.Elapsed})
 		}
 	}
 	flush(len(t.items) <= t.boundary)

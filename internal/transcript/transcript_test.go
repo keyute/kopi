@@ -79,6 +79,19 @@ func TestTaskEndedDrawsAsRestored(t *testing.T) {
 	assert.Equal(t, want, restored.Blocks())
 }
 
+func TestAgentTaskEndedCarriesTheAgent(t *testing.T) {
+	events := []event.Event{
+		event.TaskEnded{ID: "t2", Agent: "explore", Command: "look around", Status: "completed", Elapsed: 2 * time.Minute},
+	}
+	var live, restored Transcript
+	live.Apply(events[0])
+	restored.Restore(events)
+
+	want := []Block{Task{key: "item:0", ID: "t2", Agent: "explore", Command: "look around", Status: "completed", Elapsed: 2 * time.Minute}}
+	assert.Equal(t, want, live.Blocks())
+	assert.Equal(t, want, restored.Blocks())
+}
+
 func TestQueueChangedAddsNoBlock(t *testing.T) {
 	var tr Transcript
 	tr.Apply(event.QueueChanged{Pending: []string{"x"}})

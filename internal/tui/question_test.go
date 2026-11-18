@@ -696,6 +696,45 @@ func TestQuestionRequestClosesTheTasksDialog(t *testing.T) {
 	assert.NotNil(t, m.question)
 }
 
+func TestQuestionReturnsAfterAChildApprovalOverIt(t *testing.T) {
+	qs := choice("db", false, "A", "B")
+	m, c := openQuestion(t, qs)
+	send(m, subagentAsk(2, "explore"))
+	text := strings.Join(screen(m), "\n")
+	assert.Contains(t, text, "explore t2 › Edit explore.go")
+	assert.NotContains(t, text, "Which db?")
+
+	press(m, enter)
+	assert.Equal(t, []answer{{2, policy.Decision{Answer: policy.Allow}}}, c.answers)
+	assert.Empty(t, c.questionAnswers, "keys go to the approval")
+
+	send(m, event.ApprovalEnded{Token: 2})
+	assert.Nil(t, m.approval)
+	assert.Contains(t, strings.Join(screen(m), "\n"), "Which db?")
+	press(m, enter)
+	assert.Equal(t, []tool.Answer{{Picks: []tool.Pick{{Option: 0}}}}, sent(t, c, qs))
+}
+
+func TestQuestionWaitsForAChildApprovalAlreadyShown(t *testing.T) {
+	qs := choice("db", false, "A", "B")
+	m, c := newTestModel(t, 70, 30)
+	send(m, subagentAsk(2, "explore"))
+	send(m, event.QuestionRequested{Token: 7, Questions: []tool.Question{qs}})
+	require.NotNil(t, m.question)
+	text := strings.Join(screen(m), "\n")
+	assert.Contains(t, text, "explore t2 › Edit explore.go")
+	assert.NotContains(t, text, "Which db?")
+
+	press(m, enter)
+	assert.Len(t, c.answers, 1)
+	assert.Empty(t, c.questionAnswers)
+
+	send(m, event.ApprovalEnded{Token: 2})
+	assert.Contains(t, strings.Join(screen(m), "\n"), "Which db?")
+	press(m, enter)
+	sent(t, c, qs)
+}
+
 func TestQuestionResizeKeepsTheBottomRuleAboveTheFooter(t *testing.T) {
 	m, _ := openQuestion(t, choice("one", false, "A", "B", "C", "D"), choice("two", false, "C", "D"))
 	press(m, digit('5'))

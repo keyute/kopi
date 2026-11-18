@@ -107,6 +107,9 @@ type model struct {
 	exitArmed bool
 	// turnStart is when the running turn's TurnStart was applied.
 	turnStart time.Time
+	// waitStart is when the root went idle with background work running,
+	// zero otherwise.
+	waitStart time.Time
 	pickVerb  func() verb
 	// verb is the running or last turn's.
 	verb verb
@@ -114,6 +117,8 @@ type model struct {
 	// prompt. tasks is the /tasks dialog, nil when closed; an approval closes
 	// it. prompt is the shown dialog's rows, drawn in place of the composer.
 	approval *event.ApprovalRequested
+	// queued asks wait behind approval, in arrival order.
+	approvalQueue []event.ApprovalRequested
 	// login is the pending login question, whose prompt is dialog too.
 	login *event.LoginRequested
 	// question is the pending AskUserQuestion dialog, whose current page is
@@ -337,17 +342,44 @@ func (m *model) approvalKey(msg tea.KeyPressMsg) tea.Cmd {
 	return cmd
 }
 
-// endApproval drops the pending call and its prompt.
-func (m *model) endApproval() {
-	if m.approval != nil {
-		m.approval, m.dialog = nil, nil
+// dropApprovals removes the asks drop selects from the shown one and the
+// queue. When the shown one goes, the first remaining ask is shown next.
+func (m *model) dropApprovals(drop func(event.ApprovalRequested) bool) {
+	if m.approval == nil {
+		return
+	}
+	shownGone := drop(*m.approval)
+	var keep []event.ApprovalRequested
+	if !shownGone {
+		keep = append(keep, *m.approval)
+	}
+	for _, a := range m.approvalQueue {
+		if !drop(a) {
+			keep = append(keep, a)
+		}
+	}
+	if !shownGone {
+		m.approvalQueue = keep[1:]
+		return
+	}
+	m.approval, m.dialog, m.approvalQueue = nil, nil, nil
+	if len(keep) > 0 {
+		next := keep[0]
+		m.approval, m.dialog, m.approvalQueue = &next, newApprovalDialog(&next, &m.keys, m.th), keep[1:]
+	} else if m.question != nil {
+		m.dialog = m.question.current()
 	}
 }
 
-// endQuestion drops the pending questions and their dialog.
+// endQuestion drops the pending questions and, unless an approval is shown
+// over them, their dialog.
 func (m *model) endQuestion() {
-	if m.question != nil {
-		m.question, m.dialog = nil, nil
+	if m.question == nil {
+		return
+	}
+	m.question = nil
+	if m.approval == nil {
+		m.dialog = nil
 	}
 }
 
@@ -481,6 +513,7 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 	if refresh {
 		m.status = m.c.Status()
 	}
+	m.syncWaiting()
 	if !pureThinking {
 		m.relayout()
 	}
@@ -510,7 +543,7 @@ func (m *model) apply(ev event.Event) {
 		m.clearSelection()
 		m.follow = true
 		m.queued = nil
-		m.endApproval()
+		m.dropApprovals(func(event.ApprovalRequested) bool { return true })
 		m.endQuestion()
 		m.tasks = nil
 		return
@@ -524,11 +557,17 @@ func (m *model) apply(ev event.Event) {
 		m.activity = ev.Text
 		return
 	case event.ApprovalRequested:
+		if m.approval != nil {
+			m.approvalQueue = append(m.approvalQueue, ev)
+			return
+		}
 		m.approval, m.dialog, m.tasks = &ev, newApprovalDialog(&ev, &m.keys, m.th), nil
 		return
 	case event.QuestionRequested:
-		m.question = newQuestionDialog(ev, &m.keys, m.th)
-		m.dialog, m.tasks = m.question.current(), nil
+		m.question, m.tasks = newQuestionDialog(ev, &m.keys, m.th), nil
+		if m.approval == nil {
+			m.dialog = m.question.current()
+		}
 		return
 	case event.QuestionEnded:
 		if m.question != nil && m.question.token == ev.Token {
@@ -544,9 +583,7 @@ func (m *model) apply(ev event.Event) {
 		}
 		return
 	case event.ApprovalEnded:
-		if m.approval != nil && m.approval.Token == ev.Token {
-			m.endApproval()
-		}
+		m.dropApprovals(func(a event.ApprovalRequested) bool { return a.Token == ev.Token })
 		return
 	case event.TurnStart:
 		m.busy = true
@@ -560,7 +597,7 @@ func (m *model) apply(ev event.Event) {
 			m.folds.verbs[blocks[len(blocks)-1].Key()] = m.verb
 		}
 		m.busy = false
-		m.endApproval()
+		m.dropApprovals(func(a event.ApprovalRequested) bool { return a.Agent == "" })
 		m.endQuestion()
 		m.composer.restore(ev.Unsent)
 		return

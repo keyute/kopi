@@ -95,6 +95,50 @@ func TestTaskRow(t *testing.T) {
 	}
 }
 
+func TestAgentTaskRow(t *testing.T) {
+	th := mocha()
+	for _, tc := range []struct {
+		status, want string
+		bullet, text lipgloss.Style
+	}{
+		{"completed", "• explore finished · look around · 2m 14s", fg(th.success), lipgloss.NewStyle()},
+		{"failed", "• explore failed · look around · 2m 14s", fg(th.error), fg(th.error)},
+		{"stopped", "• explore stopped · look around · 2m 14s", fg(th.error), fg(th.error)},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			m, _ := newTestModel(t, 60, 20)
+			send(m, event.TaskEnded{ID: "t3", Agent: "explore", Command: "look around\nmore", Status: tc.status, Elapsed: 134 * time.Second})
+			assert.Equal(t, []string{"", tc.want}, body(m))
+			got := m.lines[len(m.lines)-1].text
+			assert.Equal(t, tc.bullet.Render("• ")+tc.text.Render(strings.TrimPrefix(tc.want, "• ")), got)
+		})
+	}
+}
+
+func TestAgentTaskRowCutsALongDescription(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	send(m, event.TaskEnded{ID: "t3", Agent: "explore", Command: strings.Repeat("x", 100), Status: "completed", Elapsed: time.Minute})
+	assert.Equal(t, []string{"", "• explore finished · " + strings.Repeat("x", 10) + "… · 1m 0s"}, body(m))
+}
+
+func agentStart(id, description string) event.ToolStart {
+	return event.ToolStart{CallID: id, Name: "Agent", Title: "explore › " + description, Action: tool.Action{Verb: "Launched", One: "agent", Many: "agents"}}
+}
+
+func agentEnd(id string) event.ToolEnd {
+	return event.ToolEnd{CallID: id, Name: "Agent", Summary: "launched", Output: "Agent t1 started."}
+}
+
+func TestAgentToolRowAndGroup(t *testing.T) {
+	m, _ := newTestModel(t, 60, 20)
+	send(m, agentStart("a", "look"), agentEnd("a"))
+	assert.Equal(t, []string{"", "• explore › look", "  ↳ launched"}, body(m))
+
+	m, _ = newTestModel(t, 60, 20)
+	send(m, agentStart("a", "look"), agentEnd("a"), agentStart("b", "dig"), agentEnd("b"))
+	assert.Equal(t, []string{"", "• Launched 2 agents", "  ↳ explore › look · launched", "  ↳ explore › dig · launched"}, body(m))
+}
+
 func TestTaskRowCutsALongCommand(t *testing.T) {
 	m, _ := newTestModel(t, 40, 20)
 	send(m, event.TaskEnded{ID: "t1", Command: strings.Repeat("x", 100), Status: "completed", Elapsed: time.Minute})

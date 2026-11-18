@@ -19,7 +19,7 @@ bin/kopi login                     # list providers
 bin/kopi login <provider>
 ```
 
-Set the model in `~/.kopi/config.json` (`$KOPI_HOME` overrides the home):
+Setting a model is optional. Without `model`, Kopi uses the default model of a provider with a credential, and with none the fullscreen interface asks which provider to log in to (see [configuration](docs/configuration.md#model)). To pick one, set it in `~/.kopi/config.json` (`$KOPI_HOME` overrides the home):
 
 ```json
 { "version": 1, "model": "openai-codex/gpt-5.6-luna" }
@@ -44,6 +44,7 @@ Shift+Tab or `/execute` switches from plan to execute mode.
 - [MCP servers](docs/mcp.md)
 - [Trust and instructions](docs/trust.md): folder trust, `AGENTS.md`
 - [Skills](docs/skills.md)
+- [Subagents](docs/subagents.md)
 
 ## Contributing
 

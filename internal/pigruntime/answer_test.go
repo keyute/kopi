@@ -112,3 +112,18 @@ func TestAnswerEffortSetsThinkingLevel(t *testing.T) {
 		})
 	}
 }
+
+func TestParseEffort(t *testing.T) {
+	for name, want := range map[string]Effort{
+		"off": OffEffort, "minimal": LowestEffort, "low": LowEffort, "medium": MediumEffort,
+		"high": HighEffort, "xhigh": XHighEffort, "max": MaxEffort,
+	} {
+		got, err := ParseEffort(name)
+		require.NoError(t, err, name)
+		assert.Equal(t, want, got, name)
+	}
+	for _, name := range []string{"", "High", "ultra"} {
+		_, err := ParseEffort(name)
+		assert.ErrorIs(t, err, ErrUnknownEffort, name)
+	}
+}

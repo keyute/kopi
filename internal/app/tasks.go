@@ -23,6 +23,7 @@ type Tasks interface {
 	Output(id string) (tool.TaskInfo, error)
 	Stop(id string) (tool.TaskInfo, error)
 	StopAll()
+	StartAgent(agent, description string, stop func()) *tool.AgentTask
 }
 
 const (
@@ -52,6 +53,11 @@ func (c *Controller) taskChanged(info tool.TaskInfo) {
 func (c *Controller) queueNotice(n pigruntime.Notice) {
 	c.queue.Lock()
 	defer c.queue.Unlock()
+	c.queueNoticeLocked(n)
+}
+
+// queueNoticeLocked is queueNotice with queue held.
+func (c *Controller) queueNoticeLocked(n pigruntime.Notice) {
 	c.mu.Lock()
 	if c.closed || c.sess == nil {
 		c.mu.Unlock()
@@ -65,7 +71,7 @@ func (c *Controller) queueNotice(n pigruntime.Notice) {
 // one runs, a switch is under way, a login runs or nothing queued wakes. It
 // must be called with queue and mu held, and releases mu.
 func (c *Controller) wakeLocked() {
-	if c.closed || c.sess == nil || c.turn != nil || c.switching != nil || c.login != nil || !c.cfg.Wake || c.hold || !c.waking() {
+	if c.closed || c.sess == nil || c.turn != nil || c.switching != nil || c.login != nil || c.hold || !c.waking() {
 		c.mu.Unlock()
 		return
 	}
@@ -82,11 +88,14 @@ func (c *Controller) takeNotices() []pigruntime.Notice {
 	return out
 }
 
-// waking reports whether a queued notice may continue a turn; it must be
-// called with queue held. Only the notice StopTask queues for a stopped task
-// does not wake.
+// waking reports whether a queued notice may start or continue a turn; it must
+// be called with queue held. The notice StopTask queues for a stopped task
+// never wakes; a subagent's end wakes even without Config.Wake, a shell
+// command's only with it.
 func (c *Controller) waking() bool {
-	return slices.ContainsFunc(c.notices, func(n pigruntime.Notice) bool { return n.Shown.Status != string(tool.TaskStopped) })
+	return slices.ContainsFunc(c.notices, func(n pigruntime.Notice) bool {
+		return n.Shown.Status != string(tool.TaskStopped) && (c.cfg.Wake || n.Shown.Agent != "")
+	})
 }
 
 // requeue puts notices the model never read back ahead of those queued since;
@@ -103,10 +112,11 @@ func notice(info tool.TaskInfo, head string) pigruntime.Notice {
 	if tail := outputTail(info.Output); tail != "" {
 		text += "\n" + tail
 	}
-	return pigruntime.Notice{
-		Text:  text,
-		Shown: event.TaskEnded{ID: info.ID, Command: info.Command, Status: string(info.Status), Elapsed: info.Ended.Sub(info.Started)},
-	}
+	return pigruntime.Notice{Text: text, Shown: taskEnded(info)}
+}
+
+func taskEnded(info tool.TaskInfo) event.TaskEnded {
+	return event.TaskEnded{ID: info.ID, Agent: info.Agent, Command: info.Command, Status: string(info.Status), Elapsed: info.Ended.Sub(info.Started)}
 }
 
 func commandLine(command string) string {
@@ -171,6 +181,9 @@ func (c *Controller) StopTask(id string) error {
 		return nil
 	}
 	head := fmt.Sprintf("Background task %s stopped by the user: %s", info.ID, commandLine(info.Command))
+	if info.Agent != "" {
+		head = agentStoppedHead(info)
+	}
 	c.queue.Lock()
 	defer c.queue.Unlock()
 	c.mu.Lock()

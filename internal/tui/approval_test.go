@@ -243,6 +243,14 @@ func TestApprovalRowsNameTheRuleOnlyWhenSet(t *testing.T) {
 	assert.NotContains(t, strings.Join(plainApprovalRows(a, 0, 10), "\n"), "asked by")
 }
 
+func TestApprovalRowsPrefixASubagentTitle(t *testing.T) {
+	a := event.ApprovalRequested{Title: "Edit a.go", Agent: "explore", TaskID: "t3"}
+	assert.Equal(t, "  explore t3 › Edit a.go", plainApprovalRows(a, 0, 10)[1])
+
+	a.Agent, a.TaskID = "", ""
+	assert.Equal(t, "  Edit a.go", plainApprovalRows(a, 0, 10)[1])
+}
+
 func TestApprovalRowsNoteTheClassifierReview(t *testing.T) {
 	for name, tt := range map[string]struct {
 		review policy.Review

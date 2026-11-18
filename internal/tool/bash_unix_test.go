@@ -162,3 +162,37 @@ func TestBashCancelKillsForegroundCommand(t *testing.T) {
 	waitFor(t, dead, "the grandchild to die")
 	assert.Empty(t, tasks.List())
 }
+
+func TestForegroundBashStopsCommandAtTimeout(t *testing.T) {
+	dir := t.TempDir()
+	tool := NewBash(NewShell(dir, nil), NewShell(dir, nil), nil)
+	command, started, dead := holdFIFO(t, dir)
+	args, err := json.Marshal(map[string]any{"command": "echo partial; " + command, "timeout": 500})
+	require.NoError(t, err)
+
+	result := runBashAsync(t.Context(), tool, string(args))
+	waitFor(t, started, "the command to start")
+
+	r := waitBash(t, result)
+	require.ErrorIs(t, r.err, ErrCommandTimeout)
+	assert.Contains(t, r.err.Error(), "partial")
+	waitFor(t, dead, "the grandchild to die")
+}
+
+func TestForegroundBashCancelKillsCommand(t *testing.T) {
+	dir := t.TempDir()
+	tool := NewBash(NewShell(dir, nil), NewShell(dir, nil), nil)
+	command, started, dead := holdFIFO(t, dir)
+	args, err := json.Marshal(map[string]any{"command": command})
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	result := runBashAsync(ctx, tool, string(args))
+	waitFor(t, started, "the command to start")
+	cancel()
+
+	r := waitBash(t, result)
+	require.ErrorIs(t, r.err, context.Canceled)
+	waitFor(t, dead, "the grandchild to die")
+}
