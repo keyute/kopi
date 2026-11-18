@@ -4,6 +4,7 @@
 
 - You must always use Taskfile to build, test, lint and format: `task build`, `task test`, `task lint`, `task fmt`. Tests run with `-race`; `task test:norace` runs them without it, for allocation checks the race detector distorts.
 - Never commit, tag or push.
+- README.md stays a landing page (install, quick start, doc links); user-facing behaviour, its limitations and what is not implemented go in the matching `docs/<topic>.md`.
 
 ## Layout
 
@@ -14,12 +15,14 @@
 
 ## PiG boundary
 
+- PiG is Kopi's runtime: the agent loop, sessions and their files, providers and sign-in, compaction and retry, the MCP client and skill parsing are PiG's. Use PiG's public API for anything in that territory. Hand-write only what PiG keeps internal, what it does only through ambient discovery, or what would bypass `internal/policy`, `tool.Workspace` or `tool.Shell`.
 - Only `internal/pigruntime` (and tests) import `github.com/MichaelKinsy/PiG`; depguard enforces it.
-- `internal/pigruntime` may use PiG's `mcp` client packages; never PiG's MCP extension `coding/mcpext`.
+- `internal/pigruntime` may use PiG's `mcp` client packages and, from `coding/mcpext`, only what works without the extension: a server connection, OAuth credentials and sign-in, and result conversion. Never register the extension, load its config, or use its tool definitions, commands or prompt sections: they read PiG's `mcp.json` and run tools outside `Gate.Admit`.
 - Never import PiG `internal/` packages, never use `coding/cli`, never add a `replace` for PiG, and never copy upstream code.
 - Create every PiG session with every input explicit: agent dir, in-memory settings, `coding.NoResources`, the system prompt as sections, `SkipBuiltinTools`, and explicit tool names for both `AllowedTools` and `InitialActiveToolNames`. A nil there turns on ambient discovery, PiG's stock prompt or stock tools. Never name a prompt part `tools` or `rules`; PiG rewrites those.
 - Skills are loaded by a PiG resource loader that is never attached to a session and is created with every input explicit and the project untrusted; sessions keep `coding.NoResources`.
-- Never call PiG's `Session.ListSessions` or `Session.Events`.
+- List sessions with `Runtime.ListSessions` and observe a session with `Subscribe`. Never call `Session.ListSessions` (it resolves PiG's default agent dir, not the runtime's) or `Session.Events` (an undrained channel stalls the agent loop).
+- A workaround for PiG behaviour lives in `internal/pigruntime` with a comment naming that behaviour. Recheck them when PiG is bumped.
 - `internal/pigruntime`'s exported API is stated in Kopi's terms; nothing exported may exist only because of how PiG works internally.
 
 ## Authority
@@ -33,14 +36,15 @@
 
 ## State
 
-- Kopi reads and writes only under its home (`$KOPI_HOME`, default `~/.kopi`). Never read or write `~/.pi`, `~/.pig`, `~/.claude` or any other tool's store, in code or in tests. The one exception is `~/.agents/skills`, the directory agents share for skills, which Kopi only reads.
+- Kopi reads and writes only under its home (`$KOPI_HOME`, default `~/.kopi`). Never read or write `~/.pi`, `~/.pig`, `~/.claude` or any other tool's store, in code or in tests. A shared place outside the project (see Built in or configured), such as `~/.agents/skills`, is not another tool's store; Kopi only reads it.
 - `trust.json` under Kopi's home holds trust decisions; the binary never writes `config.json`.
 - Tests use `t.TempDir()`, synthetic credentials and no network, and synchronise on channels, never sleeps.
 
 ## Built in or configured
 
 - The binary owns how Kopi works: mechanics, tool contracts and their limits, model-facing text about Kopi's own tools, the default look, and protection of Kopi's home and of the gate itself. These are constants, not config keys.
-- The binary assumes nothing that differs from one user's machine to the next: no built-in list of paths outside Kopi's home, other tools' stores, credential locations, providers, models or personal rules. The user states those in `config.json`. The one exception is `~/.agents/skills`, which Kopi only reads.
+- The binary assumes nothing that differs from one user's machine to the next: no built-in list of paths outside Kopi's home, other tools' stores, credential locations, providers, models or personal rules. The user states those in `config.json`. A shared place outside the project, such as `~/.agents/skills`, is the exception, and Kopi only reads it.
+- What agents share in one format and place is read there, in that format: a project's `AGENTS.md`, `.agents/skills` and `~/.agents/skills`, `.mcp.json` and the `mcpServers` entry shape. Kopi's home holds only what has no shared place, such as the global `AGENTS.md`, or what only Kopi reads. A place is shared when most peers read it. Kopi adds no fields of its own to a shared format; its extras live in `config.json`.
 - A behaviour users reasonably set differently is a `config.json` key with its default in `config.Defaults()`. A flag that overrides a key is a config layer over the file, never a separate code path.
 - Add a key only for a setting someone needs to change, never to move mechanics out of the binary.
 - When it is unclear which side something is on, check what peer agents build in and follow the majority.
