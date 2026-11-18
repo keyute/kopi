@@ -4,6 +4,7 @@
 
 - You must always use Taskfile to build, test, lint and format: `task build`, `task test`, `task lint`, `task fmt`. Tests run with `-race`; `task test:norace` runs them without it, for allocation checks the race detector distorts.
 - Never commit, tag or push.
+- README.md stays a landing page (install, quick start, doc links); user-facing behaviour, its limitations and what is not implemented go in the matching `docs/<topic>.md`.
 
 ## Layout
 
