@@ -70,7 +70,7 @@
 - Tab adds a note to the focused option; the note goes to the model with the option when it is chosen.
 - With several questions a tab strip shows which are answered, and a review page after the last one lists the answers and the gaps before you submit. A single question answers at once.
 - The result lists each question with its answer, any note and any typed text, or says you dismissed the questions.
-- Esc dismisses the questions and the turn continues. Ctrl+C interrupts the turn. There is no time limit.
+- Esc dismisses the questions and stops the turn; the model sees that you dismissed them. Ctrl+C interrupts the turn. There is no time limit.
 - Only in the fullscreen interface; `kopi -p` has no `AskUserQuestion`.
 - A response's tool calls run one at a time when it contains a question.
 - Keys while a question is open; Enter, Tab, Esc, Up, Down, PgUp, PgDn, Ctrl+V and the newline keys follow [`keys`](configuration.md#keys):
