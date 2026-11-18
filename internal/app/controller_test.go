@@ -96,8 +96,11 @@ func newHarness(t *testing.T, sb pigruntimetest.Sandbox, cfg Config) *harness {
 	if cfg.JoinTimeout == 0 {
 		cfg.JoinTimeout = waitLimit
 	}
-	tasks := &fakeTasks{}
-	cfg.Tasks = tasks
+	var tasks *fakeTasks
+	if cfg.Tasks == nil {
+		tasks = &fakeTasks{}
+		cfg.Tasks = tasks
+	}
 	c := NewController(rt, cfg)
 	rec := &recorder{}
 	c.Subscribe(rec.add)

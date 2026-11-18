@@ -5,6 +5,7 @@ package tool
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -126,6 +127,62 @@ func TestTasksCancelKillsForegroundGroup(t *testing.T) {
 	assert.Empty(t, out)
 	assert.Equal(t, Moved{}, moved)
 	waitFor(t, dead, "the grandchild to die")
+	assert.Empty(t, events)
+	assert.Empty(t, m.List())
+}
+
+type cancelCleanupContext struct {
+	context.Context
+	entered, release chan struct{}
+}
+
+func (c *cancelCleanupContext) Err() error {
+	err := c.Context.Err()
+	if err != nil {
+		close(c.entered)
+		<-c.release
+	}
+	return err
+}
+
+func TestTasksStopAllOwnsCancellationCleanup(t *testing.T) {
+	sh := NewShell(t.TempDir(), nil)
+	m, events := newTasks(t)
+	signals := foregroundSignals(m)
+	command, started, dead := holdFIFO(t, t.TempDir())
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	cleanup := &cancelCleanupContext{Context: ctx, entered: make(chan struct{}), release: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(cleanup.release) })
+	defer release()
+	result := runAsync(cleanup, m, sh, command)
+	waitFor(t, started, "the grandchild to start")
+	assert.True(t, nextSignal(t, signals))
+	m.mu.Lock()
+	var p *process
+	for task := range m.fg {
+		p = task.p
+	}
+	m.mu.Unlock()
+	require.NotNil(t, p)
+	cancel()
+	// Pause cancellation immediately before Run requests the process stop.
+	waitFor(t, cleanup.entered, "Run to enter cancellation cleanup")
+	stopped := make(chan struct{})
+	go func() {
+		m.StopAll()
+		close(stopped)
+	}()
+	waitFor(t, stopped, "StopAll to finish cancellation cleanup")
+	assert.True(t, ended(p), "StopAll must wait for the cancelling process")
+	assert.True(t, m.Foreground(), "Run retains ownership until cleanup finishes")
+	release()
+	r := waitResult(t, result)
+	waitFor(t, dead, "the grandchild to die")
+	require.ErrorIs(t, r.err, ErrStopped)
+	assert.Equal(t, Moved{}, r.moved)
+	assert.False(t, nextSignal(t, signals))
+	assert.Empty(t, signals)
 	assert.Empty(t, events)
 	assert.Empty(t, m.List())
 }

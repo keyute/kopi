@@ -167,19 +167,19 @@ func (m *Tasks) Run(ctx context.Context, sh *Shell, command string, timeout time
 		canceled = true
 	}
 	m.mu.Lock()
-	delete(m.fg, t)
 	detach, stopped := t.detached, t.stopped
 	var info TaskInfo
 	if (detach || timedOut) && !stopped && !ended(p) {
 		info = m.adopt(t)
+		delete(m.fg, t)
 	}
 	change := m.onChange
 	f = m.onForeground
 	m.mu.Unlock()
-	if f != nil {
-		f()
-	}
 	if info.ID != "" {
+		if f != nil {
+			f()
+		}
 		if change != nil {
 			change(info)
 		}
@@ -190,6 +190,13 @@ func (m *Tasks) Run(ctx context.Context, sh *Shell, command string, timeout time
 		p.stop(ctx.Err())
 	}
 	<-p.done
+	m.mu.Lock()
+	delete(m.fg, t)
+	f = m.onForeground
+	m.mu.Unlock()
+	if f != nil {
+		f()
+	}
 	out, err := p.result()
 	return out, Moved{}, err
 }
