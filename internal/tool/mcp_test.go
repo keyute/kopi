@@ -65,7 +65,7 @@ func TestMCPAdmitsBeforeCalling(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, "result", out)
+	assert.Equal(t, "result", out.Text)
 	assert.Equal(t, []string{"admit", "call"}, order)
 }
 
@@ -96,7 +96,7 @@ func TestMCPResult(t *testing.T) {
 			want += ": " + text
 		}
 		assert.Equal(t, want, err.Error())
-		assert.Empty(t, out)
+		assert.Empty(t, out.Text)
 	}
 
 	for _, text := range []string{"", "short supplemental", strings.Repeat("界", 3*maxOutputPart) + "tail"} {
@@ -109,7 +109,7 @@ func TestMCPResult(t *testing.T) {
 			var original *url.Error
 			require.ErrorAs(t, err, &original)
 			assert.Same(t, failed, original)
-			assert.Empty(t, out)
+			assert.Empty(t, out.Text)
 			complete := failed.Error()
 			if text != "" {
 				complete += ": " + text
@@ -124,20 +124,20 @@ func TestMCPResult(t *testing.T) {
 
 	out, err := result("", nil).Run(t.Context(), nil, allowTarget)
 	require.NoError(t, err)
-	assert.Equal(t, "no output", result("", nil).Display.Summary(out))
+	assert.Equal(t, "no output", result("", nil).Display.Summary(out.Text))
 
 	long := "head" + strings.Repeat("x", 3*maxOutputPart) + "tail"
 	out, err = result(long, nil).Run(t.Context(), nil, allowTarget)
 	require.NoError(t, err)
-	assert.Less(t, len(out), len(long))
-	assert.True(t, strings.HasPrefix(out, "head"))
-	assert.True(t, strings.HasSuffix(out, "tail"))
-	assert.Contains(t, out, "bytes cut")
+	assert.Less(t, len(out.Text), len(long))
+	assert.True(t, strings.HasPrefix(out.Text, "head"))
+	assert.True(t, strings.HasSuffix(out.Text, "tail"))
+	assert.Contains(t, out.Text, "bytes cut")
 
 	failed = errors.New("failed")
 	errorOut, err := result(long, failed).Run(t.Context(), nil, allowTarget)
 	require.ErrorIs(t, err, failed)
-	assert.Empty(t, errorOut)
+	assert.Empty(t, errorOut.Text)
 	assert.True(t, strings.HasPrefix(err.Error(), "failed: head"))
 	assert.True(t, strings.HasSuffix(err.Error(), "tail"))
 	assert.Contains(t, err.Error(), fmt.Sprintf("%d bytes cut", len(failed.Error()+": "+long)-2*maxOutputPart))

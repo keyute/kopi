@@ -254,6 +254,63 @@ func TestRootRejectsPathRuleForWebFetch(t *testing.T) {
 	assert.NoDirExists(t, e.agentDir)
 }
 
+func TestRootRejectsPathRuleForWebSearch(t *testing.T) {
+	e := newTestEnv(t)
+
+	_, _, err := execute(t, "", "--model", mockModel, "--allowed-tools", "WebSearch(x)", "-p", "hi")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `tool "WebSearch" takes no path`)
+	assert.NoDirExists(t, e.agentDir)
+}
+
+func TestRootAcceptsWebSearchRuleWithoutHostedSearch(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+
+	stdout, _, err := execute(t, "", "--model", mockModel, "--allowed-tools", "WebSearch", "-p", "hi")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok\n", stdout)
+	assert.NotContains(t, toolNames(server.next(t)), "WebSearch")
+}
+
+func TestRootOffersWebSearchForSearchingSmallModel(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	models := map[string]any{"providers": map[string]any{
+		"kopi-mock": map[string]any{
+			"baseUrl": server.URL + "/v1", "api": "openai-completions", "apiKey": syntheticKey,
+			"models": []any{map[string]any{"id": "mock-1"}},
+		},
+		"kopi-search": map[string]any{
+			"baseUrl": server.URL + "/v1", "api": "openai-responses", "apiKey": syntheticKey,
+			"models": []any{map[string]any{"id": "search-1"}},
+		},
+	}}
+	b, err := json.Marshal(models)
+	require.NoError(t, err)
+	e.writeFile(t, filepath.Join(e.agentDir, "models.json"), string(b))
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"smallModel":"kopi-search/search-1"}`)
+
+	_, _, err = execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	tools := toolNames(server.next(t))
+	require.GreaterOrEqual(t, len(tools), 2)
+	assert.Equal(t, []string{"WebFetch", "WebSearch"}, tools[len(tools)-2:])
+}
+
+// toolNames lists the function tools of a chat-completions request.
+func toolNames(req mockRequest) []string {
+	var names []string
+	for _, tl := range req.body["tools"].([]any) {
+		names = append(names, tl.(map[string]any)["function"].(map[string]any)["name"].(string))
+	}
+	return names
+}
+
 func TestRootUnknownSmallModelFailsAtStart(t *testing.T) {
 	e := newTestEnv(t)
 	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
@@ -509,7 +566,7 @@ func TestRootStreamsTurnFromMockServer(t *testing.T) {
 	for _, tl := range req.body["tools"].([]any) {
 		tools = append(tools, tl.(map[string]any)["function"].(map[string]any)["name"].(string))
 	}
-	assert.Equal(t, []string{"Read", "Write", "Edit", "Bash", "TaskOutput", "TaskStop", "WebFetch"}, tools)
+	assert.Equal(t, []string{"Read", "Glob", "Grep", "LS", "Write", "Edit", "Bash", "TaskOutput", "TaskStop", "WebFetch"}, tools)
 	messages := req.body["messages"].([]any)
 	first := messages[0].(map[string]any)
 	assert.Contains(t, []string{"system", "developer"}, first["role"])
@@ -636,6 +693,48 @@ func TestRootReadRefusesProtectedPaths(t *testing.T) {
 	require.Len(t, results, 1)
 	assert.Contains(t, results[0], tool.ErrProtected.Error())
 	assert.NotContains(t, results[0], "synthetic")
+}
+
+// streamGrep answers with one Grep call searching the workspace for pattern.
+func streamGrep(w http.ResponseWriter, pattern string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	writeChunk(w, map[string]any{"role": "assistant", "content": ""}, nil)
+	args, _ := json.Marshal(map[string]any{"pattern": pattern})
+	writeChunk(w, map[string]any{"tool_calls": []any{map[string]any{
+		"index": 0, "id": "call_0", "type": "function",
+		"function": map[string]any{"name": "Grep", "arguments": string(args)},
+	}}}, nil)
+	writeChunk(w, map[string]any{}, "tool_calls")
+	fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
+func TestRootGrepHidesDeniedPaths(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.workspace, "secret.txt"), "token\n")
+	e.writeFile(t, filepath.Join(e.workspace, "notes.txt"), "token\n")
+	var calls atomic.Int32
+	server := newMockProvider(t, func(w http.ResponseWriter) {
+		if calls.Add(1) == 1 {
+			streamGrep(w, "token")
+			return
+		}
+		streamText(w, "done")
+	})
+	e.writeMockModels(t, server.URL)
+
+	_, _, err := execute(t, "", "--model", mockModel, "--disallowed-tools", "Grep(secret.txt)", "-p", "search")
+
+	require.NoError(t, err)
+	server.next(t)
+	var results []string
+	for _, m := range server.next(t).body["messages"].([]any) {
+		if msg := m.(map[string]any); msg["role"] == "tool" {
+			results = append(results, fmt.Sprint(msg["content"]))
+		}
+	}
+	require.Len(t, results, 1)
+	assert.Contains(t, results[0], "notes.txt")
+	assert.NotContains(t, results[0], "secret.txt")
 }
 
 // lastUserText is the text of the last user message in a chat-completions

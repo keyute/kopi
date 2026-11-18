@@ -124,8 +124,8 @@ func permissionRules(cwd, home string, tools []tool.Tool, perms config.Permissio
 		{Name: origins["permissions.ask"], Ask: perms.Ask},
 		{Name: origins["permissions.deny"], Deny: perms.Deny},
 	}
-	// ToolSearch is known to rules even when no server tools need it in the session.
-	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil)}))
+	// ToolSearch and WebSearch are known to rules even when the session lacks them.
+	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil), tool.NewWebSearch(nil)}))
 	rules, err := policy.NewRules(cwd, home, specs, append(sources, flagRules...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load permission rules: %w", err)
@@ -360,12 +360,16 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		}
 		review = classifier.New(stage(pigruntime.LowestEffort), stage(pigruntime.MediumEffort), resolved.Config.Classifier.Instructions)
 	}
+	// rules is set below; the search tools consult it only when they run.
+	var rules *policy.Rules
+	hidden := func(name string, root, t policy.Target) bool { return rules.Hides(name, root, t) }
 	tools := []tool.Tool{
-		tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb), tool.NewShell(cwd, planSB), tasks),
+		tool.NewRead(ws), tool.NewGlob(ws, hidden), tool.NewGrep(ws, hidden), tool.NewLS(ws, hidden),
+		tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb), tool.NewShell(cwd, planSB), tasks),
 		tool.NewTaskOutput(tasks), tool.NewTaskStop(tasks),
 		tool.NewWebFetch("Kopi/"+kopiVersion(), answer),
 	}
-	rules, err := permissionRules(cwd, userHome, tools, resolved.Config.Permissions, resolved.Origins, flagRules)
+	rules, err = permissionRules(cwd, userHome, tools, resolved.Config.Permissions, resolved.Origins, flagRules)
 	if err != nil {
 		return err
 	}
@@ -417,6 +421,11 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		if err := checkModel("classifier.model", classifierModel); err != nil {
 			return err
 		}
+	}
+	if rt.CanSearch(smallModel) {
+		tools = append(tools, tool.NewWebSearch(func(ctx context.Context, system, query string) (tool.SearchResult, error) {
+			return rt.Search(ctx, smallModel, system, query)
+		}))
 	}
 	// Only the fullscreen interface has a human to answer approvals.
 	cfg := app.Config{

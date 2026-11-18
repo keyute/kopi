@@ -22,19 +22,19 @@ func NewTaskOutput(tasks *Tasks) Tool {
 		Description: "Returns a background task's status and its combined output so far; long output keeps its start and end.",
 		Parameters:  taskIDParameters(),
 		Capability:  policy.Read,
-		Run: func(_ context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+		Run: func(_ context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (Result, error) {
 			args, err := decodeTaskIDArgs(raw)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
 			if _, err := admit(policy.Target{}); err != nil {
-				return "", err
+				return Result{}, err
 			}
 			info, err := tasks.Output(args.TaskID)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
-			return fmt.Sprintf("Task %s %s.\n%s", info.ID, info.StatusText(), info.Output), nil
+			return Result{Text: fmt.Sprintf("Task %s %s.\n%s", info.ID, info.StatusText(), info.Output)}, nil
 		},
 		Display: Display{
 			Title:   taskTitle("TaskOutput"),

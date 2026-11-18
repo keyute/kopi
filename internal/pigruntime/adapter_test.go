@@ -1,8 +1,12 @@
 package pigruntime
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -35,12 +39,12 @@ func execTool(ran *atomic.Int32) tool.Tool {
 		Description: "Test-only tool that needs execute mode.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 		Capability:  policy.Exec,
-		Run: func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+		Run: func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (tool.Result, error) {
 			if _, err := admit(policy.Target{}); err != nil {
-				return "", err
+				return tool.Result{}, err
 			}
 			ran.Add(1)
-			return execOutput, nil
+			return tool.Result{Text: execOutput}, nil
 		},
 	}
 }
@@ -76,6 +80,93 @@ func TestHookBlocksToolUnknownToGate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, lastToolResult(t, <-requests), policy.ErrUnknownTool.Error())
 	assert.False(t, ran.Load())
+}
+
+func TestToolResultCarriesImages(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 2, 2))))
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "seen")})
+
+	probe := probeTool(nil)
+	probe.Run = func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (tool.Result, error) {
+		if _, err := admit(policy.Target{}); err != nil {
+			return tool.Result{}, err
+		}
+		return tool.Result{Text: "img", Images: []tool.Image{{MimeType: "image/png", Data: buf.Bytes()}}}, nil
+	}
+	sess := openTestSession(t, r, probe)
+
+	_, err := sess.Send(t.Context(), Prompt{Text: "look"}, nil, nil)
+	require.NoError(t, err)
+	content := toolResultContent(<-requests)
+	require.Len(t, content, 2)
+	assert.Equal(t, ai.TextContent{Text: "img"}, content[0])
+	img, ok := content[1].(ai.ImageContent)
+	require.True(t, ok, "%T", content[1])
+	assert.Equal(t, "image/png", img.MimeType)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(buf.Bytes()), img.Data)
+}
+
+func TestToolResultKeepsOversizedImageForPiGToResize(t *testing.T) {
+	data := widePNG(t)
+	probe := probeTool(nil)
+	probe.Run = func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (tool.Result, error) {
+		if _, err := admit(policy.Target{}); err != nil {
+			return tool.Result{}, err
+		}
+		return tool.Result{Text: "wide image", Images: []tool.Image{{MimeType: "image/png", Data: data}}}, nil
+	}
+	gate := policy.NewGate(policy.NewAuthority(), tool.Specs([]tool.Tool{probe}), nil, nil, nil)
+	args := json.RawMessage(`{}`)
+	require.NoError(t, gate.Before(t.Context(), "call-1", probe.Name, args))
+
+	res, err := (agentTool{tool: probe, gate: gate}).Execute(t.Context(), "call-1", args, nil)
+	require.NoError(t, err)
+	require.False(t, res.IsError, toolResultContentText(res.Content))
+	require.Len(t, res.Content, 2)
+	assert.Equal(t, ai.TextContent{Text: "wide image"}, res.Content[0])
+	img, ok := res.Content[1].(ai.ImageContent)
+	require.True(t, ok, "%T", res.Content[1])
+	assert.Equal(t, base64.StdEncoding.EncodeToString(data), img.Data)
+	assert.Equal(t, "image/png", img.MimeType)
+}
+
+func TestToolResultOmitsUnprocessableImage(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "seen")})
+
+	probe := probeTool(nil)
+	probe.Run = func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (tool.Result, error) {
+		if _, err := admit(policy.Target{}); err != nil {
+			return tool.Result{}, err
+		}
+		data := []byte("\x89PNG\r\n\x1a\ngarbage-bytes")
+		return tool.Result{Text: "(image/png, 20 bytes)", Images: []tool.Image{{MimeType: "image/png", Data: data}}}, nil
+	}
+	sess := openTestSession(t, r, probe)
+
+	_, err := sess.Send(t.Context(), Prompt{Text: "look"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []ai.ToolResultMessageContent{ai.TextContent{Text: "(image/png, 20 bytes)\n" + tool.OmittedImageNote}}, toolResultContent(<-requests))
+}
+
+// toolResultContent returns the content of the last tool result in msgs.
+func toolResultContent(msgs []ai.Message) []ai.ToolResultMessageContent {
+	var content []ai.ToolResultMessageContent
+	for _, m := range msgs {
+		switch m := m.(type) {
+		case ai.ToolResultMessage:
+			content = m.Content
+		case *ai.ToolResultMessage:
+			content = m.Content
+		}
+	}
+	return content
 }
 
 func TestExecToolRunsOnlyInExecuteMode(t *testing.T) {
@@ -131,13 +222,13 @@ func TestExecutePassesTheAdmittedModeToTheTool(t *testing.T) {
 		gate := policy.NewGate(authority, map[string]policy.ToolSpec{"Exec": {Capability: policy.Exec, Sandboxed: true, PlanSandboxed: true}}, nil, nil, nil)
 		require.NoError(t, gate.Before(t.Context(), "call-1", "Exec", json.RawMessage(`{}`)))
 		got := make(chan policy.Mode, 1)
-		exec := tool.Tool{Name: "Exec", Capability: policy.Exec, Run: func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+		exec := tool.Tool{Name: "Exec", Capability: policy.Exec, Run: func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (tool.Result, error) {
 			mode, err := admit(policy.Target{})
 			if err != nil {
-				return "", err
+				return tool.Result{}, err
 			}
 			got <- mode
-			return execOutput, nil
+			return tool.Result{Text: execOutput}, nil
 		}}
 
 		res, err := agentTool{tool: exec, gate: gate}.Execute(t.Context(), "call-1", json.RawMessage(`{}`), nil)
@@ -385,7 +476,7 @@ func TestInterruptTurnRejectsBeforeCancellationForwarding(t *testing.T) {
 }
 
 func TestRealToolsRejectApprovalRetarget(t *testing.T) {
-	for _, name := range []string{"Read", "Write", "Edit"} {
+	for _, name := range []string{"Read", "Write", "Edit", "Glob", "Grep", "LS"} {
 		for _, phase := range []string{"pending approval", "before execution"} {
 			t.Run(name+"/"+phase, func(t *testing.T) {
 				dir := t.TempDir()
@@ -393,12 +484,16 @@ func TestRealToolsRejectApprovalRetarget(t *testing.T) {
 					require.NoError(t, os.Mkdir(filepath.Join(dir, sub), 0o755))
 					require.NoError(t, os.WriteFile(filepath.Join(dir, sub, "file"), []byte(sub+"-secret"), 0o600))
 				}
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "denied", "denied-filename"), []byte("denied-secret"), 0o600))
 				link := filepath.Join(dir, "link")
 				require.NoError(t, os.Symlink("allowed", link))
 				ws, err := tool.NewWorkspace(dir, nil)
 				require.NoError(t, err)
 				defer ws.Close()
-				tools := map[string]tool.Tool{"Read": tool.NewRead(ws), "Write": tool.NewWrite(ws), "Edit": tool.NewEdit(ws)}
+				tools := map[string]tool.Tool{
+					"Read": tool.NewRead(ws), "Write": tool.NewWrite(ws), "Edit": tool.NewEdit(ws),
+					"Glob": tool.NewGlob(ws, nil), "Grep": tool.NewGrep(ws, nil), "LS": tool.NewLS(ws, nil),
+				}
 				realTool := tools[name]
 				args := map[string]any{"file_path": "link/file"}
 				switch name {
@@ -406,11 +501,17 @@ func TestRealToolsRejectApprovalRetarget(t *testing.T) {
 					args["content"] = "new"
 				case "Edit":
 					args["old_string"], args["new_string"] = "allowed", "updated"
+				case "Glob":
+					args = map[string]any{"path": "link", "pattern": "*"}
+				case "Grep":
+					args = map[string]any{"path": "link", "pattern": "secret", "output_mode": "content"}
+				case "LS":
+					args = map[string]any{"path": "link"}
 				}
 				raw, err := json.Marshal(args)
 				require.NoError(t, err)
 				specs := map[string]policy.ToolSpec{name: {Capability: realTool.Capability, Target: realTool.Target}}
-				rules, err := policy.NewRules(dir, t.TempDir(), specs, policy.Source{Name: "test", Ask: []string{name}, Deny: []string{name + "(denied/**)"}})
+				rules, err := policy.NewRules(dir, t.TempDir(), specs, policy.Source{Name: "test", Ask: []string{name}, Deny: []string{name + "(denied)", name + "(denied/**)"}})
 				require.NoError(t, err)
 				authority := policy.NewAuthority()
 				authority.EnterExecute()
@@ -442,6 +543,7 @@ func TestRealToolsRejectApprovalRetarget(t *testing.T) {
 				text := toolResultContentText(result.Content)
 				assert.Contains(t, text, policy.ErrChangedCall.Error())
 				assert.NotContains(t, text, "denied-secret")
+				assert.NotContains(t, text, "denied-filename")
 				for _, sub := range []string{"allowed", "denied"} {
 					data, err := os.ReadFile(filepath.Join(dir, sub, "file"))
 					require.NoError(t, err)

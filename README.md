@@ -1,7 +1,7 @@
 # Kopi
 
 Kopi is a coding-agent CLI built on [PiG](https://github.com/MichaelKinsy/PiG).
-It is early: tools to read, write and edit files and to run commands, tools from MCP servers, a fullscreen terminal interface, and a print mode that answers one prompt.
+It is early: tools to read, search, write and edit files and to run commands, tools from MCP servers, a fullscreen terminal interface, and a print mode that answers one prompt.
 
 ## Build and run
 
@@ -93,7 +93,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 `mode` is the mode sessions start in: `plan` (default) or `execute`.
 
-`smallModel` (`provider/id`) is the model that answers `WebFetch` calls; unset, it is `model`, so set it to a cheaper model. A wrong value, an unknown model or one whose provider has no credential fails at start.
+`smallModel` (`provider/id`) is the model that answers `WebFetch` and `WebSearch` calls; unset, it is `model`, so set it to a cheaper model. A wrong value, an unknown model or one whose provider has no credential fails at start.
 
 `instructionFallbacks` lists bare file names a directory's project instruction file is read from when it has no `AGENTS.md`, the first present winning (default `["CLAUDE.md"]`); `[]` turns the fallback off. Project instruction files load only in a trusted folder (see MCP servers).
 
@@ -178,11 +178,15 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 ## Modes and tools
 
-- Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab. Plan mode allows `Read`, `ToolSearch`, `TaskOutput`, `TaskStop`, `WebFetch`, read-only MCP tools, and `Bash` only in the sandbox, where it cannot write the start directory; `Write`, `Edit` and other MCP tools need execute mode.
+- Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab. Plan mode allows `Read`, `Glob`, `Grep`, `LS`, `ToolSearch`, `TaskOutput`, `TaskStop`, `WebFetch`, `WebSearch`, read-only MCP tools, and `Bash` only in the sandbox, where it cannot write the start directory; `Write`, `Edit` and other MCP tools need execute mode.
 - Sessions start and resume in the configured `mode` (default plan), including ones opened with `/new` and `/resume`; `--mode` overrides the config file. A mode switched to while the first session is opening is the mode it starts in.
-- `Read` reads text files inside the start directory: up to 2000 lines, 2000 characters per line and 100 KiB per call; binary files and directories are refused.
+- `Read` reads text files inside the start directory: up to 2000 lines, 2000 characters per line and 100 KiB per call. It returns PNG, JPEG, GIF and WebP images whole, up to 20 MiB (one that cannot be processed is left out with a note); `offset` and `limit` do not apply to them. Other binary files and directories are refused.
+- `Glob` finds files under a directory inside the start directory by glob (`*`, `?`, `**`, `{a,b}`; a pattern without `/` matches names at any depth), up to 100 paths, most recently modified first.
+- `Grep` searches the contents of a file or the files under a directory with an RE2 regular expression. `output_mode` is `files_with_matches` (default), `content` (with up to 10 `context` lines) or `count`; `limit` is 100 by default, at most 1000; `glob` filters the files searched and `case_insensitive` ignores case. Content output is capped at 100 KiB, like `Read`'s.
+- `LS` lists one directory, not recursively, sorted by name with directories ending in `/`, up to 500 entries, including hidden and gitignored entries and `.git/`.
+- `Glob` and `Grep` skip `.git` directories below the searched path, anything a `.gitignore` in the start directory or below ignores, symlinks and, for `Grep`, binary files; a `path` inside `.git` or inside an ignored directory is searched. None of the three follows a symlink it finds while searching or listing (`LS` lists them, except one whose destination cannot be resolved); a `path` that is itself a symlink is resolved, as for `Read`.
 - `Write` creates a file or replaces its whole content; `Edit` replaces a string that must match exactly once unless `replace_all` is set, in a text file of up to 10 MiB. Both work inside the start directory, replace the file atomically and keep its mode.
-- `Read`, `Write` and `Edit` refuse Kopi's home, including paths there that do not exist yet.
+- `Read`, `Write` and `Edit` refuse Kopi's home, including paths there that do not exist yet. `Glob`, `Grep` and `LS` refuse a path there and leave Kopi's home out of what they search or list.
 - `Bash` runs a command with `bash -c` (`/bin/sh` when `bash` is not on `PATH`) in the start directory, with Kopi's environment. Every call is a fresh shell with no input; `cd` and variables do not carry over.
 - `Bash`'s `timeout` is in milliseconds, default 120000, at most 600000. A command still running at its timeout keeps running as a background task, as does one started with `run_in_background` or moved with the `background` key; the result names the task. On interrupt a foreground command's whole process group is killed (on Windows, only the shell).
 - `Bash` returns stdout and stderr combined, keeping the first and last 15,000 bytes. A non-zero exit is an error reporting the exit code.
@@ -192,6 +196,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - In the sandbox a command can read everything except Kopi's home and the `sandbox.denyRead` paths, which it also cannot write, rename or remove.
 - In the sandbox a command has no network unless `sandbox.network` is true, which opens IP networking only; Unix sockets stay blocked.
 - `WebFetch` fetches one http or https page on a public host and has `smallModel` answer the call's prompt from it; the main model gets the answer and the page's final URL, not the page. HTML is converted to markdown from its main content; text, JSON and XML pass through; other content types are refused. Pages are up to 5 MiB, fetched within 30 seconds and without JavaScript, and the small model reads their first 100,000 characters. Redirects on the same host (a leading `www.` and http to https count as the same) are followed, at most 5; any other redirect is returned for the model to fetch in a new call. `localhost`, names without a dot, `.localhost`, `.local` and `.internal` names, and non-public addresses are refused, including ones a name resolves to. Every call asks unless a rule allows it or the classifier reviews it (see below), in both modes.
+- `WebSearch` has `smallModel` search the web with its provider's built-in search and answer the call's query; the main model gets the answer followed by a `Sources:` list of up to 20 `- [title](url)` lines (`- url` when the page has no title), or `Sources: none`; the list is the pages the answer cites, or the pages the provider consulted when it cited none, not the pages themselves. The tool exists only when `smallModel`'s API protocol has hosted search: OpenAI Responses (also Azure and Codex), Anthropic Messages and Google Generative AI. Every call asks unless a rule allows it or the classifier reviews it (see below), in both modes.
 
 Background tasks:
 
@@ -214,17 +219,18 @@ Permission rules in `config.json` allow, ask about or deny calls:
 }
 ```
 
-- A rule is `Name` or `Name(path)`. The name is a tool name (`Read`, `Write`, `Edit`, `Bash`, `TaskOutput`, `TaskStop`, `ToolSearch`, `WebFetch`), an MCP tool name (see MCP servers) or `*` for every tool; an unknown name or a malformed rule is rejected at start.
+- A rule is `Name` or `Name(path)`. The name is a tool name (`Read`, `Glob`, `Grep`, `LS`, `Write`, `Edit`, `Bash`, `TaskOutput`, `TaskStop`, `ToolSearch`, `WebFetch`, `WebSearch`), an MCP tool name (see MCP servers) or `*` for every tool; an unknown name or a malformed rule is rejected at start.
 - `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory. `*` and `**` glob. A name with no slash (`.env`) matches at any depth, and a directory covers everything in it. Paths match case-insensitively on macOS and Windows.
 - `Name(!path)` exempts the calls it matches from the other rules in its own list, from the same config layer or flag; it never reaches rules from anywhere else.
 - A bare `Name` in `deny` removes the tool from the model.
-- `ToolSearch`, `TaskOutput`, `TaskStop` and `WebFetch` take no path: only a bare rule naming the tool or `*` applies to them; `ToolSearch(path)` and the like are rejected at start.
+- `Glob`, `Grep` and `LS` leave out entries that a `deny` or `ask` rule with a path for that tool or `*` matches, except that a rule which also matches the searched path itself does not hide what is under it, as it already judged the whole call (unless a `!` exception in the same list is what admitted that path); `Read(path)` rules do not apply to them, so use `*(path)` to keep a path from every tool.
+- `ToolSearch`, `TaskOutput`, `TaskStop`, `WebFetch` and `WebSearch` take no path: only a bare rule naming the tool or `*` applies to them; `ToolSearch(path)` and the like are rejected at start.
 - `Bash` takes no path: only a bare `Bash` or `*` rule applies to it, `Bash(path)` is rejected at start, and path rules such as `*(~/.ssh)` never apply to `Bash`. `"ask": ["Bash"]` makes every command ask.
 - Plan mode refuses `Write`, `Edit`, unsandboxed `Bash` and MCP tools not marked read-only before any rule; otherwise rules apply to `Bash` the same in both modes.
-- Deny beats ask, and ask beats allow. With no rule matching, `Read`, `ToolSearch`, `TaskOutput`, `TaskStop` and sandboxed `Bash` are allowed and any other call asks, including every `WebFetch` call and every `Bash` command without the sandbox.
+- Deny beats ask, and ask beats allow. With no rule matching, `Read`, `Glob`, `Grep`, `LS`, `ToolSearch`, `TaskOutput`, `TaskStop` and sandboxed `Bash` are allowed and any other call asks, including every `WebFetch` and `WebSearch` call and every `Bash` command without the sandbox.
 - With `classifier.enabled`, plan mode's refusals and deny rules apply first; a call an ask rule matches, including the built-in asks below, still asks you, and a call an allow rule matches runs without review.
 - With `classifier.enabled` and no rule matching, `Write` and `Edit` run without asking.
-- With `classifier.enabled` and no rule matching, any other call that would ask (every `WebFetch` call, every MCP tool call, every `Bash` command without the sandbox) is reviewed instead. The classifier allows it, denies it with a one-line reason the model gets while the turn goes on, or leaves it to you; a review that fails, times out or returns anything else is left to you too. Sandboxed `Bash` never asks, so it is never reviewed.
+- With `classifier.enabled` and no rule matching, any other call that would ask (every `WebFetch` and `WebSearch` call, every MCP tool call, every `Bash` command without the sandbox) is reviewed instead. The classifier allows it, denies it with a one-line reason the model gets while the turn goes on, or leaves it to you; a review that fails, times out or returns anything else is left to you too. Sandboxed `Bash` never asks, so it is never reviewed.
 - The third denial in a row, and the twentieth in a session, goes to you instead of being denied; a call the classifier allows or you approve ends the run of denials.
 - The classifier is sent the session's prompts (the last 8,000 bytes), its last 20 tool calls with their arguments (each cut to 2,000 bytes) and whether each failed, and the call under review; it is not sent the model's text or any tool output.
 - A review is up to two requests to the classifier model, each limited to 30 seconds: one at the lowest reasoning level the model supports and, unless that one allows the call, one at medium whose answer stands.
@@ -290,9 +296,10 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - Symlinks in rule paths, sandbox paths, the start directory and the home directory are resolved once, at start.
 - `Edit` detects identity or content changes at its pinned destination immediately before replacement and refuses detected conflicts. This is best-effort, not atomic compare-and-swap: reads can race and another writer can change the file between the check and rename. `Write` replaces unconditionally.
 - `Write` and `Edit` pin and check parent-directory handles before making changes, so replacing a parent name with a symlink cannot redirect those changes. Another process can still move a checked directory, including into Kopi's home; later changes follow its handle. Permission checks and these protections are not an OS boundary.
-- `Read` protection is by file identity, re-checked on every read: a hard link into Kopi's home or a credential copied elsewhere is readable, whether Kopi's home exists is observable, and if Kopi's home cannot be inspected all reads are refused.
+- `Read` and `Grep` protection is by file identity, re-checked on every read and, for the searches, on every directory searched: a hard link into Kopi's home or a credential copied elsewhere is readable, whether Kopi's home exists is observable, and if Kopi's home cannot be inspected all reads are refused.
 - Kopi refuses no credential locations outside its home; deny them with rules, such as `*(~/.ssh)`, and to `Bash` with `sandbox.denyRead`.
-- `Read` detects binary files from their first 8 KiB and refuses absolute symlinks, even ones pointing inside the start directory.
+- `Read` and `Grep` tell binary files, and `Read` images, from their first 8 KiB, not their names. `Read` refuses absolute symlinks, even ones pointing inside the start directory.
+- `Grep` shows only the first 2000 characters of a line; a match past that shows the line cut to that prefix.
 - PiG's built-in providers still use ambient credentials: API keys in the environment, Google application-default credentials and the AWS profile and credential chain.
 - Importing PiG changes the TLS settings of Go's process-wide default HTTP transport.
 - `agent/models.json` is trusted configuration: PiG reads it, and its `apiKey` can run a shell command.
@@ -300,6 +307,7 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - `WebFetch` connects directly and ignores `HTTP_PROXY` and `HTTPS_PROXY`; `sandbox.network` does not govern it.
 - An approved `WebFetch` URL is requested from its host, and the call's prompt and up to 100,000 characters of the page go to `smallModel`'s provider.
 - With `classifier.enabled`, the session's prompts, recent tool-call arguments and the call under review go to `classifier.model`'s provider; the classifier can be wrong in both directions, and a review can hold the turn for up to a minute.
+- `WebSearch`'s query goes to `smallModel`'s provider, which runs the search. Hosted search is offered by protocol, so an endpoint that speaks one of those protocols but lacks the hosted tool fails at call time with the provider's error; chat-completions providers, Bedrock, Vertex and Mistral get no `WebSearch`. Google returns redirect links, not the pages' own URLs. A search an Anthropic response pauses mid-turn returns what it has.
 - `WebFetch` runs no JavaScript, and only the `Content-Type` header decides a page's charset; without one, the type is sniffed from the body and it is read as UTF-8 unless it starts with a UTF-16 byte-order mark.
 
 ## Development
@@ -316,7 +324,7 @@ Manual live check: `kopi login openai-codex`, run with a model, ask it to read a
 
 ## Not implemented
 
-Project-level config, a Linux sandbox, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approving a call the classifier denied after the fact, review of sandboxed `Bash` commands, usage accounting for classifier requests, delegation and workflows, a Kopi provider identity, domain rules for `WebFetch`, PDF and image pages, and release packaging and self-update.
+Project-level config, a Linux sandbox, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approving a call the classifier denied after the fact, review of sandboxed `Bash` commands, usage accounting for classifier requests, delegation and workflows, a Kopi provider identity, domain rules for `WebFetch`, domain filters and citation markers for `WebSearch`, other search backends (an MCP server can provide one), PDF and image pages, and release packaging and self-update.
 
 MCP: OAuth for remote servers, the SSE transport, resources and prompts, `tools/list_changed`, image results, sandboxing servers or giving them a restricted environment, and a command or flag to set or change a folder's trust.
 

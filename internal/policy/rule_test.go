@@ -723,3 +723,126 @@ func TestRemovesKeepsToolWithExceptionInSameList(t *testing.T) {
 	other := d.rules(t, Source{Name: "config", Deny: []string{"Edit"}}, Source{Name: "flags", Deny: []string{"Edit(!docs/**)"}})
 	assert.True(t, other.Removes("Edit"))
 }
+
+func TestHidesUsesPathRulesOfTheToolOrStar(t *testing.T) {
+	d := newDirs(t)
+	root := *at(d.ws)
+	key, env := *at(filepath.Join(d.ws, "secrets/k")), *at(filepath.Join(d.ws, ".env"))
+	r := d.rules(t, Source{Name: "config", Deny: []string{"Read(secrets/**)", "*(.env*)"}})
+	assert.True(t, r.Hides("Read", root, key))
+	assert.True(t, r.Hides("Read", root, env))
+	assert.False(t, r.Hides("Read", root, *at(filepath.Join(d.ws, "main.go"))))
+
+	assert.False(t, d.rules(t, Source{Name: "config", Deny: []string{"Edit(secrets/**)"}}).Hides("Read", root, key))
+	assert.True(t, d.rules(t, Source{Name: "config", Ask: []string{"Read(secrets/**)"}}).Hides("Read", root, key))
+	assert.False(t, d.rules(t, Source{Name: "config", Allow: []string{"Read(secrets/**)"}}).Hides("Read", root, key))
+}
+
+func TestHidesIgnoresBareRules(t *testing.T) {
+	d := newDirs(t)
+	file := *at(filepath.Join(d.ws, "a.go"))
+	for _, ask := range []string{"*", "Read"} {
+		assert.False(t, d.rules(t, Source{Name: "config", Ask: []string{ask}}).Hides("Read", *at(d.ws), file), ask)
+	}
+}
+
+func TestHidesHonoursExceptions(t *testing.T) {
+	d := newDirs(t)
+	r := d.rules(t, Source{Name: "config", Deny: []string{"Read(secrets/**)", "Read(!secrets/public/**)"}})
+	assert.False(t, r.Hides("Read", *at(d.ws), *at(filepath.Join(d.ws, "secrets/public/a"))))
+	assert.True(t, r.Hides("Read", *at(d.ws), *at(filepath.Join(d.ws, "secrets/b"))))
+}
+
+func TestHidesExceptionsRequireBothPaths(t *testing.T) {
+	d := newDirs(t)
+	root := *at(d.ws)
+	public := filepath.Join(d.ws, "secrets/public/a")
+	private := filepath.Join(d.ws, "secrets/private/a")
+	rules := []string{"Read(secrets/**)", "Read(!secrets/public/**)"}
+	for _, source := range []Source{
+		{Name: "deny", Deny: rules},
+		{Name: "ask", Ask: rules},
+	} {
+		t.Run(source.Name, func(t *testing.T) {
+			r := d.rules(t, source)
+			for _, tc := range []struct {
+				name   string
+				target Target
+				want   bool
+			}{
+				{"lexical exception only", Target{Path: public, Real: private}, true},
+				{"resolved exception only", Target{Path: private, Real: public}, true},
+				{"both paths excepted", *at(public), false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					assert.Equal(t, tc.want, r.Hides("Read", root, tc.target))
+				})
+			}
+		})
+	}
+}
+
+func TestHidesExceptionDoesNotReachAnotherSource(t *testing.T) {
+	d := newDirs(t)
+	root := *at(d.ws)
+	public := *at(filepath.Join(d.ws, "secrets/public/a"))
+	rules := []string{"Read(secrets/**)", "Read(!secrets/public/**)"}
+	for _, excepted := range []Source{
+		{Name: "deny exception", Deny: rules},
+		{Name: "ask exception", Ask: rules},
+	} {
+		t.Run(excepted.Name, func(t *testing.T) {
+			assert.False(t, d.rules(t, excepted).Hides("Read", root, public))
+			for _, other := range []Source{
+				{Name: "other deny", Deny: []string{"Read(secrets/**)"}},
+				{Name: "other ask", Ask: []string{"Read(secrets/**)"}},
+			} {
+				t.Run(other.Name, func(t *testing.T) {
+					assert.True(t, d.rules(t, excepted, other).Hides("Read", root, public))
+					assert.True(t, d.rules(t, other, excepted).Hides("Read", root, public))
+				})
+			}
+		})
+	}
+}
+
+func TestHidesSkipsRuleThatMatchedTheRoot(t *testing.T) {
+	d := newDirs(t)
+	src := *at(filepath.Join(d.ws, "src"))
+	r := d.rules(t, Source{Name: "config", Ask: []string{"Read(src/**)"}})
+	file := *at(filepath.Join(d.ws, "src/a.go"))
+	assert.False(t, r.Hides("Read", src, file))
+	assert.True(t, r.Hides("Read", *at(d.ws), file))
+
+	r = d.rules(t, Source{Name: "config", Ask: []string{"Read(src)", "*(.env*)"}})
+	assert.False(t, r.Hides("Read", src, file))
+	assert.True(t, r.Hides("Read", src, *at(filepath.Join(d.ws, "src/.env"))))
+}
+
+func TestHidesAppliesRuleMatchingRootWhenExceptionAdmittedIt(t *testing.T) {
+	d := newDirs(t)
+	pub := *at(filepath.Join(d.ws, "src/pub"))
+	r := d.rules(t, Source{Name: "config", Deny: []string{"Read(src/**)", "Read(!src/pub)"}})
+	link := Target{Path: filepath.Join(d.ws, "src/pub/l"), Real: filepath.Join(d.ws, "src/private")}
+	assert.True(t, r.Hides("Read", pub, link))
+}
+
+func TestHidesAcrossSources(t *testing.T) {
+	d := newDirs(t)
+	src := *at(filepath.Join(d.ws, "src"))
+	env := *at(filepath.Join(d.ws, "src/.env"))
+	approved := Source{Name: "config", Ask: []string{"Read(src)"}}
+	for _, other := range []Source{
+		{Name: "flags", Deny: []string{"*(.env*)"}},
+		{Name: "flags", Ask: []string{"*(.env*)"}},
+	} {
+		r := d.rules(t, approved, other)
+		assert.True(t, r.Hides("Read", src, env))
+		assert.False(t, r.Hides("Read", src, *at(filepath.Join(d.ws, "src/a.go"))))
+	}
+}
+
+func TestHidesWithNilRules(t *testing.T) {
+	var r *Rules
+	assert.False(t, r.Hides("Read", Target{}, Target{}))
+}
