@@ -88,7 +88,7 @@ func NewSkill(skills []skill.Skill, home string) Tool {
 			if args.File == "" {
 				return skill.Text(skills[i]), nil
 			}
-			return readSkillFile(ctx, skills[i], loaded[i], home, args)
+			return readSkillFile(ctx, skills[i], loaded[i], home, args, target)
 		},
 		Display: Display{
 			Title: func(raw json.RawMessage) string {
@@ -188,7 +188,7 @@ func decodeSkillArgs(raw json.RawMessage) (skillArgs, error) {
 	return args, nil
 }
 
-func readSkillFile(ctx context.Context, s skill.Skill, loaded os.FileInfo, home string, args skillArgs) (string, error) {
+func readSkillFile(ctx context.Context, s skill.Skill, loaded os.FileInfo, home string, args skillArgs, target policy.Target) (string, error) {
 	if loaded == nil {
 		return "", fmt.Errorf("%w: %s", ErrSkillChanged, s.Name)
 	}
@@ -227,7 +227,7 @@ func readSkillFile(ctx context.Context, s skill.Skill, loaded os.FileInfo, home 
 	if err != nil {
 		return "", fmt.Errorf("failed to stat %s: %w", args.File, err)
 	}
-	if err := checkSkillHome(s, args.File, info, home); err != nil {
+	if err := checkSkillHome(s, args.File, info, home, target); err != nil {
 		return "", err
 	}
 	if !info.Mode().IsRegular() {
@@ -241,7 +241,7 @@ func readSkillFile(ctx context.Context, s skill.Skill, loaded os.FileInfo, home 
 // opened file, with the protected identities taken afresh on every read, so a
 // skill directory that is or holds part of the home, or reaches it through a
 // symlink, cannot expose the home's credentials or settings.
-func checkSkillHome(s skill.Skill, file string, opened os.FileInfo, home string) error {
+func checkSkillHome(s skill.Skill, file string, opened os.FileInfo, home string, admitted policy.Target) error {
 	target, protected, err := walkSkillHome(skillPath(s, file), home)
 	if err != nil {
 		return err
@@ -249,14 +249,40 @@ func checkSkillHome(s skill.Skill, file string, opened os.FileInfo, home string)
 	if protected {
 		return fmt.Errorf("%w: %s", ErrProtected, file)
 	}
-	resolved, err := os.Lstat(target)
-	if err != nil {
-		return fmt.Errorf("failed to stat %s: %w", file, err)
-	}
-	// The path was resolved after the root opened it; requiring the same
-	// identity binds this judgement to the file the read then goes through.
-	if !os.SameFile(opened, resolved) {
+	if target != admitted.Real {
 		return fmt.Errorf("%w: %s", ErrSkillChanged, s.Name)
+	}
+	return validateSkillTarget(target, opened)
+}
+
+// validateSkillTarget binds the opened file to the canonical admitted path
+// without following symlinks installed after that path was resolved.
+func validateSkillTarget(target string, opened os.FileInfo) error {
+	parent, err := os.OpenRoot(string(filepath.Separator))
+	if err != nil {
+		return fmt.Errorf("failed to open parent of %s: %w", target, err)
+	}
+	defer func() { parent.Close() }()
+	for _, name := range components(filepath.Dir(target)) {
+		child, err := parent.OpenRoot(name)
+		if err != nil {
+			return fmt.Errorf("%w: failed to open parent of %s: %w", ErrSkillChanged, target, err)
+		}
+		before, lerr := parent.Lstat(name)
+		now, serr := child.Stat(".")
+		if lerr != nil || serr != nil || !before.IsDir() || before.Mode()&os.ModeSymlink != 0 || !os.SameFile(before, now) {
+			child.Close()
+			return fmt.Errorf("%w: %s", ErrSkillChanged, target)
+		}
+		parent.Close()
+		parent = child
+	}
+	resolved, err := parent.Lstat(filepath.Base(target))
+	if err != nil {
+		return fmt.Errorf("failed to stat %s: %w", target, err)
+	}
+	if resolved.Mode()&os.ModeSymlink != 0 || !os.SameFile(opened, resolved) {
+		return fmt.Errorf("%w: %s", ErrSkillChanged, target)
 	}
 	return nil
 }

@@ -193,6 +193,104 @@ func TestSkillRunAdmitsTheTargetItReports(t *testing.T) {
 	}
 }
 
+func TestSkillRefusesSymlinkRetargetedAfterAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		initial     string
+		replacement string
+		file        string
+	}{
+		{"file", "allowed/ref.md", "replacement/ref.md", "link"},
+		{"parent directory", "allowed", "replacement", "link/ref.md"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sk := skillDir(t)
+			for dir, content := range map[string]string{
+				"allowed":     "allowed content",
+				"replacement": "replacement content",
+			} {
+				require.NoError(t, os.Mkdir(filepath.Join(sk.Dir, dir), 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(sk.Dir, dir, "ref.md"), []byte(content), 0o644))
+			}
+			link := filepath.Join(sk.Dir, "link")
+			require.NoError(t, os.Symlink(tc.initial, link))
+			tool := NewSkill([]skill.Skill{sk}, "")
+			raw, err := json.Marshal(map[string]string{"name": sk.Name, "file": tc.file})
+			require.NoError(t, err)
+			want, err := tool.Target(raw)
+			require.NoError(t, err)
+			real, err := filepath.EvalSymlinks(filepath.Join(sk.Dir, "allowed", "ref.md"))
+			require.NoError(t, err)
+			assert.Equal(t, filepath.Join(sk.Dir, tc.file), want.Path)
+			assert.Equal(t, real, want.Real)
+			var admitted bool
+
+			out, err := tool.Run(t.Context(), raw, func(target policy.Target) (policy.Mode, error) {
+				admitted = true
+				assert.Equal(t, want, target)
+				require.NoError(t, os.Remove(link))
+				require.NoError(t, os.Symlink(tc.replacement, link))
+				return policy.Plan, nil
+			})
+
+			assert.True(t, admitted)
+			assert.ErrorIs(t, err, ErrSkillChanged)
+			assert.NotContains(t, out, "replacement content")
+		})
+	}
+}
+
+func TestValidateSkillTarget(t *testing.T) {
+	for _, name := range []string{"unchanged", "different file", "parent symlink", "nested parent symlink", "leaf symlink"} {
+		t.Run(name, func(t *testing.T) {
+			dir, err := filepath.EvalSymlinks(t.TempDir())
+			require.NoError(t, err)
+			for _, parent := range []string{"allowed", "denied"} {
+				require.NoError(t, os.MkdirAll(filepath.Join(dir, parent, "nested"), 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, parent, "nested", "ref.md"), []byte(parent), 0o644))
+			}
+			target := filepath.Join(dir, "allowed", "nested", "ref.md")
+			denied := filepath.Join(dir, "denied", "nested", "ref.md")
+			openPath := denied
+			if name == "unchanged" {
+				openPath = target
+			}
+			f, err := os.Open(openPath)
+			require.NoError(t, err)
+			defer f.Close()
+			opened, err := f.Stat()
+			require.NoError(t, err)
+
+			switch name {
+			case "parent symlink":
+				parent := filepath.Join(dir, "allowed")
+				require.NoError(t, os.Rename(parent, parent+"-old"))
+				require.NoError(t, os.Symlink("denied", parent))
+			case "nested parent symlink":
+				parent := filepath.Dir(target)
+				require.NoError(t, os.Rename(parent, parent+"-old"))
+				require.NoError(t, os.Symlink(filepath.Dir(denied), parent))
+			case "leaf symlink":
+				require.NoError(t, os.Remove(target))
+				require.NoError(t, os.Symlink(denied, target))
+			}
+			if name == "parent symlink" || name == "nested parent symlink" {
+				resolved, err := os.Lstat(target)
+				require.NoError(t, err)
+				require.True(t, os.SameFile(opened, resolved))
+			}
+
+			err = validateSkillTarget(target, opened)
+
+			if name == "unchanged" {
+				require.NoError(t, err)
+			} else {
+				assert.ErrorIs(t, err, ErrSkillChanged)
+			}
+		})
+	}
+}
+
 func TestSkillDescriptionListsInvocableSkillsSorted(t *testing.T) {
 	desc := NewSkill([]skill.Skill{
 		{Name: "zeta", Description: "Last."},
