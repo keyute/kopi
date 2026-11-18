@@ -123,27 +123,34 @@ type SessionChanged struct {
 	History []Event
 }
 
+// StatusCommandResult is ephemeral footer output, not session history.
+type StatusCommandResult struct {
+	Name, Output string
+	Err          error
+}
+
 type Error struct{ Err error }
 
-func (TurnStart) isEvent()         {}
-func (QueueChanged) isEvent()      {}
-func (UserMessage) isEvent()       {}
-func (TextDelta) isEvent()         {}
-func (ThinkingDelta) isEvent()     {}
-func (ToolStart) isEvent()         {}
-func (ToolEnd) isEvent()           {}
-func (ApprovalRequested) isEvent() {}
-func (ApprovalEnded) isEvent()     {}
-func (LoginRequested) isEvent()    {}
-func (LoginEnded) isEvent()        {}
-func (Notice) isEvent()            {}
-func (Activity) isEvent()          {}
-func (TurnEnd) isEvent()           {}
-func (TaskEnded) isEvent()         {}
-func (TasksChanged) isEvent()      {}
-func (ModeChanged) isEvent()       {}
-func (SessionChanged) isEvent()    {}
-func (Error) isEvent()             {}
+func (TurnStart) isEvent()           {}
+func (QueueChanged) isEvent()        {}
+func (UserMessage) isEvent()         {}
+func (TextDelta) isEvent()           {}
+func (ThinkingDelta) isEvent()       {}
+func (ToolStart) isEvent()           {}
+func (ToolEnd) isEvent()             {}
+func (ApprovalRequested) isEvent()   {}
+func (ApprovalEnded) isEvent()       {}
+func (LoginRequested) isEvent()      {}
+func (LoginEnded) isEvent()          {}
+func (Notice) isEvent()              {}
+func (Activity) isEvent()            {}
+func (TurnEnd) isEvent()             {}
+func (TaskEnded) isEvent()           {}
+func (TasksChanged) isEvent()        {}
+func (ModeChanged) isEvent()         {}
+func (SessionChanged) isEvent()      {}
+func (StatusCommandResult) isEvent() {}
+func (Error) isEvent()               {}
 
 type Status int
 

@@ -3,11 +3,13 @@ package tui
 import (
 	"fmt"
 	"image/color"
+	"strconv"
 	"strings"
 	"sync"
 
 	"charm.land/glamour/v2"
 	"charm.land/glamour/v2/ansi"
+	"charm.land/lipgloss/v2"
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/styles"
 	xansi "github.com/charmbracelet/x/ansi"
@@ -36,7 +38,7 @@ func newMarkdown(width int, th theme) *markdown {
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithStyles(markdownStyle(width, th)),
 		glamour.WithWordWrap(width),
-		glamour.WithChromaFormatter("terminal16m"),
+		glamour.WithChromaFormatter(th.codeFormatter),
 	)
 	return &markdown{r: r, width: width, blocks: map[string][]chunk{}}
 }
@@ -181,28 +183,47 @@ func nextFence(fence, l string) string {
 	return ""
 }
 
-// codeThemes registers, once, copies of Chroma's styles that draw no
-// background: Catppuccin shades diff lines, and only what the user typed is
-// shaded here.
-var codeThemes = sync.OnceValue(func() map[string]string {
-	names := map[string]string{}
-	for _, base := range []string{"catppuccin-mocha", "catppuccin-latte"} {
-		src := styles.Get(base)
-		b := chroma.NewStyleBuilder("kopi-" + base)
-		for _, tt := range src.Types() {
-			e := src.Get(tt)
-			e.Background = 0
-			b.AddEntry(tt, e)
-		}
-		if s, err := b.Build(); err == nil {
-			names[base] = styles.Register(s).Name
-		}
+var (
+	codeThemesMu sync.Mutex
+	codeThemes   = map[string]string{}
+)
+
+// codeStyle registers, once per base, a copy of the Chroma style base that
+// draws no background: Catppuccin shades diff lines, and only what the user
+// typed is shaded here. It returns the copy's name, or "" if the copy fails.
+func codeStyle(base string) string {
+	codeThemesMu.Lock()
+	defer codeThemesMu.Unlock()
+	if name, ok := codeThemes[base]; ok {
+		return name
 	}
-	return names
-})
+	src := styles.Get(base)
+	b := chroma.NewStyleBuilder("kopi-" + base)
+	for _, tt := range src.Types() {
+		e := src.Get(tt)
+		e.Background = 0
+		b.AddEntry(tt, e)
+	}
+	name := ""
+	if s, err := b.Build(); err == nil {
+		name = styles.Register(s).Name
+	}
+	codeThemes[base] = name
+	return name
+}
 
 func markdownStyle(width int, th theme) ansi.StyleConfig {
 	c := func(col color.Color) *string {
+		switch col := col.(type) {
+		case lipgloss.NoColor:
+			return nil
+		case xansi.BasicColor:
+			s := strconv.Itoa(int(col))
+			return &s
+		case lipgloss.ANSIColor:
+			s := strconv.Itoa(int(col))
+			return &s
+		}
 		r, g, b, _ := col.RGBA()
 		s := fmt.Sprintf("#%02x%02x%02x", r>>8, g>>8, b>>8)
 		return &s
@@ -225,6 +246,6 @@ func markdownStyle(width int, th theme) ansi.StyleConfig {
 		Link:           ansi.StylePrimitive{Color: c(th.link)},
 		LinkText:       ansi.StylePrimitive{Color: c(th.link)},
 		Code:           ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Color: c(th.code)}},
-		CodeBlock:      ansi.StyleCodeBlock{StyleBlock: ansi.StyleBlock{Margin: &zero}, Theme: codeThemes()[th.codeTheme]},
+		CodeBlock:      ansi.StyleCodeBlock{StyleBlock: ansi.StyleBlock{Margin: &zero}, Theme: codeStyle(th.codeTheme)},
 	}
 }

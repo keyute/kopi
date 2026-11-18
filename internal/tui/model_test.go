@@ -156,9 +156,10 @@ func (f *fakeController) StopTask(id string) error {
 
 // testOptions are the options config's defaults resolve to.
 func testOptions() Options {
-	s := config.DefaultStatusLine()
-	return Options{Version: "v1.2.3", Keys: config.DefaultKeys(), StatusLeft: s.Left, StatusRight: s.Right}
+	return Options{Version: "v1.2.3", Keys: config.DefaultKeys(), StatusLine: config.DefaultStatusLine(), Themes: testThemes}
 }
+
+var testThemes = Themes{dark: mocha(), light: latte()}
 
 func newTestModel(t *testing.T, width, height int) (*model, *fakeController) {
 	t.Helper()
@@ -1373,11 +1374,26 @@ func TestRowsFillTheScreenStatusLast(t *testing.T) {
 			s := screen(m)
 			require.Len(t, s, m.height)
 			assert.Equal(t, m.height, m.transcriptHeight()+len(m.below))
-			status := strings.TrimRight(ansi.Strip(statusLine(m.status, m.layout, m.flashText, m.width, m.th)), " ")
+			status := strings.TrimRight(ansi.Strip(statusLine(m.statusInput(), m.layout, m.width, m.th)), " ")
 			assert.Equal(t, status, s[m.height-1])
 			if m.approval == nil && m.tasks == nil {
 				assert.True(t, strings.HasPrefix(s[m.composerTop()], "❯"), "row %d: %q", m.composerTop(), s[m.composerTop()])
 			}
 		})
 	}
+}
+
+func TestCommandSegmentResultsRenderAndRecover(t *testing.T) {
+	opts := testOptions()
+	opts.StatusLine = config.StatusLine{Left: []string{"git"}, Right: []string{"mode"}, Separator: " ", Segments: map[string]config.StatusSegment{"git": {Command: "git-info"}}}
+	m, _ := newTestModelWith(t, 40, 20, opts)
+	assert.NotContains(t, statusText(m), "ok")
+	send(m, event.StatusCommandResult{Name: "git", Output: "\x1b[32mok\x1b[0m\nsecond line"})
+	assert.Equal(t, "  ok"+strings.Repeat(" ", 30)+"plan", strings.TrimRight(ansi.Strip(statusText(m)), " "))
+	assert.Contains(t, statusLine(m.statusInput(), m.layout, m.width, m.th), "\x1b[32mok")
+	send(m, event.StatusCommandResult{Name: "git", Err: errors.New("exit status 1")})
+	assert.NotContains(t, statusText(m), "ok", "a failed run hides the segment")
+	send(m, event.StatusCommandResult{Name: "git", Output: "back"})
+	assert.Contains(t, statusText(m), "back")
+	assert.Empty(t, body(m), "footer results are not transcript events")
 }

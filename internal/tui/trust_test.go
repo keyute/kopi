@@ -19,7 +19,7 @@ import (
 var trustReq = TrustRequest{Folder: "/w/proj", Parent: "/w", Servers: []string{"docs: npx -y docs-mcp", "remote: https://example.com/mcp"}}
 
 func newTrustTestModel(req TrustRequest) *trustModel {
-	m := newTrustModel(req, config.DefaultKeys())
+	m := newTrustModel(req, config.DefaultKeys(), testThemes)
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
 	return m
 }
@@ -322,7 +322,7 @@ func TestTrustHintNamesBoundKeys(t *testing.T) {
 		{"neither", map[string][]string{}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m := newTrustModel(trustReq, tc.keys)
+			m := newTrustModel(trustReq, tc.keys, testThemes)
 			m.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
 			rows := trustScreen(m)
 			assert.Equal(t, tc.want, rows[len(rows)-1])

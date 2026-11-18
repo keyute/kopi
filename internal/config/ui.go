@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
+	"unicode"
 )
 
 // KeyActions lists every bindable action in display order.
@@ -31,11 +34,36 @@ var KeyActions = []string{
 }
 
 // StatusSegments lists every segment the status line can show.
-var StatusSegments = []string{"model", "context", "branch", "mode", "notice", "sandbox", "tasks"}
+var StatusSegments = []string{"model", "context", "branch", "mode", "notice", "sandbox", "tasks", "cwd"}
+
+// ThemeRoles lists every colour role a theme defines.
+var ThemeRoles = []string{"accent", "success", "error", "warning", "muted", "dim", "text", "userMessageBg", "heading", "link", "code", "frame"}
 
 type StatusLine struct {
 	Left  []string `koanf:"left"`
 	Right []string `koanf:"right"`
+	// Separator is drawn between segments; "" is a valid choice.
+	Separator string                   `koanf:"separator"`
+	Segments  map[string]StatusSegment `koanf:"segments"`
+}
+
+// StatusSegment is a user-defined segment with either static Text or the
+// output of Command, rerun every Interval (a Go duration) when one is set.
+type StatusSegment struct {
+	Text     string `koanf:"text"`
+	Command  string `koanf:"command"`
+	Color    string `koanf:"color"`
+	Interval string `koanf:"interval"`
+}
+
+// Theme names the theme used on a dark and on a light background.
+type Theme struct {
+	Dark  string `koanf:"dark"`
+	Light string `koanf:"light"`
+}
+
+func DefaultTheme() Theme {
+	return Theme{Dark: "catppuccin-mocha", Light: "catppuccin-latte"}
 }
 
 func DefaultKeys() map[string][]string {
@@ -63,7 +91,7 @@ func DefaultKeys() map[string][]string {
 }
 
 func DefaultStatusLine() StatusLine {
-	return StatusLine{Left: []string{"model", "context", "branch"}, Right: []string{"notice", "sandbox", "tasks", "mode"}}
+	return StatusLine{Left: []string{"model", "context", "branch"}, Right: []string{"notice", "sandbox", "tasks", "mode"}, Separator: " · "}
 }
 
 // uiDefaults is the default layer's share of the UI blocks. Nested values must
@@ -75,9 +103,11 @@ func uiDefaults() map[string]any {
 		keys[action] = ks
 	}
 	s := DefaultStatusLine()
+	t := DefaultTheme()
 	return map[string]any{
 		"keys":       keys,
-		"statusline": map[string]any{"left": s.Left, "right": s.Right},
+		"statusline": map[string]any{"left": s.Left, "right": s.Right, "separator": s.Separator, "segments": map[string]any{}},
+		"theme":      map[string]any{"dark": t.Dark, "light": t.Light},
 	}
 }
 
@@ -97,15 +127,81 @@ func validateUI(c Config) error {
 			}
 		}
 	}
-	for _, side := range []struct {
-		name string
-		segs []string
-	}{{"left", c.StatusLine.Left}, {"right", c.StatusLine.Right}} {
-		for _, s := range side.segs {
-			if !slices.Contains(StatusSegments, s) {
-				return fmt.Errorf("%w: statusline.%s: unknown segment %q", ErrInvalidValue, side.name, s)
+	if strings.ContainsFunc(c.StatusLine.Separator, unicode.IsControl) {
+		return fmt.Errorf("%w: statusline.separator: control character", ErrInvalidValue)
+	}
+	return validateSegments(c.StatusLine.Segments)
+}
+
+func validateSegments(segments map[string]StatusSegment) error {
+	for _, name := range slices.Sorted(maps.Keys(segments)) {
+		seg := segments[name]
+		key := "statusline.segments." + name
+		switch {
+		case slices.Contains(StatusSegments, name):
+			return fmt.Errorf("%w: %s: name is a built-in segment", ErrInvalidValue, key)
+		case strings.ContainsFunc(seg.Text, unicode.IsControl):
+			return fmt.Errorf("%w: %s.text: control character", ErrInvalidValue, key)
+		case (seg.Text == "") == (seg.Command == ""):
+			return fmt.Errorf("%w: %s: want text or command, not both or neither", ErrInvalidValue, key)
+		case seg.Interval != "" && seg.Command == "":
+			return fmt.Errorf("%w: %s: interval needs command", ErrInvalidValue, key)
+		}
+		if seg.Interval != "" {
+			d, err := time.ParseDuration(seg.Interval)
+			if err != nil || d < time.Second {
+				return fmt.Errorf("%w: %s: interval %q is not a duration of at least 1s", ErrInvalidValue, key, seg.Interval)
+			}
+		}
+		if seg.Color != "" {
+			if err := ValidColor(seg.Color); err != nil {
+				return fmt.Errorf("%w: %s.color: %w", ErrInvalidValue, key, err)
 			}
 		}
 	}
 	return nil
+}
+
+// validateSegmentRefs checks the merged statusline lists against the built-in
+// and user-defined segments, naming the layer that set each list.
+func validateSegmentRefs(s StatusLine, origins map[string]string) error {
+	for _, side := range []struct {
+		name string
+		segs []string
+	}{{"left", s.Left}, {"right", s.Right}} {
+		for _, name := range side.segs {
+			if _, user := s.Segments[name]; !user && !slices.Contains(StatusSegments, name) {
+				key := "statusline." + side.name
+				return fmt.Errorf("config layer %s: %w: %s: unknown segment %q", originOf(origins, key), ErrInvalidValue, key, name)
+			}
+		}
+	}
+	return nil
+}
+
+func validateThemeName(key, name string) error {
+	if name == "" || strings.ContainsAny(name, `/\`) || strings.HasPrefix(name, ".") {
+		return fmt.Errorf("%w: %s: %q is not a theme name", ErrInvalidValue, key, name)
+	}
+	return nil
+}
+
+// ValidColor accepts a ThemeRoles name or a literal colour.
+func ValidColor(s string) error {
+	if slices.Contains(ThemeRoles, s) {
+		return nil
+	}
+	return ValidLiteralColor(s)
+}
+
+// ValidLiteralColor accepts "#rgb", "#rrggbb" or an ANSI index from 0 to 255.
+func ValidLiteralColor(s string) error {
+	if hex, ok := strings.CutPrefix(s, "#"); ok {
+		if _, err := strconv.ParseUint(hex, 16, 32); err == nil && (len(hex) == 3 || len(hex) == 6) {
+			return nil
+		}
+	} else if _, err := strconv.ParseUint(s, 10, 8); err == nil {
+		return nil
+	}
+	return fmt.Errorf("invalid colour %q: want #rgb, #rrggbb or 0-255", s)
 }

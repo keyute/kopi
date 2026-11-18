@@ -5,6 +5,8 @@ package tool
 import (
 	"os/exec"
 	"syscall"
+
+	childprocess "github.com/keyute/kopi/internal/process"
 )
 
 // newSession puts the shell in a new session so a kill reaches everything it
@@ -22,11 +24,11 @@ func kill(cmd *exec.Cmd) error {
 }
 
 // watchExit reports the shell's exit without reaping it; reap then collects
-// its status. awaitExit exists only for Linux and macOS, so other Unix
+// its status. childprocess.AwaitExit exists only for Linux and macOS, so other Unix
 // systems deliberately fail to build rather than lose group kills.
 func watchExit(cmd *exec.Cmd) (exited <-chan error, reap func() error) {
 	ch := make(chan error, 1)
 	pid := cmd.Process.Pid
-	go func() { ch <- awaitExit(pid) }()
+	go func() { ch <- childprocess.AwaitExit(pid) }()
 	return ch, cmd.Wait
 }

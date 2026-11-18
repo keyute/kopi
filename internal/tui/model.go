@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -59,11 +60,15 @@ type model struct {
 	version string
 
 	th            theme
+	themes        Themes
 	width, height int
 	keys          keyMap
 	composer      composer
 	spinner       spinner.Model
 	layout        statusLayout
+	home          string
+	commands      statusCommands
+	commandOut    map[string]string
 	geo           geometry
 	clip          clipboard
 	imageDir      string
@@ -123,26 +128,35 @@ type model struct {
 }
 
 func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model {
-	th, km := mocha(), newKeyMap(opts.Keys)
+	th, km := opts.Themes.dark, newKeyMap(opts.Keys)
 	m := &model{
 		ctx: ctx, c: c, bridge: b, version: opts.Version,
-		th: th, keys: km, composer: newComposer(th, km.newline), spinner: newSpinner(th),
-		layout:   statusLayout{left: opts.StatusLeft, right: opts.StatusRight},
-		clip:     systemClipboard{},
-		imageDir: opts.ImageDir,
-		folds:    newFolds(),
-		follow:   true,
-		geo:      geometry{working: -1},
-		status:   c.Status(),
-		pickVerb: randomVerb,
-		verb:     fallbackVerb,
+		th: th, themes: opts.Themes, keys: km, composer: newComposer(th, km.newline), spinner: newSpinner(th),
+		layout: statusLayout{
+			left: opts.StatusLine.Left, right: opts.StatusLine.Right,
+			separator: opts.StatusLine.Separator, segments: opts.StatusLine.Segments,
+		},
+		commandOut: map[string]string{},
+		clip:       systemClipboard{},
+		imageDir:   opts.ImageDir,
+		folds:      newFolds(),
+		follow:     true,
+		geo:        geometry{working: -1},
+		status:     c.Status(),
+		pickVerb:   randomVerb,
+		verb:       fallbackVerb,
 	}
 	m.composer.setHistory(c.History())
+	m.home, _ = os.UserHomeDir()
 	return m
 }
 
 func (m *model) Init() tea.Cmd {
 	return tea.Batch(m.bridge.wait(), tea.RequestBackgroundColor)
+}
+
+func (m *model) statusInput() statusInput {
+	return statusInput{Status: m.status, notice: m.flashText, home: m.home, commands: m.commandOut}
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -163,7 +177,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.relayout()
 	case tea.BackgroundColorMsg:
 		if !msg.IsDark() {
-			m.th = latte()
+			m.th = m.themes.light
 			m.clearSelection()
 			m.composer.style(m.th)
 			m.spinner.Style = fg(m.th.accent)
@@ -446,6 +460,9 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 		case event.SessionChanged, event.ModeChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged:
 			refresh = true
 		}
+		if m.commands != nil {
+			m.commands.Observe(ev)
+		}
 		m.apply(ev)
 	}
 	if refresh {
@@ -463,6 +480,13 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 
 func (m *model) apply(ev event.Event) {
 	switch ev := ev.(type) {
+	case event.StatusCommandResult:
+		if ev.Err != nil {
+			delete(m.commandOut, ev.Name)
+		} else {
+			m.commandOut[ev.Name] = cleanStatusOutput(ev.Output)
+		}
+		return
 	case event.SessionChanged:
 		m.tr = transcript.Transcript{}
 		if len(ev.History) > 0 {
@@ -647,7 +671,7 @@ func (m *model) place() {
 		rows = append(rows, m.menuRows()...)
 		m.geo.fields = []fieldArea{{c: &m.composer, y: m.geo.composerTop, h: m.composer.height()}}
 	}
-	rows = append(rows, statusLine(m.status, m.layout, m.flashText, m.width, m.th))
+	rows = append(rows, statusLine(m.statusInput(), m.layout, m.width, m.th))
 	m.below = make([]line, len(rows))
 	for i, r := range rows {
 		m.below[i] = line{text: r}
