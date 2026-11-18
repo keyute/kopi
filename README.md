@@ -93,7 +93,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 `mode` is the mode sessions start in: `plan` (default) or `execute`.
 
-`smallModel` (`provider/id`) is the model that answers `WebFetch` calls; unset, it is `model`, so set it to a cheaper model. A wrong value, an unknown model or one whose provider has no credential fails at start.
+`smallModel` (`provider/id`) is the model that answers `WebFetch` and `WebSearch` calls; unset, it is `model`, so set it to a cheaper model. A wrong value, an unknown model or one whose provider has no credential fails at start.
 
 `instructionFallbacks` lists bare file names a directory's project instruction file is read from when it has no `AGENTS.md`, the first present winning (default `["CLAUDE.md"]`); `[]` turns the fallback off. Project instruction files load only in a trusted folder (see MCP servers).
 
@@ -161,7 +161,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 ## Modes and tools
 
-- Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab. Plan mode allows `Read`, `ToolSearch`, `TaskOutput`, `TaskStop`, `WebFetch`, read-only MCP tools, and `Bash` only in the sandbox, where it cannot write the start directory; `Write`, `Edit` and other MCP tools need execute mode.
+- Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab. Plan mode allows `Read`, `ToolSearch`, `TaskOutput`, `TaskStop`, `WebFetch`, `WebSearch`, read-only MCP tools, and `Bash` only in the sandbox, where it cannot write the start directory; `Write`, `Edit` and other MCP tools need execute mode.
 - Sessions start and resume in the configured `mode` (default plan), including ones opened with `/new` and `/resume`; `--mode` overrides the config file. A mode switched to while the first session is opening is the mode it starts in.
 - `Read` reads text files inside the start directory: up to 2000 lines, 2000 characters per line and 100 KiB per call; binary files and directories are refused.
 - `Write` creates a file or replaces its whole content; `Edit` replaces a string that must match exactly once unless `replace_all` is set, in a text file of up to 10 MiB. Both work inside the start directory, replace the file atomically and keep its mode.
@@ -175,6 +175,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - In the sandbox a command can read everything except Kopi's home and the `sandbox.denyRead` paths, which it also cannot write, rename or remove.
 - In the sandbox a command has no network unless `sandbox.network` is true, which opens IP networking only; Unix sockets stay blocked.
 - `WebFetch` fetches one http or https page on a public host and has `smallModel` answer the call's prompt from it; the main model gets the answer and the page's final URL, not the page. HTML is converted to markdown from its main content; text, JSON and XML pass through; other content types are refused. Pages are up to 5 MiB, fetched within 30 seconds and without JavaScript, and the small model reads their first 100,000 characters. Redirects on the same host (a leading `www.` and http to https count as the same) are followed, at most 5; any other redirect is returned for the model to fetch in a new call. `localhost`, names without a dot, `.localhost`, `.local` and `.internal` names, and non-public addresses are refused, including ones a name resolves to. Every call asks unless a rule allows it, in both modes.
+- `WebSearch` has `smallModel` search the web with its provider's built-in search and answer the call's query; the main model gets the answer followed by up to 20 `Sources:` lines, `- [title](url)`, which are the pages the answer cites, or the pages the provider consulted when it cited none, not the pages themselves. The tool exists only when `smallModel`'s API protocol has hosted search: OpenAI Responses (also Azure and Codex), Anthropic Messages and Google Generative AI. Every call asks unless a rule allows it, in both modes.
 
 Background tasks:
 
@@ -197,14 +198,14 @@ Permission rules in `config.json` allow, ask about or deny calls:
 }
 ```
 
-- A rule is `Name` or `Name(path)`. The name is a tool name (`Read`, `Write`, `Edit`, `Bash`, `TaskOutput`, `TaskStop`, `ToolSearch`, `WebFetch`), an MCP tool name (see MCP servers) or `*` for every tool; an unknown name or a malformed rule is rejected at start.
+- A rule is `Name` or `Name(path)`. The name is a tool name (`Read`, `Write`, `Edit`, `Bash`, `TaskOutput`, `TaskStop`, `ToolSearch`, `WebFetch`, `WebSearch`), an MCP tool name (see MCP servers) or `*` for every tool; an unknown name or a malformed rule is rejected at start.
 - `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory. `*` and `**` glob. A name with no slash (`.env`) matches at any depth, and a directory covers everything in it. Paths match case-insensitively on macOS and Windows.
 - `Name(!path)` exempts the calls it matches from the other rules in its own list, from the same config layer or flag; it never reaches rules from anywhere else.
 - A bare `Name` in `deny` removes the tool from the model.
-- `ToolSearch`, `TaskOutput`, `TaskStop` and `WebFetch` take no path: only a bare rule naming the tool or `*` applies to them; `ToolSearch(path)` and the like are rejected at start.
+- `ToolSearch`, `TaskOutput`, `TaskStop`, `WebFetch` and `WebSearch` take no path: only a bare rule naming the tool or `*` applies to them; `ToolSearch(path)` and the like are rejected at start.
 - `Bash` takes no path: only a bare `Bash` or `*` rule applies to it, `Bash(path)` is rejected at start, and path rules such as `*(~/.ssh)` never apply to `Bash`. `"ask": ["Bash"]` makes every command ask.
 - Plan mode refuses `Write`, `Edit`, unsandboxed `Bash` and MCP tools not marked read-only before any rule; otherwise rules apply to `Bash` the same in both modes.
-- Deny beats ask, and ask beats allow. With no rule matching, `Read`, `ToolSearch`, `TaskOutput`, `TaskStop` and sandboxed `Bash` are allowed and any other call asks, including every `WebFetch` call and every `Bash` command without the sandbox.
+- Deny beats ask, and ask beats allow. With no rule matching, `Read`, `ToolSearch`, `TaskOutput`, `TaskStop` and sandboxed `Bash` are allowed and any other call asks, including every `WebFetch` and `WebSearch` call and every `Bash` command without the sandbox.
 - Built in: `Edit` and `Write` under any `.git` directory, and of any file named `.mcp.json` or the file the start directory's `.mcp.json` resolves to when it is a symlink, always ask unless a deny rule refuses them.
 - `--allowed-tools` and `--disallowed-tools` add allow and deny rules to the config's; each is repeatable and takes comma-separated rules (commas inside `()` or `{}` do not split).
 - A rule's path counts as a match on either the path as written or its resolved target when it denies, asks or exempts from an allow, and only on both when it allows or exempts from a deny or ask.
@@ -276,6 +277,7 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - Provider requests identify as PiG, not Kopi.
 - `WebFetch` connects directly and ignores `HTTP_PROXY` and `HTTPS_PROXY`; `sandbox.network` does not govern it.
 - An approved `WebFetch` URL is requested from its host, and the call's prompt and up to 100,000 characters of the page go to `smallModel`'s provider.
+- `WebSearch`'s query goes to `smallModel`'s provider, which runs the search. Hosted search is offered by protocol, so an endpoint that speaks one of those protocols but lacks the hosted tool fails at call time with the provider's error; chat-completions providers, Bedrock, Vertex and Mistral get no `WebSearch`. Google returns redirect links, not the pages' own URLs. A search an Anthropic response pauses mid-turn returns what it has.
 - `WebFetch` runs no JavaScript, and only the `Content-Type` header decides a page's charset; without one, the type is sniffed from the body and it is read as UTF-8 unless it starts with a UTF-16 byte-order mark.
 
 ## Development
@@ -292,7 +294,7 @@ Manual live check: `kopi login openai-codex`, run with a model, ask it to read a
 
 ## Not implemented
 
-Project-level config, a Linux sandbox, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approval classification, delegation and workflows, a Kopi provider identity, domain rules for `WebFetch`, PDF and image pages, and release packaging and self-update.
+Project-level config, a Linux sandbox, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approval classification, delegation and workflows, a Kopi provider identity, domain rules for `WebFetch`, domain filters and citation markers for `WebSearch`, other search backends (an MCP server can provide one), PDF and image pages, and release packaging and self-update.
 
 MCP: OAuth for remote servers, the SSE transport, resources and prompts, `tools/list_changed`, image results, sandboxing servers or giving them a restricted environment, and a command or flag to set or change a folder's trust.
 
