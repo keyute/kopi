@@ -78,7 +78,7 @@ func newWebFetch(f *fetcher, answer func(ctx context.Context, system, prompt str
 			if page.redirect != nil {
 				target := page.redirect.String()
 				return fmt.Sprintf("%s redirects (HTTP %d) to %s, which was not followed. To read it, call WebFetch again with url %q.",
-					args.URL, page.status, target, target), nil
+					page.url, page.status, target, target), nil
 			}
 			text, err := pageText(page.contentType, page.body, page.url)
 			if err != nil {

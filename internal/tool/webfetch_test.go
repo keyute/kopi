@@ -57,8 +57,10 @@ func TestWebFetchDescribesItself(t *testing.T) {
 }
 
 func TestWebFetchRejectsInvalidArgs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("unexpected request") }))
+	defer srv.Close()
 	answer, calls := recordAnswers("")
-	tool := NewWebFetch("Kopi/test", answer)
+	tool := newWebFetch(routedFetcher(srv), answer)
 
 	for _, raw := range []string{`{"url":"https://example.com/"}`, `{"url":" ","prompt":"p"}`, `{"url":"https://example.com/","prompt":""}`, `{"url":"https://example.com/","prompt":"p","extra":1}`} {
 		_, err := tool.Run(t.Context(), json.RawMessage(raw), admitRead)
@@ -150,6 +152,25 @@ func TestWebFetchReturnsCrossHostRedirect(t *testing.T) {
 		`To read it, call WebFetch again with url "https://other.example.org/x".`, out)
 	assert.Empty(t, *calls)
 	assert.Equal(t, "redirected", tool.Display.Summary(out))
+}
+
+func TestWebFetchRedirectNamesThePageThatRedirected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/a" {
+			http.Redirect(w, r, "/b", http.StatusFound)
+			return
+		}
+		http.Redirect(w, r, "https://other.example.org/x", http.StatusMovedPermanently)
+	}))
+	defer srv.Close()
+	answer, _ := recordAnswers("unused")
+	tool := newWebFetch(routedFetcher(srv), answer)
+
+	out, err := tool.Run(t.Context(), json.RawMessage(`{"url":"http://example.com/a","prompt":"p"}`), admitRead)
+
+	require.NoError(t, err)
+	assert.Equal(t, `http://example.com/b redirects (HTTP 301) to https://other.example.org/x, which was not followed. `+
+		`To read it, call WebFetch again with url "https://other.example.org/x".`, out)
 }
 
 func TestWebFetchWrapsAnswerError(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,6 +43,7 @@ func TestCheckURL(t *testing.T) {
 		{url: "https:///path", reason: "it has no host"},
 		{url: "http://localhost:8080/", reason: "host is not public"},
 		{url: "http://LOCALHOST./", reason: "host is not public"},
+		{url: "http://localhost../", reason: "host is not public"},
 		{url: "http://intranet/", reason: "host is not public"},
 		{url: "http://a.localhost/", reason: "host is not public"},
 		{url: "http://printer.local/", reason: "host is not public"},
@@ -52,6 +54,8 @@ func TestCheckURL(t *testing.T) {
 		{url: "http://169.254.169.254/latest/meta-data", reason: "host is not a public address"},
 		{url: "http://100.64.0.1/", reason: "host is not a public address"},
 		{url: "http://[::ffff:127.0.0.1]/", reason: "host is not a public address"},
+		{url: "http://[::ffff:127.0.0.1%25..]/", reason: "host is not a public address"},
+		{url: "http://[::ffff:127.0.0.1%25.]/", reason: "host is not a public address"},
 		{url: "https://example.com/a?b"},
 		{url: "http://93.184.215.14:8080/"},
 	} {
@@ -219,8 +223,10 @@ func TestFetchReturnsPortChangeAndDowngradeRedirects(t *testing.T) {
 }
 
 func TestFetchStopsAfterFiveRedirects(t *testing.T) {
+	var highest atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/"))
+		highest.Store(int64(n))
 		http.Redirect(w, r, fmt.Sprintf("/%d", n+1), http.StatusFound)
 	}))
 	defer srv.Close()
@@ -229,6 +235,7 @@ func TestFetchStopsAfterFiveRedirects(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrTooManyRedirects)
 	assert.EqualError(t, err, `failed to fetch "http://example.com/0": too many redirects: over 5`)
+	assert.EqualValues(t, 5, highest.Load())
 }
 
 func TestFetchReportsErrorStatus(t *testing.T) {

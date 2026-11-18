@@ -377,7 +377,15 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		}
 	}()
 	if resolved.Config.SmallModel != "" {
-		if err := rt.Check(ctx, pigruntime.OpenOptions{Model: smallModel}); err != nil {
+		if err := rt.Check(startCtx, pigruntime.OpenOptions{Model: smallModel}); err != nil {
+			if errors.Is(err, pigruntime.ErrNoCredential) {
+				providers, listErr := rt.Providers(ctx)
+				if listErr != nil {
+					err = errors.Join(err, listErr)
+				} else {
+					err = diagnose(err, smallModel, resolved.Origins["smallModel"], paths, app.OpenRequest{}, providers)
+				}
+			}
 			return fmt.Errorf("failed to use \"smallModel\" in %s: %w", paths.ConfigFile, err)
 		}
 	}

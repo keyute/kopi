@@ -58,8 +58,16 @@ func checkURL(raw string) (*url.URL, error) {
 	case u.Hostname() == "":
 		return refuse("it has no host")
 	}
-	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
-	if addr, err := netip.ParseAddr(host); err == nil {
+	lower := strings.ToLower(u.Hostname())
+	host := strings.TrimRight(lower, ".")
+	// The untrimmed form is tried first: trimming dots inside an IPv6 zone
+	// would make a refused literal unparseable and so pass the name rules.
+	var addr netip.Addr
+	addr, err = netip.ParseAddr(lower)
+	if err != nil {
+		addr, err = netip.ParseAddr(host)
+	}
+	if err == nil {
 		if publicGuard.SafeAddr(addr) != nil {
 			return refuse("host is not a public address")
 		}
@@ -196,7 +204,7 @@ func followSameHost(req *http.Request, via []*http.Request) error {
 }
 
 // pageText returns the text of a page fetched from u: HTML as markdown, other
-// text as it is. The charset comes from contentType only, else UTF-8.
+// text as it is. The charset comes from contentType; without one the body is sniffed.
 func pageText(contentType string, body []byte, u *url.URL) (string, error) {
 	if contentType == "" {
 		contentType = http.DetectContentType(body)

@@ -268,6 +268,24 @@ func TestRootUnknownSmallModelFailsAtStart(t *testing.T) {
 	assert.Empty(t, server.requests)
 }
 
+// The check on smallModel runs before any session opens, so the credential
+// error must still name the login command.
+func TestRootSmallModelWithoutCredentialFailsAtStart(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
+	e.writeMockModels(t, server.URL)
+	configFile := filepath.Join(e.kopiHome, "config.json")
+	e.writeFile(t, configFile, fmt.Sprintf(`{"smallModel":%q}`, builtinModel(t, "openai-codex")))
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"smallModel" in `+configFile)
+	assert.Contains(t, err.Error(), `run "kopi login openai-codex"`)
+	assert.NotContains(t, err.Error(), "failed to open session")
+	assert.Empty(t, server.requests)
+}
+
 // builtinModel names one of PiG's builtin models for provider.
 func builtinModel(t *testing.T, provider string) string {
 	t.Helper()

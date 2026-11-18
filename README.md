@@ -264,7 +264,7 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - Provider requests identify as PiG, not Kopi.
 - `WebFetch` connects directly and ignores `HTTP_PROXY` and `HTTPS_PROXY`; `sandbox.network` does not govern it.
 - An approved `WebFetch` URL is requested from its host, and the call's prompt and up to 100,000 characters of the page go to `smallModel`'s provider.
-- `WebFetch` runs no JavaScript, and only the `Content-Type` header decides a page's charset; without one it is read as UTF-8.
+- `WebFetch` runs no JavaScript, and only the `Content-Type` header decides a page's charset; without one, the type is sniffed from the body and it is read as UTF-8 unless it starts with a UTF-16 byte-order mark.
 
 ## Development
 
