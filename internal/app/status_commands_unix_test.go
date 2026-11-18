@@ -86,6 +86,13 @@ func TestShellRunnerCleansUpDescendants(t *testing.T) {
 	}
 }
 
+func TestShellRunnerNonzeroExit(t *testing.T) {
+	_, err := (shellRunner{}).run(t.Context(), t.TempDir(), "printf stale; exit 7")
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr)
+	assert.Equal(t, 7, exitErr.ExitCode())
+}
+
 func TestShellRunnerOutput(t *testing.T) {
 	dir := t.TempDir()
 	out, err := (shellRunner{}).run(t.Context(), dir, "printf '%s' \"$PWD\"; printf ignored >&2")

@@ -37,6 +37,15 @@ func TestWindowsStatusOutputArgumentsEnvironmentWorkspace(t *testing.T) {
 	assert.Equal(t, dir+"|custom value|"+`quoted value \\"end`, out)
 }
 
+func TestWindowsStatusNonzeroExit(t *testing.T) {
+	executable, err := os.Executable()
+	require.NoError(t, err)
+	dir := t.TempDir()
+	env := append(os.Environ(), "KOPI_STATUS_HELPER=nonzero", "KOPI_STATUS_DIR="+dir)
+	_, err = runWindowsStatus(t.Context(), executable, []string{executable, "-test.run=^TestStatusWindowsHelper$"}, env, dir)
+	require.ErrorContains(t, err, "exit code 7")
+}
+
 func statusTestEvent(t *testing.T) (windows.Handle, string) {
 	t.Helper()
 	id, err := windows.GenerateGUID()
@@ -63,6 +72,10 @@ func TestStatusWindowsHelper(t *testing.T) {
 	dir := os.Getenv("KOPI_STATUS_DIR")
 	if err := os.WriteFile(filepath.Join(dir, role), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
 		os.Exit(3)
+	}
+	if role == "nonzero" {
+		fmt.Print("stale")
+		os.Exit(7)
 	}
 	if role == "output" {
 		cwd, err := os.Getwd()

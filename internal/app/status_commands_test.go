@@ -44,6 +44,24 @@ func (r *fakeRunner) started() []string {
 	return slices.Clone(r.calls)
 }
 
+type independentRunner struct {
+	started chan string
+	first   chan runResult
+	second  chan runResult
+}
+
+func (r *independentRunner) run(_ context.Context, _, command string) (string, error) {
+	r.started <- command
+	var result runResult
+	switch command {
+	case "first-command":
+		result = <-r.first
+	case "second-command":
+		result = <-r.second
+	}
+	return result.out, result.err
+}
+
 type contextRunner struct{ started chan context.Context }
 
 func (r *contextRunner) run(ctx context.Context, _, _ string) (string, error) {
@@ -92,6 +110,49 @@ func TestStatusCommandsStartAndRefresh(t *testing.T) {
 			r.release <- runResult{out: "ok"}
 			assert.NoError(t, (<-results).Err)
 		}
+	})
+}
+
+func TestStatusCommandsCompleteIndependently(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := NewStatusCommands("/work", config.StatusLine{
+			Left: []string{"first", "second"},
+			Segments: map[string]config.StatusSegment{
+				"first":  {Command: "first-command"},
+				"second": {Command: "second-command"},
+			},
+		})
+		r := &independentRunner{started: make(chan string, 4), first: make(chan runResult), second: make(chan runResult)}
+		s.runner = r
+		results := make(chan event.StatusCommandResult, 4)
+		startStatusCommands(t, s, results)
+		synctest.Wait()
+		assert.ElementsMatch(t, []string{"first-command", "second-command"}, []string{<-r.started, <-r.started})
+
+		s.Observe(event.TurnEnd{})
+		synctest.Wait()
+		assert.Empty(t, r.started, "busy commands do not execute twice")
+		r.second <- runResult{out: "second output"}
+		assert.Equal(t, event.StatusCommandResult{Name: "second", Output: "second output"}, <-results)
+		synctest.Wait()
+		assert.Empty(t, r.started, "busy refresh does not queue catchup")
+		assert.Empty(t, results, "first remains held")
+
+		s.Observe(event.TurnEnd{})
+		synctest.Wait()
+		require.Len(t, r.started, 1)
+		assert.Equal(t, "second-command", <-r.started)
+		r.second <- runResult{out: "refreshed second"}
+		assert.Equal(t, event.StatusCommandResult{Name: "second", Output: "refreshed second"}, <-results)
+		synctest.Wait()
+		assert.Empty(t, r.started, "first stays busy while second makes progress")
+		assert.Empty(t, results)
+
+		r.first <- runResult{out: "first output"}
+		assert.Equal(t, event.StatusCommandResult{Name: "first", Output: "first output"}, <-results)
+		synctest.Wait()
+		assert.Empty(t, r.started, "busy refreshes never queue another first execution")
+		assert.Empty(t, results)
 	})
 }
 
