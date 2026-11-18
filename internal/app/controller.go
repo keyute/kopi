@@ -284,6 +284,9 @@ func (c *Controller) startFirst(ctx context.Context, req OpenRequest, notices []
 			c.mu.Lock()
 			c.switching = nil
 			c.mu.Unlock()
+			for _, ev := range notices {
+				c.relay.emit(ev)
+			}
 		}
 		if err != nil {
 			c.relay.emit(event.Error{Err: err})

@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/pigruntime"
+	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 )
 
 func TestLoginWithoutProviderListsProviders(t *testing.T) {
@@ -41,6 +42,19 @@ func TestLoginStoresAPIKey(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(e.agentDir, "auth.json"))
 	require.NoError(t, err)
 	assert.Contains(t, string(content), syntheticKey)
+}
+
+func TestLoginPrintsTheSignInNotice(t *testing.T) {
+	rt := pigruntimetest.NewRuntime(t, pigruntimetest.NewSandbox(t))
+	pigruntimetest.RegisterPromptingLoginProvider(t, rt, "anthropic")
+	var out strings.Builder
+
+	err := loginTo(t.Context(), rt, strings.NewReader("red\n"+syntheticKey+"\n"), &out, "anthropic", "auth.json")
+
+	require.NoError(t, err)
+	assert.Contains(t, out.String(), "Anthropic bills third-party tools per token as extra usage")
+	assert.Contains(t, out.String(), "Logged in to anthropic. The credential is stored in auth.json.")
+	assert.NotContains(t, out.String(), syntheticKey)
 }
 
 func TestLoginUnknownProviderFails(t *testing.T) {

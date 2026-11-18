@@ -146,7 +146,7 @@ func (c *Controller) canLoginFirst(ctx context.Context, err error) bool {
 	}
 	provider := c.modelProvider()
 	return slices.ContainsFunc(providers, func(p pigruntime.Provider) bool {
-		return p.ID == provider && (p.SignIn != "" || p.APIKey)
+		return p.ID == provider && len(LoginMethods(p)) > 0
 	})
 }
 
@@ -195,7 +195,7 @@ func (c *Controller) loginTask(run *loginRun, ctx context.Context, missing error
 	c.mu.Unlock()
 	if req != nil {
 		// The open reports the notices itself: its SessionChanged wipes the transcript.
-		err = c.check(ctx, *req)
+		err = c.check(context.WithoutCancel(ctx), *req)
 		if err == nil {
 			err = c.startFirst(ctx, *req, notices)
 			if err == nil {
@@ -228,11 +228,7 @@ func (c *Controller) endLogin() {
 	defer c.queue.Unlock()
 	c.mu.Lock()
 	c.login = nil
-	if c.closed || c.sess == nil || c.turn != nil || c.switching != nil || !c.cfg.Wake || c.hold || !c.waking() {
-		c.mu.Unlock()
-		return
-	}
-	c.startTurn(context.Background(), nil)
+	c.wakeLocked()
 }
 
 func (c *Controller) isClosed() bool {
@@ -245,23 +241,44 @@ func (c *Controller) logoutCommand(ctx context.Context, provider string) error {
 	if provider == "" {
 		return fmt.Errorf("%w: /logout needs a provider", ErrMissingArgument)
 	}
+	// Checked before life, which a switch holds while it joins old work: the TUI
+	// submits on its event loop.
+	c.mu.Lock()
+	switch {
+	case c.closed:
+		c.mu.Unlock()
+		return ErrNoSession
+	case c.login != nil:
+		c.mu.Unlock()
+		return ErrLoggingIn
+	case c.switching != nil:
+		c.mu.Unlock()
+		return ErrBusy
+	}
+	c.mu.Unlock()
 	// Held so that it cannot touch the runtime after Close.
 	c.life.Lock()
 	defer c.life.Unlock()
-	c.mu.Lock()
-	closed, loggingIn := c.closed, c.login != nil
-	c.mu.Unlock()
-	switch {
-	case closed:
+	if c.isClosed() {
 		return ErrNoSession
-	case loggingIn:
-		return ErrLoggingIn
 	}
 	if err := c.rt.Logout(ctx, provider); err != nil {
 		return err
 	}
 	c.relay.emit(event.Notice{Text: fmt.Sprintf("Logged out of %s.", provider)})
 	return nil
+}
+
+// LoginMethods names the logins p offers: its account sign-in, then "API key".
+func LoginMethods(p pigruntime.Provider) []string {
+	var methods []string
+	if p.SignIn != "" {
+		methods = append(methods, p.SignIn)
+	}
+	if p.APIKey {
+		methods = append(methods, "API key")
+	}
+	return methods
 }
 
 func (c *Controller) loginCandidates() ([]Candidate, error) {
@@ -271,13 +288,7 @@ func (c *Controller) loginCandidates() ([]Candidate, error) {
 	}
 	var out []Candidate
 	for _, p := range providers {
-		var methods []string
-		if p.SignIn != "" {
-			methods = append(methods, p.SignIn)
-		}
-		if p.APIKey {
-			methods = append(methods, "API key")
-		}
+		methods := LoginMethods(p)
 		if len(methods) == 0 {
 			continue
 		}

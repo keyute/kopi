@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/pigruntime"
 )
@@ -51,22 +52,25 @@ func loginCmd() *cobra.Command {
 				}
 				return listLogins(out, providers)
 			}
-			provider := args[0]
-			in := cmd.InOrStdin()
-			t := &terminalLogin{in: in, lines: bufio.NewReader(in), out: out}
-			notice, err := rt.Login(ctx, provider, pigruntime.LoginUI{Ask: t.ask, Show: t.show})
-			if err != nil {
-				return err
-			}
-			if notice != "" {
-				if _, err := fmt.Fprintln(out, notice); err != nil {
-					return fmt.Errorf("failed to print login notice: %w", err)
-				}
-			}
-			_, err = fmt.Fprintf(out, "Logged in to %s. The credential is stored in %s.\n", provider, filepath.Join(paths.AgentDir, "auth.json"))
-			return err
+			return loginTo(ctx, rt, cmd.InOrStdin(), out, args[0], filepath.Join(paths.AgentDir, "auth.json"))
 		},
 	}
+}
+
+// loginTo logs in to provider on the terminal and prints the sign-in notice.
+func loginTo(ctx context.Context, rt *pigruntime.Runtime, in io.Reader, out io.Writer, provider, authFile string) error {
+	t := &terminalLogin{in: in, lines: bufio.NewReader(in), out: out}
+	notice, err := rt.Login(ctx, provider, pigruntime.LoginUI{Ask: t.ask, Show: t.show})
+	if err != nil {
+		return err
+	}
+	if notice != "" {
+		if _, err := fmt.Fprintln(out, notice); err != nil {
+			return fmt.Errorf("failed to print login notice: %w", err)
+		}
+	}
+	_, err = fmt.Fprintf(out, "Logged in to %s. The credential is stored in %s.\n", provider, authFile)
+	return err
 }
 
 // listLogins prints one line per provider that offers a login: its id, its
@@ -75,13 +79,7 @@ func listLogins(out io.Writer, providers []pigruntime.Provider) error {
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "Providers that offer login:")
 	for _, p := range providers {
-		var methods []string
-		if p.SignIn != "" {
-			methods = append(methods, p.SignIn)
-		}
-		if p.APIKey {
-			methods = append(methods, "API key")
-		}
+		methods := app.LoginMethods(p)
 		if len(methods) == 0 {
 			continue
 		}

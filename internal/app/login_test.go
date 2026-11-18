@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,7 +46,7 @@ func (h *loginHarness) next(t *testing.T, match func(event.Event) bool) event.Ev
 			if match(ev) {
 				return ev
 			}
-		case <-t.Context().Done():
+		case <-time.After(waitLimit):
 			t.Fatal("timed out waiting for an event")
 		}
 	}
@@ -88,7 +90,7 @@ func TestLoginAnswerStoresCredential(t *testing.T) {
 	require.True(t, h.c.AnswerLogin(req.Token, "synthetic-code"))
 	assert.False(t, h.c.AnswerLogin(req.Token, "again"))
 	h.notice(t, "Logged in to "+loginProvider+".")
-	<-run.done
+	wait(t, run.done)
 
 	evs := h.rec.all()
 	assert.Contains(t, evs, event.Activity{Text: "Logging in to " + loginProvider + "…"})
@@ -99,12 +101,68 @@ func TestLoginAnswerStoresCredential(t *testing.T) {
 	assert.True(t, h.loggedIn(t))
 }
 
+func TestLoginRequestCarriesOptionsAndSecretPrompt(t *testing.T) {
+	const provider = "kopi-prompt"
+	h := openLoginHarness(t, Config{})
+	pigruntimetest.RegisterPromptingLoginProvider(t, h.c.rt, provider)
+	isRequest := func(ev event.Event) bool { _, ok := ev.(event.LoginRequested); return ok }
+
+	_, err := h.c.Submit(t.Context(), "/login "+provider)
+	require.NoError(t, err)
+	team := h.next(t, isRequest).(event.LoginRequested)
+	assert.Equal(t, event.LoginRequested{Token: team.Token, Provider: provider, Message: "Team:", Options: []event.LoginOption{
+		{ID: "red", Label: "Red", Description: "warm"}, {ID: "blue", Label: "Blue"},
+	}}, team)
+	run := h.loginRun()
+	require.NotNil(t, run)
+
+	require.True(t, h.c.AnswerLogin(team.Token, "blue"))
+	key := h.next(t, isRequest).(event.LoginRequested)
+	assert.Equal(t, event.LoginRequested{Token: key.Token, Provider: provider, Message: "Key:", Placeholder: "sk-test", Secret: true}, key)
+	require.True(t, h.c.AnswerLogin(key.Token, "synthetic-key"))
+	h.notice(t, "Logged in to "+provider+".")
+	wait(t, run.done)
+	assert.Empty(t, ofType[event.Error](h.rec.all()))
+}
+
+func TestLoginEmitsTheSignInNotice(t *testing.T) {
+	h := openLoginHarness(t, Config{})
+	pigruntimetest.RegisterPromptingLoginProvider(t, h.c.rt, "anthropic")
+
+	_, err := h.c.Submit(t.Context(), "/login anthropic")
+	require.NoError(t, err)
+	team := h.next(t, func(ev event.Event) bool { _, ok := ev.(event.LoginRequested); return ok }).(event.LoginRequested)
+	run := h.loginRun()
+	require.NotNil(t, run)
+	require.True(t, h.c.AnswerLogin(team.Token, "red"))
+	key := h.next(t, func(ev event.Event) bool { r, ok := ev.(event.LoginRequested); return ok && r.Secret }).(event.LoginRequested)
+	require.True(t, h.c.AnswerLogin(key.Token, "synthetic-key"))
+
+	n := h.next(t, func(ev event.Event) bool {
+		n, ok := ev.(event.Notice)
+		return ok && strings.Contains(n.Text, "Anthropic bills")
+	}).(event.Notice)
+	assert.Contains(t, n.Text, "extra usage")
+	wait(t, run.done)
+}
+
+func TestLoginFailureReportsAnErrorNotACancel(t *testing.T) {
+	h := openLoginHarness(t, Config{})
+
+	_, err := h.c.Submit(t.Context(), "/login no-such-provider")
+	require.NoError(t, err)
+
+	ev := h.next(t, func(ev event.Event) bool { _, ok := ev.(event.Error); return ok }).(event.Error)
+	assert.ErrorIs(t, ev.Err, pigruntime.ErrUnknownProvider)
+	assert.NotContains(t, h.rec.all(), event.Notice{Text: "Login cancelled."})
+}
+
 func TestLoginInterruptCancelsWithoutStoring(t *testing.T) {
 	h := openLoginHarness(t, Config{})
 	run, req := h.startLogin(t)
 	assert.True(t, h.c.Interrupt())
 	h.notice(t, "Login cancelled.")
-	<-run.done
+	wait(t, run.done)
 
 	evs := h.rec.all()
 	assert.Contains(t, evs, event.LoginEnded{Token: req.Token})
@@ -147,11 +205,32 @@ func TestLoginRefusals(t *testing.T) {
 	assert.ErrorIs(t, err, ErrLoggingIn)
 
 	h.c.Interrupt()
-	<-run.done
+	wait(t, run.done)
 	w, err = h.c.Submit(t.Context(), "hello")
 	require.NoError(t, err)
 	require.NotNil(t, w)
 	wait(t, w.Done())
+}
+
+func TestLogoutRefusesWhileASwitchRuns(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h := firstRunHarness(t, Config{Servers: func(context.Context) ([]pigruntime.ServerStatus, error) {
+		close(started)
+		<-release
+		return nil, nil
+	}})
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	run := h.loginRun()
+	require.NotNil(t, run)
+	req := h.next(t, func(ev event.Event) bool { _, ok := ev.(event.LoginRequested); return ok }).(event.LoginRequested)
+	require.True(t, h.c.AnswerLogin(req.Token, "synthetic-code"))
+	wait(t, started)
+	wait(t, run.done)
+
+	_, err := h.c.Submit(t.Context(), "/logout "+loginProvider)
+	assert.ErrorIs(t, err, ErrBusy)
+	close(release)
+	h.next(t, func(ev event.Event) bool { _, ok := ev.(event.SessionChanged); return ok })
 }
 
 func TestCloseEndsRunningLogin(t *testing.T) {
@@ -184,7 +263,7 @@ func TestLoginAndLogoutArguments(t *testing.T) {
 
 	run, req := h.startLogin(t)
 	require.True(t, h.c.AnswerLogin(req.Token, "synthetic-code"))
-	<-run.done
+	wait(t, run.done)
 
 	cs, err = h.c.Arguments("login")
 	require.NoError(t, err)
@@ -215,7 +294,7 @@ func TestLogout(t *testing.T) {
 
 	run, req := h.startLogin(t)
 	require.True(t, h.c.AnswerLogin(req.Token, "synthetic-code"))
-	<-run.done
+	wait(t, run.done)
 	require.True(t, h.loggedIn(t))
 
 	_, err = h.c.Submit(t.Context(), "/logout "+loginProvider)
@@ -255,7 +334,7 @@ func TestStartRunsFirstRunLoginThenOpens(t *testing.T) {
 	require.True(t, h.c.AnswerLogin(req.Token, "synthetic-code"))
 	h.next(t, func(ev event.Event) bool { _, ok := ev.(event.SessionChanged); return ok })
 	h.notice(t, "Logged in to "+loginProvider+".")
-	<-run.done
+	wait(t, run.done)
 	assert.NotEmpty(t, h.c.Status().SessionID)
 	assert.Empty(t, ofType[event.Error](h.rec.all()))
 }
@@ -270,7 +349,7 @@ func TestFirstRunLoginCancelThenLoginOpens(t *testing.T) {
 	ev := h.next(t, func(ev event.Event) bool { _, ok := ev.(event.Error); return ok }).(event.Error)
 	assert.ErrorIs(t, ev.Err, pigruntime.ErrNoCredential)
 	assert.ErrorContains(t, ev.Err, "run /login "+loginProvider)
-	<-run.done
+	wait(t, run.done)
 	assert.Empty(t, ofType[event.SessionChanged](h.rec.all()))
 	_, err := h.c.Submit(t.Context(), "hello")
 	assert.ErrorIs(t, err, ErrNoSession)
@@ -279,7 +358,7 @@ func TestFirstRunLoginCancelThenLoginOpens(t *testing.T) {
 	require.True(t, h.c.AnswerLogin(req.Token, "synthetic-code"))
 	h.next(t, func(ev event.Event) bool { _, ok := ev.(event.SessionChanged); return ok })
 	h.notice(t, "Logged in to "+loginProvider+".")
-	<-run.done
+	wait(t, run.done)
 	assert.NotEmpty(t, h.c.Status().SessionID)
 }
 
@@ -299,6 +378,29 @@ func TestCloseEndsFirstRunLogin(t *testing.T) {
 	assert.False(t, h.loggedIn(t))
 }
 
+func TestFirstRunLoginFailureReportsTheCauseThenMissing(t *testing.T) {
+	const provider = "kopi-prompt"
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Model: provider + "/login-1"})
+	pigruntimetest.RegisterPromptingLoginProvider(t, h.c.rt, provider)
+	lh := &loginHarness{harness: h, events: make(chan event.Event, 64)}
+	h.c.Subscribe(func(ev event.Event) { lh.events <- ev })
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	run := lh.loginRun()
+	require.NotNil(t, run)
+	req := lh.next(t, func(ev event.Event) bool { _, ok := ev.(event.LoginRequested); return ok }).(event.LoginRequested)
+
+	require.True(t, h.c.AnswerLogin(req.Token, "green"))
+
+	isError := func(ev event.Event) bool { _, ok := ev.(event.Error); return ok }
+	cause := lh.next(t, isError).(event.Error)
+	assert.ErrorContains(t, cause.Err, `invalid choice "green"`)
+	missing := lh.next(t, isError).(event.Error)
+	assert.ErrorIs(t, missing.Err, pigruntime.ErrNoCredential)
+	assert.ErrorContains(t, missing.Err, "run /login "+provider)
+	wait(t, run.done)
+	assert.NotContains(t, h.rec.all(), event.Notice{Text: "Login cancelled."})
+}
+
 func TestStartUnattendedKeepsMissingCredentialError(t *testing.T) {
 	h := firstRunHarness(t, Config{Unattended: true})
 	require.ErrorIs(t, h.c.Start(t.Context(), OpenRequest{}), pigruntime.ErrNoCredential)
@@ -316,13 +418,14 @@ func TestFirstRunLoginDoesNotRetryAnOpenThatStarted(t *testing.T) {
 	require.NotNil(t, run)
 	req := h.next(t, func(ev event.Event) bool { _, ok := ev.(event.LoginRequested); return ok }).(event.LoginRequested)
 	require.True(t, h.c.AnswerLogin(req.Token, "synthetic-code"))
+	h.notice(t, "Logged in to "+loginProvider+".")
 	h.next(t, func(ev event.Event) bool { e, ok := ev.(event.Error); return ok && e.Err.Error() == "servers down" })
-	<-run.done
+	wait(t, run.done)
 	assert.Empty(t, h.c.Status().SessionID)
 
 	run, req = h.startLogin(t)
 	require.True(t, h.c.AnswerLogin(req.Token, "synthetic-code"))
-	<-run.done
+	wait(t, run.done)
 
 	assert.Equal(t, int32(1), calls.Load())
 	assert.Empty(t, h.c.Status().SessionID)

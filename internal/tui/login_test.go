@@ -154,6 +154,13 @@ func TestLoginEnterAnswersWithTheTypedText(t *testing.T) {
 	assert.True(t, m.composer.empty(), "the answer never enters the composer")
 }
 
+func TestLoginSecretAnswerDropsLineBreaks(t *testing.T) {
+	m, c := openLogin(t, event.LoginRequested{Token: 2, Message: "API key", Secret: true})
+	pasteText(m, "sk-\r\nabc\ndef")
+	press(m, enter)
+	assert.Equal(t, []loginAnswer{{2, "sk-abcdef"}}, c.loginAnswers)
+}
+
 func TestLoginEnterAnswersWithTheOptionID(t *testing.T) {
 	m, c := openLogin(t, event.LoginRequested{Token: 3, Message: "Method", Options: []event.LoginOption{
 		{ID: "oauth", Label: "Account"}, {ID: "key", Label: "API key"},
@@ -186,6 +193,16 @@ func TestLoginEndedKeepsAnApprovalDialog(t *testing.T) {
 	m, _ := newTestModel(t, 60, 20)
 	send(m, event.ApprovalRequested{Token: 1, Title: "Edit a.go"})
 	send(m, event.LoginEnded{Token: 1})
+	assert.NotNil(t, m.dialog)
+}
+
+func TestLoginDialogSurvivesSessionChangeAndTurnEnd(t *testing.T) {
+	m, _ := openLogin(t, event.LoginRequested{Token: 1, Message: "Code"})
+	send(m, event.SessionChanged{})
+	assert.NotNil(t, m.login)
+	assert.NotNil(t, m.dialog)
+	send(m, event.TurnEnd{})
+	assert.NotNil(t, m.login)
 	assert.NotNil(t, m.dialog)
 }
 

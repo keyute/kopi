@@ -58,7 +58,14 @@ func (c *Controller) queueNotice(n pigruntime.Notice) {
 		return
 	}
 	c.notices = append(c.notices, n)
-	if c.turn != nil || c.switching != nil || c.login != nil || !c.cfg.Wake || c.hold {
+	c.wakeLocked()
+}
+
+// wakeLocked starts a turn with no human prompt for the queued notices unless
+// one runs, a switch is under way, a login runs or nothing queued wakes. It
+// must be called with queue and mu held, and releases mu.
+func (c *Controller) wakeLocked() {
+	if c.closed || c.sess == nil || c.turn != nil || c.switching != nil || c.login != nil || !c.cfg.Wake || c.hold || !c.waking() {
 		c.mu.Unlock()
 		return
 	}

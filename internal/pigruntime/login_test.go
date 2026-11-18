@@ -522,6 +522,42 @@ func TestLoginCancelsAndJoinsAskInFlight(t *testing.T) {
 	}
 }
 
+func TestLoginCancelledContextJoinsAskInFlight(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	signIn := recordingSignIn(make(chan loginCall, 1), false)
+	signIn.Login = func(ctx context.Context, in ai.AuthInteraction, _ ai.LoginOptions) (ai.Credential, error) {
+		go func() { _, _ = in.Prompt(context.Background(), ai.AuthTextPrompt{Message: "Code:"}) }()
+		<-ctx.Done()
+		return ai.Credential{}, ctx.Err()
+	}
+	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{OAuth: signIn})))
+	ctx, cancel := context.WithCancel(t.Context())
+	asking, returned := make(chan struct{}), make(chan struct{})
+	ui := LoginUI{
+		Ask: func(ctx context.Context, _ LoginPrompt) (string, error) {
+			close(asking)
+			<-ctx.Done()
+			close(returned)
+			return "", context.Cause(ctx)
+		},
+		Show: func(string) {},
+	}
+	go func() {
+		<-asking
+		cancel()
+	}()
+
+	_, err := r.Login(ctx, oauthProvider, ui)
+
+	require.ErrorIs(t, err, context.Canceled)
+	select {
+	case <-returned:
+	default:
+		t.Fatal("Login returned before the Ask in flight did")
+	}
+}
+
 func TestLoginRefusesAskAfterReturn(t *testing.T) {
 	sb := newSandbox(t)
 	r, _ := newTestRuntime(t, sb)

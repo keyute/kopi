@@ -338,6 +338,9 @@ func (m *model) loginKey(msg tea.KeyPressMsg) tea.Cmd {
 	picked, cmd := m.dialog.key(msg, &m.keys)
 	if picked {
 		answer := m.dialog.text()
+		if f := m.dialog.field(); f != nil && f.secret {
+			answer = strings.NewReplacer("\r", "", "\n", "").Replace(answer)
+		}
 		if len(m.login.Options) > 0 {
 			answer = m.login.Options[m.dialog.sel].ID
 		}
@@ -624,19 +627,11 @@ func (m *model) place() {
 	// The +1 is the shaded top row that the composer and the prompt both draw.
 	m.geo.composerTop = m.geo.transcript + len(rows) + 1
 	switch {
-	case m.approval != nil:
+	case m.approval != nil || m.login != nil:
 		rows = append(rows, m.prompt...)
 		if len(m.prompt) > 0 {
 			// The prompt's first row is the composer's top shaded row; with
 			// no rows, the areas are an earlier render's.
-			for _, fa := range m.dialog.areas {
-				fa.y += m.geo.composerTop - 1
-				m.geo.fields = append(m.geo.fields, fa)
-			}
-		}
-	case m.login != nil:
-		rows = append(rows, m.prompt...)
-		if len(m.prompt) > 0 {
 			for _, fa := range m.dialog.areas {
 				// A secret is never selectable, so it has no area.
 				if !fa.c.secret {
