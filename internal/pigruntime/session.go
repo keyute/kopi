@@ -22,7 +22,7 @@ import (
 
 // Session wraps a PiG session. PiG's Session.Events and Session.ListSessions
 // are never used: an un-drained Events channel stalls the agent loop, and
-// ListSessions reads ~/.pig.
+// ListSessions resolves PiG's default agent dir, not the runtime's.
 type Session struct {
 	inner          *coding.Session
 	sendInProgress atomic.Bool

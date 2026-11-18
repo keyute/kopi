@@ -15,12 +15,14 @@
 
 ## PiG boundary
 
+- PiG is Kopi's runtime: the agent loop, sessions and their files, providers and sign-in, compaction and retry, the MCP client and skill parsing are PiG's. Use PiG's public API for anything in that territory. Hand-write only what PiG keeps internal, what it does only through ambient discovery, or what would bypass `internal/policy`, `tool.Workspace` or `tool.Shell`.
 - Only `internal/pigruntime` (and tests) import `github.com/MichaelKinsy/PiG`; depguard enforces it.
-- `internal/pigruntime` may use PiG's `mcp` client packages; never PiG's MCP extension `coding/mcpext`.
+- `internal/pigruntime` may use PiG's `mcp` client packages and, from `coding/mcpext`, only what works without the extension: a server connection, OAuth credentials and sign-in, and result conversion. Never register the extension, load its config, or use its tool definitions, commands or prompt sections: they read PiG's `mcp.json` and run tools outside `Gate.Admit`.
 - Never import PiG `internal/` packages, never use `coding/cli`, never add a `replace` for PiG, and never copy upstream code.
 - Create every PiG session with every input explicit: agent dir, in-memory settings, `coding.NoResources`, the system prompt as sections, `SkipBuiltinTools`, and explicit tool names for both `AllowedTools` and `InitialActiveToolNames`. A nil there turns on ambient discovery, PiG's stock prompt or stock tools. Never name a prompt part `tools` or `rules`; PiG rewrites those.
 - Skills are loaded by a PiG resource loader that is never attached to a session and is created with every input explicit and the project untrusted; sessions keep `coding.NoResources`.
-- Never call PiG's `Session.ListSessions` or `Session.Events`.
+- List sessions with `Runtime.ListSessions` and observe a session with `Subscribe`. Never call `Session.ListSessions` (it resolves PiG's default agent dir, not the runtime's) or `Session.Events` (an undrained channel stalls the agent loop).
+- A workaround for PiG behaviour lives in `internal/pigruntime` with a comment naming that behaviour. Recheck them when PiG is bumped.
 - `internal/pigruntime`'s exported API is stated in Kopi's terms; nothing exported may exist only because of how PiG works internally.
 
 ## Authority
