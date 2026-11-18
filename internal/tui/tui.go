@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/keyute/kopi/internal/app"
+	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
@@ -43,13 +44,15 @@ type Controller interface {
 }
 
 // Options are the frontend's settings. Keys maps action names to key
-// strings; an action without keys is disabled. StatusLeft and StatusRight
-// name status line segments. ImageDir holds saved clipboard images.
+// strings; an action without keys is disabled. StatusLine is the config's
+// status line. ImageDir holds saved clipboard images. Themes
+// come from LoadThemes; the zero value has no colours.
 type Options struct {
-	Version                 string
-	Keys                    map[string][]string
-	StatusLeft, StatusRight []string
-	ImageDir                string
+	Version    string
+	Keys       map[string][]string
+	StatusLine config.StatusLine
+	ImageDir   string
+	Themes     Themes
 }
 
 type Frontend struct {

@@ -27,6 +27,8 @@ func withDefaults(c Config) Config {
 	c.InstructionFallbacks = []string{"CLAUDE.md"}
 	c.Keys = DefaultKeys()
 	c.StatusLine = DefaultStatusLine()
+	c.StatusLine.Segments = map[string]StatusSegment{}
+	c.Theme = DefaultTheme()
 	c.Permissions = Permissions{Allow: []string{}, Ask: []string{}, Deny: []string{}}
 	c.Sandbox = Sandbox{AllowWrite: []string{}, DenyRead: []string{}}
 	c.MCPServers = map[string]MCPServer{}
@@ -209,7 +211,10 @@ func TestResolveOverridesOneStatusLineSide(t *testing.T) {
 	global := globalLayer(t, `{"statusline": {"left": ["branch"]}}`)
 	r, err := Resolve(Defaults(), global)
 	require.NoError(t, err)
-	assert.Equal(t, StatusLine{Left: []string{"branch"}, Right: DefaultStatusLine().Right}, r.Config.StatusLine)
+	want := DefaultStatusLine()
+	want.Left = []string{"branch"}
+	want.Segments = map[string]StatusSegment{}
+	assert.Equal(t, want, r.Config.StatusLine)
 	assert.Equal(t, global.Name, r.Origins["statusline.left"])
 	assert.Equal(t, "default", r.Origins["statusline.right"])
 }
@@ -218,7 +223,8 @@ func TestResolveAcceptsNoticeOnEitherSide(t *testing.T) {
 	global := globalLayer(t, `{"statusline": {"left": ["notice", "model"], "right": ["mode", "notice"]}}`)
 	r, err := Resolve(Defaults(), global)
 	require.NoError(t, err)
-	assert.Equal(t, StatusLine{Left: []string{"notice", "model"}, Right: []string{"mode", "notice"}}, r.Config.StatusLine)
+	assert.Equal(t, []string{"notice", "model"}, r.Config.StatusLine.Left)
+	assert.Equal(t, []string{"mode", "notice"}, r.Config.StatusLine.Right)
 }
 
 func TestBackgroundActionAndTasksSegment(t *testing.T) {
@@ -296,6 +302,107 @@ func TestResolveRejectsInvalidUIValueNamingLayer(t *testing.T) {
 			assert.NotErrorIs(t, err, ErrUnknownKey)
 			assert.Contains(t, err.Error(), global.Name)
 		})
+	}
+}
+
+func TestResolveThemeDefaultsAndNames(t *testing.T) {
+	r, err := Resolve(Defaults(), globalLayer(t, `{"theme": {"dark": "my-dark"}}`))
+	require.NoError(t, err)
+	assert.Equal(t, Theme{Dark: "my-dark", Light: "catppuccin-latte"}, r.Config.Theme)
+
+	for _, name := range []string{"", "a/b", `a\b`, ".hidden", ".."} {
+		global := globalLayer(t, fmt.Sprintf(`{"theme": {"light": %q}}`, name))
+		_, err := Resolve(Defaults(), global)
+		require.ErrorIs(t, err, ErrInvalidValue, name)
+		assert.Contains(t, err.Error(), global.Name)
+		assert.Contains(t, err.Error(), "theme.light")
+	}
+}
+
+func TestResolveSeparatorHonoursExplicitEmpty(t *testing.T) {
+	r, err := Resolve(Defaults())
+	require.NoError(t, err)
+	assert.Equal(t, " · ", r.Config.StatusLine.Separator)
+
+	r, err = Resolve(Defaults(), globalLayer(t, `{"statusline": {"separator": ""}}`))
+	require.NoError(t, err)
+	assert.Empty(t, r.Config.StatusLine.Separator)
+	assert.Contains(t, r.Origins, "statusline.separator")
+}
+
+func TestResolveStatusSegments(t *testing.T) {
+	global := globalLayer(t, `{"statusline": {
+		"right": ["k8s", "host", "mode"],
+		"segments": {
+			"k8s": {"command": "kubectl config current-context", "interval": "10s", "color": "dim"},
+			"host": {"text": "work", "color": "#89B4FA"},
+			"idx": {"text": "x", "color": "255"}
+		}}}`)
+	r, err := Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Equal(t, StatusSegment{Command: "kubectl config current-context", Interval: "10s", Color: "dim"}, r.Config.StatusLine.Segments["k8s"])
+	assert.Equal(t, StatusSegment{Text: "work", Color: "#89B4FA"}, r.Config.StatusLine.Segments["host"])
+}
+
+func TestResolveRejectsInvalidStatusSegment(t *testing.T) {
+	for _, tc := range []struct{ name, seg string }{
+		{"both", `"x": {"text": "a", "command": "b"}`},
+		{"neither", `"x": {"color": "dim"}`},
+		{"interval without command", `"x": {"text": "a", "interval": "5s"}`},
+		{"bad interval", `"x": {"command": "a", "interval": "soon"}`},
+		{"short interval", `"x": {"command": "a", "interval": "500ms"}`},
+		{"bad colour", `"x": {"text": "a", "color": "blue"}`},
+		{"short hex", `"x": {"text": "a", "color": "#12"}`},
+		{"index out of range", `"x": {"text": "a", "color": "256"}`},
+		{"signed index", `"x": {"text": "a", "color": "+5"}`},
+		{"built-in name", `"model": {"text": "a"}`},
+		{"newline in text", `"x": {"text": "a\nb"}`},
+		{"escape in text", `"x": {"text": "\u001b[31ma"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			global := globalLayer(t, `{"statusline": {"segments": {`+tc.seg+`}}}`)
+			_, err := Resolve(Defaults(), global)
+			require.ErrorIs(t, err, ErrInvalidValue)
+			assert.Contains(t, err.Error(), global.Name)
+			assert.Contains(t, err.Error(), "statusline.segments.")
+		})
+	}
+}
+
+func TestResolveRejectsControlCharacterInSeparator(t *testing.T) {
+	for _, sep := range []string{`\n`, `\t`, ` \u001b[0m `} {
+		global := globalLayer(t, `{"statusline": {"separator": "`+sep+`"}}`)
+		_, err := Resolve(Defaults(), global)
+		require.ErrorIs(t, err, ErrInvalidValue)
+		assert.Contains(t, err.Error(), global.Name)
+		assert.Contains(t, err.Error(), "statusline.separator")
+	}
+}
+
+func TestResolveChecksSegmentNamesOnMergedConfig(t *testing.T) {
+	defining := Map("defining", map[string]any{"statusline": map[string]any{"segments": map[string]any{"host": map[string]any{"text": "w"}}}})
+	using := Map("using", map[string]any{"statusline": map[string]any{"left": []any{"host"}}})
+	r, err := Resolve(Defaults(), defining, using)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"host"}, r.Config.StatusLine.Left)
+
+	_, err = Resolve(Defaults(), using)
+	require.ErrorIs(t, err, ErrInvalidValue)
+	assert.Contains(t, err.Error(), "using")
+	assert.Contains(t, err.Error(), `statusline.left: unknown segment "host"`)
+}
+
+func TestColorValidators(t *testing.T) {
+	for _, role := range ThemeRoles {
+		assert.NoError(t, ValidColor(role))
+		assert.Error(t, ValidLiteralColor(role))
+	}
+	for _, ok := range []string{"#fff", "#FfA0b1", "0", "7", "255"} {
+		assert.NoError(t, ValidColor(ok), ok)
+		assert.NoError(t, ValidLiteralColor(ok), ok)
+	}
+	for _, bad := range []string{"", "#", "#ff", "#ffff", "#ggg", "#1234567", "256", "-1", "+1", " 1", "1.0", "red"} {
+		assert.Error(t, ValidColor(bad), bad)
 	}
 }
 
@@ -481,7 +588,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	r, err := Resolve(Defaults())
 	require.NoError(t, err)
 	entries := r.Entries()
-	assert.Len(t, entries, 14+len(KeyActions))
+	assert.Len(t, entries, 17+len(KeyActions))
 	assert.IsIncreasing(t, entryKeys(entries))
 	assert.Contains(t, entries, Entry{Key: "model", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "smallModel", Value: "", Origin: "unset"})
@@ -522,6 +629,22 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "sandbox.denyRead", Value: `["~/.aws"]`, Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "sandbox.network", Value: "true", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "sandbox.allowWrite", Value: "[]", Origin: "default"})
+}
+
+func TestEntriesShowThemeSeparatorAndSegments(t *testing.T) {
+	global := globalLayer(t, `{"theme": {"dark": "x"}, "statusline": {"segments": {
+		"host": {"text": "work"},
+		"k8s": {"command": "kubectl config current-context", "interval": "10s"}
+	}}}`)
+	r, err := Resolve(Defaults(), global)
+	require.NoError(t, err)
+	entries := r.Entries()
+	assert.IsIncreasing(t, entryKeys(entries))
+	assert.Contains(t, entries, Entry{Key: "theme.dark", Value: "x", Origin: global.Name})
+	assert.Contains(t, entries, Entry{Key: "theme.light", Value: "catppuccin-latte", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "statusline.separator", Value: " · ", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "statusline.segments.host", Value: "text: work", Origin: global.Name})
+	assert.Contains(t, entries, Entry{Key: "statusline.segments.k8s", Value: "command: kubectl config current-context every 10s", Origin: global.Name})
 }
 
 func entryKeys(entries []Entry) []string {

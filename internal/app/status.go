@@ -11,7 +11,9 @@ type Status struct {
 	ContextTokens, ContextWindow int
 	// Branch is empty when the workspace is not in a git repository.
 	Branch string
-	Busy   bool
+	// Workspace is the absolute workspace path.
+	Workspace string
+	Busy      bool
 	// Shell reports that a tool that runs commands is available, and
 	// Sandboxed that it runs them under the OS sandbox.
 	Shell, Sandboxed bool

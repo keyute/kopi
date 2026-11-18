@@ -42,6 +42,7 @@ type Config struct {
 	// Keys maps an action from KeyActions to the keys bound to it.
 	Keys        map[string][]string  `koanf:"keys"`
 	StatusLine  StatusLine           `koanf:"statusline"`
+	Theme       Theme                `koanf:"theme"`
 	Permissions Permissions          `koanf:"permissions"`
 	Sandbox     Sandbox              `koanf:"sandbox"`
 	MCPServers  map[string]MCPServer `koanf:"mcpServers"`
@@ -168,6 +169,13 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 		if err := validateUI(c); err != nil {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
+		for _, name := range []struct{ key, value string }{{"theme.dark", c.Theme.Dark}, {"theme.light", c.Theme.Light}} {
+			if k.Exists(name.key) {
+				if err := validateThemeName(name.key, name.value); err != nil {
+					return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
+				}
+			}
+		}
 		if err := validatePermissions(c.Permissions); err != nil {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
@@ -191,6 +199,9 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 	}
 	if c.Version != Version {
 		return nil, fmt.Errorf("%w: %d (from %s), want %d", ErrUnsupportedVersion, c.Version, originOf(origins, "version"), Version)
+	}
+	if err := validateSegmentRefs(c.StatusLine, origins); err != nil {
+		return nil, err
 	}
 	return &Resolved{Config: c, Origins: origins}, nil
 }
@@ -345,7 +356,7 @@ type Entry struct{ Key, Value, Origin string }
 
 // Entries returns every schema key sorted by key, including unset ones (empty
 // Value, Origin "unset"), plus one entry per MCP server showing only its
-// transport and command or URL. Lists are shown as compact JSON.
+// transport and command or URL, and one per user status line segment. Lists are shown as compact JSON.
 func (r *Resolved) Entries() []Entry {
 	c := r.Config
 	values := map[string]any{
@@ -356,6 +367,9 @@ func (r *Resolved) Entries() []Entry {
 		"version":              c.Version,
 		"statusline.left":      c.StatusLine.Left,
 		"statusline.right":     c.StatusLine.Right,
+		"statusline.separator": c.StatusLine.Separator,
+		"theme.dark":           c.Theme.Dark,
+		"theme.light":          c.Theme.Light,
 		"permissions.allow":    c.Permissions.Allow,
 		"permissions.ask":      c.Permissions.Ask,
 		"permissions.deny":     c.Permissions.Deny,
@@ -381,6 +395,18 @@ func (r *Resolved) Entries() []Entry {
 		if s.Command != "" {
 			e.Value = "stdio: " + strings.Join(append([]string{s.Command}, s.Args...), " ")
 			e.Origin = originOf(r.Origins, prefix+"command")
+		}
+		entries = append(entries, e)
+	}
+	for name, s := range c.StatusLine.Segments {
+		prefix := "statusline.segments." + name + "."
+		e := Entry{Key: "statusline.segments." + name, Value: "text: " + s.Text, Origin: originOf(r.Origins, prefix+"text")}
+		if s.Command != "" {
+			e.Value = "command: " + s.Command
+			e.Origin = originOf(r.Origins, prefix+"command")
+			if s.Interval != "" {
+				e.Value += " every " + s.Interval
+			}
 		}
 		entries = append(entries, e)
 	}

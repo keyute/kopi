@@ -97,13 +97,18 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 `instructionFallbacks` lists bare file names a directory's project instruction file is read from when it has no `AGENTS.md`, the first present winning (default `["CLAUDE.md"]`); `[]` turns the fallback off. Project instruction files load only in a trusted folder (see MCP servers).
 
-`keys` maps each fullscreen action to a list of key strings, and `statusline` lists the status line's `left` and `right` segments from `model`, `context`, `branch`, `mode`, `notice`, which shows transient hints such as `Copied`, and `sandbox`, which shows `sandboxed` or `unsandboxed` when Bash is available, and `tasks`, which shows `1 shell` or `N shells` while background tasks run (default left `model, context, branch`, right `notice, sandbox, tasks, mode`):
+`keys` maps each fullscreen action to a list of key strings, and `statusline` lists the status line's `left` and `right` segments from `model`, `context`, `branch`, `cwd`, which shows the workspace with your home directory as `~`, `mode`, `notice`, which shows transient hints such as `Copied`, and `sandbox`, which shows `sandboxed` or `unsandboxed` when Bash is available, and `tasks`, which shows `1 shell` or `N shells` while background tasks run (default left `model, context, branch`, right `notice, sandbox, tasks, mode`) or from your own `segments`. `separator` goes between segments (default ` · `, `""` for none). A segment in `segments` has either `text` or `command`, and an optional `color`: a theme colour role such as `accent`, `#rgb`, `#rrggbb` or a number from 0 to 255. A `command` runs with `sh -c` in the workspace, unsandboxed, with a 5 second timeout; it runs at start, on every status refresh and, with an `interval` such as `"30s"` (at least 1s), on that schedule. The segment shows the first line of its stdout, keeping ANSI colours, and is hidden while the command fails or prints nothing:
 
 ```json
 {
   "version": 1,
   "keys": { "send-now": ["ctrl+s"] },
-  "statusline": { "left": ["model", "branch"], "right": ["notice", "context", "mode"] }
+  "statusline": {
+    "left": ["model", "branch", "cwd"],
+    "right": ["notice", "load", "context", "mode"],
+    "separator": " | ",
+    "segments": { "load": { "command": "uptime | awk '{print $NF}'", "interval": "30s", "color": "muted" } }
+  }
 }
 ```
 
@@ -128,6 +133,12 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 - Setting one action replaces that action's list and leaves the others at their defaults.
 - An unknown action or segment, an empty list or a blank key string is rejected at start; a key string that names no real key never matches.
+
+`theme.dark` and `theme.light` name the theme used on a dark or light terminal (defaults `catppuccin-mocha`, `catppuccin-latte`). Built-in names: `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`, `gruvbox-light`, `tokyonight-night`, `tokyonight-day`, `rose-pine`, `rose-pine-dawn`, `solarized-dark`, `solarized-light`, `dracula`, `ansi-dark` and `ansi-light`, which use the terminal's own 16 colours. Any other name reads `themes/<name>.json` in Kopi's home: a required `base` built-in, optional `colors` overrides by role (`accent`, `success`, `error`, `warning`, `muted`, `dim`, `text`, `userMessageBg`, `heading`, `link`, `code`, `frame`) and an optional Chroma style `codeTheme` for code blocks. A colour is `#rgb`, `#rrggbb` or a number from 0 to 255. An unknown theme, role, colour or style fails at start.
+
+```json
+{ "base": "dracula", "colors": { "accent": "#ff79c6", "dim": "244" }, "codeTheme": "monokai" }
+```
 
 `sandbox` configures the OS sandbox `Bash` runs in (see Modes and tools):
 

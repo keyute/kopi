@@ -272,12 +272,18 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM)
 	defer stop()
 
+	var themes tui.Themes
+	if fullscreen {
+		if themes, err = tui.LoadThemes(paths.ThemeDir, resolved.Config.Theme.Dark, resolved.Config.Theme.Light); err != nil {
+			return fmt.Errorf("failed to use \"theme\" in %s: %w", paths.ConfigFile, err)
+		}
+	}
 	var ask askTrust
 	if fullscreen {
 		ask = func(req tui.TrustRequest) (tui.TrustChoice, error) {
 			askCtx, stopAsk := signal.NotifyContext(ctx, os.Interrupt)
 			defer stopAsk()
-			return tui.AskTrust(askCtx, cmd.InOrStdin(), cmd.OutOrStdout(), tui.Options{Keys: resolved.Config.Keys}, req)
+			return tui.AskTrust(askCtx, cmd.InOrStdin(), cmd.OutOrStdout(), tui.Options{Keys: resolved.Config.Keys, Themes: themes}, req)
 		}
 	}
 	// The instruction walk runs on the path trust is decided on.
@@ -414,11 +420,11 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	if fullscreen {
 		// Created before Start so the TUI shows the events Start emits.
 		f = tui.New(c, cmd.InOrStdin(), cmd.OutOrStdout(), tui.Options{
-			Version:     kopiVersion(),
-			Keys:        resolved.Config.Keys,
-			StatusLeft:  resolved.Config.StatusLine.Left,
-			StatusRight: resolved.Config.StatusLine.Right,
-			ImageDir:    paths.ImageDir,
+			Version:    kopiVersion(),
+			Keys:       resolved.Config.Keys,
+			StatusLine: resolved.Config.StatusLine,
+			ImageDir:   paths.ImageDir,
+			Themes:     themes,
 		})
 	} else {
 		f = headless.New(c, prompt, cmd.OutOrStdout())

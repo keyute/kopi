@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -144,9 +145,10 @@ func (f *fakeController) StopTask(id string) error {
 
 // testOptions are the options config's defaults resolve to.
 func testOptions() Options {
-	s := config.DefaultStatusLine()
-	return Options{Version: "v1.2.3", Keys: config.DefaultKeys(), StatusLeft: s.Left, StatusRight: s.Right}
+	return Options{Version: "v1.2.3", Keys: config.DefaultKeys(), StatusLine: config.DefaultStatusLine(), Themes: testThemes}
 }
+
+var testThemes = Themes{dark: mocha(), light: latte()}
 
 func newTestModel(t *testing.T, width, height int) (*model, *fakeController) {
 	t.Helper()
@@ -1361,11 +1363,146 @@ func TestRowsFillTheScreenStatusLast(t *testing.T) {
 			s := screen(m)
 			require.Len(t, s, m.height)
 			assert.Equal(t, m.height, m.transcriptHeight()+len(m.below))
-			status := strings.TrimRight(ansi.Strip(statusLine(m.status, m.layout, m.flashText, m.width, m.th)), " ")
+			status := strings.TrimRight(ansi.Strip(statusLine(m.statusInput(), m.layout, m.width, m.th)), " ")
 			assert.Equal(t, status, s[m.height-1])
 			if m.approval == nil && m.tasks == nil {
 				assert.True(t, strings.HasPrefix(s[m.composerTop()], "❯"), "row %d: %q", m.composerTop(), s[m.composerTop()])
 			}
 		})
 	}
+}
+
+type runResult struct {
+	out string
+	err error
+}
+
+// fakeRunner blocks each run until the test sends its result.
+type fakeRunner struct {
+	release chan runResult
+	mu      sync.Mutex
+	calls   []string
+}
+
+func (r *fakeRunner) run(_ context.Context, dir, command string) (string, error) {
+	r.mu.Lock()
+	r.calls = append(r.calls, dir+": "+command)
+	r.mu.Unlock()
+	res := <-r.release
+	return res.out, res.err
+}
+
+func (r *fakeRunner) started() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.calls)
+}
+
+// runCmd runs cmd and the commands of any batch in it on their own
+// goroutines and sends their messages to the returned channel.
+func runCmd(cmd tea.Cmd) chan tea.Msg {
+	out := make(chan tea.Msg, 16)
+	var walk func(tea.Cmd)
+	walk = func(c tea.Cmd) {
+		if c == nil {
+			return
+		}
+		go func() {
+			msg := c()
+			if batch, ok := msg.(tea.BatchMsg); ok {
+				for _, sub := range batch {
+					walk(sub)
+				}
+				return
+			}
+			out <- msg
+		}()
+	}
+	walk(cmd)
+	return out
+}
+
+// await returns the first message from msgs of the same type as like.
+func await(msgs chan tea.Msg, like tea.Msg) tea.Msg {
+	for msg := range msgs {
+		if fmt.Sprintf("%T", msg) == fmt.Sprintf("%T", like) {
+			return msg
+		}
+	}
+	return nil
+}
+
+func newStatusCommandModel(t *testing.T, segment config.StatusSegment) (*model, *fakeRunner) {
+	t.Helper()
+	opts := testOptions()
+	opts.StatusLine = config.StatusLine{Left: []string{"git"}, Right: []string{"mode"}, Separator: " ", Segments: map[string]config.StatusSegment{"git": segment}}
+	m, c := newTestModelWith(t, 40, 20, opts)
+	c.status.Workspace = "/work"
+	m.status = c.Status()
+	r := &fakeRunner{release: make(chan runResult)}
+	m.runner = r
+	m.bridge.close()
+	return m, r
+}
+
+func TestCommandSegmentRunsOnInitAndEachRefresh(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, r := newStatusCommandModel(t, config.StatusSegment{Command: "git-info"})
+
+		msgs := runCmd(m.Init())
+		synctest.Wait()
+		assert.Equal(t, []string{"/work: git-info"}, r.started())
+		assert.NotContains(t, statusText(m), "ok", "drawing does not wait for the command")
+
+		_, cmd := m.Update(eventsMsg{event.TurnEnd{}})
+		runCmd(cmd)
+		synctest.Wait()
+		assert.Len(t, r.started(), 1, "a run is outstanding")
+
+		r.release <- runResult{out: "\x1b[32mok\x1b[0m\nsecond line"}
+		_, _ = m.Update(await(msgs, statusResultMsg{}))
+		assert.Equal(t, "  ok"+strings.Repeat(" ", 30)+"plan", strings.TrimRight(ansi.Strip(statusText(m)), " "))
+		assert.Contains(t, statusLine(m.statusInput(), m.layout, m.width, m.th), "\x1b[32mok")
+
+		_, cmd = m.Update(eventsMsg{event.TurnEnd{}})
+		msgs = runCmd(cmd)
+		synctest.Wait()
+		assert.Len(t, r.started(), 2)
+
+		r.release <- runResult{err: errors.New("exit status 1")}
+		_, _ = m.Update(await(msgs, statusResultMsg{}))
+		assert.NotContains(t, statusText(m), "ok", "a failed run hides the segment")
+		assert.True(t, m.failing["git"])
+
+		_, cmd = m.Update(eventsMsg{event.TurnEnd{}})
+		msgs = runCmd(cmd)
+		synctest.Wait()
+		r.release <- runResult{out: "back"}
+		_, _ = m.Update(await(msgs, statusResultMsg{}))
+		assert.Contains(t, statusText(m), "back")
+		assert.False(t, m.failing["git"])
+	})
+}
+
+func TestCommandSegmentIntervalTicks(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, r := newStatusCommandModel(t, config.StatusSegment{Command: "date", Interval: "10s"})
+		assert.Equal(t, 10*time.Second, m.intervals["git"])
+
+		msgs := runCmd(m.Init())
+		synctest.Wait()
+		r.release <- runResult{out: "one"}
+		_, _ = m.Update(await(msgs, statusResultMsg{}))
+		assert.Equal(t, statusTickMsg{"git"}, await(msgs, statusTickMsg{}))
+
+		_, cmd := m.Update(statusTickMsg{"git"})
+		msgs = runCmd(cmd)
+		synctest.Wait()
+		assert.Len(t, r.started(), 2)
+		assert.Equal(t, statusTickMsg{"git"}, await(msgs, statusTickMsg{}), "the tick re-arms")
+
+		r.release <- runResult{out: "two"}
+		_, _ = m.Update(await(msgs, statusResultMsg{}))
+		assert.Contains(t, statusText(m), "two")
+	})
 }
