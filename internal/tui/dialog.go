@@ -15,7 +15,8 @@ import (
 const cursorMark = "❭ "
 
 // option is a dialog choice; one with a field takes text, and selecting it
-// focuses the field.
+// focuses the field. One with no label draws its field alone, unnumbered: a
+// dialog's sole option.
 type option struct {
 	label string
 	field *composer
@@ -62,6 +63,10 @@ func (d *dialog) rows(width, budget, fieldCap int, th theme) []string {
 		prefix, st := "  ", none
 		if i == d.sel {
 			prefix, st = cursorMark, fg(th.accent)
+		}
+		if o.field != nil && o.label == "" {
+			slots = append(slots, fieldSlot{option: i, at: len(rows), f: o.field, head: fg(th.accent).Render(prefix), indent: lipgloss.Width(prefix)})
+			continue
 		}
 		label := fmt.Sprintf("%d. %s", i+1, o.label)
 		if o.field == nil {
