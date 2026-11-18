@@ -437,3 +437,38 @@ func TestTasksAdoptReportsEndedProcessAsRunning(t *testing.T) {
 	assert.Equal(t, started, info.Started)
 	assert.Equal(t, TaskCompleted, tk.info().Status)
 }
+
+func TestTasksStopRetainsSelectedRunAcrossRestart(t *testing.T) {
+	m, _ := newTasks(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	a := m.StartAgent("explore", "find it", func() {
+		close(entered)
+		<-release
+	})
+	result := make(chan TaskInfo, 1)
+	go func() {
+		info, err := m.Stop(a.ID())
+		assert.NoError(t, err)
+		result <- info
+	}()
+	<-entered
+	select {
+	case <-result:
+		t.Fatal("Stop returned before the selected run ended")
+	default:
+	}
+	first, ok := a.End(TaskCompleted, "", "stopped run")
+	require.True(t, ok)
+	require.True(t, a.Run(func() { a.End(TaskStopped, "", "") }))
+	close(release)
+	select {
+	case info := <-result:
+		assert.Equal(t, first, info)
+	case <-time.After(testTimeout):
+		t.Fatal("Stop waited for the replacement run")
+	}
+	info, err := m.Output(a.ID())
+	require.NoError(t, err)
+	assert.Equal(t, TaskRunning, info.Status)
+	a.End(TaskCompleted, "", "replacement")
+}

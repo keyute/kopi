@@ -306,6 +306,16 @@ func (m *Tasks) Stop(id string) (TaskInfo, error) {
 	if err != nil {
 		return TaskInfo{}, err
 	}
+	if t.a != nil {
+		run, stop := t.a.selectStop()
+		if stop != nil {
+			stop()
+		}
+		<-run.done
+		info := t.infoOutcome(run.outcome())
+		info.Output = t.a.text()
+		return info, nil
+	}
 	j := t.job()
 	done := j.finished()
 	j.stop(ErrStopped)
@@ -382,7 +392,10 @@ func (t *task) report() TaskInfo {
 
 // info leaves Output empty.
 func (t *task) info() TaskInfo {
-	o := t.job().outcome()
+	return t.infoOutcome(t.job().outcome())
+}
+
+func (t *task) infoOutcome(o jobOutcome) TaskInfo {
 	info := TaskInfo{
 		ID: t.id, Command: t.command, Agent: t.agent, Started: t.started,
 		Ended: o.ended, Status: o.status, Reason: o.reason, Result: o.result,
@@ -430,8 +443,13 @@ func (p *process) outcome() jobOutcome {
 // agentJob is the state of an agent task, which its owner ends. Guarded by mu,
 // which is never held while calling stopFn or taking Tasks.mu.
 type agentJob struct {
-	mu             sync.Mutex
-	out            *outputBuffer
+	mu  sync.Mutex
+	out *outputBuffer
+	*agentRun
+}
+
+// agentRun is retained by a stop until that selected run has ended.
+type agentRun struct {
 	done           chan struct{}
 	stopFn         func()
 	running        bool
@@ -449,15 +467,21 @@ func (j *agentJob) finished() <-chan struct{} {
 
 // stop asks the owner to stop a running run, once per run.
 func (j *agentJob) stop(error) {
-	j.mu.Lock()
-	if !j.running || j.stopped {
-		j.mu.Unlock()
-		return
+	_, f := j.selectStop()
+	if f != nil {
+		f()
 	}
-	j.stopped = true
-	f := j.stopFn
-	j.mu.Unlock()
-	f()
+}
+
+func (j *agentJob) selectStop() (*agentRun, func()) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	run := j.agentRun
+	if !run.running || run.stopped {
+		return run, nil
+	}
+	run.stopped = true
+	return run, run.stopFn
 }
 
 func (j *agentJob) text() string { return j.out.String() }
@@ -465,6 +489,10 @@ func (j *agentJob) text() string { return j.out.String() }
 func (j *agentJob) outcome() jobOutcome {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	return j.agentRun.outcome()
+}
+
+func (j *agentRun) outcome() jobOutcome {
 	if j.running {
 		return jobOutcome{started: j.started, status: TaskRunning}
 	}
@@ -481,7 +509,7 @@ type AgentTask struct {
 // asks the owner to end the run. OnChange is never called for an agent task:
 // its owner reports it.
 func (m *Tasks) StartAgent(agent, description string, stop func()) *AgentTask {
-	j := &agentJob{out: &outputBuffer{}, done: make(chan struct{}), stopFn: stop, running: true, started: time.Now()}
+	j := &agentJob{out: &outputBuffer{}, agentRun: &agentRun{done: make(chan struct{}), stopFn: stop, running: true, started: time.Now()}}
 	watched := make(chan struct{})
 	close(watched)
 	t := &task{command: description, agent: agent, a: j, watched: watched}
@@ -513,10 +541,7 @@ func (a *AgentTask) Run(stop func()) bool {
 	if j.running {
 		return false
 	}
-	j.running, j.stopped, j.stopFn = true, false, stop
-	j.done = make(chan struct{})
-	j.started = time.Now()
-	j.ended, j.status, j.reason, j.result = time.Time{}, TaskRunning, "", ""
+	j.agentRun = &agentRun{done: make(chan struct{}), stopFn: stop, running: true, started: time.Now()}
 	return true
 }
 
@@ -540,7 +565,9 @@ func (a *AgentTask) End(status TaskStatus, reason, result string) (TaskInfo, boo
 	j.running = false
 	j.ended, j.status, j.reason, j.result = time.Now(), status, reason, result
 	close(j.done)
+	info := a.t.infoOutcome(j.agentRun.outcome())
 	j.mu.Unlock()
 	a.m.mu.Unlock()
-	return a.t.report(), !forgotten
+	info.Output = j.text()
+	return info, !forgotten
 }

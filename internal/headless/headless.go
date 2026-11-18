@@ -30,25 +30,25 @@ func New(c *app.Controller, prompt string, out io.Writer) *Frontend {
 // delivers SIGINT, which interrupts the running turn or, with only subagents
 // left, ends the run.
 func (f *Frontend) Run(ctx context.Context, interrupts <-chan os.Signal) error {
-	w, err := f.c.Prompt(ctx, f.prompt)
-	if err != nil {
+	turns := f.c.FollowWork()
+	defer turns.Close()
+	if _, err := f.c.Prompt(ctx, f.prompt); err != nil {
 		return err
 	}
+	var last *app.Work
 	for {
-		if w != nil {
+		w, live, changed := turns.Next()
+		switch {
+		case w != nil:
 			if err := f.await(ctx, interrupts, w); err != nil {
 				return err
 			}
 			if w.Outcome().Status != event.Completed {
 				return f.finish(w.Outcome(), w.Reply())
 			}
-		}
-		next, live, changed := f.c.Pending()
-		switch {
-		case next != nil:
-			w = next
+			last = w
 		case !live:
-			return f.finish(w.Outcome(), w.Reply())
+			return f.finish(last.Outcome(), last.Reply())
 		default:
 			select {
 			case <-ctx.Done():

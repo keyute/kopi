@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/app"
+	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/subagent"
@@ -399,5 +402,76 @@ func spawnTool(tasks *tool.Tasks, sh *tool.Shell, command string) tool.Tool {
 			info, err := tasks.Start(ctx, sh, command)
 			return tool.Result{Text: info.ID}, err
 		},
+	}
+}
+
+// pausedPoll holds the frontend's first wait while the controller completes wakes.
+type pausedPoll struct {
+	context.Context
+	once             sync.Once
+	entered, release chan struct{}
+}
+
+func (c *pausedPoll) Done() <-chan struct{} {
+	c.once.Do(func() {
+		close(c.entered)
+		<-c.release
+	})
+	return c.Context.Done()
+}
+
+func TestCompletedWakesAreConsumedBeforeIdle(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failed=%t", failed), func(t *testing.T) {
+			sb := pigruntimetest.NewSandbox(t)
+			rt := pigruntimetest.NewRuntime(t, sb)
+			faux, model := pigruntimetest.RegisterFaux(t, rt, "kopi-faux")
+			wake := pigruntimetest.Text("wake reply")
+			if failed {
+				wake = pigruntimetest.ProviderError("wake failed")
+			}
+			faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("initial"), wake, pigruntimetest.Text("last")})
+			tasks := tool.NewTasks()
+			cfg := app.Config{Model: model, Workspace: sb.Workspace, JoinTimeout: waitLimit, Tasks: tasks, Wake: true}
+			c := app.NewController(rt, cfg)
+			t.Cleanup(func() { assert.NoError(t, c.Close(context.Background())) })
+			require.NoError(t, c.Open(t.Context(), app.OpenRequest{}))
+			ends := make(chan struct{}, 3)
+			c.Subscribe(func(ev event.Event) {
+				if _, ok := ev.(event.TurnEnd); ok {
+					ends <- struct{}{}
+				}
+			})
+			ctx := &pausedPoll{Context: t.Context(), entered: make(chan struct{}), release: make(chan struct{})}
+			var out bytes.Buffer
+			result := make(chan error, 1)
+			go func() { result <- New(c, "go", &out).Run(ctx, nil) }()
+			waitClosed(t, ctx.entered)
+			waitClosed(t, ends)
+			// Pending waits for the terminal queue transition after TurnEnd.
+			w, _, _ := c.Pending()
+			require.Nil(t, w)
+			for range 2 {
+				_, err := tasks.Start(t.Context(), tool.NewShell(sb.Workspace, nil), "true")
+				require.NoError(t, err)
+				waitClosed(t, ends)
+				w, _, _ = c.Pending()
+				require.Nil(t, w)
+			}
+			close(ctx.release)
+			select {
+			case err := <-result:
+				if failed {
+					require.ErrorIs(t, err, ErrFailed)
+					assert.ErrorContains(t, err, "wake failed")
+					assert.Empty(t, out.String())
+				} else {
+					require.NoError(t, err)
+					assert.Equal(t, "last\n", out.String())
+				}
+			case <-time.After(waitLimit):
+				t.Fatal("frontend did not consume completed turns")
+			}
+		})
 	}
 }

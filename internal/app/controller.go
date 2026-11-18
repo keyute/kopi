@@ -135,6 +135,8 @@ type Controller struct {
 	// changed closes, and is replaced, whenever a turn starts or ends or a
 	// subagent's run ends; queue guards it.
 	changed chan struct{}
+	// followers retain turns only for frontends that consume their results.
+	followers map[*WorkQueue]struct{}
 
 	mu     sync.Mutex
 	sess   *pigruntime.Session
@@ -840,6 +842,9 @@ func (c *Controller) startTurn(ctx context.Context, parts []pigruntime.Prompt) *
 	c.turnSeq++
 	w := &Work{id: fmt.Sprintf("turn-%d", c.turnSeq), sendCtx: sendCtx, cancel: cancel, done: make(chan struct{})}
 	c.turn = w
+	for q := range c.followers {
+		q.works = append(q.works, w)
+	}
 	c.mu.Unlock()
 
 	emit(event.TurnStart{WorkID: w.id, Prompt: joined(parts).Text})

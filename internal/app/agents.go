@@ -202,7 +202,7 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 
 	ch := &child{spec: spec, parent: parent, d: newDisplay(spec.tools)}
 	ch.runCtx, ch.cancel = context.WithCancel(context.Background())
-	ch.stopFn = func() { c.stopRun(ch) }
+	ch.stopFn = ch.cancel
 	if c.cfg.Classifier != nil {
 		ch.rec = &classifier.Record{}
 	}
@@ -273,14 +273,6 @@ func (c *Controller) release() {
 	c.live--
 }
 
-// stopRun is the stop func of the child's task: it ends the current run.
-func (c *Controller) stopRun(ch *child) {
-	c.queue.Lock()
-	cancel := ch.cancel
-	c.queue.Unlock()
-	cancel()
-}
-
 // message delivers message to the subagent task id.
 func (c *Controller) message(ctx context.Context, id, message string) (bool, error) {
 	for {
@@ -323,7 +315,7 @@ func (c *Controller) message(ctx context.Context, id, message string) (bool, err
 		c.wg.Add(1)
 		c.queue.Unlock()
 
-		if !ch.task.Run(ch.stopFn) {
+		if !ch.task.Run(cancel) {
 			c.queue.Lock()
 			ch.running = false
 			c.live--

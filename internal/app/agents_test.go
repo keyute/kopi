@@ -803,3 +803,28 @@ func TestRootEditsGrantCoversAnUnpinnedChildButNotAPlanPinnedOne(t *testing.T) {
 	assert.Equal(t, "beta\n", fileText(t, sb, "c.txt"))
 	assert.Len(t, ofType[event.ApprovalRequested](a.rec.all()), 1, "no second ask for the unpinned child")
 }
+
+func TestDelayedChildStopDoesNotCancelReplacement(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
+	firstGate, secondGate := make(chan struct{}), make(chan struct{})
+	requests := make(chan childRequest, 2)
+	a.child.SetResponses([]ai.FauxResponseStep{captureChild(requests, firstGate, "first"), captureChild(requests, secondGate, "second")})
+	a.rootAcks(2)
+	id := a.launch(t, "explorer", "find it", "go")
+	receiveChild(t, requests)
+	ch := a.childOf(id)
+	selectedStop := ch.stopFn
+	close(firstGate)
+	a.until(t, func() bool { return a.live() == 0 })
+	resumed, err := a.c.message(t.Context(), id, "again")
+	require.NoError(t, err)
+	require.True(t, resumed)
+	receiveChild(t, requests)
+	selectedStop()
+	a.c.queue.Lock()
+	assert.NoError(t, ch.runCtx.Err(), "a delayed stop belongs to the old run")
+	a.c.queue.Unlock()
+	close(secondGate)
+	a.untilStatus(t, id, tool.TaskCompleted)
+	assert.Equal(t, "second", a.info(t, id).Result)
+}
