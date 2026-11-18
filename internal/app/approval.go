@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/keyute/kopi/internal/classifier"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/policy"
@@ -77,6 +78,17 @@ func (c *Controller) approver(d *display) policy.Approver {
 			// still reach the model as a rejection rather than as a cancel.
 			return <-p.answer, nil
 		}
+	}
+}
+
+// reviewer returns the Reviewer for a session whose calls rec records; nil
+// when no classifier is configured.
+func (c *Controller) reviewer(rec *classifier.Record) policy.Reviewer {
+	if c.cfg.Classifier == nil {
+		return nil
+	}
+	return func(ctx context.Context, r policy.Request) (policy.Review, error) {
+		return c.cfg.Classifier.Review(ctx, rec.Conversation(r.CallID), r)
 	}
 }
 

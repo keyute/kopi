@@ -10,16 +10,33 @@ import (
 	"github.com/MichaelKinsy/PiG/ai"
 )
 
+// Effort is how much the model reasons before it answers.
+type Effort int
+
+const (
+	DefaultEffort Effort = iota // the model's own default
+	LowestEffort                // the lowest level the model supports
+	MediumEffort
+)
+
 // Answer has model ("provider/id") reply once to prompt under system,
 // outside any session.
-func (r *Runtime) Answer(ctx context.Context, model, system, prompt string) (string, error) {
+func (r *Runtime) Answer(ctx context.Context, model string, effort Effort, system, prompt string) (string, error) {
 	m, err := r.usableModel(ctx, model)
 	if err != nil {
 		return "", fmt.Errorf("failed to answer with model %q: %w", model, err)
 	}
+	var opts ai.StreamOptions
+	switch effort {
+	case LowestEffort:
+		// PiG raises this to the nearest level the model supports.
+		opts.Thinking = ai.ThinkingLevelMinimal
+	case MediumEffort:
+		opts.Thinking = ai.ThinkingLevelMedium
+	}
 	text, err := r.complete(ctx, m, system, prompt, func(content []ai.AssistantContentBlock) string {
 		return ai.ContentText(content, "\n")
-	})
+	}, opts)
 	if err != nil {
 		if ctx.Err() != nil {
 			return "", err

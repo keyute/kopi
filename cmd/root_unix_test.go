@@ -412,88 +412,97 @@ func TestRootFullscreenStartupSubmitExit(t *testing.T) {
 	}
 }
 
-func TestRootFullscreenSameProviderSmallModelWithoutCredentialReachesLogin(t *testing.T) {
-	e := newTestEnv(t)
-	t.Setenv("TERM", "xterm-256color")
-	t.Setenv("MISTRAL_API_KEY", "")
-	logger := slog.Default()
-	t.Cleanup(func() { slog.SetDefault(logger) })
-	model := builtinModel(t, "mistral")
-	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), fmt.Sprintf(`{"smallModel":%q}`, model))
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	master, slave := openTestTerminal(t)
-	asked, drained := make(chan struct{}), make(chan struct{})
-	var result terminalDrainResult
-	go func() {
-		var output strings.Builder
-		buf := make([]byte, 4096)
-		sawAsk := false
-		for {
-			n, err := master.Read(buf)
-			output.Write(buf[:n])
-			plain := ansi.Strip(output.String())
-			if !sawAsk && strings.Contains(plain, "mistral") && strings.Contains(strings.ToLower(plain), "api key") && strings.Contains(plain, "Answer") {
-				sawAsk = true
-				close(asked)
+func TestRootFullscreenSameProviderModelWithoutCredentialReachesLogin(t *testing.T) {
+	for _, tc := range []struct {
+		name, config string
+	}{
+		{name: "smallModel", config: `{"smallModel":%q}`},
+		{name: "classifier.model", config: `{"classifier":{"enabled":true,"model":%q}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			t.Setenv("TERM", "xterm-256color")
+			t.Setenv("MISTRAL_API_KEY", "")
+			logger := slog.Default()
+			t.Cleanup(func() { slog.SetDefault(logger) })
+			model := builtinModel(t, "mistral")
+			e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), fmt.Sprintf(tc.config, model))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			master, slave := openTestTerminal(t)
+			asked, drained := make(chan struct{}), make(chan struct{})
+			var result terminalDrainResult
+			go func() {
+				var output strings.Builder
+				buf := make([]byte, 4096)
+				sawAsk := false
+				for {
+					n, err := master.Read(buf)
+					output.Write(buf[:n])
+					plain := ansi.Strip(output.String())
+					if !sawAsk && strings.Contains(plain, "mistral") && strings.Contains(strings.ToLower(plain), "api key") && strings.Contains(plain, "Answer") {
+						sawAsk = true
+						close(asked)
+					}
+					if err != nil {
+						result = terminalDrainResult{text: output.String(), err: err}
+						close(drained)
+						return
+					}
+				}
+			}()
+			root := newRoot()
+			root.SetIn(slave)
+			root.SetOut(slave)
+			var stderr bytes.Buffer
+			root.SetErr(&stderr)
+			root.SetArgs([]string{"--model", model})
+			done := make(chan error, 1)
+			stopped := make(chan struct{})
+			go func() {
+				done <- root.ExecuteContext(ctx)
+				close(stopped)
+			}()
+			t.Cleanup(func() {
+				cancel()
+				select {
+				case <-stopped:
+				case <-time.After(waitLimit):
+					t.Error("timed out cleaning up fullscreen command")
+					return
+				}
+				// Close the slave first: a blocked master read can hang on Darwin.
+				_ = slave.Close()
+				select {
+				case <-drained:
+					assert.True(t, errors.Is(result.err, io.EOF) || runtime.GOOS == "linux" && errors.Is(result.err, syscall.EIO), "terminal read: %v; output: %q", result.err, result.text)
+				case <-time.After(waitLimit):
+					t.Error("timed out cleaning up fullscreen terminal drain")
+					return
+				}
+				_ = master.Close()
+			})
+			select {
+			case <-asked:
+			case <-drained:
+				t.Fatalf("terminal drain ended before login prompt: %v; output: %q", result.err, result.text)
+			case err := <-done:
+				t.Fatalf("fullscreen exited before login prompt: %v; stderr: %s", err, stderr.String())
+			case <-time.After(waitLimit):
+				t.Fatal("timed out waiting for first-run login prompt")
 			}
-			if err != nil {
-				result = terminalDrainResult{text: output.String(), err: err}
-				close(drained)
-				return
+			cancel()
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(waitLimit):
+				t.Fatal("timed out waiting for fullscreen exit")
 			}
-		}
-	}()
-	root := newRoot()
-	root.SetIn(slave)
-	root.SetOut(slave)
-	var stderr bytes.Buffer
-	root.SetErr(&stderr)
-	root.SetArgs([]string{"--model", model})
-	done := make(chan error, 1)
-	stopped := make(chan struct{})
-	go func() {
-		done <- root.ExecuteContext(ctx)
-		close(stopped)
-	}()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case <-stopped:
-		case <-time.After(waitLimit):
-			t.Error("timed out cleaning up fullscreen command")
-			return
-		}
-		// Close the slave first: a blocked master read can hang on Darwin.
-		_ = slave.Close()
-		select {
-		case <-drained:
-			assert.True(t, errors.Is(result.err, io.EOF) || runtime.GOOS == "linux" && errors.Is(result.err, syscall.EIO), "terminal read: %v; output: %q", result.err, result.text)
-		case <-time.After(waitLimit):
-			t.Error("timed out cleaning up fullscreen terminal drain")
-			return
-		}
-		_ = master.Close()
-	})
-	select {
-	case <-asked:
-	case <-drained:
-		t.Fatalf("terminal drain ended before login prompt: %v; output: %q", result.err, result.text)
-	case err := <-done:
-		t.Fatalf("fullscreen exited before login prompt: %v; stderr: %s", err, stderr.String())
-	case <-time.After(waitLimit):
-		t.Fatal("timed out waiting for first-run login prompt")
+			credentials, err := os.ReadFile(filepath.Join(e.agentDir, "auth.json"))
+			require.NoError(t, err)
+			assert.JSONEq(t, `{}`, string(credentials), "cancelling login must store no credentials")
+		})
 	}
-	cancel()
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(waitLimit):
-		t.Fatal("timed out waiting for fullscreen exit")
-	}
-	credentials, err := os.ReadFile(filepath.Join(e.agentDir, "auth.json"))
-	require.NoError(t, err)
-	assert.JSONEq(t, `{}`, string(credentials), "cancelling login must store no credentials")
 }
 
 func TestRootFullscreenDifferentProviderSmallModelWithoutCredentialFailsAtStart(t *testing.T) {

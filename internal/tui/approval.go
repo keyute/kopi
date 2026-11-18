@@ -34,8 +34,19 @@ func approvalOptions(a *event.ApprovalRequested, km *keyMap) []approvalOption {
 // approvalOptions as its options, the reject option taking a reason.
 func newApprovalDialog(a *event.ApprovalRequested, km *keyMap, th theme) *dialog {
 	d := &dialog{title: a.Title}
-	if a.Rule != "" {
+	switch {
+	case a.Rule != "":
 		d.note = "asked by " + a.Rule
+	case a.Review != nil && a.Review.Verdict == policy.VerdictDeny:
+		d.note = "the classifier would deny this"
+		if a.Review.Reason != "" {
+			d.note += ": " + a.Review.Reason
+		}
+	case a.Review != nil:
+		d.note = "the classifier could not decide"
+		if a.Review.Reason != "" {
+			d.note += ": " + a.Review.Reason
+		}
 	}
 	for _, o := range approvalOptions(a, km) {
 		opt := option{label: o.label}

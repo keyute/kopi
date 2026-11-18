@@ -1751,7 +1751,7 @@ func TestBareDenyRemovesTool(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read"}, req.ToolNames)
-	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, []tool.Tool{read}, nil, nil)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, []tool.Tool{read}, nil, nil, false)), req.SystemPrompt)
 	assert.NotContains(t, req.SystemPrompt, "Exec")
 }
 
@@ -1827,7 +1827,7 @@ func TestOpenWaitsForServersAndAddsTheirTools(t *testing.T) {
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read", "ToolSearch"}, req.ToolNames)
 	search := tool.NewToolSearch(nil, nil, nil)
-	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, []tool.Tool{read, search, mcp}, nil, []mcpServer{{name: "s", instructions: "use t wisely", tools: []string{mcp.Name}}})), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, []tool.Tool{read, search, mcp}, nil, []mcpServer{{name: "s", instructions: "use t wisely", tools: []string{mcp.Name}}}, false)), req.SystemPrompt)
 	assert.Contains(t, req.SystemPrompt, "use t wisely")
 	assert.Contains(t, req.SystemPrompt, "MCP server s tools: mcp__s__t.")
 
@@ -2395,7 +2395,7 @@ func TestTurnUsesNoAmbientState(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read"}, req.ToolNames)
-	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, tools, nil, nil)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, tools, nil, nil, false)), req.SystemPrompt)
 	for _, marker := range pigruntimetest.DecoyMarkers {
 		assert.NotContains(t, req.Raw, marker)
 	}
@@ -2414,7 +2414,7 @@ func TestTurnSendsConfiguredInstructions(t *testing.T) {
 	h.turn(t, "hello")
 
 	req := receive(t, requests)
-	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, nil, []instruction.Group{global, project}, nil)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, nil, []instruction.Group{global, project}, nil, false)), req.SystemPrompt)
 	g, p := strings.Index(req.SystemPrompt, "GLOBAL_RULE"), strings.Index(req.SystemPrompt, "PROJECT_RULE")
 	require.GreaterOrEqual(t, g, 0)
 	assert.Greater(t, p, g, "the global group comes before the project's")

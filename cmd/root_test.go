@@ -343,6 +343,46 @@ func TestRootSmallModelWithoutCredentialFailsAtStart(t *testing.T) {
 	assert.Empty(t, server.requests)
 }
 
+func TestRootUnknownClassifierModelFailsAtStart(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
+	e.writeMockModels(t, server.URL)
+	configFile := filepath.Join(e.kopiHome, "config.json")
+	e.writeFile(t, configFile, `{"classifier":{"enabled":true,"model":"nosuch/model-1"}}`)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.ErrorIs(t, err, pigruntime.ErrUnknownModel)
+	assert.Contains(t, err.Error(), `"classifier.model" in `+configFile)
+	assert.Empty(t, server.requests)
+}
+
+func TestRootClassifierModelWithoutCredentialFailsAtStart(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
+	e.writeMockModels(t, server.URL)
+	configFile := filepath.Join(e.kopiHome, "config.json")
+	e.writeFile(t, configFile, fmt.Sprintf(`{"classifier":{"enabled":true,"model":%q}}`, builtinModel(t, "openai-codex")))
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"classifier.model" in `+configFile)
+	assert.Contains(t, err.Error(), `run "kopi login openai-codex"`)
+	assert.Empty(t, server.requests)
+}
+
+func TestRootDisabledClassifierModelIsNotChecked(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"classifier":{"enabled":false,"model":"nosuch/model-1"}}`)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+}
+
 func TestRootHeadlessSameProviderSmallModelWithoutCredentialFailsAtStart(t *testing.T) {
 	e := newTestEnv(t)
 	t.Setenv("MISTRAL_API_KEY", "")
@@ -1021,6 +1061,47 @@ func TestRootSandboxDisabledBashNeedsApproval(t *testing.T) {
 
 	assert.Contains(t, result, `tool "Bash" needs approval`)
 	assert.Contains(t, result, "--allowed-tools")
+}
+
+func TestRootClassifierAllowRunsBashThatPrintModeWouldDeny(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"sandbox":{"enabled":false},"classifier":{"enabled":true}}`)
+	var calls atomic.Int32
+	server := newMockProvider(t, func(w http.ResponseWriter) {
+		switch calls.Add(1) {
+		case 1:
+			streamBash(w, "echo classified")
+		case 2:
+			streamText(w, `{"decision":"allow","reason":"asked for"}`)
+		default:
+			streamText(w, "done")
+		}
+	})
+	e.writeMockModels(t, server.URL)
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := execute(t, "", "--model", mockModel, "--mode", "execute", "-p", "run it")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for the print run to finish")
+	}
+
+	server.next(t)
+	server.next(t)
+	var results []string
+	for _, m := range server.next(t).body["messages"].([]any) {
+		if msg := m.(map[string]any); msg["role"] == "tool" {
+			results = append(results, fmt.Sprint(msg["content"]))
+		}
+	}
+	require.Len(t, results, 1)
+	assert.Contains(t, results[0], "classified")
+	assert.NotContains(t, results[0], "needs approval")
 }
 
 func TestRootSandboxUnavailableBashNeedsApproval(t *testing.T) {
