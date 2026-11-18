@@ -142,17 +142,14 @@ func (r *Runtime) check(ctx context.Context, o OpenOptions) (*ai.Model, error) {
 	if o.ResumeID != "" && o.Continue {
 		return nil, errors.New("failed to open session: resume id and continue are mutually exclusive")
 	}
-	provider, id, _ := strings.Cut(o.Model, "/")
-	model := r.svcs.ModelRuntime().GetModel(provider, id)
-	if model == nil {
-		return nil, fmt.Errorf("failed to open session with model %q: %w", o.Model, ErrUnknownModel)
-	}
-	ok, err := r.hasCredential(ctx, provider)
-	if err != nil {
+	model, err := r.usableModel(ctx, o.Model)
+	switch {
+	case errors.Is(err, ErrUnknownModel):
+		return nil, fmt.Errorf("failed to open session with model %q: %w", o.Model, err)
+	case errors.Is(err, ErrNoCredential):
+		return nil, fmt.Errorf("failed to open session: %w", err)
+	case err != nil:
 		return nil, err
-	}
-	if !ok {
-		return nil, fmt.Errorf("failed to open session: provider %q: %w", provider, ErrNoCredential)
 	}
 	if o.ResumeID == "" && !o.Continue {
 		return model, nil
@@ -279,6 +276,24 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 		})
 	}
 	return &Session{inner: sess}, nil
+}
+
+// usableModel returns the model ref ("provider/id") names once its provider
+// has a credential.
+func (r *Runtime) usableModel(ctx context.Context, ref string) (*ai.Model, error) {
+	provider, id, _ := strings.Cut(ref, "/")
+	model := r.svcs.ModelRuntime().GetModel(provider, id)
+	if model == nil {
+		return nil, ErrUnknownModel
+	}
+	ok, err := r.hasCredential(ctx, provider)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("provider %q: %w", provider, ErrNoCredential)
+	}
+	return model, nil
 }
 
 // hasCredential relies on PiG's CheckAuth returning (nil, nil) when the

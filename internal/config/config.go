@@ -31,8 +31,9 @@ const delim = "."
 // Config is the effective configuration. MCP server env and header values may
 // be secrets; Entries never prints them, and prints every other value verbatim.
 type Config struct {
-	Version int    `koanf:"version"`
-	Model   string `koanf:"model"` // "provider/id"; empty means not configured (there is no default model)
+	Version    int    `koanf:"version"`
+	Model      string `koanf:"model"`      // "provider/id"; empty means not configured (there is no default model)
+	SmallModel string `koanf:"smallModel"` // "provider/id"; empty means model
 	// Mode is the mode sessions start in, plan or execute.
 	Mode string `koanf:"mode"`
 	// InstructionFallbacks are file names tried in order in a directory
@@ -148,8 +149,11 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 		if err := decode(k, &c); err != nil {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
-		if c.Model != "" {
-			if _, _, err := ParseModelRef(c.Model); err != nil {
+		for _, ref := range []string{c.Model, c.SmallModel} {
+			if ref == "" {
+				continue
+			}
+			if _, _, err := ParseModelRef(ref); err != nil {
 				return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 			}
 		}
@@ -346,6 +350,7 @@ func (r *Resolved) Entries() []Entry {
 	c := r.Config
 	values := map[string]any{
 		"model":                c.Model,
+		"smallModel":           c.SmallModel,
 		"mode":                 c.Mode,
 		"instructionFallbacks": c.InstructionFallbacks,
 		"version":              c.Version,
