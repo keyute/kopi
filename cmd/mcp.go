@@ -54,7 +54,7 @@ func mcpListCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to resolve working directory: %w", err)
 			}
-			set, err := resolveServers(resolved.Config.MCPServers, paths.TrustFile, cwd, userHome, nil)
+			set, err := resolveServers(resolved.Config.MCPServers, paths.TrustFile, cwd, userHome, nil, nil)
 			if err != nil {
 				return err
 			}

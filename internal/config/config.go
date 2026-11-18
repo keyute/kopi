@@ -8,6 +8,7 @@ import (
 	"maps"
 	"math"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -34,6 +35,9 @@ type Config struct {
 	Model   string `koanf:"model"` // "provider/id"; empty means not configured (there is no default model)
 	// Mode is the mode sessions start in, plan or execute.
 	Mode string `koanf:"mode"`
+	// InstructionFallbacks are file names tried in order in a directory
+	// without an AGENTS.md.
+	InstructionFallbacks []string `koanf:"instructionFallbacks"`
 	// Keys maps an action from KeyActions to the keys bound to it.
 	Keys        map[string][]string  `koanf:"keys"`
 	StatusLine  StatusLine           `koanf:"statusline"`
@@ -97,6 +101,7 @@ func Defaults() Layer {
 	values := uiDefaults()
 	values["version"] = Version
 	values["mode"] = policy.Plan.String()
+	values["instructionFallbacks"] = []string{"CLAUDE.md"}
 	values["permissions"] = map[string]any{"allow": []string{}, "ask": []string{}, "deny": []string{}}
 	values["sandbox"] = map[string]any{"allowWrite": []string{}, "denyRead": []string{}, "network": false}
 	values["mcpServers"] = map[string]any{}
@@ -152,6 +157,9 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 			if _, err := policy.ParseMode(c.Mode); err != nil {
 				return nil, fmt.Errorf("config layer %s: %w: %w", l.Name, ErrInvalidValue, err)
 			}
+		}
+		if err := validateInstructionFallbacks(c.InstructionFallbacks); err != nil {
+			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
 		if err := validateUI(c); err != nil {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
@@ -273,6 +281,15 @@ func rejectFractionalInt(_, to reflect.Type, data any) (any, error) {
 	return data, nil
 }
 
+func validateInstructionFallbacks(names []string) error {
+	for i, n := range names {
+		if n == "" || n == "." || n == ".." || strings.ContainsAny(n, `/\`) || filepath.Base(n) != n {
+			return fmt.Errorf("%w: instructionFallbacks[%d]: %q is not a file name", ErrInvalidValue, i, n)
+		}
+	}
+	return nil
+}
+
 func validatePermissions(p Permissions) error {
 	for _, list := range []struct {
 		key   string
@@ -328,18 +345,19 @@ type Entry struct{ Key, Value, Origin string }
 func (r *Resolved) Entries() []Entry {
 	c := r.Config
 	values := map[string]any{
-		"model":              c.Model,
-		"mode":               c.Mode,
-		"version":            c.Version,
-		"statusline.left":    c.StatusLine.Left,
-		"statusline.right":   c.StatusLine.Right,
-		"permissions.allow":  c.Permissions.Allow,
-		"permissions.ask":    c.Permissions.Ask,
-		"permissions.deny":   c.Permissions.Deny,
-		"sandbox.enabled":    c.Sandbox.Enabled,
-		"sandbox.allowWrite": c.Sandbox.AllowWrite,
-		"sandbox.denyRead":   c.Sandbox.DenyRead,
-		"sandbox.network":    c.Sandbox.Network,
+		"model":                c.Model,
+		"mode":                 c.Mode,
+		"instructionFallbacks": c.InstructionFallbacks,
+		"version":              c.Version,
+		"statusline.left":      c.StatusLine.Left,
+		"statusline.right":     c.StatusLine.Right,
+		"permissions.allow":    c.Permissions.Allow,
+		"permissions.ask":      c.Permissions.Ask,
+		"permissions.deny":     c.Permissions.Deny,
+		"sandbox.enabled":      c.Sandbox.Enabled,
+		"sandbox.allowWrite":   c.Sandbox.AllowWrite,
+		"sandbox.denyRead":     c.Sandbox.DenyRead,
+		"sandbox.network":      c.Sandbox.Network,
 	}
 	for _, action := range KeyActions {
 		values["keys."+action] = c.Keys[action]
