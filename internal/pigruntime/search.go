@@ -18,19 +18,23 @@ import (
 type searchProtocol struct {
 	enable func(payload map[string]any)
 	read   func(event map[string]any, f *found)
+	// sep joins the answer's text blocks. Anthropic splits one sentence across
+	// citation blocks, so it joins with none.
+	sep string
 }
 
 // searchProtocols is keyed by the wire protocol, never by provider: an
 // endpoint that speaks one of these is offered search.
 var searchProtocols = map[ai.API]searchProtocol{
-	ai.APIOpenAIResponses:      {enable: enableResponsesSearch, read: readResponsesSources},
-	ai.APIAzureOpenAIResponses: {enable: enableResponsesSearch, read: readResponsesSources},
+	ai.APIOpenAIResponses:      {enable: enableResponsesSearch, read: readResponsesSources, sep: "\n"},
+	ai.APIAzureOpenAIResponses: {enable: enableResponsesSearch, read: readResponsesSources, sep: "\n"},
 	ai.APIOpenAICodexResponses: {
 		enable: func(payload map[string]any) {
 			enableResponsesSearch(payload)
 			payload["tool_choice"] = "required"
 		},
 		read: readResponsesSources,
+		sep:  "\n",
 	},
 	ai.APIAnthropicMessages: {
 		enable: func(payload map[string]any) {
@@ -48,6 +52,7 @@ var searchProtocols = map[ai.API]searchProtocol{
 			config["tools"] = []any{map[string]any{"google_search": map[string]any{}}}
 		},
 		read: readGoogleSources,
+		sep:  "\n",
 	},
 }
 
@@ -55,6 +60,35 @@ var searchProtocols = map[ai.API]searchProtocol{
 // stream observer and read after the request returns.
 type found struct {
 	cited, consulted []tool.Source
+
+	// texts counts the text blocks started so far, searched whether a search
+	// block started since the last of them, and breaks holds the ordinals of
+	// the text blocks that follow a search after other text.
+	texts    int
+	searched bool
+	breaks   map[int]bool
+}
+
+// join joins the text blocks of content with sep, or with a paragraph break
+// where the answer resumes after a search.
+func (f *found) join(content []ai.AssistantContentBlock, sep string) string {
+	var b strings.Builder
+	n := 0
+	for _, block := range content {
+		text, ok := block.(ai.TextContent)
+		if !ok {
+			continue
+		}
+		switch {
+		case n > 0 && f.breaks[n]:
+			b.WriteString("\n\n")
+		case n > 0:
+			b.WriteString(sep)
+		}
+		b.WriteString(text.Text)
+		n++
+	}
+	return b.String()
 }
 
 func (f *found) cite(url, title string)    { addSource(&f.cited, url, title) }
@@ -99,7 +133,9 @@ func (r *Runtime) Search(ctx context.Context, model, system, query string) (tool
 		return tool.SearchResult{}, fmt.Errorf("failed to search with model %q: %w", model, ErrNoSearch)
 	}
 	var f found
-	text, err := r.complete(ctx, m, system, query, "", ai.StreamOptions{
+	text, err := r.complete(ctx, m, system, query, func(content []ai.AssistantContentBlock) string {
+		return f.join(content, proto.sep)
+	}, ai.StreamOptions{
 		OnPayload: func(payload any, _ *ai.Model) (any, error) {
 			return editPayload(payload, proto.enable)
 		},
@@ -209,12 +245,24 @@ func readAnthropicSources(event map[string]any, f *found) {
 		}
 	case "content_block_start":
 		block := asMap(event["content_block"])
-		if str(block, "type") != "web_search_tool_result" {
-			return
-		}
-		for _, result := range asSlice(block["content"]) {
-			r := asMap(result)
-			f.consult(str(r, "url"), str(r, "title"))
+		switch str(block, "type") {
+		case "text":
+			if f.searched && f.texts > 0 {
+				if f.breaks == nil {
+					f.breaks = map[int]bool{}
+				}
+				f.breaks[f.texts] = true
+			}
+			f.searched = false
+			f.texts++
+		case "server_tool_use":
+			f.searched = true
+		case "web_search_tool_result":
+			f.searched = true
+			for _, result := range asSlice(block["content"]) {
+				r := asMap(result)
+				f.consult(str(r, "url"), str(r, "title"))
+			}
 		}
 	}
 }

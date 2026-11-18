@@ -85,14 +85,26 @@ func TestWebSearchReturnsAnswerAndSources(t *testing.T) {
 	assert.Equal(t, []searchCall{{webSearchSystemPrompt, "latest Go release"}}, *calls)
 }
 
-func TestWebSearchOmitsEmptySources(t *testing.T) {
+func TestWebSearchCountsOnlyKopisSources(t *testing.T) {
 	search, _ := recordSearches(SearchResult{Answer: "No idea."}, nil)
 	tool := NewWebSearch(search)
 
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"query":"q"}`), admitRead)
 
 	require.NoError(t, err)
-	assert.Equal(t, "No idea.", out)
+	assert.Equal(t, "No idea.\n\nSources: none", out)
+	assert.Equal(t, "no sources", tool.Display.Summary(out))
+}
+
+func TestWebSearchIgnoresSourcesTheAnswerListsItself(t *testing.T) {
+	search, _ := recordSearches(SearchResult{Answer: "Maybe.\n\nSources:\n- a\n- b"}, nil)
+	tool := NewWebSearch(search)
+
+	out, err := tool.Run(t.Context(), json.RawMessage(`{"query":"q"}`), admitRead)
+
+	require.NoError(t, err)
+	assert.Equal(t, "Maybe.\n\nSources:\n- a\n- b\n\nSources: none", out)
+	assert.Equal(t, "no sources", tool.Display.Summary(out))
 }
 
 func TestWebSearchCutsSourcesToTwenty(t *testing.T) {
@@ -129,6 +141,7 @@ func TestWebSearchDisplay(t *testing.T) {
 	assert.Equal(t, "WebSearch go release", d.Title(json.RawMessage(`{"query":"go release"}`)))
 	assert.Equal(t, "WebSearch", d.Title(json.RawMessage(`{}`)))
 	assert.Equal(t, "no sources", d.Summary("answer"))
+	assert.Equal(t, "no sources", d.Summary("answer\n\nSources:\n- a\n- b\n\nSources: none"))
 	assert.Equal(t, "1 source", d.Summary("answer\n\nSources:\n- https://a.example"))
 	assert.Equal(t, "2 sources", d.Summary("answer\n\nSources:\n- https://a.example\n- https://b.example"))
 }
@@ -144,6 +157,8 @@ func TestWebSearchDisplayPreview(t *testing.T) {
 	long := strings.Repeat("q", maxBashTitleRunes+1)
 
 	assert.Empty(t, preview("go release"))
+	mid := strings.Repeat("q", 75)
+	assert.Equal(t, []PreviewLine{{Kind: Context, Text: mid}}, preview(mid))
 	assert.Equal(t, []PreviewLine{{Kind: Context, Text: long}}, preview(long))
 	assert.Equal(t, []PreviewLine{{Kind: Context, Text: "go"}, {Kind: Context, Text: "release"}}, preview("go\nrelease"))
 }

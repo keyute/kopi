@@ -17,7 +17,9 @@ func (r *Runtime) Answer(ctx context.Context, model, system, prompt string) (str
 	if err != nil {
 		return "", fmt.Errorf("failed to answer with model %q: %w", model, err)
 	}
-	text, err := r.complete(ctx, m, system, prompt, "\n")
+	text, err := r.complete(ctx, m, system, prompt, func(content []ai.AssistantContentBlock) string {
+		return ai.ContentText(content, "\n")
+	})
 	if err != nil {
 		if ctx.Err() != nil {
 			return "", err
@@ -27,9 +29,9 @@ func (r *Runtime) Answer(ctx context.Context, model, system, prompt string) (str
 	return text, nil
 }
 
-// complete asks m once and returns its text blocks joined with sep. Without
+// complete asks m once and returns the text join makes of its content. Without
 // text it fails with ErrNoAnswer.
-func (r *Runtime) complete(ctx context.Context, m *ai.Model, system, prompt, sep string, opts ...ai.StreamOptions) (string, error) {
+func (r *Runtime) complete(ctx context.Context, m *ai.Model, system, prompt string, join func([]ai.AssistantContentBlock) string, opts ...ai.StreamOptions) (string, error) {
 	msg := r.svcs.ModelRuntime().CompleteSimple(ctx, m, ai.Context{
 		SystemPrompt: system,
 		Messages:     []ai.Message{ai.UserMessage{Content: ai.UserText(prompt), Timestamp: time.Now().UnixMilli()}},
@@ -44,7 +46,7 @@ func (r *Runtime) complete(ctx context.Context, m *ai.Model, system, prompt, sep
 	if msg.StopReason == ai.StopReasonError || msg.StopReason == ai.StopReasonAborted {
 		return "", errors.New(pigTexts.Replace(msg.ErrorMessage))
 	}
-	text := strings.TrimSpace(ai.ContentText(msg.Content, sep))
+	text := strings.TrimSpace(join(msg.Content))
 	if text == "" {
 		return "", ErrNoAnswer
 	}

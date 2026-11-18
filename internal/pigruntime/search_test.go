@@ -195,6 +195,51 @@ func TestSearchAnthropicJoinsSplitTextAndReadsCitations(t *testing.T) {
 	assert.NotContains(t, req.body, "betas")
 }
 
+func TestSearchAnthropicBreaksTheAnswerAfterASearch(t *testing.T) {
+	r, _ := newSearchRuntime(t, "anthropic-messages", "synthetic-key", func(w http.ResponseWriter) {
+		anthropicStream(w,
+			map[string]any{"start": map[string]any{"type": "text", "text": ""}, "deltas": []any{map[string]any{"type": "text_delta", "text": "preamble"}}},
+			map[string]any{"start": map[string]any{"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": map[string]any{}}, "deltas": []any{}},
+			map[string]any{"start": map[string]any{"type": "web_search_tool_result", "tool_use_id": "srvtoolu_1", "content": []any{}}, "deltas": []any{}},
+			citedText("Go 1.27", "https://go.dev/doc/go1.27", "Go 1.27"),
+			citedText(" is out.", "https://go.dev/doc/go1.27", "Go 1.27"),
+		)
+	})
+
+	got, err := r.Search(t.Context(), searchModel, "system", "q")
+
+	require.NoError(t, err)
+	assert.Equal(t, "preamble\n\nGo 1.27 is out.", got.Answer)
+}
+
+func TestSearchResponsesJoinsMessagesWithNewline(t *testing.T) {
+	r, _ := newSearchRuntime(t, "openai-responses", "synthetic-key", func(w http.ResponseWriter) {
+		item := func(id, text string) map[string]any {
+			return map[string]any{
+				"type": "message", "id": id, "role": "assistant", "status": "completed",
+				"content": []any{map[string]any{"type": "output_text", "text": text, "annotations": []any{}}},
+			}
+		}
+		first, second := item("msg_1", "I'll search."), item("msg_2", "Answer.")
+		sse(w,
+			map[string]any{"type": "response.created", "response": map[string]any{"id": "resp_1", "status": "in_progress", "output": []any{}}},
+			map[string]any{"type": "response.output_item.added", "output_index": 0, "item": map[string]any{"type": "message", "id": "msg_1", "role": "assistant", "status": "in_progress", "content": []any{}}},
+			map[string]any{"type": "response.output_item.done", "output_index": 0, "item": first},
+			map[string]any{"type": "response.output_item.added", "output_index": 1, "item": map[string]any{"type": "message", "id": "msg_2", "role": "assistant", "status": "in_progress", "content": []any{}}},
+			map[string]any{"type": "response.output_item.done", "output_index": 1, "item": second},
+			map[string]any{"type": "response.completed", "response": map[string]any{
+				"id": "resp_1", "status": "completed", "output": []any{first, second},
+				"usage": map[string]any{"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+			}},
+		)
+	})
+
+	got, err := r.Search(t.Context(), searchModel, "system", "q")
+
+	require.NoError(t, err)
+	assert.Equal(t, "I'll search.\nAnswer.", got.Answer)
+}
+
 func TestSearchAnthropicReadsConsultedSourcesAndSkipsErrorResults(t *testing.T) {
 	r, _ := newSearchRuntime(t, "anthropic-messages", "synthetic-key", func(w http.ResponseWriter) {
 		anthropicStream(w,
