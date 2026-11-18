@@ -255,6 +255,82 @@ func TestSearchGoogleEnablesGroundingAndTheLastMetadataWins(t *testing.T) {
 	assert.Equal(t, []any{map[string]any{"google_search": map[string]any{}}}, toolTypes(t, req.body))
 }
 
+func TestSearchGoogleReturnsOnlySupportedChunks(t *testing.T) {
+	r, _ := newSearchRuntime(t, "google-generative-ai", "synthetic-key", func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Answer."}]},"groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://a.example/","title":"A"}},{"web":{"uri":"https://b.example/","title":"B"}}],"groundingSupports":[{"groundingChunkIndices":[1]}]}}]}
+
+data: {"candidates":[{"finishReason":"STOP"}]}
+
+`)
+	})
+
+	got, err := r.Search(t.Context(), searchModel, "system", "q")
+
+	require.NoError(t, err)
+	assert.Equal(t, tool.SearchResult{Answer: "Answer.", Sources: []tool.Source{{Title: "B", URL: "https://b.example/"}}}, got)
+}
+
+func TestReadGoogleSourcesSupportIndices(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		supports string
+		cited    []tool.Source
+	}{
+		{name: "absent supports"},
+		{name: "empty supports", supports: `,"groundingSupports":[]`},
+		{name: "only B", supports: `,"groundingSupports":[{"groundingChunkIndices":[1]}]`, cited: []tool.Source{{Title: "B", URL: "https://b.example/"}}},
+		{name: "invalid indices", supports: `,"groundingSupports":[{"groundingChunkIndices":[-1,0.5,"0",null,{},true,5,1e100]}]`},
+		{name: "duplicate indices and URLs in chunk order", supports: `,"groundingSupports":[{"groundingChunkIndices":[4,1,1,3]},{"groundingChunkIndices":[0]}]`, cited: []tool.Source{{Title: "A", URL: "https://a.example/"}, {Title: "B", URL: "https://b.example/"}}},
+		{name: "nonweb chunks", supports: `,"groundingSupports":[{"groundingChunkIndices":[2,3]}]`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var event map[string]any
+			require.NoError(t, json.Unmarshal([]byte(`{"candidates":[{"groundingMetadata":{"groundingChunks":[
+				{"web":{"uri":"https://a.example/","title":"A"}},
+				{"web":{"uri":"https://b.example/","title":"B"}},
+				{"retrievedContext":{"uri":"https://context.example/"}},
+				{"web":{"title":"No URI"}},
+				{"web":{"uri":"https://a.example/","title":"Duplicate"}}
+			]`+tt.supports+`}}]}`), &event))
+			var f found
+
+			readGoogleSources(event, &f)
+
+			consulted := []tool.Source{{Title: "A", URL: "https://a.example/"}, {Title: "B", URL: "https://b.example/"}}
+			assert.Equal(t, consulted, f.consulted)
+			assert.Equal(t, tt.cited, f.cited)
+			if len(tt.cited) > 0 {
+				assert.Equal(t, tt.cited, f.sources())
+			} else {
+				assert.Equal(t, consulted, f.sources())
+			}
+		})
+	}
+}
+
+func TestReadGoogleSourcesReplacesCitationsAndPreservesMetadataLessStop(t *testing.T) {
+	var f found
+	for i, raw := range []string{
+		`{"candidates":[{"groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://early.example/"}}],"groundingSupports":[{"groundingChunkIndices":[0]}]}}]}`,
+		`{"candidates":[{"groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://later.example/"}}]}}]}`,
+		`{"candidates":[{"groundingMetadata":{"groundingChunks":[{"web":{"title":"No URI"}}]}}]}`,
+		`{"candidates":[{"finishReason":"STOP"}]}`,
+	} {
+		var event map[string]any
+		require.NoError(t, json.Unmarshal([]byte(raw), &event))
+		readGoogleSources(event, &f)
+		if i == 0 {
+			assert.Equal(t, []tool.Source{{URL: "https://early.example/"}}, f.cited)
+		} else {
+			assert.Empty(t, f.cited)
+			assert.Equal(t, []tool.Source{{URL: "https://later.example/"}}, f.consulted)
+		}
+	}
+	assert.Empty(t, f.cited)
+	assert.Equal(t, []tool.Source{{URL: "https://later.example/"}}, f.consulted)
+}
+
 func TestSearchEmptyAnswerFails(t *testing.T) {
 	r, _ := newSearchRuntime(t, "openai-responses", "synthetic-key", func(w http.ResponseWriter) {
 		responsesStream(w, " ", nil)

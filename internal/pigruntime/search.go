@@ -226,12 +226,26 @@ func readGoogleSources(event map[string]any, f *found) {
 	if len(candidates) == 0 {
 		return
 	}
-	var sources []tool.Source
-	for _, chunk := range asSlice(asMap(asMap(candidates[0])["groundingMetadata"])["groundingChunks"]) {
-		web := asMap(asMap(chunk)["web"])
-		addSource(&sources, str(web, "uri"), str(web, "title"))
+	metadata := asMap(asMap(candidates[0])["groundingMetadata"])
+	chunks := asSlice(metadata["groundingChunks"])
+	cited := make([]bool, len(chunks))
+	for _, support := range asSlice(metadata["groundingSupports"]) {
+		for _, value := range asSlice(asMap(support)["groundingChunkIndices"]) {
+			index, ok := value.(float64)
+			if ok && index >= 0 && index < float64(len(chunks)) && index == float64(int(index)) {
+				cited[int(index)] = true
+			}
+		}
 	}
-	if len(sources) > 0 {
-		f.cited = sources
+	var next found
+	for i, chunk := range chunks {
+		web := asMap(asMap(chunk)["web"])
+		next.consult(str(web, "uri"), str(web, "title"))
+		if cited[i] {
+			next.cite(str(web, "uri"), str(web, "title"))
+		}
+	}
+	if len(next.consulted) > 0 {
+		*f = next
 	}
 }
