@@ -3,6 +3,7 @@
 package pigruntimetest
 
 import (
+	"context"
 	"encoding/json"
 	"io/fs"
 	"os"
@@ -133,6 +134,60 @@ func RegisterFaux(t testing.TB, r *pigruntime.Runtime, providerID string) (faux 
 	faux = ai.NewFauxProvider(ai.FauxConfig{ProviderID: providerID, Model: "faux-1"})
 	require.NoError(t, r.RegisterProvider(faux.Provider()))
 	return faux, providerID + "/faux-1"
+}
+
+// LoginProgress is what the provider RegisterLoginProvider registers shows
+// during its sign-in. It is progress, not a URL, so no browser is opened.
+const LoginProgress = "Waiting for the code"
+
+// RegisterLoginProvider registers a provider whose only login is a fake
+// sign-in: it shows LoginProgress, asks "Code:" and stores the answer as the
+// credential.
+func RegisterLoginProvider(t testing.TB, r *pigruntime.Runtime, providerID string) {
+	t.Helper()
+	p := *ai.NewFauxProvider(ai.FauxConfig{ProviderID: providerID, Model: "login-1"}).Provider()
+	p.Auth = ai.ProviderAuth{OAuth: &ai.OAuthAuth{
+		Name: "Test sign-in",
+		Login: func(ctx context.Context, in ai.AuthInteraction, _ ai.LoginOptions) (ai.Credential, error) {
+			in.Notify(ai.AuthProgressEvent{Message: LoginProgress})
+			code, err := in.Prompt(ctx, ai.AuthManualCodePrompt{Message: "Code:"})
+			if err != nil {
+				return ai.Credential{}, err
+			}
+			return ai.Credential{Type: ai.CredentialOAuth, Access: code, Refresh: "r", Expires: time.Now().Add(time.Hour).UnixMilli()}, nil
+		},
+		Refresh: func(_ context.Context, c ai.Credential) (ai.Credential, error) { return c, nil },
+		ToAuth:  func(c ai.Credential) (ai.ModelAuth, error) { return ai.ModelAuth{APIKey: c.Access}, nil },
+	}}
+	require.NoError(t, r.RegisterProvider(&p))
+}
+
+// RegisterPromptingLoginProvider registers a provider whose only login is a
+// fake sign-in that asks "Team:" with the options red and blue, then the
+// secret "Key:" with the placeholder "sk-test", and stores the key as the
+// credential. Under the ID "anthropic", Runtime.Login adds its sign-in notice.
+func RegisterPromptingLoginProvider(t testing.TB, r *pigruntime.Runtime, providerID string) {
+	t.Helper()
+	p := *ai.NewFauxProvider(ai.FauxConfig{ProviderID: providerID, Model: "login-1"}).Provider()
+	p.Auth = ai.ProviderAuth{OAuth: &ai.OAuthAuth{
+		Name: "Prompting sign-in",
+		Login: func(ctx context.Context, in ai.AuthInteraction, _ ai.LoginOptions) (ai.Credential, error) {
+			_, err := in.Prompt(ctx, ai.AuthSelectPrompt{Message: "Team:", Options: []ai.AuthSelectOption{
+				{ID: "red", Label: "Red", Description: "warm"}, {ID: "blue", Label: "Blue"},
+			}})
+			if err != nil {
+				return ai.Credential{}, err
+			}
+			key, err := in.Prompt(ctx, ai.AuthSecretPrompt{Message: "Key:", Placeholder: "sk-test"})
+			if err != nil {
+				return ai.Credential{}, err
+			}
+			return ai.Credential{Type: ai.CredentialOAuth, Access: key, Refresh: "r", Expires: time.Now().Add(time.Hour).UnixMilli()}, nil
+		},
+		Refresh: func(_ context.Context, c ai.Credential) (ai.Credential, error) { return c, nil },
+		ToAuth:  func(c ai.Credential) (ai.ModelAuth, error) { return ai.ModelAuth{APIKey: c.Access}, nil },
+	}}
+	require.NoError(t, r.RegisterProvider(&p))
 }
 
 func Text(text string) ai.FauxResponseStep {

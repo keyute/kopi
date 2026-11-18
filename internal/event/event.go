@@ -65,8 +65,27 @@ type ApprovalRequested struct {
 // cancelled.
 type ApprovalEnded struct{ Token uint64 }
 
-// Notice reports retry and compaction progress, and the MCP server tools the
-// first session skipped.
+// LoginRequested asks the human one question of a running login; answer with
+// Controller.AnswerLogin. There may be no session yet.
+type LoginRequested struct {
+	// Token identifies this question for the controller's lifetime.
+	Token             uint64
+	Provider, Message string
+	Placeholder       string
+	// Secret asks for input that must not be echoed or kept.
+	Secret bool
+	// Options, when set, are the only valid answers; the answer is an option ID.
+	Options []LoginOption
+}
+
+type LoginOption struct{ ID, Label, Description string }
+
+// LoginEnded follows every LoginRequested, whether it was answered or
+// cancelled.
+type LoginEnded struct{ Token uint64 }
+
+// Notice reports retry and compaction progress, the MCP server tools the
+// first session skipped, and a login's progress and result.
 type Notice struct{ Text string }
 
 // Activity is what the Controller is doing outside a turn, such as waiting
@@ -115,6 +134,8 @@ func (ToolStart) isEvent()         {}
 func (ToolEnd) isEvent()           {}
 func (ApprovalRequested) isEvent() {}
 func (ApprovalEnded) isEvent()     {}
+func (LoginRequested) isEvent()    {}
+func (LoginEnded) isEvent()        {}
 func (Notice) isEvent()            {}
 func (Activity) isEvent()          {}
 func (TurnEnd) isEvent()           {}

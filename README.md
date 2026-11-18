@@ -28,6 +28,8 @@ Commands in the fullscreen interface:
 | `/execute` | Switch to execute mode |
 | `/new` | Start a new session |
 | `/resume <id>` | Resume a session |
+| `/login <provider>` | Log in to a provider |
+| `/logout <provider>` | Remove a provider's stored credential |
 | `/tasks` | List background tasks, show one's output and stop it |
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
@@ -93,7 +95,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 `mode` is the mode sessions start in: `plan` (default) or `execute`.
 
-`smallModel` (`provider/id`) is the model that answers `WebFetch` and `WebSearch` calls; unset, it is `model`, so set it to a cheaper model. A wrong value, an unknown model or one whose provider has no credential fails at start.
+`smallModel` (`provider/id`) is the model that answers `WebFetch` and `WebSearch` calls; unset, it is `model`, so set it to a cheaper model. A wrong value, an unknown model or one whose provider has no credential fails at start; in the fullscreen interface, a `smallModel` that shares `model`'s provider without a credential gets the first-run login instead when that provider offers a sign-in or an API key.
 
 `instructionFallbacks` lists bare file names a directory's project instruction file is read from when it has no `AGENTS.md`, the first present winning (default `["CLAUDE.md"]`); `[]` turns the fallback off. Project instruction files load only in a trusted folder (see MCP servers).
 
@@ -161,7 +163,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 ```
 
 - `classifier.enabled` (default `false`) has the classifier review calls that would otherwise ask, in both modes (see Modes and tools).
-- `classifier.model` (`provider/id`) is the model that reviews; unset, it is `model`. A value that is not `provider/id` fails at start; when the classifier is enabled, so does an unknown model or one whose provider has no credential.
+- `classifier.model` (`provider/id`) is the model that reviews; unset, it is `model`. A value that is not `provider/id` fails at start; when the classifier is enabled, so does an unknown model or one whose provider has no credential; in the fullscreen interface, a `classifier.model` that shares `model`'s provider without a credential gets the first-run login instead when that provider offers a sign-in or an API key.
 - `classifier.instructions` lists your own rules for the classifier, added after Kopi's; a blank entry is rejected at start. A later layer's list replaces an earlier one's whole.
 
 ## Providers
@@ -169,6 +171,8 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `kopi login` lists the providers that offer a login, with their methods and the ones Kopi holds a credential for; `kopi login <provider>` runs one.
 - A provider offers an account sign-in, a stored API key or both; with both, Kopi asks which. An API key is read hidden on a terminal, or as a line from piped stdin.
 - A sign-in prints its URL and opens it in the browser; when the browser does not open, use the printed URL.
+- In the fullscreen interface, `/login <provider>` runs the same login without leaving the session. URLs, device codes and progress appear in the transcript, the browser opens, an API key is entered in a masked field, and Esc cancels. `/logout <provider>` removes a credential. `kopi login` and `kopi logout` remain for headless and scripted use.
+- In the fullscreen interface, when the configured model has no credential and its provider offers a sign-in or an API key, Kopi opens a login for that provider before the session opens; headless use exits with the `kopi login` hint.
 - `kopi logout <provider>` removes the provider's credential from `agent/auth.json`.
 - A credential in the environment works without a login; `kopi login` marks only stored credentials as logged in.
 - After an `anthropic` account sign-in Kopi notes that Anthropic bills third-party tools per token as extra usage, not from Claude plan limits.

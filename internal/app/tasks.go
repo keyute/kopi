@@ -44,8 +44,9 @@ func (c *Controller) taskChanged(info tool.TaskInfo) {
 	c.queueNotice(notice(info, head))
 }
 
-// queueNotice queues n for the model and, while no turn runs and no session
-// switch is under way, starts a turn with no human prompt.
+// queueNotice queues n for the model and, while no turn runs, no session
+// switch is under way and no login runs, starts a turn with no human prompt;
+// the end of the login does that for a notice that arrived during it.
 // It drops n once closed or with no session. A switch that commits clears what
 // was queued; one that fails keeps it for the next prompt or wake.
 func (c *Controller) queueNotice(n pigruntime.Notice) {
@@ -57,7 +58,14 @@ func (c *Controller) queueNotice(n pigruntime.Notice) {
 		return
 	}
 	c.notices = append(c.notices, n)
-	if c.turn != nil || c.switching != nil || !c.cfg.Wake || c.hold {
+	c.wakeLocked()
+}
+
+// wakeLocked starts a turn with no human prompt for the queued notices unless
+// one runs, a switch is under way, a login runs or nothing queued wakes. It
+// must be called with queue and mu held, and releases mu.
+func (c *Controller) wakeLocked() {
+	if c.closed || c.sess == nil || c.turn != nil || c.switching != nil || c.login != nil || !c.cfg.Wake || c.hold || !c.waking() {
 		c.mu.Unlock()
 		return
 	}

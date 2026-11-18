@@ -399,7 +399,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	}()
 	checkModel := func(key, ref string) error {
 		err := rt.Check(startCtx, pigruntime.OpenOptions{Model: ref})
-		if err == nil {
+		if err == nil || fullscreen && sameProviderNoCredential(err, model, ref) {
 			return nil
 		}
 		if errors.Is(err, pigruntime.ErrNoCredential) {
@@ -739,6 +739,15 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 func planPolicy(p sandbox.Policy, cwd string) sandbox.Policy {
 	p.DenyWrite = slices.Concat(p.DenyWrite, []string{cwd})
 	return p
+}
+
+// sameProviderNoCredential reports whether err is the missing credential of
+// the provider a configured model shares with model; in fullscreen the
+// first-run login of model supplies it.
+func sameProviderNoCredential(err error, model, sub string) bool {
+	provider, _, _ := strings.Cut(model, "/")
+	subProvider, _, _ := strings.Cut(sub, "/")
+	return errors.Is(err, pigruntime.ErrNoCredential) && provider == subProvider
 }
 
 // diagnose turns the open failures a user can fix into Kopi's own advice.
