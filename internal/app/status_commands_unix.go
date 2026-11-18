@@ -1,6 +1,6 @@
 //go:build unix
 
-package tui
+package app
 
 import (
 	"bytes"
@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"syscall"
 	"time"
+
+	"github.com/keyute/kopi/internal/process"
 )
 
 func (shellRunner) run(ctx context.Context, dir, command string) (string, error) {
@@ -36,7 +38,7 @@ func (shellRunner) run(ctx context.Context, dir, command string) (string, error)
 	drained := make(chan struct{})
 	go func() { _, _ = io.Copy(&out, r); close(drained) }()
 	exited := make(chan error, 1)
-	go func() { exited <- awaitStatusExit(cmd.Process.Pid) }()
+	go func() { exited <- process.AwaitExit(cmd.Process.Pid) }()
 	// Keep the leader unreaped until every group kill is finished: its PID
 	// pins the process group ID against reuse, even after the shell exits.
 	kill := func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }

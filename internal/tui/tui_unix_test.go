@@ -18,18 +18,17 @@ import (
 	"github.com/keyute/kopi/internal/config"
 )
 
-// heldStatusRunner holds completion after the real runner has cleaned up, so
-// the test can distinguish joining execution from merely cancelling it.
-type heldStatusRunner struct {
+// heldStatusCommands holds Close after app-owned execution has been joined.
+type heldStatusCommands struct {
+	*app.StatusCommands
 	cleaned, release, returned chan struct{}
 }
 
-func (r *heldStatusRunner) run(ctx context.Context, dir, command string) (string, error) {
-	out, err := (shellRunner{}).run(ctx, dir, command)
+func (r *heldStatusCommands) Close() {
+	r.StatusCommands.Close()
 	close(r.cleaned)
 	<-r.release
 	close(r.returned)
-	return out, err
 }
 
 func TestRunQuitJoinsStatusDescendantCleanup(t *testing.T) {
@@ -63,8 +62,8 @@ func TestRunQuitJoinsStatusDescendantCleanup(t *testing.T) {
 		"cmd": {Command: `sh -c 'exec 3>ready; printf r >&3; exec sleep 60' & wait`},
 	}
 	f := New(c, in, &lockedBuffer{}, opts)
-	runner := &heldStatusRunner{cleaned: make(chan struct{}), release: make(chan struct{}), returned: make(chan struct{})}
-	f.runner = runner
+	runner := &heldStatusCommands{StatusCommands: app.NewStatusCommands(dir, opts.StatusLine), cleaned: make(chan struct{}), release: make(chan struct{}), returned: make(chan struct{})}
+	f.commands = runner
 	defer close(runner.release)
 	done := make(chan error, 1)
 	go func() { done <- f.Run(parent, nil) }()

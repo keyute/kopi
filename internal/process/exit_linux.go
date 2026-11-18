@@ -1,4 +1,4 @@
-package tool
+package process
 
 import (
 	"errors"
@@ -7,7 +7,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func awaitExit(pid int) error {
+// AwaitExit observes an owned child without reaping it. The caller must keep
+// the child unreaped until all PID-based signals have finished.
+func AwaitExit(pid int) error {
 	var info unix.Siginfo
 	for {
 		err := unix.Waitid(unix.P_PID, pid, &info, unix.WEXITED|unix.WNOWAIT, nil)

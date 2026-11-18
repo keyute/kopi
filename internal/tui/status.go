@@ -1,13 +1,10 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"image/color"
 	"slices"
 	"strings"
-	"sync"
-	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -19,9 +16,6 @@ import (
 
 // contextWarnPercent is the context use from which the percentage warns.
 const contextWarnPercent = 90
-
-// statusCommandTimeout bounds each run of a command segment.
-const statusCommandTimeout = 5 * time.Second
 
 // statusInput is what a segment draws from: the session status, the
 // current transient hint (empty when none shows), the home directory shown
@@ -195,45 +189,6 @@ func cleanStatusOutput(out string) string {
 
 func isSGR(params string) bool {
 	return !strings.ContainsFunc(params, func(r rune) bool { return (r < '0' || r > '9') && r != ';' && r != ':' })
-}
-
-// statusRunner runs a command segment's command in dir and returns its
-// stdout.
-type statusRunner interface {
-	run(ctx context.Context, dir, command string) (string, error)
-}
-
-type shellRunner struct{}
-
-// statusRuns registers commands only when they execute, not when Tea queues
-// them. Closing admission before waiting prevents a late command from escaping
-// shutdown or adding to an empty WaitGroup while it is being waited on.
-type statusRuns struct {
-	runner statusRunner
-	cancel context.CancelFunc
-	mu     sync.Mutex
-	closed bool
-	active sync.WaitGroup
-}
-
-func (r *statusRuns) run(ctx context.Context, dir, command string) (string, error) {
-	r.mu.Lock()
-	if r.closed {
-		r.mu.Unlock()
-		return "", context.Canceled
-	}
-	r.active.Add(1)
-	r.mu.Unlock()
-	defer r.active.Done()
-	return r.runner.run(ctx, dir, command)
-}
-
-func (r *statusRuns) close() {
-	r.mu.Lock()
-	r.closed = true
-	r.mu.Unlock()
-	r.cancel()
-	r.active.Wait()
 }
 
 // statusLine sits two in from both edges. Left segments that do not fit

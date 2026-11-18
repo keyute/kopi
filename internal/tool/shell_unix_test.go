@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	childprocess "github.com/keyute/kopi/internal/process"
 	"github.com/keyute/kopi/internal/sandbox"
 )
 
@@ -176,7 +177,7 @@ func TestShellCancelAfterShellExitKillsProcessGroup(t *testing.T) {
 				// EOF on fd 4 can come before the exit is observable, so wait for
 				// it the way Run does, without reaping.
 				if pid := <-exited; pid > 0 {
-					if err := awaitExit(pid); err != nil {
+					if err := childprocess.AwaitExit(pid); err != nil {
 						t.Errorf("failed to await shell exit: %v", err)
 					}
 				} else {

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"maps"
 	"slices"
 	"strings"
@@ -10,7 +9,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/config"
@@ -18,23 +16,6 @@ import (
 )
 
 var defaultLayout = statusLayout{left: config.DefaultStatusLine().Left, right: config.DefaultStatusLine().Right, separator: " · "}
-
-func TestStatusRunsRejectsQueuedCommandAfterClose(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	runner := &fakeRunner{release: make(chan runResult, 1)}
-	runner.release <- runResult{out: "unexpected"}
-	runs := &statusRuns{runner: runner, cancel: cancel}
-	m := newModel(ctx, &fakeController{}, newBridge(), testOptions())
-	m.runner = runs
-	m.layout.segments = map[string]config.StatusSegment{"cmd": {Command: "printf unexpected"}}
-	queued := m.runCommand("cmd")
-
-	// An unscheduled command must not hold shutdown open.
-	runs.close()
-	result := queued().(statusResultMsg)
-	require.ErrorIs(t, result.err, context.Canceled)
-	assert.Empty(t, runner.calls)
-}
 
 func TestSegmentsMatchConfig(t *testing.T) {
 	assert.ElementsMatch(t, config.StatusSegments, slices.Collect(maps.Keys(segments)))

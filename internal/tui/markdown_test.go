@@ -39,6 +39,28 @@ func TestMarkdownInlineCodeAndLinkKeepText(t *testing.T) {
 	assert.Contains(t, got, "https://example.com")
 }
 
+func TestMarkdownANSIThemesUsePaletteColors(t *testing.T) {
+	for _, name := range []string{"ansi-dark", "ansi-light"} {
+		t.Run(name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name, source, visible, palette string
+			}{
+				{"heading", "## Title", "Title", "33"},
+				{"inline code", "Call `Load` now.", "Call Load now.", "36"},
+				{"fenced code", "```go\nfunc main() {}\n```", "func main() {}", "(?:3[0-7]|9[0-7])"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					lines := newMarkdown(80, builtinThemes[name]()).lines("k", tc.source)
+					got := strings.Join(lines, "\n")
+					assert.Equal(t, tc.visible, ansi.Strip(got))
+					assert.Regexp(t, `\x1b\[(?:[0-9]+;)*`+tc.palette+`(?:;[0-9]+)*m`, got)
+					assert.NotRegexp(t, `\x1b\[[0-9;:]*(?:38|48|58)[;:]2[;:]`, got)
+				})
+			}
+		})
+	}
+}
+
 func TestMarkdownReferenceLinksAcrossBlankLines(t *testing.T) {
 	for _, text := range []string{
 		"Read [the docs][docs].\n\nAnother paragraph.\n\n[docs]: https://example.com/docs",

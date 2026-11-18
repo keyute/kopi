@@ -1,6 +1,6 @@
-//go:build !unix
+//go:build !unix && !windows
 
-package tui
+package app
 
 import (
 	"context"

@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"os"
 	"slices"
 	"strings"
@@ -68,18 +67,11 @@ type model struct {
 	spinner       spinner.Model
 	layout        statusLayout
 	home          string
-	runner        statusRunner
-	// commands are the command segments the layout shows, in order, with
-	// their intervals; commandOut is each one's last successful output.
-	commands   []string
-	intervals  map[string]time.Duration
-	commandOut map[string]string
-	// running and failing are the command segments with a run outstanding
-	// and with a failing latest run.
-	running, failing map[string]bool
-	geo              geometry
-	clip             clipboard
-	imageDir         string
+	commands      statusCommands
+	commandOut    map[string]string
+	geo           geometry
+	clip          clipboard
+	imageDir      string
 
 	tr    transcript.Transcript
 	folds folds
@@ -142,11 +134,7 @@ func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model
 			left: opts.StatusLine.Left, right: opts.StatusLine.Right,
 			separator: opts.StatusLine.Separator, segments: opts.StatusLine.Segments,
 		},
-		runner:     shellRunner{},
-		intervals:  map[string]time.Duration{},
 		commandOut: map[string]string{},
-		running:    map[string]bool{},
-		failing:    map[string]bool{},
 		clip:       systemClipboard{},
 		imageDir:   opts.ImageDir,
 		folds:      newFolds(),
@@ -158,84 +146,15 @@ func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model
 	}
 	m.composer.setHistory(c.History())
 	m.home, _ = os.UserHomeDir()
-	for _, name := range slices.Concat(m.layout.left, m.layout.right) {
-		def := m.layout.segments[name]
-		if _, builtin := segments[name]; builtin || def.Command == "" || slices.Contains(m.commands, name) {
-			continue
-		}
-		m.commands = append(m.commands, name)
-		if def.Interval != "" {
-			m.intervals[name], _ = time.ParseDuration(def.Interval)
-		}
-	}
 	return m
 }
 
 func (m *model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.bridge.wait(), tea.RequestBackgroundColor, m.runCommands()}
-	for _, name := range m.commands {
-		cmds = append(cmds, m.armTick(name))
-	}
-	return tea.Batch(cmds...)
+	return tea.Batch(m.bridge.wait(), tea.RequestBackgroundColor)
 }
-
-// statusResultMsg is a finished run of a command segment.
-type statusResultMsg struct {
-	name, out string
-	err       error
-}
-
-// statusTickMsg is a command segment's interval elapsing.
-type statusTickMsg struct{ name string }
 
 func (m *model) statusInput() statusInput {
 	return statusInput{Status: m.status, notice: m.flashText, home: m.home, commands: m.commandOut}
-}
-
-// runCommands starts every command segment without a run outstanding.
-func (m *model) runCommands() tea.Cmd {
-	var cmds []tea.Cmd
-	for _, name := range m.commands {
-		cmds = append(cmds, m.runCommand(name))
-	}
-	return tea.Batch(cmds...)
-}
-
-func (m *model) runCommand(name string) tea.Cmd {
-	if m.running[name] {
-		return nil
-	}
-	m.running[name] = true
-	ctx, runner, dir, command := m.ctx, m.runner, m.status.Workspace, m.layout.segments[name].Command
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(ctx, statusCommandTimeout)
-		defer cancel()
-		out, err := runner.run(ctx, dir, command)
-		return statusResultMsg{name: name, out: out, err: err}
-	}
-}
-
-// armTick schedules the segment's next interval run, if it has an interval.
-func (m *model) armTick(name string) tea.Cmd {
-	d := m.intervals[name]
-	if d <= 0 {
-		return nil
-	}
-	return tea.Tick(d, func(time.Time) tea.Msg { return statusTickMsg{name} })
-}
-
-func (m *model) applyStatusResult(msg statusResultMsg) {
-	m.running[msg.name] = false
-	if msg.err != nil {
-		delete(m.commandOut, msg.name)
-		if !m.failing[msg.name] {
-			slog.Warn("status line command failed", "segment", msg.name, "error", msg.err)
-		}
-		m.failing[msg.name] = true
-		return
-	}
-	m.failing[msg.name] = false
-	m.commandOut[msg.name] = cleanStatusOutput(msg.out)
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -264,10 +183,6 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		}
 	case eventsMsg:
 		return m.applyBatch(msg)
-	case statusResultMsg:
-		m.applyStatusResult(msg)
-	case statusTickMsg:
-		return tea.Batch(m.runCommand(msg.name), m.armTick(msg.name))
 	case spinner.TickMsg:
 		if _, shown := m.workingText(); !shown {
 			return nil
@@ -500,17 +415,18 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 		case event.SessionChanged, event.ModeChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged:
 			refresh = true
 		}
+		if m.commands != nil {
+			m.commands.Observe(ev)
+		}
 		m.apply(ev)
 	}
-	var statusCmd tea.Cmd
 	if refresh {
 		m.status = m.c.Status()
-		statusCmd = m.runCommands()
 	}
 	if !pureThinking {
 		m.relayout()
 	}
-	cmds := []tea.Cmd{m.bridge.wait(), statusCmd}
+	cmds := []tea.Cmd{m.bridge.wait()}
 	if _, shown := m.workingText(); shown && !wasShown {
 		cmds = append(cmds, m.spinner.Tick)
 	}
@@ -519,6 +435,13 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 
 func (m *model) apply(ev event.Event) {
 	switch ev := ev.(type) {
+	case event.StatusCommandResult:
+		if ev.Err != nil {
+			delete(m.commandOut, ev.Name)
+		} else {
+			m.commandOut[ev.Name] = cleanStatusOutput(ev.Output)
+		}
+		return
 	case event.SessionChanged:
 		m.tr = transcript.Transcript{}
 		if len(ev.History) > 0 {
