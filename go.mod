@@ -16,6 +16,7 @@ require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/creack/pty v1.1.24
+	github.com/elastic/go-seccomp-bpf v1.6.0
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/gofrs/flock v0.13.0

@@ -89,6 +89,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `AGENTS.md` in the home, when present, is added to the system prompt in every folder, whether or not you trust it.
 - `trust.json` holds which folders you trust (see MCP servers); Kopi writes it and never writes `config.json`.
 - `history.jsonl` holds input history per working directory, written by the fullscreen interface; the last 100 entries are recalled.
+- `sandbox/` holds the lock and the record of placeholders that Kopi processes sharing the home use to remove them safely (Linux).
 - `images/` holds pasted clipboard images, removed after a day.
 - `installation_id` holds the installation's UUID, created the first time a sign-in asks for it.
 - `agent/` is PiG's agent directory, created on first run: its credential file (`auth.json`), session logs (`sessions/`), other PiG state and an optional `models.json`.
@@ -194,11 +195,11 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `Bash` runs a command with `bash -c` (`/bin/sh` when `bash` is not on `PATH`) in the start directory, with Kopi's environment. Every call is a fresh shell with no input; `cd` and variables do not carry over.
 - `Bash`'s `timeout` is in milliseconds, default 120000, at most 600000. A command still running at its timeout keeps running as a background task, as does one started with `run_in_background` or moved with the `background` key; the result names the task. On interrupt a foreground command's whole process group is killed (on Windows, only the shell).
 - `Bash` returns stdout and stderr combined, keeping the first and last 15,000 bytes. A non-zero exit is an error reporting the exit code.
-- On macOS `Bash` runs inside an OS sandbox (`sandbox-exec`), configured with `sandbox` (see Configuration).
-- In the sandbox a command can write only in the start directory, `/tmp`, the temp directory and the `sandbox.allowWrite` paths, and never the files of the start directory's `.git` that choose git's config and hooks (`hooks`, `config`, `config.worktree`, `commondir`, `worktrees`, `modules`); when the start directory has no `.git`, a command cannot write `HEAD` in it. In plan mode nothing in the start directory is writable, including `sandbox.allowWrite` paths inside it.
-- In the sandbox a command cannot create, write, rename or remove a file named `.mcp.json`, in any letter case and in any directory, nor what the start directory's `.mcp.json` resolves to when it is a symlink; git operations that change a `.mcp.json` therefore fail in the sandbox.
+- On macOS and Linux `Bash` runs inside an OS sandbox (`sandbox-exec` on macOS, bubblewrap's `bwrap` on Linux), configured with `sandbox` (see Configuration).
+- In the sandbox a command can write only in the start directory, `/tmp`, the temp directory and the `sandbox.allowWrite` paths, and never, on macOS, the files of the start directory's `.git` that choose git's config and hooks (`hooks`, `config`, `config.worktree`, `commondir`, `worktrees`, `modules`), nor, on Linux, anything in the start directory's `.git`; a command cannot write `HEAD` in the start directory on Linux, or on macOS when it has no `.git`. In plan mode nothing in the start directory is writable, including `sandbox.allowWrite` paths inside it.
+- In the sandbox a command cannot create, write, rename or remove the start directory's `.mcp.json`, nor what it resolves to when it is a symlink; on macOS this holds for a file named `.mcp.json` in any letter case and in any directory. Git operations that change a protected `.mcp.json` therefore fail in the sandbox.
 - In the sandbox a command can read everything except Kopi's home and the `sandbox.denyRead` paths, which it also cannot write, rename or remove.
-- In the sandbox a command has no network unless `sandbox.network` is true, which opens IP networking only; Unix sockets stay blocked.
+- In the sandbox a command has no network unless `sandbox.network` is true, which opens IP networking only; Unix sockets stay blocked, and on Linux so do VM sockets, Unix datagram socket pairs and io_uring.
 - `WebFetch` fetches one http or https page on a public host and has `smallModel` answer the call's prompt from it; the main model gets the answer and the page's final URL, not the page. HTML is converted to markdown from its main content; text, JSON and XML pass through; other content types are refused. Pages are up to 5 MiB, fetched within 30 seconds and without JavaScript, and the small model reads their first 100,000 characters. Redirects on the same host (a leading `www.` and http to https count as the same) are followed, at most 5; any other redirect is returned for the model to fetch in a new call. `localhost`, names without a dot, `.localhost`, `.local` and `.internal` names, and non-public addresses are refused, including ones a name resolves to. Every call asks unless a rule allows it or the classifier reviews it (see below), in both modes.
 - `WebSearch` has `smallModel` search the web with its provider's built-in search and answer the call's query; the main model gets the answer followed by a `Sources:` list of up to 20 `- [title](url)` lines (`- url` when the page has no title), or `Sources: none`; the list is the pages the answer cites, or the pages the provider consulted when it cited none, not the pages themselves. The tool exists only when `smallModel`'s API protocol has hosted search: OpenAI Responses (also Azure and Codex), Anthropic Messages and Google Generative AI. Every call asks unless a rule allows it or the classifier reviews it (see below), in both modes.
 
@@ -276,28 +277,37 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 ## Limitations
 
 - Permission rules are not an OS boundary: they match the path a call names. Only `Bash` runs under the OS sandbox.
-- The sandbox exists only on macOS; elsewhere it is unavailable.
+- The sandbox exists only on macOS and on Linux on amd64 and arm64; elsewhere it is unavailable.
+- On Linux the sandbox needs `bwrap` on `PATH` and unprivileged user namespaces, and is unavailable without them, as in containers that forbid them or forbid mounting `/proc`. Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor until `bwrap` has an AppArmor profile or `kernel.apparmor_restrict_unprivileged_userns` is `0`; 25.04 and later work as shipped.
 - The sandbox is unavailable when Kopi itself runs inside a Seatbelt sandbox, because profiles do not nest; for the same reason tools that apply their own sandbox (`swift build`, `xcodebuild` packages) fail inside it.
 - MCP servers run outside the sandbox, with your permissions and Kopi's environment, including provider API keys.
 - Sandboxed commands inherit Kopi's environment, including provider API keys, and can read any file outside Kopi's home and `sandbox.denyRead`.
 - With `sandbox.network` true, commands reach the network without asking, in plan mode too.
 - Tools that write outside the start directory and temp directories, such as Go's build cache and package-manager caches, fail in the sandbox until those paths are in `sandbox.allowWrite`.
-- In the sandbox, `git init` in the start directory, `git config` writes, `git worktree add`, commits in a linked worktree (its git directory is outside the start directory), commits inside a submodule and commit signing through an agent socket fail.
+- In the sandbox, `git init` in the start directory, `git config` writes, `git worktree add`, commits in a linked worktree (its git directory is outside the start directory), commits inside a submodule and commit signing through an agent socket fail. On Linux every command that writes the start directory's `.git` fails (`git add`, `commit`, `checkout`, `stash`, `fetch`).
 - The sandbox does not protect the config and hooks of repositories nested inside the start directory, or of the start directory itself when it is a bare repository or a git directory.
-- When the start directory's `.mcp.json` is a symlink, what it resolves to when Kopi starts is protected like `.mcp.json` itself; when that is a directory, sandboxed commands cannot write anywhere in it. Another symlink on the way to it, a link that is broken at startup, a hard link that already exists, and the link targets of `.mcp.json` files in other folders are not protected.
+- When the start directory's `.mcp.json` is a symlink, what it resolves to when Kopi starts is protected like `.mcp.json` itself; when that is a directory, sandboxed commands cannot write anywhere in it. Another symlink on the way to it, a link that is broken at startup, a hard link that already exists, and the link targets of `.mcp.json` files in other folders are not protected. On Linux, while a denied path passes through a symlink whose entry is in a write root, such as a symlinked `.mcp.json` or `.git`, sandboxed commands refuse to run, whether the link is valid or broken. Commands also refuse unresolved aliases outside write roots when, after following a symlink, the first missing component lies inside a write root.
+- On Linux only the start directory's `.mcp.json` is protected by name: a command can create or change a `.mcp.json` in any other directory.
+- On Linux, while a sandboxed command runs, each denied path that does not exist shows outside the sandbox as an empty file or directory, in a typical repository `.mcp.json` and `HEAD`, and `.git` when the start directory has no `.git`. Kopi removes only its recorded creations that are still empty and match their creation-time device, inode and kind, once no sandboxed command, background tasks included, runs in any Kopi using the same home. This identity check is best-effort: outside changes can race removal and inodes can be reused. A killed Kopi's committed creations are cleaned after the next sandboxed command; interruption before recording can leave orphans. Kopi processes with different homes do not coordinate: one running in the same directory can remove the other's placeholders, which unmounts the deny inside the other's running command.
+- On Linux a denied directory reads as empty in the sandbox, and opening a denied file fails with "Permission denied".
+- On Linux sandboxed commands refuse policies whose deny-write self-bind would overlap `/proc` or `/dev`, including an ancestor or descendant, to preserve the private process and device mounts. This includes plan mode when the start directory is `/`. Read-deny masks over those mounts remain supported; a refused command does not run unsandboxed.
+- On Linux, while sandboxed commands run, a program outside the sandbox that removes a protected path or replaces it by renaming over it, such as an editor's save, lifts the protection on that path for those commands.
 - A command can move into a write root a directory that already holds a `.mcp.json`, and a folder moved in takes the trust of its new parent.
 - An MCP tool an allow rule covers can change `.mcp.json` and `.git` files without asking, as MCP rules take no path.
 - The files a `.mcp.json` server runs, such as `./server.sh` or `node_modules/.bin/…`, stay writable.
 - A `.mcp.json` changed outside Kopi, such as by `git pull` or an editor, starts its servers without asking again.
 - In execute mode, sandboxed commands can write anything else in the start directory, so starting Kopi in a directory holding files other programs run, such as the home directory, lets commands change them.
 - Plan mode keeps only the start directory read-only: commands can still write `/tmp`, the temp directory and `sandbox.allowWrite` paths outside it, and act over the network when `sandbox.network` is true. In plan mode `kopi -p` runs sandboxed `Bash` without asking. Commands started in execute mode, including background tasks and processes they leave running, keep their execute-mode access after a switch to plan mode.
-- `ps`, `pgrep` and `top` do not work in the sandbox.
-- Unix sockets (ssh-agent, Docker) are unreachable from the sandbox, even with `sandbox.network` true.
-- A background process a command leaves running (`cmd &`) can outlive the call, and its background task. A running command or background task keeps running if Kopi is killed.
+- On macOS `ps`, `pgrep` and `top` do not work in the sandbox; on Linux they see only the command's own processes.
+- Unix sockets (ssh-agent, Docker) are unreachable from the sandbox, even with `sandbox.network` true, and on Linux so are VM sockets and Unix datagram socket pairs (stream and seqpacket pairs work).
+- On Linux, Kopi processes with different `KOPI_HOME`s running sandboxed commands in the same workspace do not coordinate the placeholder files the sandbox mounts on missing protected paths, such as a missing `.mcp.json`, so one can remove a placeholder the other's running command relies on.
+- On Linux 32-bit programs cannot run in the sandbox: their system calls end the process.
+- On Linux commands cannot create user namespaces in the sandbox, so tools that need them fail there, such as rootless containers, browsers' own sandboxes and nested bubblewrap.
+- Outside the Linux sandbox, a background process a command leaves running (`cmd &`) can outlive the call and its background task, and a running command or background task keeps running if Kopi is killed. In the Linux sandbox everything a command started ends when it does, or when Kopi does.
 - Background tasks and their output live only in memory and do not survive a restart.
 - `sandbox-exec` is deprecated by Apple.
 - Kopi builds for macOS, Linux and Windows only.
-- Symlinks in rule paths, sandbox paths, the start directory and the home directory are resolved once, at start.
+- Symlinks in rule paths, the start directory and the home directory are resolved once, at start; in sandbox paths too on macOS, and before each command on Linux.
 - `Edit` detects identity or content changes at its pinned destination immediately before replacement and refuses detected conflicts. This is best-effort, not atomic compare-and-swap: reads can race and another writer can change the file between the check and rename. `Write` replaces unconditionally.
 - `Write` and `Edit` pin and check parent-directory handles before making changes, so replacing a parent name with a symlink cannot redirect those changes. Another process can still move a checked directory, including into Kopi's home; later changes follow its handle. Permission checks and these protections are not an OS boundary.
 - `Read` and `Grep` protection is by file identity, re-checked on every read and, for the searches, on every directory searched: a hard link into Kopi's home or a credential copied elsewhere is readable, whether Kopi's home exists is observable, and if Kopi's home cannot be inspected all reads are refused.
@@ -328,7 +338,7 @@ Manual live check: `kopi login openai-codex`, run with a model, ask it to read a
 
 ## Not implemented
 
-Project-level config, a Linux sandbox, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approving a call the classifier denied after the fact, review of sandboxed `Bash` commands, usage accounting for classifier requests, delegation and workflows, a Kopi provider identity, domain rules for `WebFetch`, domain filters and citation markers for `WebSearch`, other search backends (an MCP server can provide one), PDF and image pages, and release packaging and self-update.
+Project-level config, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approving a call the classifier denied after the fact, review of sandboxed `Bash` commands, usage accounting for classifier requests, delegation and workflows, a Kopi provider identity, domain rules for `WebFetch`, domain filters and citation markers for `WebSearch`, other search backends (an MCP server can provide one), PDF and image pages, and release packaging and self-update.
 
 MCP: OAuth for remote servers, the SSE transport, resources and prompts, `tools/list_changed`, image results, sandboxing servers or giving them a restricted environment, and a command or flag to set or change a folder's trust.
 
@@ -342,7 +352,7 @@ Kopi is opinionated and built around how I work, so I don't accept feature reque
 
 Built on [PiG](https://github.com/MichaelKinsy/PiG) by Michael Kinsy (MIT). Other dependencies are listed in `go.mod`.
 
-The Seatbelt policy in `internal/sandbox/codex/` is adapted from [OpenAI Codex](https://github.com/openai/codex) (Apache-2.0); its `LICENSE` and `NOTICE` are in that directory.
+The Seatbelt policy in `internal/sandbox/codex/` is adapted from [OpenAI Codex](https://github.com/openai/codex) (Apache-2.0); its `LICENSE` and `NOTICE` are in that directory. The Linux sandbox's mount plan in `internal/sandbox/bwrap.go` is adapted from Anthropic's [sandbox-runtime](https://github.com/anthropic-experimental/sandbox-runtime) (Apache-2.0); its `LICENSE` is in `internal/sandbox/srt/`.
 
 ## License
 

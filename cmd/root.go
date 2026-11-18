@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -675,7 +676,7 @@ func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHom
 		return nil, nil, nil, nil
 	}
 	p := sandboxPolicy(cfg, cwd, userHome, kopiHome)
-	sandboxes, err := sandbox.New(ctx, p, planPolicy(p, cwd))
+	sandboxes, err := sandbox.New(ctx, filepath.Join(kopiHome, "sandbox"), p, planPolicy(p, cwd))
 	switch {
 	case cfg.Enabled == nil && errors.Is(err, sandbox.ErrUnavailable):
 		return nil, nil, err, nil
@@ -687,7 +688,8 @@ func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHom
 
 // sandboxPolicy lets commands write only the workspace, temporary
 // directories and the paths the user allowed, never read Kopi's home, and
-// never write the git files that decide which config and hooks git runs, nor
+// never write the git files that decide which config and hooks git runs (on
+// Linux, nothing in the start directory's .git), nor
 // any .mcp.json or what the start directory's .mcp.json resolves to, either of
 // which would run code outside the sandbox.
 func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.Policy {
@@ -708,15 +710,27 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 		return out
 	}
 	gitDir := filepath.Join(cwd, ".git")
+	// The names stay listed on Linux, though gitDir covers them: with paths
+	// listed beneath it, a missing .git gets a directory placeholder rather than
+	// an empty file, so git in a subdirectory of another repository still walks
+	// up. The whole directory is denied there because bubblewrap can block
+	// creating a path only by mounting a placeholder on it, and git refuses an
+	// empty commondir and, in a reftable repository, any commondir.
 	var denyWrite []string
 	for _, name := range []string{"hooks", "config", "commondir", "config.worktree", "worktrees", "modules"} {
 		denyWrite = append(denyWrite, filepath.Join(gitDir, name))
 	}
-	if _, err := os.Lstat(gitDir); errors.Is(err, os.ErrNotExist) {
-		// With no .git, git takes a directory holding HEAD, objects and refs
-		// for a git directory and runs its config.
+	_, err := os.Lstat(gitDir)
+	missing := errors.Is(err, os.ErrNotExist)
+	if missing || runtime.GOOS == "linux" {
+		// Git takes a directory holding HEAD, objects and refs for a git
+		// directory and runs its config. On Linux another command's .git
+		// placeholder can hide that .git was missing.
 		denyWrite = append(denyWrite, filepath.Join(cwd, "HEAD"))
-	} else if info, err := os.Stat(gitDir); err != nil || !info.IsDir() {
+	}
+	if runtime.GOOS == "linux" {
+		denyWrite = append(denyWrite, gitDir)
+	} else if info, err := os.Stat(gitDir); !missing && (err != nil || !info.IsDir()) {
 		// A .git file, as in a linked worktree or submodule, names the git directory.
 		denyWrite = append(denyWrite, gitDir)
 	}
