@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -76,7 +77,7 @@ func TestBwrapArgsOrder(t *testing.T) {
 		emptyDir(filepath.Join(root, "secret")),
 		bwrapTail,
 	), args)
-	assert.Equal(t, []string{filepath.Join(root, ".mcp.json")}, made)
+	assert.Equal(t, []placeholderDestination{{path: filepath.Join(root, ".mcp.json")}}, made)
 }
 
 func TestBwrapArgsNetwork(t *testing.T) {
@@ -149,7 +150,7 @@ func TestBwrapArgsPlaceholderKind(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, concat(rw(root), emptyDir(a), null(file)), mounts(t, args))
-	assert.Equal(t, []string{a, file}, made)
+	assert.Equal(t, []placeholderDestination{{path: a, directory: true}, {path: file}}, made)
 }
 
 func TestBwrapArgsNoPlaceholderWhereReadOnly(t *testing.T) {
@@ -350,18 +351,19 @@ func TestPlaceholdersRemovedAfterLastCommand(t *testing.T) {
 	empty, full := filepath.Join(dir, "empty"), filepath.Join(dir, "full")
 	parent, child := filepath.Join(dir, "parent"), filepath.Join(dir, "parent", "child")
 	kept := filepath.Join(dir, "kept")
-	mkdirs(t, child, kept)
-	require.NoError(t, os.WriteFile(empty, nil, 0o600))
-	writeFile(t, full)
-	writeFile(t, filepath.Join(kept, "f"))
+
 	pl := newPlaceholders(resolvedTemp(t))
 
 	first, err := pl.start()
 	require.NoError(t, err)
 	second, err := pl.start()
 	require.NoError(t, err)
-	require.NoError(t, pl.record([]string{empty, full, parent, kept}))
-	require.NoError(t, pl.record([]string{child}))
+	require.NoError(t, pl.prepare([]placeholderDestination{
+		{path: empty}, {path: full}, {path: parent, directory: true}, {path: kept, directory: true},
+	}))
+	require.NoError(t, pl.prepare([]placeholderDestination{{path: child, directory: true}}))
+	writeFile(t, full)
+	writeFile(t, filepath.Join(kept, "f"))
 	require.NoError(t, pl.record(nil))
 	pl.finish(first)
 	for _, p := range []string{empty, full, child, kept} {
@@ -385,12 +387,15 @@ func TestPlaceholdersRemovedAfterLastCommand(t *testing.T) {
 func TestPlaceholdersLeftByKilledKopiSwept(t *testing.T) {
 	dir := resolvedTemp(t)
 	stale, nested := filepath.Join(dir, "stale"), filepath.Join(dir, "a", "b")
-	mkdirs(t, nested)
-	require.NoError(t, os.WriteFile(stale, nil, 0o600))
 	pl := newPlaceholders(resolvedTemp(t))
-	// The last line is cut short, as a Kopi killed in mid-write leaves it.
-	record := fmt.Sprintf("[%q]\n[%q,%q]\n[%q", stale, filepath.Dir(nested), nested, dir)
-	require.NoError(t, os.WriteFile(pl.recordPath, []byte(record), 0o600))
+	require.NoError(t, pl.prepare([]placeholderDestination{{path: stale}, {path: filepath.Dir(nested), directory: true}}))
+	// A killed append leaves a truncated tail; a later append stands alone.
+	f, err := os.OpenFile(pl.recordPath, os.O_WRONLY|os.O_APPEND, 0)
+	require.NoError(t, err)
+	_, err = f.WriteString(`[{"path":`)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	require.NoError(t, pl.prepare([]placeholderDestination{{path: nested, directory: true}}))
 
 	lock, err := pl.start()
 	require.NoError(t, err)
@@ -402,6 +407,178 @@ func TestPlaceholdersLeftByKilledKopiSwept(t *testing.T) {
 	info, err := os.Stat(pl.recordPath)
 	require.NoError(t, err)
 	assert.Zero(t, info.Size())
+}
+
+func TestPlaceholdersPreserveChangedEntries(t *testing.T) {
+	for _, directory := range []bool{false, true} {
+		for _, replacement := range []string{"same kind", "other kind", "symlink", "nonempty"} {
+			t.Run(fmt.Sprintf("directory=%v/%s", directory, replacement), func(t *testing.T) {
+				path := filepath.Join(resolvedTemp(t), "entry")
+				pl := newPlaceholders(resolvedTemp(t))
+				lock, err := pl.start()
+				require.NoError(t, err)
+				require.NoError(t, pl.prepare([]placeholderDestination{{path: path, directory: directory}}))
+				// Pin the original inode so a replacement cannot reuse it.
+				original, err := os.Open(path)
+				require.NoError(t, err)
+				defer original.Close()
+				if replacement != "nonempty" {
+					require.NoError(t, os.Remove(path))
+				}
+				switch replacement {
+				case "symlink":
+					require.NoError(t, os.Symlink(filepath.Join(filepath.Dir(path), "absent"), path))
+				case "nonempty":
+					if directory {
+						writeFile(t, filepath.Join(path, "child"))
+					} else {
+						writeFile(t, path)
+					}
+				default:
+					if directory == (replacement == "same kind") {
+						require.NoError(t, os.Mkdir(path, 0o700))
+					} else {
+						require.NoError(t, os.WriteFile(path, nil, 0o600))
+					}
+				}
+				pl.finish(lock)
+				_, err = os.Lstat(path)
+				assert.NoError(t, err)
+			})
+		}
+	}
+}
+
+func TestPlaceholdersDoNotAdoptUnownedEntries(t *testing.T) {
+	pl := newPlaceholders(resolvedTemp(t))
+	lock, err := pl.start()
+	require.NoError(t, err)
+	dir := resolvedTemp(t)
+	existing, never := filepath.Join(dir, "existing"), filepath.Join(dir, "never-created")
+	existingDir := filepath.Join(dir, "existing-directory")
+	require.NoError(t, os.WriteFile(existing, nil, 0o600))
+	require.NoError(t, os.Mkdir(existingDir, 0o700))
+	// EEXIST is not ownership, even when the destination was planned absent.
+	require.NoError(t, pl.prepare([]placeholderDestination{{path: existing}, {path: existingDir, directory: true}}))
+	assert.NoFileExists(t, pl.recordPath)
+	require.NoError(t, os.WriteFile(never, nil, 0o600))
+	legacy, err := json.Marshal([]string{existing, never})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(pl.recordPath, append(legacy, '\n'), 0o600))
+	pl.finish(lock)
+	assert.FileExists(t, existing)
+	assert.DirExists(t, existingDir)
+	assert.FileExists(t, never)
+}
+
+func TestPlaceholdersIgnoreIncompleteAndUnknownRecords(t *testing.T) {
+	for _, record := range []string{"unknown kind", "wrong kind", "missing identity", "malformed", "unterminated"} {
+		t.Run(record, func(t *testing.T) {
+			path := filepath.Join(resolvedTemp(t), "entry")
+			owned, err := createPlaceholder(placeholderDestination{path: path})
+			require.NoError(t, err)
+			require.NotNil(t, owned)
+			if record == "unknown kind" {
+				owned.Kind = "unknown"
+			}
+			if record == "wrong kind" {
+				owned.Kind = "directory"
+			}
+			if record == "missing identity" {
+				owned.Inode = nil
+			}
+			data, err := json.Marshal([]placeholderOwnership{*owned})
+			require.NoError(t, err)
+			if record == "malformed" {
+				data = data[:len(data)-2]
+			}
+			if record != "unterminated" {
+				data = append(data, '\n')
+			}
+			pl := newPlaceholders(resolvedTemp(t))
+			require.NoError(t, os.WriteFile(pl.recordPath, data, 0o600))
+			lock, err := pl.start()
+			require.NoError(t, err)
+			pl.finish(lock)
+			assert.FileExists(t, path)
+		})
+	}
+}
+
+func TestPlaceholdersConcurrentCreation(t *testing.T) {
+	pl := newPlaceholders(resolvedTemp(t))
+	path := filepath.Join(resolvedTemp(t), "entry")
+	first, err := pl.start()
+	require.NoError(t, err)
+	second, err := pl.start()
+	require.NoError(t, err)
+	start, done := make(chan struct{}), make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			done <- pl.prepare([]placeholderDestination{{path: path}})
+		}()
+	}
+	close(start)
+	require.NoError(t, <-done)
+	require.NoError(t, <-done)
+	data, err := os.ReadFile(pl.recordPath)
+	require.NoError(t, err)
+	var records []placeholderOwnership
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(data), &records))
+	require.Len(t, records, 1)
+	pl.finish(first)
+	assert.FileExists(t, path)
+	pl.finish(second)
+	assert.NoFileExists(t, path)
+}
+
+func TestPlaceholdersProcessHelper(t *testing.T) {
+	dir := os.Getenv("KOPI_PLACEHOLDER_TEST_DIR")
+	if dir == "" {
+		return
+	}
+	pl := newPlaceholders(dir)
+	lock, err := pl.start()
+	require.NoError(t, err)
+	require.NoError(t, pl.prepare([]placeholderDestination{{path: os.Getenv("KOPI_PLACEHOLDER_TEST_PATH")}}))
+	fmt.Println("ready")
+	_, err = io.Copy(io.Discard, os.Stdin)
+	require.NoError(t, err)
+	runtime.KeepAlive(lock)
+	// Exit without finish, like a killed Kopi with committed records.
+	os.Exit(0)
+}
+
+func TestPlaceholdersCommittedByAnotherProcess(t *testing.T) {
+	pl := newPlaceholders(resolvedTemp(t))
+	path := filepath.Join(resolvedTemp(t), "entry")
+	executable, err := os.Executable()
+	require.NoError(t, err)
+	cmd := exec.CommandContext(t.Context(), executable, "-test.run=^TestPlaceholdersProcessHelper$")
+	cmd.Env = append(os.Environ(), "KOPI_PLACEHOLDER_TEST_DIR="+filepath.Dir(pl.recordPath), "KOPI_PLACEHOLDER_TEST_PATH="+path)
+	stdin, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	require.NoError(t, cmd.Start())
+	defer func() { _ = cmd.Process.Kill() }()
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "ready\n", line)
+	lock, err := pl.start()
+	require.NoError(t, err)
+	pl.finish(lock)
+	assert.FileExists(t, path)
+	lock, err = pl.start()
+	require.NoError(t, err)
+	require.NoError(t, stdin.Close())
+	require.NoError(t, cmd.Wait(), stderr.String())
+	assert.FileExists(t, path)
+	pl.finish(lock)
+	assert.NoFileExists(t, path)
 }
 
 // newBwrap skips off Linux and where bubblewrap cannot run.

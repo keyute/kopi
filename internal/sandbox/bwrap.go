@@ -5,8 +5,9 @@
 // Licensed under the Apache License, Version 2.0; see srt/LICENSE in this directory.
 // Modified by the Kopi authors: ported to Go; kept the placeholders for absent
 // denied paths, their removal once no command runs in any Kopi sharing a
-// directory, coordinated with a lock and a record of Kopi's own, the ancestor pins and the symlink
-// refusal; dropped the / write root cover, 9p and WSL handling, the ripgrep
+// directory, coordinated with a lock and creation-identity records, the ancestor
+// pins and the symlink refusal; dropped the / write root cover, 9p and WSL
+// handling, the ripgrep
 // scan, the network proxy, the argument file and read carve-outs; the seccomp
 // filter goes to bwrap's --seccomp rather than through a helper binary; empty
 // directories are read-only tmpfs mounts rather than a directory in the
@@ -56,7 +57,7 @@ func (b *bwrap) command(argv []string) (*exec.Cmd, func(), error) {
 	}
 	args, made, err := bwrapArgs(b.policy)
 	if err == nil {
-		err = b.shared.record(made)
+		err = b.shared.prepare(made)
 	}
 	if err != nil {
 		b.shared.finish(lock)
@@ -93,9 +94,8 @@ var bwrapSpecials = []string{"--dev", "/dev", "--proc", "/proc"}
 // The seccomp filter is read from fd 3, the command's ExtraFiles[0].
 var bwrapTail = []string{"--seccomp", "3", "--"}
 
-// emptyDir mounts an empty read-only directory at path, which bwrap creates
-// on the host when it is absent. A tmpfs needs no source directory, which
-// would otherwise have to live where commands cannot write.
+// emptyDir mounts an empty read-only directory at path. A tmpfs needs no
+// source directory, which would otherwise have to live where commands cannot write.
 func emptyDir(path string) []string {
 	return []string{"--perms", "555", "--tmpfs", path, "--remount-ro", path}
 }
@@ -124,7 +124,7 @@ func probeBwrap(ctx context.Context, path string, seccomp []byte) error {
 }
 
 // bwrapArgs returns the bwrap arguments that apply p, through "--", and the
-// placeholders bwrap will make on the host for denied paths found absent.
+// destinations Kopi must create on the host for denied paths found absent.
 //
 // Later mounts cover earlier ones, so the order is: the read-only root; the
 // pins; the write roots; the device and proc mounts; then the denies, so that
@@ -132,7 +132,7 @@ func probeBwrap(ctx context.Context, path string, seccomp []byte) error {
 // before read denies: a bind
 // of a denied directory would uncover a read mask inside it, while a mask
 // over a directory hides any bind inside it.
-func bwrapArgs(p Policy) (args, made []string, err error) {
+func bwrapArgs(p Policy) (args []string, made []placeholderDestination, err error) {
 	var roots []string
 	for _, w := range p.Write {
 		r := policy.Resolve(w)
@@ -237,7 +237,7 @@ func bwrapArgs(p Policy) (args, made []string, err error) {
 				denyWrite = append(denyWrite, "--ro-bind", "/dev/null", dest)
 			}
 			seeds = append(seeds, dest)
-			made = append(made, dest)
+			made = append(made, placeholderDestination{path: dest, directory: above[dest]})
 		}
 	}
 
@@ -354,13 +354,22 @@ func byDepth(a, b string) int {
 	return cmp.Compare(strings.Count(a, string(filepath.Separator)), strings.Count(b, string(filepath.Separator)))
 }
 
-// placeholders tracks the mount points bwrap made on the host for denied
-// paths that were absent, so that they are removed once no sandboxed command
-// runs in any Kopi process sharing its directory: removing one under a running
-// command would detach that command's mount there. Each command holds a shared
-// lock for its lifetime; whoever ends last takes the lock exclusively and
-// removes what the record lists. The record is one JSON array of paths per line,
-// appended before the command starts so that a killed Kopi leaves none unlisted.
+type placeholderDestination struct {
+	path      string
+	directory bool
+}
+
+type placeholderOwnership struct {
+	Path   string  `json:"path"`
+	Device *uint64 `json:"device"`
+	Inode  *uint64 `json:"inode"`
+	Kind   string  `json:"kind"`
+}
+
+// placeholders tracks only Kopi's successful creations. Each command holds a
+// shared lock for its lifetime; whoever ends last takes the lock exclusively
+// and sweeps committed ownership records, including those of killed processes.
+// A kill between creation and recording can leave an unowned orphan.
 type placeholders struct {
 	lockPath   string
 	recordPath string
@@ -380,7 +389,99 @@ func (pl *placeholders) start() (*flock.Flock, error) {
 	return lock, nil
 }
 
-func (pl *placeholders) record(made []string) error {
+// placeholderParent pins each parent component and rejects symlink replacements.
+func placeholderParent(path string) (*os.Root, error) {
+	volume := filepath.VolumeName(path) + string(filepath.Separator)
+	parent, err := os.OpenRoot(volume)
+	if err != nil {
+		return nil, err
+	}
+	rel, err := filepath.Rel(volume, filepath.Dir(path))
+	if err != nil {
+		parent.Close()
+		return nil, err
+	}
+	for _, name := range strings.Split(rel, string(filepath.Separator)) {
+		if name == "." {
+			continue
+		}
+		child, err := parent.OpenRoot(name)
+		if err != nil {
+			parent.Close()
+			return nil, err
+		}
+		entry, lerr := parent.Lstat(name)
+		opened, serr := child.Stat(".")
+		parent.Close()
+		if lerr != nil || serr != nil || !entry.IsDir() || !os.SameFile(entry, opened) {
+			child.Close()
+			return nil, fmt.Errorf("failed to pin parent of %s", path)
+		}
+		parent = child
+	}
+	return parent, nil
+}
+
+func createPlaceholder(dest placeholderDestination) (*placeholderOwnership, error) {
+	parent, err := placeholderParent(dest.path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare sandbox placeholder: %w", err)
+	}
+	defer parent.Close()
+	name := filepath.Base(dest.path)
+	var info fs.FileInfo
+	var f *os.File
+	kind := "file"
+	if dest.directory {
+		kind = "directory"
+		err = parent.Mkdir(name, 0o700)
+		if err == nil {
+			f, err = parent.Open(name)
+			if err == nil {
+				defer f.Close()
+				info, err = f.Stat()
+				entry, lerr := parent.Lstat(name)
+				if err == nil && (lerr != nil || !entry.IsDir() || !os.SameFile(entry, info)) {
+					return nil, fmt.Errorf("failed to identify sandbox placeholder %s", dest.path)
+				}
+			}
+		}
+	} else {
+		f, err = parent.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			defer f.Close()
+			info, err = f.Stat()
+		}
+	}
+	if errors.Is(err, fs.ErrExist) {
+		return nil, nil // Existing entries never confer ownership.
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to create sandbox placeholder: %w", err)
+	}
+	device, inode, ok := placeholderIdentity(f, info)
+	if !ok {
+		return nil, fmt.Errorf("failed to identify sandbox placeholder %s", dest.path)
+	}
+	return &placeholderOwnership{Path: dest.path, Device: &device, Inode: &inode, Kind: kind}, nil
+}
+
+func (pl *placeholders) prepare(destinations []placeholderDestination) error {
+	for _, dest := range destinations {
+		owned, err := createPlaceholder(dest)
+		if err != nil {
+			return err
+		}
+		if owned != nil {
+			if err := pl.record([]placeholderOwnership{*owned}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (pl *placeholders) record(made []placeholderOwnership) error {
 	if len(made) == 0 {
 		return nil
 	}
@@ -392,7 +493,11 @@ func (pl *placeholders) record(made []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to record sandbox placeholders: %w", err)
 	}
-	_, err = f.Write(append(line, '\n'))
+	line = append(append([]byte{'\n'}, line...), '\n')
+	n, err := f.Write(line)
+	if err == nil && n != len(line) {
+		err = io.ErrShortWrite
+	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -429,15 +534,19 @@ func (pl *placeholders) finish(lock *flock.Flock) {
 		}
 		return
 	}
-	var paths []string
+	var paths []placeholderOwnership
 	for line := range bytes.Lines(data) {
-		var made []string
+		// A trailing fragment is not a committed record.
+		if len(line) == 0 || line[len(line)-1] != '\n' {
+			continue
+		}
+		var made []placeholderOwnership
 		if json.Unmarshal(line, &made) == nil {
-			paths = appendNew(paths, made...)
+			paths = append(paths, made...)
 		}
 	}
 	// Deepest first: a directory goes only once empty.
-	slices.SortFunc(paths, func(a, b string) int { return cmp.Compare(len(b), len(a)) })
+	slices.SortFunc(paths, func(a, b placeholderOwnership) int { return cmp.Compare(len(b.Path), len(a.Path)) })
 	for _, p := range paths {
 		removePlaceholder(p)
 	}
@@ -446,31 +555,46 @@ func (pl *placeholders) finish(lock *flock.Flock) {
 	}
 }
 
-// removePlaceholder removes path only while it is still an empty file or an
-// empty directory, as bwrap made it.
-func removePlaceholder(path string) {
-	info, err := os.Lstat(path)
-	switch {
-	case err != nil:
+// Identity checks are best-effort: outside writers can race the final removal.
+func removePlaceholder(owned placeholderOwnership) {
+	if !filepath.IsAbs(owned.Path) || owned.Device == nil || owned.Inode == nil ||
+		(owned.Kind != "file" && owned.Kind != "directory") {
 		return
-	case info.Mode().IsRegular():
+	}
+	path := owned.Path
+	parent, err := placeholderParent(path)
+	if err != nil {
+		return
+	}
+	defer parent.Close()
+	name := filepath.Base(path)
+	info, err := parent.Lstat(name)
+	if err != nil {
+		return
+	}
+	device, inode, ok := placeholderEntryIdentity(parent, name, info)
+	if !ok || device != *owned.Device || inode != *owned.Inode {
+		return
+	}
+	switch {
+	case info.Mode().IsRegular() && owned.Kind == "file":
 		if info.Size() != 0 {
 			return
 		}
-	case info.IsDir():
-		if !isEmptyDir(path) {
+	case info.IsDir() && owned.Kind == "directory":
+		if !isEmptyDir(parent, name) {
 			return
 		}
 	default:
 		return
 	}
-	if err := os.Remove(path); err != nil {
+	if err := parent.Remove(name); err != nil {
 		slog.Warn("failed to remove a sandbox placeholder", "path", path, "err", err)
 	}
 }
 
-func isEmptyDir(path string) bool {
-	f, err := os.Open(path)
+func isEmptyDir(parent *os.Root, name string) bool {
+	f, err := parent.Open(name)
 	if err != nil {
 		return false
 	}

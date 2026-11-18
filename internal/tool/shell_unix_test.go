@@ -285,6 +285,52 @@ func TestShellWaitsForExitAfterOutputCloses(t *testing.T) {
 	assert.True(t, strings.HasSuffix(err.Error(), "exit code 3"))
 }
 
+func TestShellCleansPlaceholdersAfterStartFailure(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("placeholders are made by the Linux sandbox")
+	}
+	for _, name := range []string{"canceled context", "missing working directory"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			placeholder := filepath.Join(dir, "absent")
+			sbs, err := sandbox.New(t.Context(), t.TempDir(), sandbox.Policy{Write: []string{dir}, DenyWrite: []string{placeholder}})
+			if errors.Is(err, sandbox.ErrUnavailable) && os.Getenv("KOPI_TEST_REQUIRE_LINUX_SANDBOX") != "1" {
+				t.Skip(err)
+			}
+			require.NoError(t, err)
+			sh := NewShell(dir, sbs[0])
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if name == "canceled context" {
+				cancel()
+			} else {
+				sh.dir = filepath.Join(dir, "missing")
+			}
+
+			p, err := sh.start(ctx, "true")
+
+			require.Error(t, err)
+			if name == "canceled context" {
+				require.ErrorIs(t, err, context.Canceled)
+			} else {
+				require.NotErrorIs(t, err, context.Canceled)
+				require.ErrorContains(t, err, "failed to run command")
+			}
+			require.Nil(t, p)
+			assert.NoFileExists(t, placeholder)
+
+			sh.dir = dir
+			p, err = sh.start(t.Context(), "test -e '"+placeholder+"'")
+			require.NoError(t, err)
+			defer p.stop(context.Canceled)
+			waitFor(t, p.done, "the next command to end")
+			_, err = p.result()
+			require.NoError(t, err)
+			assert.NoFileExists(t, placeholder)
+		})
+	}
+}
+
 func TestShellHoldsPlaceholdersUntilCommandEnds(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("placeholders are made by the Linux sandbox")
