@@ -284,3 +284,33 @@ func TestShellWaitsForExitAfterOutputCloses(t *testing.T) {
 	require.ErrorIs(t, err, ErrExitStatus)
 	assert.True(t, strings.HasSuffix(err.Error(), "exit code 3"))
 }
+
+func TestShellHoldsPlaceholdersUntilCommandEnds(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("placeholders are made by the Linux sandbox")
+	}
+	dir := t.TempDir()
+	placeholder := filepath.Join(dir, "absent")
+	sbs, err := sandbox.New(t.Context(), t.TempDir(), sandbox.Policy{Write: []string{dir}, DenyWrite: []string{placeholder}})
+	if errors.Is(err, sandbox.ErrUnavailable) && os.Getenv("KOPI_TEST_REQUIRE_LINUX_SANDBOX") != "1" {
+		t.Skip(err)
+	}
+	require.NoError(t, err)
+	sh := NewShell(dir, sbs[0])
+	gate := mkfifo(t, dir, "gate")
+
+	p, err := sh.start(t.Context(), "read x <'"+gate+"'")
+	require.NoError(t, err)
+	defer p.stop(context.Canceled)
+
+	// Opening blocks until the command is running and reads; the writer stays
+	// open so the command keeps waiting.
+	f, err := os.OpenFile(gate, os.O_WRONLY, 0)
+	require.NoError(t, err)
+	defer f.Close()
+	assert.FileExists(t, placeholder)
+
+	p.stop(errors.New("stopped"))
+	waitFor(t, p.done, "the command to end")
+	assert.NoFileExists(t, placeholder)
+}

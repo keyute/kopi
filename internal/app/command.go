@@ -34,6 +34,9 @@ func commandTable() []command {
 			return c.switchTo(ctx, OpenRequest{})
 		}},
 		{Command: Command{Name: "resume", Summary: "resume a session"}, run: (*Controller).resumeCommand, args: (*Controller).sessionCandidates},
+		{Command: Command{Name: "tasks", Summary: "list and stop background tasks"}, run: func(*Controller, context.Context, string) error {
+			return ErrShowTasks
+		}},
 		{Command: Command{Name: "quit", Summary: "exit kopi"}, run: func(*Controller, context.Context, string) error {
 			return ErrQuit
 		}},

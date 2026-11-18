@@ -137,6 +137,19 @@ func TestBlocks(t *testing.T) {
 			want:   []Block{Assistant{key: "item:0", Text: "x"}},
 		},
 		{
+			name: "task end splits the stretch",
+			events: []event.Event{
+				start("a"), end("a"), start("b"), end("b"),
+				event.TaskEnded{ID: "t1", Command: "make", Status: "completed", Elapsed: 12 * time.Second},
+				start("c"), end("c"), start("d"), end("d"),
+			},
+			want: []Block{
+				group("a", true, "a", "b"),
+				Task{key: "item:2", ID: "t1", Command: "make", Status: "completed", Elapsed: 12 * time.Second},
+				group("c", false, "c", "d"),
+			},
+		},
+		{
 			name:   "error block",
 			events: []event.Event{event.Error{Err: assert.AnError}},
 			want:   []Block{Error{key: "item:0", Text: assert.AnError.Error()}},

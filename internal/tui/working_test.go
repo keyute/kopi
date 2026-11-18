@@ -76,3 +76,71 @@ func TestWorkingRowShowsActivity(t *testing.T) {
 		require.Nil(t, cmd, "ticking stops once the activity ends")
 	})
 }
+
+func TestWorkingRowNamesTheBackgroundKey(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTestModel(t, 60, 20)
+		working := func() string { s := screen(m); return s[len(s)-6] }
+		c.status.Foreground = true
+		send(m, event.TasksChanged{})
+		assert.NotContains(t, screen(m), "⠋ Working… 0s · ctrl+b to background", "not while idle")
+
+		send(m, event.TurnStart{Prompt: "go"})
+		assert.Equal(t, "⠋ Working… 0s · ctrl+b to background", working())
+		th := m.th
+		assert.Contains(t, m.below[len(m.below)-6].text, fg(th.dim).Render(" · ctrl+b to background"))
+
+		c.status.Foreground = false
+		send(m, event.TasksChanged{})
+		assert.Equal(t, "⠋ Working… 0s", working(), "only while a foreground command runs")
+
+		c.status.Foreground = true
+		ask := editApproval()
+		send(m, event.TasksChanged{}, ask)
+		assert.Contains(t, screen(m), "⠋ Waiting for you…", "not while an approval waits")
+		send(m, event.ApprovalEnded{Token: ask.Token})
+		assert.Equal(t, "⠋ Working… 0s · ctrl+b to background", working())
+	})
+}
+
+func TestWorkingRowHidesBackgroundKeyWhileTasksOpen(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		c.status.Foreground = true
+		c.foreground = true
+		send(m, event.TasksChanged{}, event.TurnStart{Prompt: "go"})
+		assert.Contains(t, screen(m), "⠋ Working… 0s · ctrl+b to background")
+
+		submitText(m, "/tasks")
+
+		require.NotNil(t, m.tasks)
+		assert.Contains(t, screen(m), "⠋ Working… 0s")
+		assert.NotContains(t, screen(m), "⠋ Working… 0s · ctrl+b to background")
+		press(m, ctrlB)
+		assert.Zero(t, c.backgrounds, "the dialog swallows the background key")
+
+		press(m, escape)
+
+		require.Nil(t, m.tasks)
+		assert.Contains(t, screen(m), "⠋ Working… 0s · ctrl+b to background")
+		press(m, ctrlB)
+		assert.Equal(t, 1, c.backgrounds, "the background key works again after closing")
+	})
+}
+
+func TestWorkingRowUsesTheConfiguredBackgroundKey(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		for keys, want := range map[string]string{"ctrl+g": "⠋ Working… 0s · ctrl+g to background", "": "⠋ Working… 0s"} {
+			opts := testOptions()
+			opts.Keys["background"] = nil
+			if keys != "" {
+				opts.Keys["background"] = []string{keys}
+			}
+			m, c := newTestModelWith(t, 60, 20, opts)
+			c.status.Foreground = true
+			send(m, event.TasksChanged{}, event.TurnStart{Prompt: "go"})
+			s := screen(m)
+			assert.Equal(t, want, s[len(s)-6])
+		}
+	})
+}

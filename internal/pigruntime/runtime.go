@@ -111,7 +111,7 @@ type OpenOptions struct {
 	ResumeID string
 	// Continue resumes the most recent session of the workspace.
 	Continue     bool
-	SystemPrompt string
+	SystemPrompt []PromptPart
 	Tools        []tool.Tool
 	Authority    *policy.Authority
 	// Rules nil means no rules.
@@ -119,6 +119,11 @@ type OpenOptions struct {
 	// Approve nil means nobody can answer, so a call needing approval is denied.
 	Approve policy.Approver
 }
+
+// PromptPart is one named piece of the system prompt. Parts are sent in
+// order, separated by a blank line. Resumes record changed parts by name,
+// with suffix removals and additions when needed to restore that order.
+type PromptPart struct{ Name, Text string }
 
 func (r *Runtime) Open(ctx context.Context, o OpenOptions) (*Session, error) {
 	return r.open(ctx, o, policy.NewGate(o.Authority, tool.Specs(o.Tools), o.Rules, o.Approve))
@@ -137,17 +142,14 @@ func (r *Runtime) check(ctx context.Context, o OpenOptions) (*ai.Model, error) {
 	if o.ResumeID != "" && o.Continue {
 		return nil, errors.New("failed to open session: resume id and continue are mutually exclusive")
 	}
-	provider, id, _ := strings.Cut(o.Model, "/")
-	model := r.svcs.ModelRuntime().GetModel(provider, id)
-	if model == nil {
-		return nil, fmt.Errorf("failed to open session with model %q: %w", o.Model, ErrUnknownModel)
-	}
-	ok, err := r.hasCredential(ctx, provider)
-	if err != nil {
+	model, err := r.usableModel(ctx, o.Model)
+	switch {
+	case errors.Is(err, ErrUnknownModel):
+		return nil, fmt.Errorf("failed to open session with model %q: %w", o.Model, err)
+	case errors.Is(err, ErrNoCredential):
+		return nil, fmt.Errorf("failed to open session: %w", err)
+	case err != nil:
 		return nil, err
-	}
-	if !ok {
-		return nil, fmt.Errorf("failed to open session: provider %q: %w", provider, ErrNoCredential)
 	}
 	if o.ResumeID == "" && !o.Continue {
 		return model, nil
@@ -184,12 +186,18 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 		}
 		allowed[t.Name] = struct{}{}
 	}
+	// Sections must be non-nil even when empty: nil with no SystemPrompt
+	// selects PiG's stock prompt.
+	sections := make(ai.OrderedSections, 0, len(o.SystemPrompt))
+	for _, p := range o.SystemPrompt {
+		sections = append(sections, ai.PromptSection{Name: p.Name, Value: &p.Text})
+	}
 	// InitialActiveToolNames must be set too: nil falls back to PiG's
 	// read/bash/edit/write defaults. An explicit Model also stops a resumed
 	// session from restoring the model it was saved with.
 	start := coding.SessionStartOptions{
 		Model:                  model,
-		SystemPrompt:           o.SystemPrompt,
+		SystemPromptSections:   sections,
 		ResourceLoader:         coding.NoResources,
 		SkipBuiltinTools:       true,
 		ExtraTools:             tools,
@@ -213,7 +221,79 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	// InitialActiveToolNames says, and a resumed session restores the tools
 	// its transcript last declared, so deferred tools are deactivated here.
 	sess.SetActiveToolsByName(names)
+	if o.ResumeID != "" || o.Continue {
+		a := sess.Agent()
+		previous := a.PreparePromptHook()
+		a.SetPreparePrompt(func(ctx context.Context, messages []agent.AgentMessage) ([]agent.AgentMessage, error) {
+			if previous != nil {
+				var err error
+				messages, err = previous(ctx, messages)
+				if err != nil {
+					return nil, err
+				}
+			}
+			history := a.MessagesSnapshot()
+			current := ai.GetCurrentSystemMessage(history)
+			var committed ai.OrderedSections
+			if current != nil {
+				committed = current.Sections
+			}
+			// Prepared repairs can be abandoned before the run commits them.
+			// Retire only after the transcript itself has the opening order.
+			if slices.EqualFunc(committed, sections, func(a, b ai.PromptSection) bool { return a.Name == b.Name }) {
+				a.SetPreparePrompt(previous)
+				return messages, nil
+			}
+			current = ai.GetCurrentSystemMessage(slices.Concat(history, messages))
+			var replayed ai.OrderedSections
+			if current != nil {
+				replayed = current.Sections
+			}
+			prefix := 0
+			for prefix < len(replayed) && prefix < len(sections) && replayed[prefix].Name == sections[prefix].Name {
+				prefix++
+			}
+			if prefix == len(replayed) && prefix == len(sections) {
+				return messages, nil
+			}
+			// PiG updates names in place and appends additions. Remove the whole
+			// mismatched suffix first so replay can append it in the desired order.
+			removed := make(ai.OrderedSections, 0, len(replayed)-prefix)
+			for _, section := range replayed[prefix:] {
+				removed = append(removed, ai.PromptSection{Name: section.Name})
+			}
+			repair := []agent.AgentMessage{
+				{System: &ai.SystemMessage{Content: ai.SystemText(""), Sections: removed, Timestamp: time.Now().UnixMilli()}},
+				{System: &ai.SystemMessage{Content: ai.SystemText(""), Sections: slices.Clone(sections[prefix:]), Timestamp: time.Now().UnixMilli()}},
+			}
+			// Preserve PiG's prepared system updates ahead of the repair and the
+			// user's starting messages after it, without changing either slice.
+			at := 0
+			for at < len(messages) && messages[at].System != nil {
+				at++
+			}
+			return slices.Concat(messages[:at], repair, messages[at:]), nil
+		})
+	}
 	return &Session{inner: sess}, nil
+}
+
+// usableModel returns the model ref ("provider/id") names once its provider
+// has a credential.
+func (r *Runtime) usableModel(ctx context.Context, ref string) (*ai.Model, error) {
+	provider, id, _ := strings.Cut(ref, "/")
+	model := r.svcs.ModelRuntime().GetModel(provider, id)
+	if model == nil {
+		return nil, ErrUnknownModel
+	}
+	ok, err := r.hasCredential(ctx, provider)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("provider %q: %w", provider, ErrNoCredential)
+	}
+	return model, nil
 }
 
 // hasCredential relies on PiG's CheckAuth returning (nil, nil) when the

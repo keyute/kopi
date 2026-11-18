@@ -28,6 +28,7 @@ Commands in the fullscreen interface:
 | `/execute` | Switch to execute mode |
 | `/new` | Start a new session |
 | `/resume <id>` | Resume a session |
+| `/tasks` | List background tasks, show one's output and stop it |
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
 
@@ -52,6 +53,7 @@ Keys in the fullscreen interface (defaults, see Configuration):
 - After an interrupt, queued messages return to the input; `/new`, `/resume` and exiting discard them.
 - Ctrl+D exits when the input is empty.
 - Shift+Tab switches between plan and execute.
+- Ctrl+B moves the running foreground `Bash` command to the background, where it keeps running as a task; while one runs, the working row shows `ctrl+b to background`. With none running, Ctrl+B keeps its meaning in the input.
 - Ctrl+V pastes text or an image from the clipboard.
 - Mouse wheel or PgUp/PgDn scrolls the transcript.
 - Ctrl+O expands every group and call output until pressed again.
@@ -82,6 +84,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `config.json` in the home; precedence is default < config file < flags.
 - `kopi config` shows each value and its origin; unknown keys are rejected.
 - The fullscreen interface logs to `kopi.log` in the home; print mode logs to stderr.
+- `AGENTS.md` in the home, when present, is added to the system prompt in every folder, whether or not you trust it.
 - `trust.json` holds which folders you trust (see MCP servers); Kopi writes it and never writes `config.json`.
 - `history.jsonl` holds input history per working directory, written by the fullscreen interface; the last 100 entries are recalled.
 - `sandbox/` holds the lock and the record of placeholders that Kopi processes sharing the home use to remove them safely (Linux).
@@ -91,7 +94,11 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 `mode` is the mode sessions start in: `plan` (default) or `execute`.
 
-`keys` maps each fullscreen action to a list of key strings, and `statusline` lists the status line's `left` and `right` segments from `model`, `context`, `branch`, `mode`, `notice`, which shows transient hints such as `Copied`, and `sandbox`, which shows `sandboxed` or `unsandboxed` when Bash is available (default left `model, context, branch`, right `notice, sandbox, mode`):
+`smallModel` (`provider/id`) is the model that answers `WebFetch` calls; unset, it is `model`, so set it to a cheaper model. A wrong value, an unknown model or one whose provider has no credential fails at start.
+
+`instructionFallbacks` lists bare file names a directory's project instruction file is read from when it has no `AGENTS.md`, the first present winning (default `["CLAUDE.md"]`); `[]` turns the fallback off. Project instruction files load only in a trusted folder (see MCP servers).
+
+`keys` maps each fullscreen action to a list of key strings, and `statusline` lists the status line's `left` and `right` segments from `model`, `context`, `branch`, `mode`, `notice`, which shows transient hints such as `Copied`, and `sandbox`, which shows `sandboxed` or `unsandboxed` when Bash is available, and `tasks`, which shows `1 shell` or `N shells` while background tasks run (default left `model, context, branch`, right `notice, sandbox, tasks, mode`):
 
 ```json
 {
@@ -110,6 +117,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `cancel` | `ctrl+c` |
 | `quit` | `ctrl+d` |
 | `toggle-mode` | `shift+tab` |
+| `background` | `ctrl+b` |
 | `paste` | `ctrl+v` |
 | `history-prev`, `history-next` | `up`, `down` |
 | `queue-edit` | `up` |
@@ -154,19 +162,29 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 ## Modes and tools
 
-- Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab. Plan mode allows `Read`, `ToolSearch`, read-only MCP tools, and `Bash` only in the sandbox, where it cannot write the start directory; `Write`, `Edit` and other MCP tools need execute mode.
+- Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab. Plan mode allows `Read`, `ToolSearch`, `TaskOutput`, `TaskStop`, `WebFetch`, read-only MCP tools, and `Bash` only in the sandbox, where it cannot write the start directory; `Write`, `Edit` and other MCP tools need execute mode.
 - Sessions start and resume in the configured `mode` (default plan), including ones opened with `/new` and `/resume`; `--mode` overrides the config file. A mode switched to while the first session is opening is the mode it starts in.
 - `Read` reads text files inside the start directory: up to 2000 lines, 2000 characters per line and 100 KiB per call; binary files and directories are refused.
 - `Write` creates a file or replaces its whole content; `Edit` replaces a string that must match exactly once unless `replace_all` is set, in a text file of up to 10 MiB. Both work inside the start directory, replace the file atomically and keep its mode.
 - `Read`, `Write` and `Edit` refuse Kopi's home, including paths there that do not exist yet.
 - `Bash` runs a command with `bash -c` (`/bin/sh` when `bash` is not on `PATH`) in the start directory, with Kopi's environment. Every call is a fresh shell with no input; `cd` and variables do not carry over.
-- `Bash`'s `timeout` is in milliseconds, default 120000, at most 600000. On timeout or interrupt the command's whole process group is killed (on Windows, only the shell).
+- `Bash`'s `timeout` is in milliseconds, default 120000, at most 600000. A command still running at its timeout keeps running as a background task, as does one started with `run_in_background` or moved with the `background` key; the result names the task. On interrupt a foreground command's whole process group is killed (on Windows, only the shell).
 - `Bash` returns stdout and stderr combined, keeping the first and last 15,000 bytes. A non-zero exit is an error reporting the exit code.
 - On macOS and Linux `Bash` runs inside an OS sandbox (`sandbox-exec` on macOS, bubblewrap's `bwrap` on Linux), configured with `sandbox` (see Configuration).
 - In the sandbox a command can write only in the start directory, `/tmp`, the temp directory and the `sandbox.allowWrite` paths, and never, on macOS, the files of the start directory's `.git` that choose git's config and hooks (`hooks`, `config`, `config.worktree`, `commondir`, `worktrees`, `modules`), nor, on Linux, anything in the start directory's `.git`; a command cannot write `HEAD` in the start directory on Linux, or on macOS when it has no `.git`. In plan mode nothing in the start directory is writable, including `sandbox.allowWrite` paths inside it.
 - In the sandbox a command cannot create, write, rename or remove the start directory's `.mcp.json`, nor what it resolves to when it is a symlink; on macOS this holds for a file named `.mcp.json` in any letter case and in any directory. Git operations that change a protected `.mcp.json` therefore fail in the sandbox.
 - In the sandbox a command can read everything except Kopi's home and the `sandbox.denyRead` paths, which it also cannot write, rename or remove.
 - In the sandbox a command has no network unless `sandbox.network` is true, which opens IP networking only; Unix sockets stay blocked, and on Linux so do VM sockets and io_uring.
+- `WebFetch` fetches one http or https page on a public host and has `smallModel` answer the call's prompt from it; the main model gets the answer and the page's final URL, not the page. HTML is converted to markdown from its main content; text, JSON and XML pass through; other content types are refused. Pages are up to 5 MiB, fetched within 30 seconds and without JavaScript, and the small model reads their first 100,000 characters. Redirects on the same host (a leading `www.` and http to https count as the same) are followed, at most 5; any other redirect is returned for the model to fetch in a new call. `localhost`, names without a dot, `.localhost`, `.local` and `.internal` names, and non-public addresses are refused, including ones a name resolves to. Every call asks unless a rule allows it, in both modes.
+
+Background tasks:
+
+- Tasks are numbered `t1`, `t2`, … per run. They have no time limit and keep the sandbox profile of the mode they started in.
+- `TaskOutput` returns a task's status and its output so far, kept like `Bash` output. `TaskStop` kills a task's process group (on Windows, only the shell), whichever mode it started in.
+- When a task completes or fails, the model is told its status and its last 20 non-empty output lines at the next boundary of the running turn, or in a new turn when none runs. After an interrupt such notices wait for the next prompt; they never return to the input.
+- A task stopped from `/tasks` is reported to the model along with the next prompt or the next task notice, without starting a turn; one the model stops is not reported again.
+- A task that completes, fails or is stopped from `/tasks` adds a `• task t1 finished · <command> · 12s` row to the transcript (`failed` or `stopped` in place of `finished`), restored on resume.
+- Tasks are stopped on exit, when `/new` or `/resume` opens another session, and at the end of `kopi -p`. `kopi -p` never starts a turn for a task's end, so a task still running at the final reply is killed.
 
 Permission rules in `config.json` allow, ask about or deny calls:
 
@@ -180,14 +198,14 @@ Permission rules in `config.json` allow, ask about or deny calls:
 }
 ```
 
-- A rule is `Name` or `Name(path)`. The name is a tool name (`Read`, `Write`, `Edit`, `Bash`, `ToolSearch`), an MCP tool name (see MCP servers) or `*` for every tool; an unknown name or a malformed rule is rejected at start.
+- A rule is `Name` or `Name(path)`. The name is a tool name (`Read`, `Write`, `Edit`, `Bash`, `TaskOutput`, `TaskStop`, `ToolSearch`, `WebFetch`), an MCP tool name (see MCP servers) or `*` for every tool; an unknown name or a malformed rule is rejected at start.
 - `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory. `*` and `**` glob. A name with no slash (`.env`) matches at any depth, and a directory covers everything in it. Paths match case-insensitively on macOS and Windows.
 - `Name(!path)` exempts the calls it matches from the other rules in its own list, from the same config layer or flag; it never reaches rules from anywhere else.
 - A bare `Name` in `deny` removes the tool from the model.
-- `ToolSearch` takes no path: only a bare `ToolSearch` or `*` rule applies to it; `ToolSearch(path)` is rejected at start.
+- `ToolSearch`, `TaskOutput`, `TaskStop` and `WebFetch` take no path: only a bare rule naming the tool or `*` applies to them; `ToolSearch(path)` and the like are rejected at start.
 - `Bash` takes no path: only a bare `Bash` or `*` rule applies to it, `Bash(path)` is rejected at start, and path rules such as `*(~/.ssh)` never apply to `Bash`. `"ask": ["Bash"]` makes every command ask.
 - Plan mode refuses `Write`, `Edit`, unsandboxed `Bash` and MCP tools not marked read-only before any rule; otherwise rules apply to `Bash` the same in both modes.
-- Deny beats ask, and ask beats allow. With no rule matching, `Read`, `ToolSearch` and sandboxed `Bash` are allowed and any other call asks, including every `Bash` command without the sandbox.
+- Deny beats ask, and ask beats allow. With no rule matching, `Read`, `ToolSearch`, `TaskOutput`, `TaskStop` and sandboxed `Bash` are allowed and any other call asks, including every `WebFetch` call and every `Bash` command without the sandbox.
 - Built in: `Edit` and `Write` under any `.git` directory, and of any file named `.mcp.json` or the file the start directory's `.mcp.json` resolves to when it is a symlink, always ask unless a deny rule refuses them.
 - `--allowed-tools` and `--disallowed-tools` add allow and deny rules to the config's; each is repeatable and takes comma-separated rules (commas inside `()` or `{}` do not split).
 - A rule's path counts as a match on either the path as written or its resolved target when it denies, asks or exempts from an allow, and only on both when it allows or exempts from a deny or ask.
@@ -211,8 +229,9 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - A stdio server has `command`, optional `args` and `env` (added to Kopi's environment), and `type` absent or `"stdio"`. A remote server has `"type": "http"` (streamable HTTP), `url` and optional `headers`.
 - `${VAR}` and `${VAR:-default}` expand in `command`, `args`, `env` values, `url` and `headers` values. An unset variable with no default fails that server only.
 - A `.mcp.json` in the start directory adds its `mcpServers`, only once you trust the folder; a server there replaces the `config.json` server of the same name whole. Its unknown keys are ignored, and a server of an unsupported type (`sse`, `ws`) fails alone.
-- When the start directory's `.mcp.json` declares a server and you have not decided about the folder, the fullscreen interface lists its servers and asks before the session opens: `Yes, trust this folder`, `Yes, trust the parent folder` (not offered when the parent is the root or your home directory), or `No, don't trust`. The answer is saved in `trust.json` and covers the folders below; the closest saved folder decides. In your home directory or the root no parent is offered, and the answer, yes or no, holds for this run only and is not saved. Cancelling saves nothing and skips the servers for this run.
-- Print mode never asks: in a folder with no decision it skips the `.mcp.json` servers and warns on stderr.
+- A trusted folder's project instruction files are added to the system prompt after the home's `AGENTS.md`: one file per directory from the directory holding `.git` (a directory or a file) down to the start directory (its symlinks resolved first), outermost first, or the start directory alone when none holds `.git`. Each directory's file is `AGENTS.md`, else the first `instructionFallbacks` name present; a symlinked file is followed. Instruction files are read once at startup and have no size limit.
+- When the start directory's `.mcp.json` declares a server or the folder has project instruction files, and you have not decided about the folder, the fullscreen interface lists its instruction files and servers and asks before the session opens: `Yes, trust this folder`, `Yes, trust the parent folder` (not offered when the parent is the root or your home directory), or `No, don't trust`. The answer is saved in `trust.json` and covers the folders below; the closest saved folder decides. In your home directory or the root no parent is offered, and the answer, yes or no, holds for this run only and is not saved. Cancelling saves nothing and skips the servers and instruction files for this run.
+- Print mode never asks: in a folder with no decision it skips the `.mcp.json` servers and project instruction files and warns on stderr.
 - To change a saved answer, remove the folder's entry from `trust.json`.
 - Servers start at startup. The fullscreen interface shows at once with "Connecting to MCP servers…", and the session opens when the servers have settled or after 10 seconds; a prompt sent before then is queued and sent when the session opens. Print mode waits for the servers before it runs. A server that fails or is late is reported and its tools are absent for the run; the fullscreen interface shows the reasons in the transcript, print mode on stderr.
 - A server's tools are named `mcp__<server>__<tool>`, with characters outside `A-Z`, `a-z`, `0-9`, `_` and `-` turned into `_`. The normalized server component must be nonempty, must not contain `__`, and must not end in `_`, so a whole-server permission prefix cannot match another server. Invalid server names fail before connecting. A name over 64 characters, or one that two tools share, is skipped and reported.
@@ -236,7 +255,7 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - The sandbox does not protect the config and hooks of repositories nested inside the start directory, or of the start directory itself when it is a bare repository or a git directory.
 - When the start directory's `.mcp.json` is a symlink, what it resolves to when Kopi starts is protected like `.mcp.json` itself; when that is a directory, sandboxed commands cannot write anywhere in it. Another symlink on the way to it, a link that is broken at startup, a hard link that already exists, and the link targets of `.mcp.json` files in other folders are not protected. On Linux, while a denied path passes through a symlink whose entry is in a write root, such as a symlinked `.mcp.json` or `.git`, sandboxed commands refuse to run, whether the link is valid or broken.
 - On Linux only the start directory's `.mcp.json` is protected by name: a command can create or change a `.mcp.json` in any other directory.
-- On Linux, while a sandboxed command runs, each denied path that does not exist shows outside the sandbox as an empty file or directory, in a typical repository `.mcp.json` and `HEAD`, and `.git` when the start directory has no `.git`. They are removed once no sandboxed command runs in any Kopi using the same home; a killed Kopi's are removed after the next sandboxed command, and Kopi processes with different homes do not coordinate.
+- On Linux, while a sandboxed command runs, each denied path that does not exist shows outside the sandbox as an empty file or directory, in a typical repository `.mcp.json` and `HEAD`, and `.git` when the start directory has no `.git`. They are removed once no sandboxed command, background tasks included, runs in any Kopi using the same home; a killed Kopi's are removed after the next sandboxed command, and Kopi processes with different homes do not coordinate.
 - On Linux a denied directory reads as empty in the sandbox, and opening a denied file fails with "Permission denied".
 - On Linux, while sandboxed commands run, a program outside the sandbox that removes a protected path or replaces it by renaming over it, such as an editor's save, lifts the protection on that path for those commands.
 - A command can move into a write root a directory that already holds a `.mcp.json`, and a folder moved in takes the trust of its new parent.
@@ -244,12 +263,13 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - The files a `.mcp.json` server runs, such as `./server.sh` or `node_modules/.bin/…`, stay writable.
 - A `.mcp.json` changed outside Kopi, such as by `git pull` or an editor, starts its servers without asking again.
 - In execute mode, sandboxed commands can write anything else in the start directory, so starting Kopi in a directory holding files other programs run, such as the home directory, lets commands change them.
-- Plan mode keeps only the start directory read-only: commands can still write `/tmp`, the temp directory and `sandbox.allowWrite` paths outside it, and act over the network when `sandbox.network` is true. In plan mode `kopi -p` runs sandboxed `Bash` without asking. Commands started in execute mode, including background processes they leave running, keep their execute-mode access after a switch to plan mode.
+- Plan mode keeps only the start directory read-only: commands can still write `/tmp`, the temp directory and `sandbox.allowWrite` paths outside it, and act over the network when `sandbox.network` is true. In plan mode `kopi -p` runs sandboxed `Bash` without asking. Commands started in execute mode, including background tasks and processes they leave running, keep their execute-mode access after a switch to plan mode.
 - On macOS `ps`, `pgrep` and `top` do not work in the sandbox; on Linux they see only the command's own processes.
 - Unix sockets (ssh-agent, Docker) are unreachable from the sandbox, even with `sandbox.network` true, and on Linux so are VM sockets.
 - On Linux 32-bit programs cannot run in the sandbox: their system calls end the process.
 - On Linux commands cannot create user namespaces in the sandbox, so tools that need them fail there, such as rootless containers, browsers' own sandboxes and nested bubblewrap.
-- Outside the Linux sandbox, a background process a command leaves running (`cmd &`) can outlive the call, and a running command keeps running if Kopi is killed. In the Linux sandbox everything a command started ends when it does, or when Kopi does.
+- Outside the Linux sandbox, a background process a command leaves running (`cmd &`) can outlive the call and its background task, and a running command or background task keeps running if Kopi is killed. In the Linux sandbox everything a command started ends when it does, or when Kopi does.
+- Background tasks and their output live only in memory and do not survive a restart.
 - `sandbox-exec` is deprecated by Apple.
 - Kopi builds for macOS, Linux and Windows only.
 - Symlinks in rule paths, the start directory and the home directory are resolved once, at start; in sandbox paths too on macOS, and before each command on Linux.
@@ -262,6 +282,9 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - Importing PiG changes the TLS settings of Go's process-wide default HTTP transport.
 - `agent/models.json` is trusted configuration: PiG reads it, and its `apiKey` can run a shell command.
 - Provider requests identify as PiG, not Kopi.
+- `WebFetch` connects directly and ignores `HTTP_PROXY` and `HTTPS_PROXY`; `sandbox.network` does not govern it.
+- An approved `WebFetch` URL is requested from its host, and the call's prompt and up to 100,000 characters of the page go to `smallModel`'s provider.
+- `WebFetch` runs no JavaScript, and only the `Content-Type` header decides a page's charset; without one, the type is sniffed from the body and it is read as UTF-8 unless it starts with a UTF-16 byte-order mark.
 
 ## Development
 
@@ -273,11 +296,11 @@ task fmt
 
 Tests are mock-backed (PiG's faux provider and a local HTTP mock server); none use a live provider.
 
-Manual live check: `kopi login openai-codex`, run with a model, ask it to read a file, then try `/execute`, `/plan`, Ctrl+C and `--continue`; then `kopi -p` with an argument and with piped input. For sign-in, with a scratch `KOPI_HOME`: `kopi login` lists `openai` and `openai-codex`; `kopi login openai-codex` opens the browser with `originator=kopi` in the URL; `kopi login openai` has `agent_name_hint=Kopi` and `ext_agent_host_id=urn:uuid:<installation_id>` in the URL and OpenAI's consent screen names Kopi; `kopi logout openai-codex`, then a run suggests `kopi login`.
+Manual live check: `kopi login openai-codex`, run with a model, ask it to read a file, then try `/execute`, `/plan`, Ctrl+C and `--continue`; then `kopi -p` with an argument and with piped input. For sign-in, with a scratch `KOPI_HOME`: `kopi login` lists `openai` and `openai-codex`; `kopi login openai-codex` opens the browser with `originator=kopi` in the URL; `kopi login openai` has `agent_name_hint=Kopi` and `ext_agent_host_id=urn:uuid:<installation_id>` in the URL and OpenAI's consent screen names Kopi; `kopi logout openai-codex`, then a run suggests `kopi login`. For background tasks: ask for `sleep 30; echo done` with Bash, press Ctrl+B while it runs, and see `1 shell` in the status line, the `• task t1 finished` row when it ends and the model's reply without a prompt; `/tasks` lists and stops a task; after quitting, `pgrep sleep` finds nothing.
 
 ## Not implemented
 
-Project-level config, loading project instruction files, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approval classification, delegation and workflows, background jobs, a Kopi provider identity, and release packaging and self-update.
+Project-level config, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approval classification, delegation and workflows, a Kopi provider identity, domain rules for `WebFetch`, PDF and image pages, and release packaging and self-update.
 
 MCP: OAuth for remote servers, the SSE transport, resources and prompts, `tools/list_changed`, image results, sandboxing servers or giving them a restricted environment, and a command or flag to set or change a folder's trust.
 

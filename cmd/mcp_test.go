@@ -57,6 +57,19 @@ func TestMCPListWithoutServers(t *testing.T) {
 	assert.Equal(t, before, pigruntimetest.Snapshot(t, e.root))
 }
 
+func TestMCPListIgnoresInstructionFiles(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.workspace, "AGENTS.md"), "project rule")
+	before := pigruntimetest.Snapshot(t, e.root)
+
+	stdout, stderr, err := execute(t, "", "mcp", "list")
+
+	require.NoError(t, err)
+	assert.Equal(t, "No MCP servers configured: declare them under mcpServers in "+filepath.Join(e.kopiHome, "config.json")+" or in .mcp.json in this folder.\n", stdout)
+	assert.NotContains(t, stderr, "not trusted")
+	assert.Equal(t, before, pigruntimetest.Snapshot(t, e.root), "no trust.json is created")
+}
+
 func TestMCPListWithUnreadableProjectFile(t *testing.T) {
 	e := newTestEnv(t)
 	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), `{"mcpServers":`)
