@@ -672,3 +672,19 @@ func TestPlanRefusesAskExecButAsksAboutAskRead(t *testing.T) {
 	require.NoError(t, g.Before(t.Context(), "c2", "mcp__s__read", nil))
 	assert.Equal(t, []Request{{CallID: "c2", Tool: "mcp__s__read"}}, f.reqs)
 }
+
+func TestAllowEditsGrantCoversEveryGateOnTheAuthority(t *testing.T) {
+	f := &approver{answer: AllowEdits}
+	a, first := newTestGate(nil, f.approve)
+	second := NewGate(a, testSpecs, nil, f.approve, nil)
+	a.EnterExecute()
+
+	require.NoError(t, first.Before(t.Context(), "c1", "Edit", pathArgs("/x")))
+	require.Len(t, f.reqs, 1)
+	require.NoError(t, second.Before(t.Context(), "c2", "Edit", pathArgs("/y")))
+	assert.Len(t, f.reqs, 1, "the grant given through one gate covers the other")
+
+	a.ClearEdits()
+	require.NoError(t, second.Before(t.Context(), "c3", "Edit", pathArgs("/z")))
+	assert.Len(t, f.reqs, 2)
+}

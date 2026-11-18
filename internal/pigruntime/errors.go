@@ -14,6 +14,8 @@ var (
 	ErrNoTurn          = errors.New("no turn in progress")
 	ErrNoAnswer        = errors.New("model returned no text")
 	ErrNoSearch        = errors.New("model has no web search")
+	ErrUnknownEffort   = errors.New("unknown effort")
+	ErrParentResume    = errors.New("a session with a parent cannot resume or continue")
 
 	ErrServerStartTimeout = errors.New("MCP server did not start in time")
 	ErrServerNameClash    = errors.New("MCP server names give the same tool names")

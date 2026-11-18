@@ -21,11 +21,17 @@ const (
 // TaskInfo describes a background task. Started is when its command started,
 // also for one moved from the foreground; Ended is zero while it runs.
 type TaskInfo struct {
-	ID, Command    string
+	ID string
+	// Command is the shell command, or the description of an agent call.
+	Command string
+	// Agent is the name of the agent running an agent task, "" for a command.
+	Agent          string
 	Started, Ended time.Time
 	Status         TaskStatus
 	// Reason is why the task completed or failed, "" while running or stopped.
 	Reason string
+	// Result is the final message of a completed agent run.
+	Result string
 	Output string
 }
 
@@ -36,6 +42,9 @@ func (i TaskInfo) StatusText() string {
 	case TaskStopped:
 		return string(i.Status)
 	default:
+		if i.Reason == "" {
+			return string(i.Status)
+		}
 		return fmt.Sprintf("%s (%s)", i.Status, i.Reason)
 	}
 }
@@ -48,7 +57,8 @@ type Moved struct {
 }
 
 // Tasks runs commands in the foreground, moves them to the background at a
-// timeout or on Detach, and tracks the background ones.
+// timeout or on Detach, and tracks the background ones and the agent tasks its
+// callers start.
 type Tasks struct {
 	mu           sync.Mutex
 	next         int
@@ -60,9 +70,11 @@ type Tasks struct {
 }
 
 type task struct {
-	id, command string
-	started     time.Time
-	p           *process
+	id, command, agent string
+	started            time.Time
+	// p is a command's process; an agent task has a instead.
+	p *process
+	a *agentJob
 	// ready closes once a task's start has returned, setting p on
 	// success.
 	ready chan struct{}
@@ -72,6 +84,28 @@ type task struct {
 	watched chan struct{}
 	// Guarded by Tasks.mu.
 	detached, stopped, forgotten bool
+}
+
+// job is what the registry needs from a running command or agent run.
+type job interface {
+	finished() <-chan struct{}
+	stop(reason error)
+	text() string
+	outcome() jobOutcome
+}
+
+// jobOutcome is a job's state; started is set only when the job owns it.
+type jobOutcome struct {
+	started, ended time.Time
+	status         TaskStatus
+	reason, result string
+}
+
+func (t *task) job() job {
+	if t.p != nil {
+		return t.p
+	}
+	return t.a
 }
 
 func NewTasks() *Tasks {
@@ -209,7 +243,8 @@ func (m *Tasks) adopt(t *task) TaskInfo {
 	t.id = fmt.Sprintf("t%d", m.next)
 	t.watched = make(chan struct{})
 	m.tasks = append(m.tasks, t)
-	return t.report(false)
+	// Running whatever the process's state: watch reports its end.
+	return TaskInfo{ID: t.id, Command: t.command, Started: t.started, Status: TaskRunning, Output: t.p.text()}
 }
 
 func (m *Tasks) watch(t *task) {
@@ -220,7 +255,7 @@ func (m *Tasks) watch(t *task) {
 	f := m.onChange
 	m.mu.Unlock()
 	if !forgotten && f != nil {
-		f(t.report(true))
+		f(t.report())
 	}
 }
 
@@ -250,7 +285,7 @@ func (m *Tasks) List() []TaskInfo {
 	defer m.mu.Unlock()
 	infos := make([]TaskInfo, 0, len(m.tasks))
 	for _, t := range m.tasks {
-		infos = append(infos, t.info(ended(t.p)))
+		infos = append(infos, t.info())
 	}
 	return infos
 }
@@ -260,24 +295,37 @@ func (m *Tasks) Output(id string) (TaskInfo, error) {
 	if err != nil {
 		return TaskInfo{}, err
 	}
-	return t.report(ended(t.p)), nil
+	return t.report(), nil
 }
 
-// Stop kills the task's process group and returns its final info; on a task
-// that has already ended it only returns that.
+// Stop kills the task's process group, or asks an agent task to stop, and
+// returns its final info once the task has ended; on a task that has already
+// ended it only returns that.
 func (m *Tasks) Stop(id string) (TaskInfo, error) {
 	t, err := m.find(id)
 	if err != nil {
 		return TaskInfo{}, err
 	}
+	if t.a != nil {
+		run, stop := t.a.selectStop()
+		if stop != nil {
+			stop()
+		}
+		<-run.done
+		info := t.infoOutcome(run.outcome())
+		info.Output = t.a.text()
+		return info, nil
+	}
+	done := t.p.finished()
 	t.p.stop(ErrStopped)
-	<-t.p.done
-	return t.report(true), nil
+	<-done
+	return t.report(), nil
 }
 
-// StopAll stops every pending, foreground and background command, waits for
-// them, and forgets the background tasks without reporting their end: when it
-// returns, no ended call to the OnChange callback for them is still running.
+// StopAll stops every pending, foreground and background command and agent
+// task, waits for them, and forgets the background tasks without reporting
+// their end: when it returns, no ended call to the OnChange callback for them
+// is still running, and End and Run of a forgotten agent task report false.
 func (m *Tasks) StopAll() {
 	m.mu.Lock()
 	fg := make([]*task, 0, len(m.fg))
@@ -303,7 +351,7 @@ func (m *Tasks) StopAll() {
 		}
 	}
 	for _, t := range bg {
-		t.p.stop(ErrStopped)
+		t.job().stop(ErrStopped)
 	}
 	for _, t := range pending {
 		<-t.ready
@@ -318,7 +366,7 @@ func (m *Tasks) StopAll() {
 		}
 	}
 	for _, t := range bg {
-		<-t.p.done
+		<-t.job().finished()
 		<-t.watched
 	}
 }
@@ -335,32 +383,24 @@ func (m *Tasks) find(id string) (*task, error) {
 }
 
 // report is info with the task's output.
-func (t *task) report(done bool) TaskInfo {
-	info := t.info(done)
-	info.Output = t.p.out.String()
+func (t *task) report() TaskInfo {
+	info := t.info()
+	info.Output = t.job().text()
 	return info
 }
 
-// info reads the process's outcome only when done says it has ended. It
-// leaves Output empty.
-func (t *task) info(done bool) TaskInfo {
-	info := TaskInfo{ID: t.id, Command: t.command, Started: t.started, Status: TaskRunning}
-	if !done {
-		return info
+// info leaves Output empty.
+func (t *task) info() TaskInfo {
+	return t.infoOutcome(t.job().outcome())
+}
+
+func (t *task) infoOutcome(o jobOutcome) TaskInfo {
+	info := TaskInfo{
+		ID: t.id, Command: t.command, Agent: t.agent, Started: t.started,
+		Ended: o.ended, Status: o.status, Reason: o.reason, Result: o.result,
 	}
-	info.Ended = t.p.ended
-	var exitStatus *exec.ExitError
-	switch {
-	case t.p.reason != nil:
-		info.Status = TaskStopped
-	case t.p.err != nil:
-		info.Status, info.Reason = TaskFailed, t.p.err.Error()
-	case t.p.exit == nil:
-		info.Status, info.Reason = TaskCompleted, "exit code 0"
-	case errors.As(t.p.exit, &exitStatus):
-		info.Status, info.Reason = TaskFailed, exitReason(exitStatus)
-	default:
-		info.Status, info.Reason = TaskFailed, fmt.Sprintf("failed to run command: %v", t.p.exit)
+	if !o.started.IsZero() {
+		info.Started = o.started
 	}
 	return info
 }
@@ -372,4 +412,161 @@ func ended(p *process) bool {
 	default:
 		return false
 	}
+}
+
+func (p *process) finished() <-chan struct{} { return p.done }
+
+func (p *process) text() string { return p.out.String() }
+
+func (p *process) outcome() jobOutcome {
+	if !ended(p) {
+		return jobOutcome{status: TaskRunning}
+	}
+	o := jobOutcome{ended: p.ended}
+	var exitStatus *exec.ExitError
+	switch {
+	case p.reason != nil:
+		o.status = TaskStopped
+	case p.err != nil:
+		o.status, o.reason = TaskFailed, p.err.Error()
+	case p.exit == nil:
+		o.status, o.reason = TaskCompleted, "exit code 0"
+	case errors.As(p.exit, &exitStatus):
+		o.status, o.reason = TaskFailed, exitReason(exitStatus)
+	default:
+		o.status, o.reason = TaskFailed, fmt.Sprintf("failed to run command: %v", p.exit)
+	}
+	return o
+}
+
+// agentJob is the state of an agent task, which its owner ends. Guarded by mu,
+// which is never held while calling stopFn or taking Tasks.mu.
+type agentJob struct {
+	mu  sync.Mutex
+	out *outputBuffer
+	*agentRun
+}
+
+// agentRun is retained by a stop until that selected run has ended.
+type agentRun struct {
+	done           chan struct{}
+	stopFn         func()
+	running        bool
+	stopped        bool
+	started, ended time.Time
+	status         TaskStatus
+	reason, result string
+}
+
+func (j *agentJob) finished() <-chan struct{} {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.done
+}
+
+// stop asks the owner to stop a running run, once per run.
+func (j *agentJob) stop(error) {
+	_, f := j.selectStop()
+	if f != nil {
+		f()
+	}
+}
+
+func (j *agentJob) selectStop() (*agentRun, func()) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	run := j.agentRun
+	if !run.running || run.stopped {
+		return run, nil
+	}
+	run.stopped = true
+	return run, run.stopFn
+}
+
+func (j *agentJob) text() string { return j.out.String() }
+
+func (j *agentJob) outcome() jobOutcome {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.agentRun.outcome()
+}
+
+func (j *agentRun) outcome() jobOutcome {
+	if j.running {
+		return jobOutcome{started: j.started, status: TaskRunning}
+	}
+	return jobOutcome{started: j.started, ended: j.ended, status: j.status, reason: j.reason, result: j.result}
+}
+
+// AgentTask is a task in a Tasks registry that its owner starts and ends.
+type AgentTask struct {
+	m *Tasks
+	t *task
+}
+
+// StartAgent registers a running agent task under the shared id counter; stop
+// asks the owner to end the run. OnChange is never called for an agent task:
+// its owner reports it.
+func (m *Tasks) StartAgent(agent, description string, stop func()) *AgentTask {
+	j := &agentJob{out: &outputBuffer{}, agentRun: &agentRun{done: make(chan struct{}), stopFn: stop, running: true, started: time.Now()}}
+	watched := make(chan struct{})
+	close(watched)
+	t := &task{command: description, agent: agent, a: j, watched: watched}
+	m.mu.Lock()
+	m.next++
+	t.id = fmt.Sprintf("t%d", m.next)
+	m.tasks = append(m.tasks, t)
+	m.mu.Unlock()
+	return &AgentTask{m: m, t: t}
+}
+
+func (a *AgentTask) ID() string { return a.t.id }
+
+// Write appends to the task's output, which is kept across runs.
+func (a *AgentTask) Write(p []byte) (int, error) { return a.t.a.out.Write(p) }
+
+// Run starts another run of an ended task: running again, Started now, Ended
+// and Result cleared. It reports false for a task that is still running or
+// that StopAll forgot.
+func (a *AgentTask) Run(stop func()) bool {
+	a.m.mu.Lock()
+	defer a.m.mu.Unlock()
+	if a.t.forgotten {
+		return false
+	}
+	j := a.t.a
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.running {
+		return false
+	}
+	j.agentRun = &agentRun{done: make(chan struct{}), stopFn: stop, running: true, started: time.Now()}
+	return true
+}
+
+// End records how the current run ended and returns the task as it then is. A
+// run that was stopped ends as TaskStopped whatever status is passed. It
+// reports false once StopAll forgot the task, in which case nothing may be
+// reported for it, and for a task that is not running.
+func (a *AgentTask) End(status TaskStatus, reason, result string) (TaskInfo, bool) {
+	a.m.mu.Lock()
+	forgotten := a.t.forgotten
+	j := a.t.a
+	j.mu.Lock()
+	if !j.running {
+		j.mu.Unlock()
+		a.m.mu.Unlock()
+		return TaskInfo{}, false
+	}
+	if j.stopped || status == TaskStopped {
+		status, reason, result = TaskStopped, "", ""
+	}
+	j.running = false
+	j.ended, j.status, j.reason, j.result = time.Now(), status, reason, result
+	close(j.done)
+	info := a.t.infoOutcome(j.agentRun.outcome())
+	j.mu.Unlock()
+	a.m.mu.Unlock()
+	info.Output = j.text()
+	return info, !forgotten
 }

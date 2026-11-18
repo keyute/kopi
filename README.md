@@ -44,6 +44,7 @@ Shift+Tab or `/execute` switches from plan to execute mode.
 - [MCP servers](docs/mcp.md)
 - [Trust and instructions](docs/trust.md): folder trust, `AGENTS.md`
 - [Skills](docs/skills.md)
+- [Subagents](docs/subagents.md)
 
 ## Contributing
 

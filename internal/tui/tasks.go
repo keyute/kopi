@@ -189,15 +189,20 @@ func (t *taskDialog) tail(limit, width int, th theme) []string {
 	return append([]string{hang("  ", fg(th.dim), more, fg(th.dim), width)[0]}, t.out[len(t.out)-limit+1:]...)
 }
 
-// taskLine is "t1 · running · 1m 2s · <command's first line>": the time is
-// since the start while running, else the whole run.
+// taskLine is "t1 · running · 1m 2s · <command's first line>", an agent's
+// command shown as "<agent> › <description>": the time is since the start
+// while running, else the whole run.
 func taskLine(info tool.TaskInfo) string {
 	end := info.Ended
 	if info.Status == tool.TaskRunning {
 		end = time.Now()
 	}
 	command, _, _ := strings.Cut(info.Command, "\n")
-	return oneLine(info.ID) + " · " + string(info.Status) + " · " + formatDuration(end.Sub(info.Started)) + " · " + oneLine(command)
+	what := oneLine(command)
+	if info.Agent != "" {
+		what = oneLine(info.Agent) + " › " + what
+	}
+	return oneLine(info.ID) + " · " + string(info.Status) + " · " + formatDuration(end.Sub(info.Started)) + " · " + what
 }
 
 func cut(s string, width int) string { return ansi.Truncate(s, max(1, width), "…") }

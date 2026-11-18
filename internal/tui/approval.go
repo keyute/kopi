@@ -34,6 +34,9 @@ func approvalOptions(a *event.ApprovalRequested, km *keyMap) []approvalOption {
 // approvalOptions as its options, the reject option taking a reason.
 func newApprovalDialog(a *event.ApprovalRequested, km *keyMap, th theme) *dialog {
 	d := &dialog{title: a.Title}
+	if a.Agent != "" {
+		d.title = a.Agent + " " + a.TaskID + " › " + a.Title
+	}
 	switch {
 	case a.Rule != "":
 		d.note = "asked by " + a.Rule

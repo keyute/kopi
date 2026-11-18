@@ -32,6 +32,7 @@ import (
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/sandbox"
 	"github.com/keyute/kopi/internal/skill"
+	"github.com/keyute/kopi/internal/subagent"
 	"github.com/keyute/kopi/internal/tool"
 	"github.com/keyute/kopi/internal/trust"
 	"github.com/keyute/kopi/internal/tui"
@@ -126,8 +127,8 @@ func permissionRules(cwd, home string, tools []tool.Tool, perms config.Permissio
 		{Name: origins["permissions.ask"], Ask: perms.Ask},
 		{Name: origins["permissions.deny"], Deny: perms.Deny},
 	}
-	// ToolSearch, Skill and WebSearch are known to rules even when the session lacks them.
-	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil), tool.NewSkill(nil, ""), tool.NewWebSearch(nil)}))
+	// ToolSearch, Skill, WebSearch, Agent and SendMessage are known to rules even when the session lacks them.
+	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil), tool.NewSkill(nil, ""), tool.NewWebSearch(nil), tool.NewAgent(nil, nil), tool.NewSendMessage(nil)}))
 	rules, err := policy.NewRules(cwd, home, specs, append(sources, flagRules...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load permission rules: %w", err)
@@ -378,11 +379,25 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// rules is set below; the search tools consult it only when they run.
 	var rules *policy.Rules
 	hidden := func(name string, root, t policy.Target) bool { return rules.Hides(name, root, t) }
+	shell, planShell := tool.NewShell(cwd, sb), tool.NewShell(cwd, planSB)
 	tools := []tool.Tool{
 		tool.NewRead(ws), tool.NewGlob(ws, hidden), tool.NewGrep(ws, hidden), tool.NewLS(ws, hidden),
-		tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb), tool.NewShell(cwd, planSB), tasks),
+		tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(shell, planShell, tasks),
 		tool.NewTaskOutput(tasks), tool.NewTaskStop(tasks),
 		tool.NewWebFetch("Kopi/"+kopiVersion(), answer),
+	}
+	// A subagent can have every built-in the root can, whether or not this run
+	// offers it, except the tools of the shared task registry.
+	taskToolNames := []string{"TaskOutput", "TaskStop"}
+	var subagentTools []string
+	for _, t := range slices.Concat(tools, []tool.Tool{tool.NewWebSearch(nil), tool.NewSkill(nil, "")}) {
+		if !slices.Contains(taskToolNames, t.Name) {
+			subagentTools = append(subagentTools, t.Name)
+		}
+	}
+	agents, err := subagent.Load(paths.AgentsDir, subagentTools)
+	if err != nil {
+		return err
 	}
 	rules, err = permissionRules(cwd, userHome, tools, resolved.Config.Permissions, resolved.Origins, flagRules)
 	if err != nil {
@@ -412,7 +427,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			rt.Close()
 		}
 	}()
-	checkModel := func(key, ref string) error {
+	checkModel := func(ref, origin string) error {
 		err := rt.Check(startCtx, pigruntime.OpenOptions{Model: ref})
 		if err == nil || fullscreen && sameProviderNoCredential(err, model, ref) {
 			return nil
@@ -420,21 +435,33 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		if errors.Is(err, pigruntime.ErrNoCredential) {
 			providers, listErr := rt.Providers(ctx)
 			if listErr != nil {
-				err = errors.Join(err, listErr)
-			} else {
-				err = diagnose(err, ref, resolved.Origins[key], paths, app.OpenRequest{}, providers)
+				return errors.Join(err, listErr)
 			}
+			return diagnose(err, ref, origin, paths, app.OpenRequest{}, providers)
 		}
-		return fmt.Errorf("failed to use %q in %s: %w", key, paths.ConfigFile, err)
+		return err
 	}
 	if resolved.Config.SmallModel != "" {
-		if err := checkModel("smallModel", smallModel); err != nil {
-			return err
+		if err := checkModel(smallModel, resolved.Origins["smallModel"]); err != nil {
+			return fmt.Errorf("failed to use %q in %s: %w", "smallModel", paths.ConfigFile, err)
 		}
 	}
 	if classifierOn && resolved.Config.Classifier.Model != "" {
-		if err := checkModel("classifier.model", classifierModel); err != nil {
-			return err
+		if err := checkModel(classifierModel, resolved.Origins["classifier.model"]); err != nil {
+			return fmt.Errorf("failed to use %q in %s: %w", "classifier.model", paths.ConfigFile, err)
+		}
+	}
+	for _, def := range agents {
+		if def.Effort != "" {
+			if _, err := pigruntime.ParseEffort(def.Effort); err != nil {
+				return fmt.Errorf("failed to use effort in %s: %w", def.Path, err)
+			}
+		}
+		if def.Model == "" {
+			continue
+		}
+		if err := checkModel(def.Model, ""); err != nil {
+			return fmt.Errorf("failed to use model %q in %s: %w", def.Model, def.Path, err)
 		}
 	}
 	if rt.CanSearch(smallModel) {
@@ -456,6 +483,17 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		Model: model, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
 		Errors: slices.Concat(set.errs, instructionErrs, skillErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review,
 		Skills: skills, SkillPrefix: resolved.Config.Skills.Prefix,
+	}
+	if len(agents) > 0 {
+		cfg.Agents = agents
+		for _, t := range tools {
+			switch t.Name {
+			case "Bash":
+				cfg.AgentTools = append(cfg.AgentTools, tool.NewBash(shell, planShell, nil))
+			default:
+				cfg.AgentTools = append(cfg.AgentTools, t)
+			}
+		}
 	}
 	if len(set.servers) > 0 {
 		cfg.Servers = func(ctx context.Context) ([]pigruntime.ServerStatus, error) { return waitServers(ctx, servers) }

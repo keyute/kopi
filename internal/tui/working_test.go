@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/event"
 )
 
@@ -74,6 +76,90 @@ func TestWorkingRowShowsActivity(t *testing.T) {
 		assert.Equal(t, idle, m.transcriptHeight())
 		_, cmd = m.Update(m.spinner.Tick())
 		require.Nil(t, cmd, "ticking stops once the activity ends")
+	})
+}
+
+func TestWorkingRowWaitsOnBackgroundWork(t *testing.T) {
+	for _, tc := range []struct {
+		agents, shells int
+		want           string
+	}{
+		{1, 0, "Waiting on 1 agent… 0s"},
+		{2, 0, "Waiting on 2 agents… 0s"},
+		{0, 1, "Waiting on 1 shell… 0s"},
+		{0, 3, "Waiting on 3 shells… 0s"},
+		{1, 1, "Waiting on 1 agent, 1 shell… 0s"},
+		{2, 1, "Waiting on 2 agents, 1 shell… 0s"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				m, c := newTestModel(t, 60, 20)
+				c.status.Agents, c.status.Shells = tc.agents, tc.shells
+				send(m, event.TasksChanged{})
+				s := screen(m)
+				assert.Equal(t, "⠋ "+tc.want, s[len(s)-6])
+			})
+		})
+	}
+}
+
+func TestWorkingRowWaitingCountsFromWhenItBegan(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTestModel(t, 60, 20)
+		idle := m.transcriptHeight()
+		working := func() string { s := screen(m); return s[len(s)-6] }
+
+		c.status.Agents = 1
+		send(m, event.TasksChanged{})
+		assert.Equal(t, idle-busyRows, m.transcriptHeight())
+		time.Sleep(30 * time.Second)
+		c.status.Agents, c.status.Shells = 2, 1
+		send(m, event.TasksChanged{})
+		assert.Equal(t, "⠋ Waiting on 2 agents, 1 shell… 30s", working(), "a count change keeps the clock")
+
+		send(m, event.TurnStart{Prompt: "go"})
+		assert.Equal(t, "⠋ Working… 0s", working(), "the turn's text wins while busy")
+		time.Sleep(10 * time.Second)
+		c.status = app.Status{Agents: 1}
+		send(m, event.TurnEnd{})
+		assert.Equal(t, "⠋ Waiting on 1 agent… 0s", working(), "the clock restarts after the turn")
+
+		c.status = app.Status{}
+		send(m, event.TasksChanged{})
+		assert.Equal(t, idle, m.transcriptHeight())
+		_, cmd := m.Update(m.spinner.Tick())
+		require.Nil(t, cmd, "ticking stops with the last task")
+	})
+}
+
+func TestWorkingRowActivityWinsOverWaiting(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTestModel(t, 60, 20)
+		working := func() string { s := screen(m); return s[len(s)-6] }
+		c.status.Agents = 1
+		send(m, event.TasksChanged{})
+		time.Sleep(20 * time.Second)
+
+		send(m, event.Activity{Text: "Connecting to MCP servers…"})
+		assert.Equal(t, "⠋ Connecting to MCP servers…", working())
+
+		send(m, event.Activity{})
+		assert.Equal(t, "⠋ Waiting on 1 agent… 20s", working(), "the clock kept running")
+	})
+}
+
+func TestWorkingRowApprovalWinsWhileIdle(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTestModel(t, 60, 30)
+		c.status.Agents = 1
+		send(m, event.TasksChanged{})
+
+		send(m, event.ApprovalRequested{Token: 1, Title: "Edit a.go", Agent: "explore", TaskID: "t1"})
+		assert.Contains(t, screen(m), "⠋ Waiting for you…")
+		assert.NotContains(t, strings.Join(screen(m), "\n"), "Waiting on")
+
+		send(m, event.ApprovalEnded{Token: 1})
+		assert.Contains(t, screen(m), "⠋ Waiting on 1 agent… 0s")
 	})
 }
 

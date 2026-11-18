@@ -394,7 +394,7 @@ func TestStatusRefreshesOnEventsThatChangeIt(t *testing.T) {
 	send(m, event.ModeChanged{Mode: policy.Execute})
 	assert.Equal(t, "  model-1 · main"+strings.Repeat(" ", 15)+"execute", last())
 
-	c.status.Tasks = 2
+	c.status.Shells = 2
 	send(m, event.TasksChanged{})
 	assert.Equal(t, "  model-1 · main"+strings.Repeat(" ", 4)+"2 shells · execute", last())
 }
@@ -1095,7 +1095,6 @@ func TestApprovalClipboardCompletionAfterTransitionIsDiscarded(t *testing.T) {
 		{"approval ended", event.ApprovalEnded{Token: 1}},
 		{"turn ended", event.TurnEnd{}},
 		{"session changed", event.SessionChanged{SessionID: "s2"}},
-		{"replacement approval", event.ApprovalRequested{Token: 2, Title: "Edit b.go", Edits: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _ := newTestModel(t, 60, 30)
@@ -1122,6 +1121,85 @@ func TestApprovalClipboardCompletionAfterTransitionIsDiscarded(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestApprovalClipboardCompletionAfterPromotionIsDiscarded(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	m.clip = &fakeClipboard{text: "stale clipboard"}
+	send(m, editApproval(), subagentAsk(2, "explore"))
+	press(m, digit('3'))
+	keys(m, "feedback")
+	oldField := m.dialog.field()
+	cmd := press(m, ctrlV)
+	require.NotNil(t, cmd)
+
+	send(m, event.ApprovalEnded{Token: 1})
+	require.Equal(t, uint64(2), m.approval.Token)
+	press(m, digit('3'))
+	m.Update(cmd())
+
+	assert.Equal(t, "feedback", oldField.value())
+	assert.Empty(t, m.dialog.text(), "the promoted ask's reason field is unchanged")
+}
+
+func subagentAsk(token uint64, agent string) event.ApprovalRequested {
+	return event.ApprovalRequested{Token: token, Title: "Edit " + agent + ".go", Agent: agent, TaskID: fmt.Sprintf("t%d", token)}
+}
+
+func TestApprovalQueuePromotesInOrder(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	send(m, editApproval(), subagentAsk(2, "explore"), subagentAsk(3, "review"))
+	assert.Equal(t, uint64(1), m.approval.Token)
+	assert.Contains(t, strings.Join(screen(m), "\n"), "Edit a.go")
+
+	send(m, event.ApprovalEnded{Token: 1})
+	assert.Equal(t, uint64(2), m.approval.Token)
+	assert.Contains(t, strings.Join(screen(m), "\n"), "explore t2 › Edit explore.go")
+	press(m, enter)
+	assert.Equal(t, []answer{{2, policy.Decision{Answer: policy.Allow}}}, c.answers, "answers use the shown ask's token")
+
+	send(m, event.ApprovalEnded{Token: 2})
+	assert.Equal(t, uint64(3), m.approval.Token)
+	send(m, event.ApprovalEnded{Token: 3})
+	assert.Nil(t, m.approval)
+	assert.Nil(t, m.dialog)
+}
+
+func TestApprovalQueueEndOfAQueuedAskRemovesIt(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	send(m, editApproval(), subagentAsk(2, "explore"), subagentAsk(3, "review"))
+
+	send(m, event.ApprovalEnded{Token: 2})
+	assert.Equal(t, uint64(1), m.approval.Token)
+	send(m, event.ApprovalEnded{Token: 1})
+	assert.Equal(t, uint64(3), m.approval.Token)
+}
+
+func TestApprovalQueueRootTurnEndKeepsSubagentAsks(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	send(m, editApproval(), subagentAsk(2, "explore"))
+	send(m, event.TurnEnd{})
+	assert.Equal(t, uint64(2), m.approval.Token, "the root's ask is dropped and the subagent's is shown")
+	assert.Contains(t, strings.Join(screen(m), "\n"), "explore t2 › Edit explore.go")
+
+	send(m, event.TurnEnd{})
+	assert.Equal(t, uint64(2), m.approval.Token)
+
+	m, _ = newTestModel(t, 60, 30)
+	send(m, subagentAsk(2, "explore"), editApproval())
+	send(m, event.TurnEnd{})
+	assert.Equal(t, uint64(2), m.approval.Token)
+	send(m, event.ApprovalEnded{Token: 2})
+	assert.Nil(t, m.approval, "the queued root ask was dropped")
+}
+
+func TestApprovalQueueSessionChangeClearsAll(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	send(m, editApproval(), subagentAsk(2, "explore"))
+	send(m, event.SessionChanged{SessionID: "s2"})
+	assert.Nil(t, m.approval)
+	assert.Nil(t, m.dialog)
+	assert.Empty(t, m.approvalQueue)
 }
 
 func TestApprovalClipboardCompletionAfterLeavingFieldIsDiscarded(t *testing.T) {

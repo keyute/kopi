@@ -16,6 +16,7 @@ import (
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/skill"
+	"github.com/keyute/kopi/internal/subagent"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -63,6 +64,13 @@ type Config struct {
 	// Classifier reviews the calls that would otherwise ask; nil means none
 	// are reviewed.
 	Classifier *classifier.Classifier
+	// Agents are the subagents the model can start; none means there is no
+	// Agent or SendMessage tool.
+	Agents []subagent.Definition
+	// AgentTools are the tools a subagent may have, besides the MCP servers'
+	// tools; Agent, SendMessage, TaskOutput, TaskStop and ToolSearch are never
+	// given to one.
+	AgentTools []tool.Tool
 }
 
 const maxReferenceEntries = 10000
@@ -82,6 +90,8 @@ type Controller struct {
 	// first session and not changed after.
 	tools  []tool.Tool
 	prompt []pigruntime.PromptPart
+	// agents are the subagents' tools and prompts, set with tools.
+	agents []agentSpec
 	// skills is what users can type; skillErrs reports the skills it left out.
 	skills    *skill.Set
 	skillErrs []error
@@ -116,6 +126,15 @@ type Controller struct {
 	// hold, guarded by queue, keeps notices from waking the model after an
 	// Interrupt until a human prompt starts a turn.
 	hold bool
+	// children are the subagents of the current session by task id, and live
+	// counts the running ones; both are guarded by queue.
+	children map[string]*child
+	live     int
+	// changed closes, and is replaced, whenever a turn starts or ends or a
+	// subagent's run ends; queue guards it.
+	changed chan struct{}
+	// followers retain turns only for frontends that consume their results.
+	followers map[*WorkQueue]struct{}
 
 	mu     sync.Mutex
 	sess   *pigruntime.Session
@@ -131,11 +150,13 @@ type Controller struct {
 	closed  bool
 	turn    *Work
 	turnSeq int
-	// approval is the call waiting for Answer; nil when none is.
-	approval    *pendingApproval
+	// approvals are the calls waiting for Answer, oldest first.
+	approvals   []*pendingApproval
 	approvalSeq uint64
-	// login is the running login; nil when none is. A login and a turn never
-	// run together: each is refused while the other is registered.
+	// login is the running login; nil when none is. A login and a turn or a
+	// running subagent never run together: each is refused while the other is
+	// registered. The login's questions and an approval would otherwise share
+	// the one dialog the frontend has.
 	login    *loginRun
 	loginSeq uint64
 	// deferred is the first open that Start put off for a login; cleared once
@@ -202,6 +223,13 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 		servers = append(servers, server)
 	}
 	tools := slices.Clone(c.cfg.Tools)
+	if len(c.cfg.Agents) > 0 && !c.cfg.Rules.Removes("Agent") {
+		launcher := agentLauncher{c}
+		tools = append(tools, tool.NewAgent(c.cfg.Agents, launcher))
+		if send := tool.NewSendMessage(launcher); !c.cfg.Rules.Removes(send.Name) {
+			tools = append(tools, send)
+		}
+	}
 	if len(serverTools) > 0 {
 		search := tool.NewToolSearch(serverTools, pigruntime.RankTools, pigruntime.LoadTools)
 		if c.cfg.Rules.Removes(search.Name) {
@@ -216,7 +244,8 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	}
 	tools = append(tools, serverTools...)
 	c.tools = tools
-	c.prompt = systemPrompt(c.cfg.Workspace, c.tools, c.cfg.Instructions, servers, c.cfg.Classifier != nil)
+	c.prompt = buildPrompt(c.cfg.Workspace, c.tools, c.cfg.Instructions, servers, c.cfg.Classifier != nil, nil)
+	c.agents = c.buildAgents(serverTools, servers)
 	return events
 }
 
@@ -566,6 +595,14 @@ func (c *Controller) Spans(text string) []Span {
 	return Spans(text, c.skills)
 }
 
+// signalLocked must be called with queue held.
+func (c *Controller) signalLocked() {
+	if c.changed != nil {
+		close(c.changed)
+		c.changed = nil
+	}
+}
+
 // Interrupt requests abort of the running root turn or of a running login,
 // without waiting for it, and reports whether there was one. Input still queued
 // is handed back in the turn's TurnEnd.Unsent; task notices are not, and wait
@@ -593,9 +630,7 @@ func (c *Controller) stop(w *Work, emit func(event.Event)) {
 	w.handBack = append(w.handBack, c.take(emit)...)
 	w.stopped = true
 	c.mu.Lock()
-	if c.approval != nil && c.approval.work == w {
-		c.approval = nil
-	}
+	c.approvals = slices.DeleteFunc(c.approvals, func(p *pendingApproval) bool { return p.work == w })
 	c.mu.Unlock()
 	w.cancel()
 }
@@ -657,7 +692,11 @@ func (c *Controller) Status() Status {
 	}
 	for _, info := range c.cfg.Tasks.List() {
 		if info.Status == tool.TaskRunning {
-			s.Tasks++
+			if info.Agent != "" {
+				s.Agents++
+			} else {
+				s.Shells++
+			}
 		}
 	}
 	s.Foreground = c.cfg.Tasks.Foreground()
@@ -679,6 +718,7 @@ func (c *Controller) Close(ctx context.Context) error {
 	c.mu.Lock()
 	c.closed = true
 	c.notices = nil
+	c.approvals = nil
 	sess, unsubscribe, w, emit, login := c.sess, c.unsubscribe, c.turn, c.emit, c.login
 	if login != nil {
 		login.cancel()
@@ -731,6 +771,7 @@ func (c *Controller) Close(ctx context.Context) error {
 			return err
 		}
 	}
+	c.closeChildren()
 	unsubscribe()
 	c.mu.Lock()
 	c.sess, c.sessID, c.emit, c.unsubscribe = nil, "", nil, nil
@@ -776,9 +817,13 @@ func (c *Controller) startTurn(ctx context.Context, parts []pigruntime.Prompt) *
 	// send.
 	base := context.WithoutCancel(ctx)
 	sendCtx, cancel := context.WithCancel(base)
+	c.signalLocked()
 	c.turnSeq++
 	w := &Work{id: fmt.Sprintf("turn-%d", c.turnSeq), sendCtx: sendCtx, cancel: cancel, done: make(chan struct{})}
 	c.turn = w
+	for q := range c.followers {
+		q.works = append(q.works, w)
+	}
 	c.mu.Unlock()
 
 	emit(event.TurnStart{WorkID: w.id, Prompt: joined(parts).Text})
@@ -816,7 +861,7 @@ func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session
 		}
 		// A failed or unsent send never continues for notices alone, so a
 		// failing provider cannot be woken in a loop.
-		wake := !w.stopped && c.cfg.Wake && (cancelled || res.Outcome.Status == event.Completed && res.Sent) && c.waking()
+		wake := !w.stopped && (cancelled || res.Outcome.Status == event.Completed && res.Sent) && c.waking()
 		if len(next) > 0 || wake {
 			ctx, w.cancel = context.WithCancel(base)
 			w.sendCtx = ctx
@@ -860,7 +905,7 @@ func (c *Controller) pull(ctx context.Context, emit func(event.Event)) func() ([
 			return nil, nil
 		}
 		prompts := c.take(emit)
-		if len(prompts) == 0 && (!c.cfg.Wake || !c.waking()) {
+		if len(prompts) == 0 && !c.waking() {
 			return nil, nil
 		}
 		return prompts, c.takeNotices()
@@ -877,6 +922,7 @@ func (c *Controller) finish(base context.Context, w *Work, emit func(event.Event
 	c.mu.Lock()
 	if c.turn == w {
 		c.turn = nil
+		c.signalLocked()
 	}
 	if len(parts) == 0 || c.closed || c.switching != nil {
 		c.mu.Unlock()
@@ -1040,7 +1086,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		Tools:        c.tools,
 		Authority:    c.authority,
 		Rules:        c.cfg.Rules,
-		Approve:      c.approver(d),
+		Approve:      c.approver(d, nil),
 		Review:       c.reviewer(rec),
 	})
 	if err != nil {
@@ -1063,12 +1109,14 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		// The tasks and their notices belong to the old session; a failed
 		// open keeps both. Notices are cleared atomically with installation.
 		c.cfg.Tasks.StopAll()
+		c.closeChildren()
 		c.relay.emit(event.TasksChanged{})
 	}
 	// A session opened after the first open was tried, even one that failed,
 	// starts in the configured mode, never in the mode it was left in; the
 	// first keeps the mode chosen while it was opening.
 	if later {
+		c.authority.ClearEdits()
 		if c.cfg.Mode == policy.Execute {
 			c.EnterExecute()
 		} else {

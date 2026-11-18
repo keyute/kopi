@@ -15,6 +15,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `trust.json` | Which folders you trust, see [trust](trust.md#folder-trust); Kopi writes it |
 | `history.jsonl` | Input history per working directory, written by the fullscreen interface; the last 100 entries are recalled |
 | `skills/` | Your [skills](skills.md) |
+| `agents/` | Your [subagents](subagents.md), one Markdown file each |
 | `sandbox/` | The lock and the record of placeholders that Kopi processes sharing the home use to remove them safely (Linux), see [sandbox](sandbox.md#linux-placeholders) |
 | `images/` | Pasted clipboard images, removed after a day |
 | `installation_id` | The installation's UUID, created the first time a sign-in asks for it |
@@ -102,7 +103,7 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 | `cwd` | The workspace, with your home directory as `~` |
 | `notice` | Transient hints such as `Copied` |
 | `sandbox` | `sandboxed` or `unsandboxed` when `Bash` is available |
-| `tasks` | `1 shell` or `N shells` while background tasks run |
+| `tasks` | Running background work, such as `2 agents, 1 shell` |
 
 A segment in `segments`:
 
