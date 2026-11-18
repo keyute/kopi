@@ -182,14 +182,17 @@ func renderTurn(t transcript.Turn, v verb, width int, th theme) []string {
 	return out
 }
 
-// renderTask is one row naming a background task's end, its command's first
-// line cut to fit.
+// renderTask is one row naming a background task's end, its command's (an
+// agent's: description's) first line cut to fit.
 func renderTask(t transcript.Task, width int, th theme) []string {
 	word, ps, ts := "finished", fg(th.success), lipgloss.NewStyle()
 	if t.Status != string(tool.TaskCompleted) {
 		word, ps, ts = t.Status, fg(th.error), fg(th.error)
 	}
 	head := "task " + oneLine(t.ID) + " " + word + " · "
+	if t.Agent != "" {
+		head = oneLine(t.Agent) + " " + word + " · "
+	}
 	tail := " · " + formatDuration(t.Elapsed)
 	command, _, _ := strings.Cut(t.Command, "\n")
 	command = cut(oneLine(command), width-2-lipgloss.Width(head+tail))

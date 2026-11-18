@@ -9,6 +9,7 @@ import (
 	"github.com/keyute/kopi/internal/instruction"
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/subagent"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -29,6 +30,12 @@ type mcpServer struct {
 // most: Kopi's own text, the instruction groups, then what the MCP servers
 // report.
 func systemPrompt(workspace string, tools []tool.Tool, groups []instruction.Group, servers []mcpServer, reviewed bool) []pigruntime.PromptPart {
+	return buildPrompt(workspace, tools, groups, servers, reviewed, nil)
+}
+
+// buildPrompt is systemPrompt for the root session, or for the subagent def:
+// its preamble says who it is, and its own part follows the preamble.
+func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group, servers []mcpServer, reviewed bool, def *subagent.Definition) []pigruntime.PromptPart {
 	names := make([]string, 0, len(tools))
 	for _, t := range tools {
 		if !t.Deferred {
@@ -41,13 +48,21 @@ func systemPrompt(workspace string, tools []tool.Tool, groups []instruction.Grou
 	}
 	lines := []string{
 		fmt.Sprintf("You are Kopi, a coding agent working in %s.", workspace),
-		available,
-		"The session has a plan mode and an execute mode; only the user can switch between them.",
 	}
+	if def != nil {
+		lines = append(lines, fmt.Sprintf("You are the subagent %s: another agent gave you your task, and your final message is returned to that agent as the result.", def.Name))
+	}
+	modes := "The session has a plan mode and an execute mode; only the user can switch between them."
+	works := "Read-only tools work in both modes, the others only in execute mode"
+	if def != nil && def.Plan {
+		modes = "You stay in plan mode, whatever mode the user is in."
+		works = "Read-only tools work, the others do not"
+	}
+	lines = append(lines, available, modes)
 	if slices.ContainsFunc(tools, func(t tool.Tool) bool { return t.Capability != policy.Read }) {
-		line := "Read-only tools work in both modes, the others only in execute mode, and any tool call may need the user's approval."
+		line := works + ", and any tool call may need the user's approval."
 		if i := slices.IndexFunc(tools, func(t tool.Tool) bool { return t.PlanSandboxed }); i >= 0 {
-			line = "Read-only tools work in both modes, the others only in execute mode, and any tool call may need the user's approval; in plan mode " + tools[i].Name + " runs too, but cannot write the workspace."
+			line = works + ", and any tool call may need the user's approval; in plan mode " + tools[i].Name + " runs too, but cannot write the workspace."
 		}
 		lines = append(lines, line)
 		if reviewed {
@@ -60,6 +75,9 @@ func systemPrompt(workspace string, tools []tool.Tool, groups []instruction.Grou
 			"Call ToolSearch with keywords for what you need, or with exact tool names; the tools it loads can be called in your next response, not in the one that calls ToolSearch.")
 	}
 	parts := []pigruntime.PromptPart{{Name: "preamble", Text: strings.Join(lines, "\n")}}
+	if def != nil && strings.TrimSpace(def.Prompt) != "" {
+		parts = append(parts, pigruntime.PromptPart{Name: "agent " + def.Name, Text: def.Prompt})
+	}
 	for _, g := range groups {
 		texts := make([]string, 0, len(g.Files))
 		for _, f := range g.Files {

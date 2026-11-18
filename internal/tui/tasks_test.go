@@ -97,6 +97,34 @@ func TestTasksListCutsLongCommands(t *testing.T) {
 	})
 }
 
+func TestTasksListNamesAnAgentTask(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		c.tasks[1].Agent = "explore"
+		c.tasks[1].Command = "look around\nmore"
+		submitText(m, "/tasks")
+
+		rows := dialogRows(t, m)
+		assert.Equal(t, "❭ 1. t1 · running · 1m 2s · sleep 30", rows[3])
+		assert.Equal(t, "  2. t2 · completed · 5s · explore › look around", rows[4])
+	})
+}
+
+func TestTasksOpenAgentShowsItsOutputAndOptions(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		c.tasks[0].Agent = "explore"
+		c.tasks[0].Command = "look around"
+		submitText(m, "/tasks")
+
+		press(m, enter)
+
+		rule := strings.Repeat("─", 60)
+		want := []string{rule, "  t1 · running · 1m 2s · explore › look around", "    one", "    two", "", "❭ 1. Stop", "  2. Back", rule}
+		assert.Equal(t, want, dialogRows(t, m))
+	})
+}
+
 func TestTasksOpenShowsTheOutputTail(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, c := tasksModel(t)

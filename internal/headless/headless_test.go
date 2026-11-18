@@ -16,6 +16,7 @@ import (
 	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/subagent"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -24,6 +25,7 @@ const waitLimit = 30 * time.Second
 
 type harness struct {
 	c          *app.Controller
+	faux       *ai.FauxProviderHandle
 	out        *bytes.Buffer
 	interrupts chan os.Signal
 	cancel     context.CancelFunc
@@ -41,15 +43,26 @@ func start(t *testing.T, sb pigruntimetest.Sandbox, prompt string, steps []ai.Fa
 // in mode.
 func startRun(t *testing.T, sb pigruntimetest.Sandbox, cfg app.Config, mode policy.Mode, prompt string, steps []ai.FauxResponseStep) *harness {
 	t.Helper()
+	return startWith(t, sb, cfg, mode, prompt, steps, nil)
+}
+
+// startWith is startRun with a second provider, "kopi-child/faux-1", serving
+// childSteps, for subagents whose definitions name that model.
+func startWith(t *testing.T, sb pigruntimetest.Sandbox, cfg app.Config, mode policy.Mode, prompt string, steps, childSteps []ai.FauxResponseStep) *harness {
+	t.Helper()
 	rt := pigruntimetest.NewRuntime(t, sb)
 	faux, model := pigruntimetest.RegisterFaux(t, rt, "kopi-faux")
 	faux.SetResponses(steps)
+	if childSteps != nil {
+		child, _ := pigruntimetest.RegisterFaux(t, rt, "kopi-child")
+		child.SetResponses(childSteps)
+	}
 	cfg.Model, cfg.Workspace, cfg.JoinTimeout, cfg.Unattended, cfg.Mode = model, sb.Workspace, waitLimit, true, mode
 	c := app.NewController(rt, cfg)
 	t.Cleanup(func() { assert.NoError(t, c.Close(context.Background())) })
 	require.NoError(t, c.Open(t.Context(), app.OpenRequest{}))
 	ctx, cancel := context.WithCancel(t.Context())
-	h := &harness{c: c, out: &bytes.Buffer{}, interrupts: make(chan os.Signal), cancel: cancel, result: make(chan error, 1)}
+	h := &harness{c: c, faux: faux, out: &bytes.Buffer{}, interrupts: make(chan os.Signal), cancel: cancel, result: make(chan error, 1)}
 	f := New(c, prompt, h.out)
 	go func() { h.result <- f.Run(ctx, h.interrupts) }()
 	return h
@@ -248,4 +261,143 @@ func TestExecuteRunWithAllowRuleEdits(t *testing.T) {
 
 	assert.NotContains(t, result, policy.ErrDenied.Error())
 	assert.Equal(t, "beta\n", content)
+}
+
+func agentConfig() app.Config {
+	return app.Config{Agents: []subagent.Definition{{Name: "explorer", Description: "explores", Model: "kopi-child/faux-1", Instructions: true}}}
+}
+
+func launchCall(id, description string) pigruntimetest.Call {
+	return pigruntimetest.Call{Name: "Agent", ID: id, Args: map[string]any{"description": description, "prompt": "go", "subagent_type": "explorer"}}
+}
+
+// gatedText answers text once gate is closed.
+func gatedText(gate <-chan struct{}, text string) ai.FauxResponseStep {
+	return ai.FauxFactoryStep(func(ai.TranscriptContext, ai.StreamOptions, *ai.FauxProviderState, *ai.Model) (ai.AssistantMessage, error) {
+		<-gate
+		return ai.FauxAssistantMessage(ai.FauxContentString(text), ai.FauxAssistantMessageOptions{}), nil
+	})
+}
+
+// untilIdleWaiting waits until the run has only running subagents to wait for.
+func untilIdleWaiting(t *testing.T, c *app.Controller) {
+	t.Helper()
+	for {
+		w, live, changed := c.Pending()
+		if w == nil && live {
+			return
+		}
+		select {
+		case <-changed:
+		case <-time.After(waitLimit):
+			t.Fatal("timed out waiting for the run to wait on subagents")
+		}
+	}
+}
+
+func TestWaitsForChildAndPrintsTheWokenTurnsReply(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	gate := make(chan struct{})
+	steps := []ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(launchCall("c1", "look")),
+		pigruntimetest.Text("launched"),
+		pigruntimetest.Text("the child found it"),
+	}
+
+	h := startWith(t, sb, agentConfig(), policy.Plan, "delegate", steps, []ai.FauxResponseStep{gatedText(gate, "child result")})
+	untilIdleWaiting(t, h.c)
+	close(gate)
+
+	require.NoError(t, h.wait(t))
+	assert.Equal(t, "the child found it\n", h.out.String())
+}
+
+func TestWaitsForEveryChild(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	gate := make(chan struct{})
+	steps := []ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(launchCall("c1", "one"), launchCall("c2", "two")),
+		pigruntimetest.Text("launched"),
+		pigruntimetest.Text("woken"), pigruntimetest.Text("woken"),
+	}
+
+	h := startWith(t, sb, agentConfig(), policy.Plan, "delegate", steps, []ai.FauxResponseStep{gatedText(gate, "r1"), gatedText(gate, "r2")})
+	untilIdleWaiting(t, h.c)
+	close(gate)
+
+	require.NoError(t, h.wait(t))
+	assert.Equal(t, "woken\n", h.out.String())
+	for _, info := range h.c.Tasks() {
+		assert.Equal(t, tool.TaskCompleted, info.Status, info.ID)
+	}
+	assert.Len(t, h.c.Tasks(), 2)
+}
+
+func TestFailedFirstTurnDoesNotWaitForChildren(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	gate := make(chan struct{})
+	steps := []ai.FauxResponseStep{pigruntimetest.ToolCalls(launchCall("c1", "look")), pigruntimetest.ProviderError("bad thing")}
+
+	h := startWith(t, sb, agentConfig(), policy.Plan, "delegate", steps, []ai.FauxResponseStep{gatedText(gate, "late")})
+	t.Cleanup(func() { close(gate) }) // runs before the controller's Close, which waits for the child
+
+	err := h.wait(t)
+	require.ErrorIs(t, err, ErrFailed)
+	assert.Contains(t, err.Error(), "bad thing")
+}
+
+func TestInterruptWhileWaitingForChildrenEndsTheRun(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	gate := make(chan struct{})
+	steps := []ai.FauxResponseStep{pigruntimetest.ToolCalls(launchCall("c1", "look")), pigruntimetest.Text("launched")}
+
+	h := startWith(t, sb, agentConfig(), policy.Plan, "delegate", steps, []ai.FauxResponseStep{gatedText(gate, "late")})
+	t.Cleanup(func() { close(gate) }) // runs before the controller's Close, which waits for the child
+	untilIdleWaiting(t, h.c)
+	h.interrupts <- os.Interrupt
+
+	require.ErrorIs(t, h.wait(t), ErrInterrupted)
+	assert.Empty(t, h.out.String())
+}
+
+func TestFailedChildStillLetsTheRunFinish(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	steps := []ai.FauxResponseStep{pigruntimetest.ToolCalls(launchCall("c1", "look")), pigruntimetest.Text("launched"), pigruntimetest.Text("it failed")}
+
+	h := startWith(t, sb, agentConfig(), policy.Plan, "delegate", steps, []ai.FauxResponseStep{pigruntimetest.ProviderError("boom")})
+
+	require.NoError(t, h.wait(t))
+	assert.Equal(t, "it failed\n", h.out.String())
+}
+
+func TestStoppedChildStillLetsTheRunFinish(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	started := make(chan struct{})
+	cfg := agentConfig()
+	cfg.AgentTools = []tool.Tool{blockTool(started)}
+	steps := []ai.FauxResponseStep{pigruntimetest.ToolCalls(launchCall("c1", "look")), pigruntimetest.Text("launched")}
+
+	h := startWith(t, sb, cfg, policy.Plan, "delegate", steps, []ai.FauxResponseStep{pigruntimetest.ToolCalls(pigruntimetest.Call{Name: "Block", ID: "b1"})})
+	waitClosed(t, started)
+	untilIdleWaiting(t, h.c)
+	require.NoError(t, h.c.StopTask("t1"))
+
+	require.NoError(t, h.wait(t))
+	assert.Equal(t, "launched\n", h.out.String(), "a stop wakes nobody, so the last turn's reply stands")
+}
+
+// spawnTool starts the shell command as a background task.
+func spawnTool(tasks *tool.Tasks, sh *tool.Shell, command string) tool.Tool {
+	return tool.Tool{
+		Name: "Spawn", Label: "Spawn", Description: "Test-only tool.",
+		Parameters: map[string]any{"type": "object", "properties": map[string]any{}},
+		Capability: policy.Read,
+		Run: func(ctx context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (tool.Result, error) {
+			if _, err := admit(policy.Target{}); err != nil {
+				return tool.Result{}, err
+			}
+			info, err := tasks.Start(ctx, sh, command)
+			return tool.Result{Text: info.ID}, err
+		},
+	}
 }

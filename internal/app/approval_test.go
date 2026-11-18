@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -223,10 +224,10 @@ func TestApprovalClaimedAnswerSurvivesCancellation(t *testing.T) {
 				require.Len(t, requests, 1)
 				c.queue.Lock()
 				c.mu.Lock()
-				p := c.approval
-				require.NotNil(t, p)
+				require.Len(t, c.approvals, 1)
+				p := c.approvals[0]
 				p.claimed = true
-				c.approval = nil
+				c.approvals = nil
 				c.mu.Unlock()
 				c.queue.Unlock()
 				// Hold delivery after Answer claims the slot, forcing cancellation to
@@ -302,7 +303,7 @@ func TestApprovalRegistrationAfterCancellation(t *testing.T) {
 			assert.Equal(t, policy.Decision{}, answer)
 			assert.ErrorIs(t, err, context.Canceled)
 			assert.Empty(t, rec.all())
-			assert.Nil(t, c.approval)
+			assert.Empty(t, c.approvals)
 		})
 	}
 }
@@ -366,7 +367,7 @@ func TestApprovalSendCancellationBeforeForwarding(t *testing.T) {
 						assert.Equal(t, policy.Decision{}, answer)
 						assert.ErrorIs(t, err, context.Canceled)
 						assert.Empty(t, ofType[event.ApprovalRequested](rec.all()))
-						assert.Nil(t, c.approval)
+						assert.Empty(t, c.approvals)
 						return
 					}
 					done := make(chan struct{})
@@ -893,4 +894,160 @@ func TestClassifierDoesNotReviewUnruledEdits(t *testing.T) {
 	assert.Empty(t, ofType[event.ApprovalRequested](h.rec.all()))
 	assert.Empty(t, prompts)
 	assert.Contains(t, receive(t, requests).SystemPrompt, "and that no permission rule decides are first reviewed by a classifier model")
+}
+
+// askingChildren opens a harness whose subagents ask about every Probe call.
+func askingChildren(t *testing.T, cfg Config) (*agentHarness, *atomic.Int32) {
+	t.Helper()
+	ran := new(atomic.Int32)
+	cfg.AgentTools = []tool.Tool{probeTool(ran)}
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), cfg, agentDef("worker"))
+	a.rootAcks(4)
+	return a, ran
+}
+
+func TestChildAskIsAdmittedWithoutARootTurnAndLabelled(t *testing.T) {
+	a, ran := askingChildren(t, Config{})
+	approvals, ended := subscribeTo[event.ApprovalRequested](a.c), subscribeTo[event.ApprovalEnded](a.c)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("p1", 1)), pigruntimetest.Text("done")})
+
+	id := a.launch(t, "worker", "probe it", "go")
+	req := receiveEvent(t, approvals)
+
+	assert.Equal(t, "worker", req.Agent)
+	assert.Equal(t, id, req.TaskID)
+	assert.Equal(t, "p1", req.CallID)
+	assert.False(t, a.c.Status().Busy, "no root turn is running")
+	assert.True(t, a.c.Answer(req.Token, policy.Decision{Answer: policy.Allow}))
+	a.untilStatus(t, id, tool.TaskCompleted)
+	assert.Equal(t, event.ApprovalEnded{Token: req.Token}, receiveEvent(t, ended))
+	assert.Equal(t, int32(1), ran.Load())
+}
+
+func TestChildAsksQueueFirstInFirstOutAndAreAnsweredByToken(t *testing.T) {
+	a, ran := askingChildren(t, Config{})
+	approvals := subscribeTo[event.ApprovalRequested](a.c)
+	a.child.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(probeCall("p1", 1)), pigruntimetest.ToolCalls(probeCall("p2", 2)),
+		pigruntimetest.Text("done"), pigruntimetest.Text("done"),
+	})
+
+	first := a.launch(t, "worker", "one", "go")
+	req1 := receiveEvent(t, approvals)
+	second := a.launch(t, "worker", "two", "go")
+	req2 := receiveEvent(t, approvals)
+
+	assert.Equal(t, first, req1.TaskID)
+	assert.Equal(t, second, req2.TaskID)
+	a.c.mu.Lock()
+	require.Len(t, a.c.approvals, 2)
+	assert.Equal(t, []uint64{req1.Token, req2.Token}, []uint64{a.c.approvals[0].token, a.c.approvals[1].token})
+	a.c.mu.Unlock()
+	assert.False(t, a.c.Answer(req2.Token+1, policy.Decision{Answer: policy.Allow}))
+	assert.True(t, a.c.Answer(req2.Token, policy.Decision{Answer: policy.Allow}))
+	a.untilStatus(t, second, tool.TaskCompleted)
+	assert.Equal(t, tool.TaskRunning, a.info(t, first).Status, "the older ask still waits")
+	assert.True(t, a.c.Answer(req1.Token, policy.Decision{Answer: policy.Allow}))
+	a.untilStatus(t, first, tool.TaskCompleted)
+	assert.Equal(t, int32(2), ran.Load())
+}
+
+func TestChildRejectWithoutReasonStopsOnlyThatChild(t *testing.T) {
+	a, ran := askingChildren(t, Config{})
+	approvals := subscribeTo[event.ApprovalRequested](a.c)
+	a.child.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(probeCall("p1", 1)), pigruntimetest.ToolCalls(probeCall("p2", 2)), pigruntimetest.Text("done"),
+	})
+	first := a.launch(t, "worker", "one", "go")
+	req1 := receiveEvent(t, approvals)
+	second := a.launch(t, "worker", "two", "go")
+	req2 := receiveEvent(t, approvals)
+
+	assert.True(t, a.c.Answer(req1.Token, policy.Decision{Answer: policy.Reject}))
+	a.untilStatus(t, first, tool.TaskStopped)
+	a.until(t, func() bool { return a.live() == 1 })
+
+	queued := a.queuedNotices()
+	require.Len(t, queued, 1, "counting the child out and its notice are one step")
+	assert.True(t, strings.HasPrefix(queued[0].Text, fmt.Sprintf("Agent %s (worker) stopped by the user: one", first)), queued[0].Text)
+	assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.Status)
+	assert.True(t, a.idle(), "the stop wakes nobody")
+	assert.Equal(t, tool.TaskRunning, a.info(t, second).Status)
+	assert.True(t, a.c.Answer(req2.Token, policy.Decision{Answer: policy.Allow}))
+	a.untilStatus(t, second, tool.TaskCompleted)
+	assert.Equal(t, int32(1), ran.Load())
+}
+
+func TestChildRejectWithReasonLetsTheChildGoOn(t *testing.T) {
+	a, ran := askingChildren(t, Config{})
+	approvals := subscribeTo[event.ApprovalRequested](a.c)
+	requests := make(chan pigruntimetest.Request, 1)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("p1", 1)), pigruntimetest.Capture(t, requests, "done")})
+
+	id := a.launch(t, "worker", "one", "go")
+	req := receiveEvent(t, approvals)
+	assert.True(t, a.c.Answer(req.Token, policy.Decision{Answer: policy.Reject, Reason: "use b"}))
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	results := receive(t, requests).ToolResults
+	require.Len(t, results, 1)
+	assert.Contains(t, results[0], "use b")
+	assert.Zero(t, ran.Load())
+}
+
+func TestUnattendedDeniesAChildsAsk(t *testing.T) {
+	a, ran := askingChildren(t, Config{Unattended: true})
+	requests := make(chan pigruntimetest.Request, 1)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("p1", 1)), pigruntimetest.Capture(t, requests, "done")})
+
+	id := a.launch(t, "worker", "one", "go")
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	results := receive(t, requests).ToolResults
+	require.Len(t, results, 1)
+	assert.Contains(t, results[0], "cannot ask for it")
+	assert.Zero(t, ran.Load())
+}
+
+func TestCloseCancelsAChildsPendingAsk(t *testing.T) {
+	a, ran := askingChildren(t, Config{})
+	approvals, ended := subscribeTo[event.ApprovalRequested](a.c), subscribeTo[event.ApprovalEnded](a.c)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("p1", 1)), pigruntimetest.Text("unreached")})
+	a.launch(t, "worker", "one", "go")
+	req := receiveEvent(t, approvals)
+
+	require.NoError(t, a.c.Close(t.Context()))
+
+	assert.Equal(t, event.ApprovalEnded{Token: req.Token}, receiveEvent(t, ended))
+	assert.False(t, a.c.Answer(req.Token, policy.Decision{Answer: policy.Allow}))
+	assert.Empty(t, a.c.approvals)
+	assert.Zero(t, ran.Load())
+}
+
+func TestEditsGrantFromAChildCoversTheRoot(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	for _, name := range []string{"a.txt", "b.txt"} {
+		require.NoError(t, os.WriteFile(filepath.Join(sb.Workspace, name), []byte("alpha\n"), 0o600))
+	}
+	ws, err := tool.NewWorkspace(sb.Workspace, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
+	edits := []tool.Tool{tool.NewEdit(ws), tool.NewWrite(ws)}
+	a := newAgentHarness(t, sb, Config{Tools: edits, AgentTools: edits}, agentDef("worker"))
+	a.c.EnterExecute()
+	approvals := subscribeTo[event.ApprovalRequested](a.c)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(editCall("c1", "a.txt")), pigruntimetest.Text("edited")})
+	a.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("ack"), pigruntimetest.ToolCalls(editCall("r1", "b.txt")), pigruntimetest.Text("done")})
+	ends := turnEnds(a.c)
+
+	a.launch(t, "worker", "edit a", "go")
+	req := receiveEvent(t, approvals)
+	require.True(t, a.c.Answer(req.Token, policy.Decision{Answer: policy.AllowEdits}))
+	receiveEnd(t, ends)
+	w, err := a.c.Submit(t.Context(), "edit b.txt")
+	require.NoError(t, err)
+	wait(t, w.Done())
+
+	assert.Equal(t, "beta\n", fileText(t, sb, "b.txt"))
+	assert.Len(t, ofType[event.ApprovalRequested](a.rec.all()), 1, "one grant covers the root and its children")
 }

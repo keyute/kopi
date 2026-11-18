@@ -24,13 +24,45 @@ func New(c *app.Controller, prompt string, out io.Writer) *Frontend {
 	return &Frontend{c: c, prompt: prompt, out: out}
 }
 
-// Run sends the prompt and waits for its turn to end. interrupts delivers
-// SIGINT, which interrupts the turn.
+// Run sends the prompt and waits for its turn to end, then for the running
+// subagents and the turns their ends wake, and finishes with the last turn's
+// outcome; a turn that does not complete finishes the run at once. interrupts
+// delivers SIGINT, which interrupts the running turn or, with only subagents
+// left, ends the run.
 func (f *Frontend) Run(ctx context.Context, interrupts <-chan os.Signal) error {
 	w, err := f.c.Prompt(ctx, f.prompt)
 	if err != nil {
 		return err
 	}
+	for {
+		if w != nil {
+			if err := f.await(ctx, interrupts, w); err != nil {
+				return err
+			}
+			if w.Outcome().Status != event.Completed {
+				return f.finish(w.Outcome(), w.Reply())
+			}
+		}
+		next, live, changed := f.c.Pending()
+		switch {
+		case next != nil:
+			w = next
+		case !live:
+			return f.finish(w.Outcome(), w.Reply())
+		default:
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("failed to finish the turn: %w", ctx.Err())
+			case <-interrupts:
+				return ErrInterrupted
+			case <-changed:
+			}
+		}
+	}
+}
+
+// await waits for w, interrupting it on SIGINT.
+func (f *Frontend) await(ctx context.Context, interrupts <-chan os.Signal, w *app.Work) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -38,7 +70,7 @@ func (f *Frontend) Run(ctx context.Context, interrupts <-chan os.Signal) error {
 		case <-interrupts:
 			f.c.Interrupt()
 		case <-w.Done():
-			return f.finish(w.Outcome(), w.Reply())
+			return nil
 		}
 	}
 }

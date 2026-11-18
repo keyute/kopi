@@ -17,7 +17,7 @@ func TestTaskOutputDescribesItself(t *testing.T) {
 
 	assert.Equal(t, "TaskOutput", tool.Name)
 	assert.Equal(t, "TaskOutput", tool.Label)
-	assert.Equal(t, "Returns a background task's status and its combined output so far; long output keeps its start and end.", tool.Description)
+	assert.Equal(t, "Returns the status and output so far of a background task, a command or a subagent; long output keeps its start and end.", tool.Description)
 	assert.Equal(t, []string{"task_id"}, tool.Parameters["required"])
 	assert.Equal(t, false, tool.Parameters["additionalProperties"])
 	assert.Contains(t, tool.Parameters["properties"], "task_id")
@@ -53,6 +53,27 @@ func TestTaskOutputReportsEndedTask(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "Task t1 failed (exit code 3).\nhi\n", out.Text)
+}
+
+func TestTaskOutputReportsAgentTask(t *testing.T) {
+	tasks, events := newTasks(t)
+	agent := startAgent(tasks, "find it")
+	_, err := agent.Write([]byte("looking\n"))
+	require.NoError(t, err)
+	tool := NewTaskOutput(tasks)
+
+	out, err := tool.Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(out.Text, "Task t1 running for "), out.Text)
+	assert.True(t, strings.HasSuffix(out.Text, ".\nlooking\n"), out.Text)
+
+	_, ok := agent.End(TaskCompleted, "", "done")
+	require.True(t, ok)
+	out, err = tool.Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
+	require.NoError(t, err)
+	assert.Equal(t, "Task t1 completed.\nlooking\n", out.Text)
+	assert.Equal(t, "completed", tool.Display.Summary(out.Text))
+	assert.Empty(t, events)
 }
 
 func TestTaskOutputRefusesUnknownTask(t *testing.T) {

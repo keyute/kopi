@@ -42,12 +42,14 @@ func ParseMode(name string) (Mode, error) {
 	return 0, fmt.Errorf("invalid mode %q: want plan or execute", name)
 }
 
-// Authority holds the session mode. The generation increases on every actual
-// mode change so grants issued under an earlier mode can be recognised as stale.
+// Authority holds the session mode and the session's edits grant, which every
+// gate over it shares. The generation increases on every actual mode change so
+// grants issued under an earlier mode can be recognised as stale.
 type Authority struct {
 	mu         sync.Mutex
 	mode       Mode
 	generation uint64
+	edits      bool
 }
 
 func NewAuthority() *Authority {
@@ -82,4 +84,24 @@ func (a *Authority) Permits(s ToolSpec) (Mode, uint64, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.mode, a.generation, !s.Capability.NeedsExecute() || s.PlanSandboxed || a.mode == Execute
+}
+
+// GrantEdits records that the human allowed every later Write call no rule
+// asks about, until ClearEdits.
+func (a *Authority) GrantEdits() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.edits = true
+}
+
+func (a *Authority) EditsGranted() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.edits
+}
+
+func (a *Authority) ClearEdits() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.edits = false
 }

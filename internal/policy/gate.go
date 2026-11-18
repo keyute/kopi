@@ -80,7 +80,6 @@ type Gate struct {
 	review    Reviewer
 	mu        sync.Mutex
 	grants    map[string]grant
-	edits     bool
 	// consecutiveDenials and totalDenials count the reviewer's denials.
 	consecutiveDenials, totalDenials int
 }
@@ -128,7 +127,7 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 		}
 	case effectAllow:
 	default:
-		if spec.Ask || (spec.Capability != Read && !spec.Sandboxed && (spec.Capability != Write || !g.editsGranted())) {
+		if spec.Ask || (spec.Capability != Read && !spec.Sandboxed && (spec.Capability != Write || !g.authority.EditsGranted())) {
 			req.Edits = spec.Capability == Write
 			allow := tool
 			if target != nil {
@@ -153,12 +152,6 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 	return nil
 }
 
-func (g *Gate) editsGranted() bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.edits
-}
-
 // ask asks the approver about r. allow is the rule that would allow the call
 // when no rule asked about it.
 func (g *Gate) ask(ctx context.Context, r Request, allow string) error {
@@ -174,8 +167,8 @@ func (g *Gate) ask(ctx context.Context, r Request, allow string) error {
 	}
 	switch {
 	case d.Answer == AllowEdits && r.Edits:
+		g.authority.GrantEdits()
 		g.mu.Lock()
-		g.edits = true
 		g.consecutiveDenials = 0
 		g.mu.Unlock()
 		return nil

@@ -83,3 +83,12 @@ func TestConcurrentTransitionsAndPermitsAreRaceFree(t *testing.T) {
 	assert.Equal(t, Plan, mode)
 	assert.Equal(t, uint64(1), gen%2, "every completed execute/plan pair bumps twice")
 }
+
+func TestEditsGrantIsSharedAndCleared(t *testing.T) {
+	a := NewAuthority()
+	assert.False(t, a.EditsGranted())
+	a.GrantEdits()
+	assert.True(t, a.EditsGranted())
+	a.ClearEdits()
+	assert.False(t, a.EditsGranted())
+}

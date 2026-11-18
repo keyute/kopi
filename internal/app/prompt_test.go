@@ -11,6 +11,7 @@ import (
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/subagent"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -134,4 +135,55 @@ func TestPromptMentionsClassifierOnlyWhenOnAndApprovalCanBeNeeded(t *testing.T) 
 	assert.Contains(t, on, "any tool call may need the user's approval.\n"+sentence+"\n")
 	assert.Equal(t, strings.Replace(on, sentence+"\n", "", 1), joinPrompt(systemPrompt("/w", exec, nil, nil, false)))
 	assert.NotContains(t, joinPrompt(systemPrompt("/w", read, nil, nil, true)), sentence)
+}
+
+func TestSubagentPromptStatesItsRoleThenBodyInstructionsAndItsServers(t *testing.T) {
+	global := instruction.Group{Dir: "/home/.kopi", Global: true, Files: []instruction.File{{Path: "/home/.kopi/AGENTS.md", Text: "Global rule."}}}
+	read := tool.Tool{Name: "Read", Capability: policy.Read}
+	def := &subagent.Definition{Name: "explorer", Prompt: "Explore only."}
+
+	parts := buildPrompt("/w", []tool.Tool{read}, []instruction.Group{global}, []mcpServer{{name: "s", tools: []string{"mcp__s__a"}}}, false, def)
+
+	assert.Equal(t, []string{"preamble", "agent explorer", "instructions global /home/.kopi", "mcp-servers"}, partNames(parts))
+	assert.Equal(t, "You are Kopi, a coding agent working in /w.\n"+
+		"You are the subagent explorer: another agent gave you your task, and your final message is returned to that agent as the result.\n"+
+		"Tools available: Read.\n"+
+		"The session has a plan mode and an execute mode; only the user can switch between them.\n"+
+		"A tool call that is refused or that the user rejects returns an error saying so; when the rejection carries the user's feedback, act on it; never retry a rejected call unchanged.", parts[0].Text)
+	assert.Equal(t, "Explore only.", parts[1].Text)
+	assert.NotContains(t, partNames(parts), "tools")
+	assert.NotContains(t, partNames(parts), "rules")
+	assert.Equal(t, systemPrompt("/w", []tool.Tool{read}, nil, nil, false)[0].Text, strings.Replace(parts[0].Text, "You are the subagent explorer: another agent gave you your task, and your final message is returned to that agent as the result.\n", "", 1))
+}
+
+func TestSubagentPromptOmitsEmptyBodyAndInstructionsWhenOff(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	global := instruction.Group{Dir: sb.KopiHome, Global: true, Files: []instruction.File{{Path: sb.KopiHome + "/AGENTS.md", Text: "Global rule."}}}
+	bodiless, bare := agentDef("bodiless"), agentDef("bare")
+	bare.Prompt, bare.Instructions = "Body.", false
+	h := newHarness(t, sb, Config{Instructions: []instruction.Group{global}, Agents: []subagent.Definition{bodiless, bare}})
+
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+
+	assert.Equal(t, []string{"preamble", "instructions global " + sb.KopiHome}, partNames(h.c.agents[0].prompt))
+	assert.Equal(t, []string{"preamble", "agent bare"}, partNames(h.c.agents[1].prompt))
+	assert.Equal(t, systemPrompt(sb.Workspace, h.c.tools, []instruction.Group{global}, nil, false), h.c.prompt[:2], "the root's prompt has neither agent text")
+	assert.Equal(t, []string{"preamble", "instructions global " + sb.KopiHome}, partNames(h.c.prompt))
+}
+
+func TestPlanPinnedSubagentPreambleSaysItStaysInPlanMode(t *testing.T) {
+	read := tool.Tool{Name: "Read", Capability: policy.Read}
+	write := tool.Tool{Name: "Write", Capability: policy.Write}
+	pinned := &subagent.Definition{Name: "planner", Plan: true}
+	free := &subagent.Definition{Name: "worker"}
+
+	text := buildPrompt("/w", []tool.Tool{read, write}, nil, nil, false, pinned)[0].Text
+	assert.Contains(t, text, "\nYou stay in plan mode, whatever mode the user is in.\n")
+	assert.Contains(t, text, "\nRead-only tools work, the others do not, and any tool call may need the user's approval.\n")
+	assert.NotContains(t, text, "only the user can switch")
+	assert.NotContains(t, text, "execute mode")
+
+	unpinned := buildPrompt("/w", []tool.Tool{read, write}, nil, nil, false, free)[0].Text
+	assert.Contains(t, unpinned, "The session has a plan mode and an execute mode; only the user can switch between them.")
+	assert.NotContains(t, unpinned, "stay in plan mode")
 }

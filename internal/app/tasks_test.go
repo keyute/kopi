@@ -35,6 +35,7 @@ type fakeTasks struct {
 	stops        []string
 	stop         func(tool.TaskInfo) (tool.TaskInfo, error)
 	stopAll      func(int)
+	agents       *tool.Tasks
 }
 
 func (f *fakeTasks) OnChange(fn func(tool.TaskInfo)) {
@@ -99,12 +100,31 @@ func (f *fakeTasks) Stop(id string) (tool.TaskInfo, error) {
 		f.infos[i].Status = tool.TaskStopped
 		f.infos[i].Ended = f.infos[i].Started.Add(3 * time.Second)
 	}
-	info, stop := f.infos[i], f.stop
+	info, stop, agents := f.infos[i], f.stop, f.agents
 	f.mu.Unlock()
+	if info.Agent != "" {
+		info, _ = agents.Stop(id)
+		f.set(info)
+	}
 	if stop != nil {
 		return stop(info)
 	}
 	return info, nil
+}
+
+// StartAgent starts the task in a real registry and mirrors it into infos;
+// Stop runs the task's stop func there.
+func (f *fakeTasks) StartAgent(agent, description string, stop func()) *tool.AgentTask {
+	f.mu.Lock()
+	if f.agents == nil {
+		f.agents = tool.NewTasks()
+	}
+	agents := f.agents
+	f.mu.Unlock()
+	at := agents.StartAgent(agent, description, stop)
+	info, _ := agents.Output(at.ID())
+	f.set(info)
+	return at
 }
 
 func (f *fakeTasks) StopAll() {
@@ -732,7 +752,8 @@ func TestBackgroundDelegatesUntilClose(t *testing.T) {
 
 func TestStatusCountsRunningTasks(t *testing.T) {
 	h, _ := openHarness(t, Config{})
-	assert.Zero(t, h.c.Status().Tasks)
+	assert.Zero(t, h.c.Status().Shells)
+	assert.Zero(t, h.c.Status().Agents)
 	assert.False(t, h.c.Status().Foreground)
 	h.tasks.set(runningTask("t1"))
 	h.tasks.set(endedTask("t2"))
@@ -742,7 +763,8 @@ func TestStatusCountsRunningTasks(t *testing.T) {
 	h.tasks.mu.Unlock()
 
 	s := h.c.Status()
-	assert.Equal(t, 2, s.Tasks)
+	assert.Equal(t, 2, s.Shells)
+	assert.Zero(t, s.Agents)
 	assert.True(t, s.Foreground)
 	assert.Len(t, h.c.Tasks(), 3)
 	info, err := h.c.TaskOutput("t2")
@@ -833,7 +855,7 @@ func TestUndeliveredStopNoticeDoesNotContinueTurn(t *testing.T) {
 }
 
 func TestRequeueKeepsStopNoticesNonWaking(t *testing.T) {
-	h, _ := openHarness(t, Config{})
+	h, _ := openHarness(t, Config{Wake: true})
 	stopped := runningTask("t1")
 	stopped.Status = tool.TaskStopped
 	stop, end := notice(stopped, "stop"), notice(endedTask("t2"), "end")
@@ -942,4 +964,103 @@ func TestTaskEndDuringLoginWakesAfterLogin(t *testing.T) {
 	require.NotEmpty(t, texts)
 	assert.Equal(t, endText("t1"), texts[len(texts)-1])
 	assert.Empty(t, h.queuedNotices())
+}
+
+func endedAgent(id string) tool.TaskInfo {
+	info := endedTask(id)
+	info.Agent = "reviewer"
+	return info
+}
+
+func TestAgentEndWakesWithoutWake(t *testing.T) {
+	for _, wake := range []bool{false, true} {
+		t.Run(fmt.Sprintf("wake=%t", wake), func(t *testing.T) {
+			h, _ := openHarness(t, Config{Wake: wake})
+			requests := make(chan pigruntimetest.Request, 1)
+			h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "noted")})
+			ends := turnEnds(h.c)
+
+			h.tasks.end(endedAgent("t1"))
+
+			assert.Equal(t, event.Completed, receiveEnd(t, ends).Outcome.Status)
+			texts := receive(t, requests).UserTexts
+			assert.Equal(t, endText("t1"), texts[len(texts)-1])
+			assert.Equal(t, "reviewer", ofType[event.TaskEnded](h.rec.all())[0].Agent)
+		})
+	}
+}
+
+func TestAgentEndContinuesTurnWithoutWake(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "done")})
+
+	w, err := h.c.Submit(t.Context(), "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	h.tasks.end(endedAgent("t1"))
+	close(release)
+	wait(t, w.Done())
+
+	assert.Equal(t, []string{"hold", endText("t1")}, receive(t, requests).UserTexts)
+	assert.Equal(t, 2, h.faux.CallCount())
+}
+
+func TestWakingIsPerNotice(t *testing.T) {
+	stoppedAgent := endedAgent("t1")
+	stoppedAgent.Status = tool.TaskStopped
+	for _, tc := range []struct {
+		name   string
+		wake   bool
+		notice tool.TaskInfo
+		want   bool
+	}{
+		{"shell without wake", false, endedTask("t1"), false},
+		{"shell with wake", true, endedTask("t1"), true},
+		{"agent without wake", false, endedAgent("t1"), true},
+		{"agent with wake", true, endedAgent("t1"), true},
+		{"stopped agent without wake", false, stoppedAgent, false},
+		{"stopped agent with wake", true, stoppedAgent, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := openHarness(t, Config{Wake: tc.wake})
+			h.c.queue.Lock()
+			defer h.c.queue.Unlock()
+			h.c.notices = []pigruntime.Notice{notice(tc.notice, "head")}
+			assert.Equal(t, tc.want, h.c.waking())
+		})
+	}
+}
+
+func TestStopTaskOnAgentQueuesAgentNotice(t *testing.T) {
+	h, _ := openHarness(t, Config{Wake: true})
+	var at *tool.AgentTask
+	at = h.tasks.StartAgent("reviewer", "check the diff\nmore", func() { at.End(tool.TaskStopped, "", "") })
+	assert.Equal(t, 1, h.c.Status().Agents)
+
+	require.NoError(t, h.c.StopTask(at.ID()))
+
+	assert.True(t, h.idle(), "a human stop does not wake the model")
+	assert.Zero(t, h.faux.CallCount())
+	assert.Zero(t, h.c.Status().Agents)
+	queued := h.queuedNotices()
+	require.Len(t, queued, 1)
+	assert.Equal(t, "Agent "+at.ID()+" (reviewer) stopped by the user: check the diff\n(no output)", queued[0].Text)
+	assert.Equal(t, "reviewer", queued[0].Shown.Agent)
+	assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.Status)
+}
+
+func TestStatusCountsAgentsSeparately(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	h.tasks.StartAgent("reviewer", "a", func() {})
+	h.tasks.StartAgent("explorer", "b", func() {})
+	done := h.tasks.StartAgent("explorer", "c", func() {})
+	done.End(tool.TaskCompleted, "", "ok")
+	h.tasks.set(tool.TaskInfo{ID: "s1", Command: "make", Status: tool.TaskRunning})
+	h.tasks.set(func() tool.TaskInfo { i, _ := h.tasks.agents.Output(done.ID()); return i }())
+
+	s := h.c.Status()
+	assert.Equal(t, 2, s.Agents)
+	assert.Equal(t, 1, s.Shells)
 }

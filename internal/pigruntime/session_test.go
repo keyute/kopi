@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -868,4 +869,75 @@ func TestSendHandsOverSkillsWithPrompt(t *testing.T) {
 	assert.Empty(t, res.Undelivered)
 	assert.Equal(t, []string{"prompt", "x", "S"}, userTexts(<-requests))
 	assert.Equal(t, []event.Event{event.UserMessage{Text: "x"}}, drain(evs))
+}
+
+func TestRootAndChildSessionsSendConcurrently(t *testing.T) {
+	r, rootFaux := newTestRuntime(t, newSandbox(t))
+	childFaux := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "kopi-faux-child", Model: "faux-1"})
+	require.NoError(t, r.RegisterProvider(childFaux.Provider()))
+
+	// Each turn blocks until the other has started, so the two overlap.
+	rootStarted, childStarted := make(chan struct{}), make(chan struct{})
+	overlap := func(own, other chan struct{}, text string) ai.FauxResponseStep {
+		return ai.FauxFactoryStep(func(ai.TranscriptContext, ai.StreamOptions, *ai.FauxProviderState, *ai.Model) (ai.AssistantMessage, error) {
+			close(own)
+			<-other
+			return ai.FauxAssistantMessage(ai.FauxContentString(text), ai.FauxAssistantMessageOptions{}), nil
+		})
+	}
+	rootFaux.SetResponses([]ai.FauxResponseStep{overlap(rootStarted, childStarted, "root done")})
+	childFaux.SetResponses([]ai.FauxResponseStep{overlap(childStarted, rootStarted, "child done")})
+
+	root := openTestSession(t, r)
+	child, err := r.Open(t.Context(), OpenOptions{Model: "kopi-faux-child/faux-1", Parent: root, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, child.Close(context.Background())) })
+
+	results := make(chan event.Outcome, 2)
+	for _, s := range []*Session{root, child} {
+		go func() {
+			res, err := s.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
+			assert.NoError(t, err)
+			results <- res.Outcome
+		}()
+	}
+	for range 2 {
+		assert.Equal(t, event.Outcome{Status: event.Completed}, <-results)
+	}
+}
+
+func twoProbeCalls() ai.FauxResponseStep {
+	return ai.FauxAssistantMessage(
+		ai.FauxContentBlocks{
+			ai.FauxToolCall("Probe", map[string]any{}, &ai.FauxToolCallOptions{ID: "call-1"}),
+			ai.FauxToolCall("Probe", map[string]any{}, &ai.FauxToolCallOptions{ID: "call-2"}),
+		},
+		ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)},
+	)
+}
+
+// Opening a child session from parallel tool calls must not touch state the
+// root's sibling tool calls or other live sessions read.
+func TestChildOpenedFromParallelToolCallsDoesNotRace(t *testing.T) {
+	r, faux := newTestRuntime(t, newSandbox(t))
+	childFaux := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "kopi-faux-child", Model: "faux-1"})
+	require.NoError(t, r.RegisterProvider(childFaux.Provider()))
+	childFaux.SetResponses([]ai.FauxResponseStep{twoProbeCalls(), reply("child one"), reply("child two")})
+	faux.SetResponses([]ai.FauxResponseStep{twoProbeCalls(), reply("root done")})
+
+	var root *Session
+	probe := probeTool(func(ctx context.Context, _ json.RawMessage) (string, error) {
+		child, err := r.Open(ctx, OpenOptions{Model: "kopi-faux-child/faux-1", Parent: root, SystemPrompt: kopiPrompt, Tools: []tool.Tool{probeTool(okProbe)}, Authority: policy.NewAuthority()})
+		if err != nil {
+			return "", err
+		}
+		defer func() { assert.NoError(t, child.Close(context.Background())) }()
+		res, err := child.Send(ctx, Prompt{Text: "go"}, nil, nil)
+		assert.Equal(t, event.Completed, res.Outcome.Status)
+		return toolOutput, err
+	})
+	root = openTestSession(t, r, probe)
+	res, err := root.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
 }
