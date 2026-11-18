@@ -109,7 +109,7 @@ func TestGrepCount(t *testing.T) {
 	out, err = runGrep(t, tool, `{"pattern":"x","output_mode":"count","limit":1}`)
 	require.NoError(t, err)
 	assert.Equal(t, "Found 4 matches in 2 files\na.txt:3\n"+
-		"[Showing 1 of 2 files, most recently modified first. Use a narrower path, glob or pattern to see others.]\n", out)
+		"[Showing 1 of 2 files, most recently modified first; a narrower path, glob or pattern lists the others.]\n", out)
 
 	out, err = runGrep(t, tool, `{"pattern":"x","output_mode":"count","path":"b.txt"}`)
 	require.NoError(t, err)
@@ -221,17 +221,17 @@ func TestGrepTruncatesAtLimit(t *testing.T) {
 	out, err := runGrep(t, tool, `{"pattern":"needle","limit":2}`)
 	require.NoError(t, err)
 	assert.Equal(t, "Found 5 files\nf0.txt\nf1.txt\n"+
-		"[Showing 2 of 5 files, most recently modified first. Use a narrower path, glob or pattern to see others.]\n", out)
+		"[Showing 2 of 5 files, most recently modified first; a narrower path, glob or pattern lists the others.]\n", out)
 
 	out, err = runGrep(t, tool, `{"pattern":"needle","output_mode":"content","limit":3}`)
 	require.NoError(t, err)
 	assert.Equal(t, "Found 3 matches in 2 files\nf0.txt:1:needle\nf0.txt:2:needle\nf1.txt:1:needle\n"+
-		"[Showing 3 matching lines; more remain. Use a narrower path, glob or pattern, or a higher limit.]\n", out)
+		"[Showing 3 matching lines; more match. A narrower path, glob or pattern, or a higher limit, lists them.]\n", out)
 
 	out, err = runGrep(t, tool, `{"pattern":"needle","output_mode":"content","limit":10}`)
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(out, "Found 10 matches in 5 files\n"))
-	assert.NotContains(t, out, "more remain")
+	assert.NotContains(t, out, "higher limit")
 }
 
 func TestGrepStopsAtByteCap(t *testing.T) {
@@ -246,7 +246,17 @@ func TestGrepStopsAtByteCap(t *testing.T) {
 	shown := len(lines) - 2
 	assert.Less(t, shown, 500)
 	assert.Equal(t, fmt.Sprintf("Found %d matches in 1 file", shown), lines[0])
-	assert.Equal(t, fmt.Sprintf("[Showing %d matching lines; more remain. Use a narrower path, glob or pattern, or a higher limit.]", shown), lines[len(lines)-1])
+	assert.Equal(t, fmt.Sprintf("[Showing %d matching lines; more match. A narrower path, glob or pattern lists them.]", shown), lines[len(lines)-1])
+}
+
+func TestGrepNoticeOmitsHigherLimitAtMaximum(t *testing.T) {
+	tool, dir := newGrepTool(t)
+	writeFile(t, filepath.Join(dir, "a.txt"), strings.Repeat("needle\n", 1001))
+
+	out, err := runGrep(t, tool, `{"pattern":"needle","output_mode":"content","limit":1000}`)
+	require.NoError(t, err)
+	assert.Contains(t, out, "[Showing 1000 matching lines; more match. A narrower path, glob or pattern lists them.]")
+	assert.NotContains(t, out, "higher limit")
 }
 
 func TestGrepRejectsInvalidArgs(t *testing.T) {

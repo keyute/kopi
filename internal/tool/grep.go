@@ -46,7 +46,7 @@ func NewGrep(ws *Workspace, hidden Hidden) Tool {
 		Label: "Grep",
 		Description: "Searches file contents inside the workspace with a regular expression (RE2 syntax). " +
 			"path is a file or directory, absolute or relative to the workspace (default the workspace). " +
-			"Skips .git, files .gitignore ignores, binary files and symlinks. " +
+			"Skips .git directories below path, files .gitignore ignores, binary files and symlinks. " +
 			"output_mode is files_with_matches (paths, most recently modified first; the default), " +
 			"content (lines as path:line:text, with path-line-text for context) " +
 			"or count (path:count, most recently modified first). " +
@@ -195,7 +195,8 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 		kept           []found
 		matches, files int
 		out            strings.Builder
-		more, printed  bool
+		more, limited  bool
+		printed        bool
 	)
 	// searchFile reports whether the search goes on past p.
 	searchFile := func(p string, f *os.File, fi fs.FileInfo) bool {
@@ -246,7 +247,7 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 			scan(f, func(l grepLine) bool {
 				if re.MatchString(l.text) {
 					if matches == limit {
-						more = true
+						more, limited = true, true
 						return false
 					}
 					for _, b := range before {
@@ -319,7 +320,11 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 		fmt.Fprintf(&res, "Found %s in %s\n", grepNoun(matches, "match", "matches"), grepNoun(files, "file", "files"))
 		res.WriteString(out.String())
 		if more {
-			fmt.Fprintf(&res, "[Showing %d matching lines; more remain. Use a narrower path, glob or pattern, or a higher limit.]\n", matches)
+			raise := ""
+			if limited && limit < maxGrepResults {
+				raise = ", or a higher limit,"
+			}
+			fmt.Fprintf(&res, "[Showing %d matching lines; more match. A narrower path, glob or pattern%s lists them.]\n", matches, raise)
 		}
 		return Result{Text: res.String()}, nil
 	}
@@ -338,7 +343,7 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 		res.WriteString("\n")
 	}
 	if files > len(kept) {
-		fmt.Fprintf(&res, "[Showing %d of %d files, most recently modified first. Use a narrower path, glob or pattern to see others.]\n", len(kept), files)
+		fmt.Fprintf(&res, "[Showing %d of %d files, most recently modified first; a narrower path, glob or pattern lists the others.]\n", len(kept), files)
 	}
 	return Result{Text: res.String()}, nil
 }

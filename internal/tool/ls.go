@@ -30,7 +30,7 @@ func NewLS(ws *Workspace, hidden Hidden) Tool {
 		Label: "LS",
 		Description: "Lists one directory inside the workspace, sorted by name, directories ending in /. " +
 			"path is absolute or relative to the workspace (default the workspace). " +
-			"Includes hidden and .gitignored entries; symlinks are listed, not followed. " +
+			"Includes hidden and .gitignored entries; symlinks are listed, not followed, except one whose destination cannot be resolved. " +
 			"Returns up to 500 entries.",
 		Parameters: map[string]any{
 			"type": "object",

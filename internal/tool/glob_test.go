@@ -114,6 +114,15 @@ func TestGlobRespectsGitignore(t *testing.T) {
 	assert.ElementsMatch(t, []string{".gitignore", "a.go"}, lines[1:])
 }
 
+func TestGlobSearchesExplicitGitPath(t *testing.T) {
+	tool, dir := newGlobTool(t)
+	writeFile(t, filepath.Join(dir, ".git", "config"), "")
+
+	out, err := runGlob(t, tool, `{"pattern":"*","path":".git"}`)
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 file\n.git/config", out)
+}
+
 func TestGlobSkipsSymlinksProtectedAndHidden(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
 	writeFile(t, filepath.Join(home, "notes.txt"), "")
@@ -154,7 +163,7 @@ func TestGlobTruncatesAt100WithNotice(t *testing.T) {
 	lines := strings.Split(out, "\n")
 	require.Len(t, lines, maxGlobResults+2)
 	assert.Equal(t, "Found 150 files", lines[0])
-	assert.Equal(t, "[Showing 100 of 150 files, most recently modified first. Use a narrower path or pattern to see others.]", lines[len(lines)-1])
+	assert.Equal(t, "[Showing 100 of 150 files, most recently modified first; a narrower path or pattern lists the others.]", lines[len(lines)-1])
 }
 
 func TestGlobReportsNoFiles(t *testing.T) {
