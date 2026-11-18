@@ -31,6 +31,9 @@ type Controller interface {
 	// AnswerLogin answers the pending login question for token; false when it
 	// is stale.
 	AnswerLogin(token uint64, answer string) bool
+	// AnswerQuestion answers the pending questions for token, one answer per
+	// question; nil dismisses them. False when it is stale.
+	AnswerQuestion(token uint64, answers []tool.Answer) bool
 	ToggleMode()
 	History() []string
 	Status() app.Status

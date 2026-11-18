@@ -134,6 +134,9 @@ type Controller struct {
 	// approval is the call waiting for Answer; nil when none is.
 	approval    *pendingApproval
 	approvalSeq uint64
+	// question is the AskUserQuestion call waiting for AnswerQuestion; nil when none is.
+	question    *pendingQuestion
+	questionSeq uint64
 	// login is the running login; nil when none is. A login and a turn never
 	// run together: each is refused while the other is registered.
 	login    *loginRun
@@ -202,6 +205,9 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 		servers = append(servers, server)
 	}
 	tools := slices.Clone(c.cfg.Tools)
+	if ask := tool.NewAskUserQuestion(c.askQuestion); !c.cfg.Unattended && !c.cfg.Rules.Removes(ask.Name) {
+		tools = append(tools, ask)
+	}
 	if len(serverTools) > 0 {
 		search := tool.NewToolSearch(serverTools, pigruntime.RankTools, pigruntime.LoadTools)
 		if c.cfg.Rules.Removes(search.Name) {
@@ -595,6 +601,9 @@ func (c *Controller) stop(w *Work, emit func(event.Event)) {
 	c.mu.Lock()
 	if c.approval != nil && c.approval.work == w {
 		c.approval = nil
+	}
+	if c.question != nil && c.question.work == w {
+		c.question = nil
 	}
 	c.mu.Unlock()
 	w.cancel()

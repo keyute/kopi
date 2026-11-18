@@ -65,6 +65,16 @@ type ApprovalRequested struct {
 // cancelled.
 type ApprovalEnded struct{ Token uint64 }
 
+// QuestionRequested asks the human the questions of one AskUserQuestion call;
+// answer with Controller.AnswerQuestion.
+type QuestionRequested struct {
+	Token     uint64
+	Questions []tool.Question
+}
+
+// QuestionEnded follows every QuestionRequested: answered, dismissed or cancelled.
+type QuestionEnded struct{ Token uint64 }
+
 // LoginRequested asks the human one question of a running login; answer with
 // Controller.AnswerLogin. There may be no session yet.
 type LoginRequested struct {
@@ -140,6 +150,8 @@ func (ToolStart) isEvent()           {}
 func (ToolEnd) isEvent()             {}
 func (ApprovalRequested) isEvent()   {}
 func (ApprovalEnded) isEvent()       {}
+func (QuestionRequested) isEvent()   {}
+func (QuestionEnded) isEvent()       {}
 func (LoginRequested) isEvent()      {}
 func (LoginEnded) isEvent()          {}
 func (Notice) isEvent()              {}

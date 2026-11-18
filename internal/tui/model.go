@@ -115,11 +115,14 @@ type model struct {
 	// it. prompt is the shown dialog's rows, drawn in place of the composer.
 	approval *event.ApprovalRequested
 	// login is the pending login question, whose prompt is dialog too.
-	login  *event.LoginRequested
-	dialog *dialog
-	tasks  *taskDialog
-	prompt []string
-	menu   menu
+	login *event.LoginRequested
+	// question is the pending AskUserQuestion dialog, whose current page is
+	// dialog too.
+	question *questionDialog
+	dialog   *dialog
+	tasks    *taskDialog
+	prompt   []string
+	menu     menu
 	// seen is the draft and cursor syncInput last reconciled.
 	seen struct {
 		value     string
@@ -211,7 +214,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			}
 			return nil
 		}
-		if m.approval == nil && m.tasks == nil {
+		if m.approval == nil && m.question == nil && m.tasks == nil {
 			return m.paste(msg.text)
 		}
 		return nil
@@ -260,6 +263,9 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	if m.approval != nil {
 		return m.approvalKey(msg)
+	}
+	if m.question != nil {
+		return m.questionKey(msg)
 	}
 	if m.login != nil {
 		return m.loginKey(msg)
@@ -335,6 +341,13 @@ func (m *model) approvalKey(msg tea.KeyPressMsg) tea.Cmd {
 func (m *model) endApproval() {
 	if m.approval != nil {
 		m.approval, m.dialog = nil, nil
+	}
+}
+
+// endQuestion drops the pending questions and their dialog.
+func (m *model) endQuestion() {
+	if m.question != nil {
+		m.question, m.dialog = nil, nil
 	}
 }
 
@@ -498,6 +511,7 @@ func (m *model) apply(ev event.Event) {
 		m.follow = true
 		m.queued = nil
 		m.endApproval()
+		m.endQuestion()
 		m.tasks = nil
 		return
 	case event.TasksChanged:
@@ -511,6 +525,15 @@ func (m *model) apply(ev event.Event) {
 		return
 	case event.ApprovalRequested:
 		m.approval, m.dialog, m.tasks = &ev, newApprovalDialog(&ev, &m.keys, m.th), nil
+		return
+	case event.QuestionRequested:
+		m.question = newQuestionDialog(ev, &m.keys, m.th)
+		m.dialog, m.tasks = m.question.current(), nil
+		return
+	case event.QuestionEnded:
+		if m.question != nil && m.question.token == ev.Token {
+			m.endQuestion()
+		}
 		return
 	case event.LoginRequested:
 		m.login, m.dialog, m.tasks = &ev, newLoginDialog(ev, &m.keys, m.th), nil
@@ -538,6 +561,7 @@ func (m *model) apply(ev event.Event) {
 		}
 		m.busy = false
 		m.endApproval()
+		m.endQuestion()
 		m.composer.restore(ev.Unsent)
 		return
 	}
@@ -630,6 +654,9 @@ func (m *model) place() {
 		// The prompt takes the composer's frame rows too.
 		m.prompt = approvalRows(m.dialog, m.approval, m.width, max(2, m.height/3), free+2, m.th)
 		input = len(m.prompt) - 2
+	case m.question != nil:
+		m.prompt = m.question.rows(m.width, max(2, m.height/3), free+2, m.th)
+		input = len(m.prompt) - 2
 	case m.login != nil:
 		m.prompt = loginRows(m.dialog, m.width, max(2, m.height/3), free+2, m.th)
 		input = len(m.prompt) - 2
@@ -651,7 +678,7 @@ func (m *model) place() {
 	// The +1 is the shaded top row that the composer and the prompt both draw.
 	m.geo.composerTop = m.geo.transcript + len(rows) + 1
 	switch {
-	case m.approval != nil || m.login != nil:
+	case m.approval != nil || m.login != nil || m.question != nil:
 		rows = append(rows, m.prompt...)
 		if len(m.prompt) > 0 {
 			// The prompt's first row is the composer's top shaded row; with

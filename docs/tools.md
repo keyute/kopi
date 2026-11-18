@@ -4,7 +4,7 @@
 
 - Sessions are in plan or execute mode. Only the user switches, with `/plan`, `/execute` or Shift+Tab.
 - Plan mode allows:
-  - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `TaskOutput`, `TaskStop`, `WebFetch`, `WebSearch`
+  - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `TaskOutput`, `TaskStop`, `WebFetch`, `WebSearch`, `AskUserQuestion`
   - read-only MCP tools
   - `Bash` only in the [sandbox](sandbox.md), where it cannot write the start directory
 - `Write`, `Edit` and other MCP tools need execute mode.
@@ -61,6 +61,39 @@
 - Tasks are stopped on exit, when `/new` or `/resume` opens another session, and at the end of `kopi -p`.
 - `kopi -p` never starts a turn for a task's end, so a task still running at the final reply is killed.
 
+## AskUserQuestion
+
+- Puts one to four questions to you and waits for the answers.
+- Each question has a header, shown as its tab and cut with `…` past 16 columns (the model is asked for at most 12 characters), and two to four options, each with a description. A question may allow several options (multi-select).
+- A single-select option may have a markdown preview, shown while the option is focused: beside the options at 80 columns or wider, below them otherwise. A preview that does not fit shows `… N more lines` and scrolls with PgUp and PgDn.
+- Every question ends with an `Other` row for a typed answer, so an option labelled `Other` is refused. A single-select answer is one option or typed text, a multi-select answer is any options and/or typed text.
+- Tab adds a note to the focused option; the note goes to the model with the option when it is chosen.
+- With several questions a tab strip shows which are answered, and a review page after the last one lists the answers and the gaps before you submit. A single question answers at once.
+- The result lists each question with its answer, any note and any typed text, or says you dismissed the questions.
+- Esc dismisses the questions and the turn continues. Ctrl+C interrupts the turn. There is no time limit.
+- Only in the fullscreen interface; `kopi -p` has no `AskUserQuestion`.
+- A response's tool calls run one at a time when it contains a question.
+- Keys while a question is open; Enter, Tab, Esc, Up, Down, PgUp, PgDn, Ctrl+V and the newline keys follow [`keys`](configuration.md#keys):
+
+| Where | Key | Action |
+|---|---|---|
+| Options | Up, Down | Move; Down from the last option focuses `Other` |
+| Options | a number | Single-select: choose that option and go on. Multi-select: toggle it. The `Other` number focuses its field |
+| Options | Space | Toggle the focused option (multi-select) |
+| Options | Enter | Single-select: choose the focused option and go on. Multi-select: go on |
+| Options | Tab | Open a note on the focused option |
+| Options | Left, Right | Previous or next question; Right from the last opens the review |
+| Options | PgUp, PgDn | Scroll a cut preview |
+| `Other` | Enter | Answer with the typed text and go on; blank text asks you to answer unless a multi-select question already has an option chosen, which goes on |
+| `Other` | Up on the first row | Back to the options |
+| `Other` | Left, Right | Switch questions while the field is empty, else move the cursor |
+| Note | Enter or Tab | Save the note; a blank note removes it |
+| Note | Esc | Discard the edit and close the note |
+| Review | Enter | Submit; with a gap, jump to the first unanswered question |
+| Review | Left | Back to the last question |
+| Review | PgUp, PgDn | Scroll a cut review |
+| Any | Esc | Dismiss the questions (in a note, close the note) |
+
 ## WebFetch
 
 - Fetches one http or https page on a public host and has [`smallModel`](configuration.md#smallmodel) answer the call's prompt from it.
@@ -102,6 +135,9 @@
   - Chat-completions providers, Bedrock, Vertex and Mistral get no `WebSearch`.
   - Google returns redirect links, not the pages' own URLs.
   - A search an Anthropic response pauses mid-turn returns what it has.
+- In an `AskUserQuestion` dialog Space, Left, Right and the number keys are fixed keys, not [`keys`](configuration.md#keys) entries.
+- A note on an option that is not chosen is dropped.
+- While a question is open PgUp and PgDn scroll a cut preview or review, not the transcript, and do nothing when nothing is cut.
 
 ## Not implemented
 
@@ -111,3 +147,4 @@
 - Domain filters and citation markers for `WebSearch`.
 - Other search backends (an MCP server can provide one).
 - PDF and image pages.
+- Typed questions for `AskUserQuestion` (yes/no, text only, number), questions in print mode, and MCP elicitation.

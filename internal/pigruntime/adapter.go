@@ -60,7 +60,7 @@ func (a agentTool) Execute(ctx context.Context, toolCallID string, params json.R
 }
 
 func (a agentTool) ExecutionMode() agent.ToolExecutionMode {
-	if a.tool.Capability == policy.Read {
+	if a.tool.Capability == policy.Read && !a.tool.Exclusive {
 		return agent.ToolModeParallel
 	}
 	return agent.ToolModeSequential

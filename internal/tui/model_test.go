@@ -47,7 +47,9 @@ type fakeController struct {
 	answers    []answer
 	// loginAnswers logs AnswerLogin.
 	loginAnswers []loginAnswer
-	commands     []app.Command
+	// questionAnswers logs AnswerQuestion.
+	questionAnswers []questionAnswer
+	commands        []app.Command
 	// skills is what Spans highlights as skill commands; nil means none.
 	skills   *skill.Set
 	args     map[string][]app.Candidate
@@ -80,6 +82,16 @@ func (f *fakeController) Answer(token uint64, d policy.Decision) bool {
 
 func (f *fakeController) AnswerLogin(token uint64, answer string) bool {
 	f.loginAnswers = append(f.loginAnswers, loginAnswer{token, answer})
+	return true
+}
+
+type questionAnswer struct {
+	token   uint64
+	answers []tool.Answer
+}
+
+func (f *fakeController) AnswerQuestion(token uint64, answers []tool.Answer) bool {
+	f.questionAnswers = append(f.questionAnswers, questionAnswer{token, answers})
 	return true
 }
 

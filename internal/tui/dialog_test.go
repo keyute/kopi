@@ -217,3 +217,18 @@ func TestDialogPaste(t *testing.T) {
 	assert.Equal(t, big, d.text())
 	require.Len(t, d.options[1].field.blocks, 1)
 }
+
+func TestDialogDetailSitsUnderTheLabelAndBeforeABelowField(t *testing.T) {
+	d := fieldDialog("Later")
+	d.options[0].detail = []string{"says yes"}
+	d.options[1].detail = []string{"says no", "twice"}
+	assert.Equal(t, []string{"❭ 1. Yes", "  says yes", "  2. No  What should change?", "  says no", "  twice", "  3. Later"}, plainRows(optionRows(d, 40)), "a field beside its label stays on the label row")
+	assert.Equal(t, []int{3, 5, 8, 9}, d.optionStarts)
+
+	d.move(1)
+	d.paste("a\nb")
+	assert.Equal(t, []string{"  1. Yes", "  says yes", "❭ 2. No", "  says no", "  twice", "  a", "  b", "  3. Later"}, plainRows(optionRows(d, 40)), "a field below the label follows the detail")
+	assert.Equal(t, []int{3, 5, 10, 11}, d.optionStarts)
+	require.Len(t, d.areas, 1)
+	assert.Equal(t, 8, d.areas[0].y)
+}

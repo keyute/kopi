@@ -15,7 +15,7 @@ Permission rules in `config.json` allow, ask about or deny calls:
 ```
 
 - A rule is `Name` or `Name(path)`.
-- The name is a tool name (`Read`, `Glob`, `Grep`, `LS`, `Write`, `Edit`, `Bash`, `TaskOutput`, `TaskStop`, `ToolSearch`, `Skill`, `WebFetch`, `WebSearch`), an [MCP tool name](mcp.md#plan-mode-and-rules) or `*` for every tool.
+- The name is a tool name (`Read`, `Glob`, `Grep`, `LS`, `Write`, `Edit`, `Bash`, `TaskOutput`, `TaskStop`, `ToolSearch`, `Skill`, `WebFetch`, `WebSearch`, `AskUserQuestion`), an [MCP tool name](mcp.md#plan-mode-and-rules) or `*` for every tool.
 - An unknown name or a malformed rule is rejected at start.
 - Paths:
   - `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory.
@@ -34,7 +34,7 @@ Permission rules in `config.json` allow, ask about or deny calls:
 - Plan mode refuses `Write`, `Edit`, unsandboxed `Bash` and MCP tools not marked read-only before any rule; otherwise rules apply to `Bash` the same in both modes.
 - Deny beats ask, and ask beats allow.
 - With no rule matching:
-  - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `TaskOutput`, `TaskStop` and sandboxed `Bash` are allowed.
+  - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `TaskOutput`, `TaskStop`, `AskUserQuestion` and sandboxed `Bash` are allowed.
   - Any other call asks, including every `WebFetch` and `WebSearch` call and every `Bash` command without the sandbox.
 - Built in: `Edit` and `Write` under any `.git` directory, and of any file named `.mcp.json` or the file the start directory's `.mcp.json` resolves to when it is a symlink, always ask unless a deny rule refuses them.
 
@@ -43,7 +43,7 @@ Permission rules in `config.json` allow, ask about or deny calls:
 - `Glob`, `Grep` and `LS` leave out entries that a `deny` or `ask` rule with a path for that tool or `*` matches.
   - Exception: a rule which also matches the searched path itself does not hide what is under it, as it already judged the whole call (unless a `!` exception in the same list is what admitted that path).
   - `Read(path)` rules do not apply to them; use `*(path)` to keep a path from every tool.
-- `ToolSearch`, `TaskOutput`, `TaskStop`, `WebFetch` and `WebSearch` take no path: only a bare rule naming the tool or `*` applies to them. `ToolSearch(path)` and the like are rejected at start.
+- `ToolSearch`, `TaskOutput`, `TaskStop`, `AskUserQuestion`, `WebFetch` and `WebSearch` take no path: only a bare rule naming the tool or `*` applies to them. `ToolSearch(path)` and the like are rejected at start.
 - For `Skill` the path is the skill's directory, or the file when the call names one, so path rules apply to it. A rule for a skill outside the start directory needs an absolute or `~/` path.
 - `Bash` takes no path:
   - Only a bare `Bash` or `*` rule applies to it.

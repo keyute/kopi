@@ -20,6 +20,9 @@ const cursorMark = "❭ "
 type option struct {
 	label string
 	field *composer
+	// detail is rows the caller rendered for width-2, drawn two columns in
+	// under the label's rows; a field below the label comes after them.
+	detail []string
 }
 
 // dialog is a choice drawn in the composer's slot. It is drawn between two
@@ -71,14 +74,17 @@ func (d *dialog) rows(width, budget, fieldCap int, th theme) []string {
 		label := fmt.Sprintf("%d. %s", i+1, o.label)
 		if o.field == nil {
 			rows = append(rows, hang(prefix, fg(th.accent), label, st, width)...)
+			rows = withDetail(rows, o)
 			continue
 		}
 		head := label + "  "
 		if indent := lipgloss.Width(prefix + head); fitsBeside(o.field.value(), width-indent) {
 			slots = append(slots, fieldSlot{option: i, at: len(rows), f: o.field, head: fg(th.accent).Render(prefix) + st.Render(head), indent: indent})
+			rows = withDetail(rows, o)
 			continue
 		}
 		rows = append(rows, hang(prefix, fg(th.accent), label, st, width)...)
+		rows = withDetail(rows, o)
 		slots = append(slots, fieldSlot{option: i, at: len(rows), f: o.field, indent: 2, selected: i == d.sel})
 	}
 	d.optionStarts = append(d.optionStarts, len(rows))
@@ -96,6 +102,13 @@ func (d *dialog) rows(width, budget, fieldCap int, th theme) []string {
 				d.optionStarts[i] += len(fr)
 			}
 		}
+	}
+	return rows
+}
+
+func withDetail(rows []string, o option) []string {
+	for _, r := range o.detail {
+		rows = append(rows, "  "+r)
 	}
 	return rows
 }
