@@ -78,9 +78,10 @@ func untimed(evs []event.Event) []event.Event {
 }
 
 type harness struct {
-	c    *Controller
-	faux *ai.FauxProviderHandle
-	rec  *recorder
+	c     *Controller
+	faux  *ai.FauxProviderHandle
+	rec   *recorder
+	tasks *fakeTasks
 }
 
 // newHarness builds a controller over a fresh runtime on sb. Its cleanup
@@ -96,11 +97,16 @@ func newHarness(t *testing.T, sb pigruntimetest.Sandbox, cfg Config) *harness {
 	if cfg.JoinTimeout == 0 {
 		cfg.JoinTimeout = waitLimit
 	}
+	var tasks *fakeTasks
+	if cfg.Tasks == nil {
+		tasks = &fakeTasks{}
+		cfg.Tasks = tasks
+	}
 	c := NewController(rt, cfg)
 	rec := &recorder{}
 	c.Subscribe(rec.add)
 	t.Cleanup(func() { assert.NoError(t, c.Close(context.Background())) })
-	return &harness{c: c, faux: faux, rec: rec}
+	return &harness{c: c, faux: faux, rec: rec, tasks: tasks}
 }
 
 func openHarness(t *testing.T, cfg Config) (*harness, pigruntimetest.Sandbox) {
@@ -534,7 +540,7 @@ func TestRejectedSendIsHandedBackOnce(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	w := &Work{id: "turn-rejected", done: make(chan struct{}), cancel: cancel}
-	h.c.runTurn(t.Context(), ctx, h.c.sess, h.c.emit, w, []pigruntime.Prompt{{Text: "rejected"}})
+	h.c.runTurn(t.Context(), ctx, h.c.sess, h.c.emit, w, []pigruntime.Prompt{{Text: "rejected"}}, nil)
 	wait(t, w.Done())
 	close(release)
 	wait(t, running.Done())
@@ -938,7 +944,7 @@ func TestInterruptBeforeSendHandsOriginalAndQueuedInputBack(t *testing.T) {
 	}
 	h.c.turn = w
 
-	h.c.runTurn(t.Context(), ctx, h.c.sess, h.c.emit, w, []pigruntime.Prompt{original})
+	h.c.runTurn(t.Context(), ctx, h.c.sess, h.c.emit, w, []pigruntime.Prompt{original}, nil)
 	wait(t, w.Done())
 
 	assert.Zero(t, h.faux.CallCount())
@@ -1274,10 +1280,12 @@ func TestPullHandsNothingToCancelledSend(t *testing.T) {
 
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
-	assert.Empty(t, c.pull(cancelled, emit)())
+	prompts, _ := c.pull(cancelled, emit)()
+	assert.Empty(t, prompts)
 	assert.Equal(t, []pigruntime.Prompt{a}, c.pending)
 
-	assert.Equal(t, []pigruntime.Prompt{a}, c.pull(t.Context(), emit)())
+	prompts, _ = c.pull(t.Context(), emit)()
+	assert.Equal(t, []pigruntime.Prompt{a}, prompts)
 	assert.Empty(t, c.pending)
 }
 

@@ -118,6 +118,16 @@ func TestTextJoinerSeparatesAdjacentTextBlocks(t *testing.T) {
 			want: []event.Event{event.TextDelta{Text: "one"}, event.Notice{Text: "retrying (attempt 1/2) in 0s: "}, event.TextDelta{Text: "two"}},
 		},
 		{
+			name: "kopi notice between",
+			in:   []agent.AgentEvent{textStart, text("one"), agent.MessageStartEvent{Message: agent.AgentMessage{Custom: map[string]any{"role": agent.RoleCustom, "customType": noticeType}}}, textStart, text("two")},
+			want: []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: "two"}},
+		},
+		{
+			name: "foreign custom message between",
+			in:   []agent.AgentEvent{textStart, text("one"), agent.MessageStartEvent{Message: agent.AgentMessage{Custom: map[string]any{"role": agent.RoleCustom, "customType": "other"}}}, textStart, text("two")},
+			want: []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: "\n\ntwo"}},
+		},
+		{
 			name: "empty delta waits for text",
 			in:   []agent.AgentEvent{textStart, text("one"), textStart, text(""), text("two")},
 			want: []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: ""}, event.TextDelta{Text: "\n\ntwo"}},

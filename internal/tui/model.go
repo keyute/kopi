@@ -106,9 +106,11 @@ type model struct {
 	// verb is the running or last turn's.
 	verb verb
 	// approval is the call awaiting an answer, nil when none; dialog is its
-	// prompt and prompt the dialog's rows, drawn in place of the composer.
+	// prompt. tasks is the /tasks dialog, nil when closed; an approval closes
+	// it. prompt is the shown dialog's rows, drawn in place of the composer.
 	approval *event.ApprovalRequested
 	dialog   *dialog
+	tasks    *taskDialog
 	prompt   []string
 	menu     menu
 	// seen is the draft and cursor syncInput last reconciled.
@@ -193,13 +195,16 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			}
 			return nil
 		}
-		if m.approval == nil {
+		if m.approval == nil && m.tasks == nil {
 			return m.paste(msg.text)
 		}
 		return nil
 	case tea.PasteMsg:
-		if m.dialog != nil {
+		switch {
+		case m.dialog != nil:
 			return m.dialog.paste(msg.Content)
+		case m.tasks != nil:
+			return nil
 		}
 		return m.paste(msg.Content)
 	case imagePastedMsg:
@@ -239,6 +244,13 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	if m.approval != nil {
 		return m.approvalKey(msg)
+	}
+	if m.tasks != nil {
+		return m.tasksKey(msg)
+	}
+	// Unconsumed, the key reaches the composer, which may bind it too.
+	if key.Matches(msg, km.background) && m.c.Background() {
+		return nil
 	}
 	if m.menuHeight() > 0 && !m.holding() {
 		if cmd, ok := m.menuKey(msg); ok {
@@ -354,6 +366,9 @@ func (m *model) submitted(err error) tea.Cmd {
 	switch {
 	case errors.Is(err, app.ErrQuit):
 		return tea.Quit
+	case errors.Is(err, app.ErrShowTasks):
+		m.composer.reset()
+		return m.showTasks()
 	case err == nil:
 		m.composer.reset()
 	case errors.Is(err, app.ErrBusy):
@@ -383,7 +398,7 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 			pureThinking = false
 		}
 		switch ev.(type) {
-		case event.SessionChanged, event.ModeChanged, event.ToolEnd, event.TurnEnd:
+		case event.SessionChanged, event.ModeChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged:
 			refresh = true
 		}
 		m.apply(ev)
@@ -414,6 +429,10 @@ func (m *model) apply(ev event.Event) {
 		m.follow = true
 		m.queued = nil
 		m.endApproval()
+		m.tasks = nil
+		return
+	case event.TasksChanged:
+		m.refreshTasks()
 		return
 	case event.QueueChanged:
 		m.queued = ev.Pending
@@ -422,7 +441,7 @@ func (m *model) apply(ev event.Event) {
 		m.activity = ev.Text
 		return
 	case event.ApprovalRequested:
-		m.approval, m.dialog = &ev, newApprovalDialog(&ev, &m.keys, m.th)
+		m.approval, m.dialog, m.tasks = &ev, newApprovalDialog(&ev, &m.keys, m.th), nil
 		return
 	case event.ApprovalEnded:
 		if m.approval != nil && m.approval.Token == ev.Token {
@@ -529,11 +548,15 @@ func (m *model) place() {
 		free -= busyRows
 	}
 	input := m.composer.height()
-	if m.approval != nil {
+	switch {
+	case m.approval != nil:
 		// The prompt takes the composer's frame rows too.
 		m.prompt = approvalRows(m.dialog, m.approval, m.width, max(2, m.height/3), free+2, m.th)
 		input = len(m.prompt) - 2
-	} else {
+	case m.tasks != nil:
+		m.prompt = m.tasks.rows(m.width, max(2, m.height/3), free+2, m.th)
+		input = len(m.prompt) - 2
+	default:
 		m.geo.menu = max(0, min(m.menu.want(), free-input))
 	}
 	free -= input + m.geo.menu
@@ -543,11 +566,12 @@ func (m *model) place() {
 	rows := append([]string{""}, m.pending...)
 	if shown {
 		m.geo.working = len(rows)
-		rows = append(rows, workingRow(&m.spinner, working, m.th), "")
+		rows = append(rows, workingRow(&m.spinner, working, m.workingHint(), m.th), "")
 	}
 	// The +1 is the shaded top row that the composer and the prompt both draw.
 	m.geo.composerTop = m.geo.transcript + len(rows) + 1
-	if m.approval != nil {
+	switch {
+	case m.approval != nil:
 		rows = append(rows, m.prompt...)
 		if len(m.prompt) > 0 {
 			// The prompt's first row is the composer's top shaded row; with
@@ -557,7 +581,9 @@ func (m *model) place() {
 				m.geo.fields = append(m.geo.fields, fa)
 			}
 		}
-	} else {
+	case m.tasks != nil:
+		rows = append(rows, m.prompt...)
+	default:
 		rows = append(rows, m.composer.view(m.width, m.th)...)
 		rows = append(rows, m.menuRows()...)
 		m.geo.fields = []fieldArea{{c: &m.composer, y: m.geo.composerTop, h: m.composer.height()}}

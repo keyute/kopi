@@ -180,6 +180,20 @@ func TestResolveRejectsInvalidModelNamingLayer(t *testing.T) {
 	assert.Contains(t, err.Error(), "flags")
 }
 
+func TestResolveRejectsInvalidSmallModelNamingLayer(t *testing.T) {
+	_, err := Resolve(Defaults(), Map("flags", map[string]any{"smallModel": "noslash"}))
+	require.ErrorIs(t, err, ErrInvalidModel)
+	assert.Contains(t, err.Error(), "flags")
+}
+
+func TestResolveSmallModel(t *testing.T) {
+	global := globalLayer(t, `{"smallModel": "anthropic/claude-haiku"}`)
+	r, err := Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Equal(t, "anthropic/claude-haiku", r.Config.SmallModel)
+	assert.Equal(t, global.Name, r.Origins["smallModel"])
+}
+
 func TestResolveOverridesOneActionKeepingOthers(t *testing.T) {
 	global := globalLayer(t, `{"keys": {"submit": ["ctrl+s"]}}`)
 	r, err := Resolve(Defaults(), global)
@@ -205,6 +219,21 @@ func TestResolveAcceptsNoticeOnEitherSide(t *testing.T) {
 	r, err := Resolve(Defaults(), global)
 	require.NoError(t, err)
 	assert.Equal(t, StatusLine{Left: []string{"notice", "model"}, Right: []string{"mode", "notice"}}, r.Config.StatusLine)
+}
+
+func TestBackgroundActionAndTasksSegment(t *testing.T) {
+	assert.Contains(t, KeyActions, "background")
+	assert.Equal(t, []string{"ctrl+b"}, DefaultKeys()["background"])
+	assert.Equal(t, []string{"notice", "sandbox", "tasks", "mode"}, DefaultStatusLine().Right)
+
+	global := globalLayer(t, `{"keys": {"background": ["ctrl+g"]}, "statusline": {"left": ["tasks"]}}`)
+	r, err := Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ctrl+g"}, r.Config.Keys["background"])
+	assert.Equal(t, []string{"tasks"}, r.Config.StatusLine.Left)
+
+	_, err = Resolve(Defaults(), globalLayer(t, `{"keys": {"background": []}}`))
+	require.ErrorIs(t, err, ErrInvalidValue)
 }
 
 func TestResolveRejectsUnknownActionNamingLayer(t *testing.T) {
@@ -452,16 +481,17 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	r, err := Resolve(Defaults())
 	require.NoError(t, err)
 	entries := r.Entries()
-	assert.Len(t, entries, 13+len(KeyActions))
+	assert.Len(t, entries, 14+len(KeyActions))
 	assert.IsIncreasing(t, entryKeys(entries))
 	assert.Contains(t, entries, Entry{Key: "model", Value: "", Origin: "unset"})
+	assert.Contains(t, entries, Entry{Key: "smallModel", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "version", Value: "1", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "mode", Value: "plan", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "instructionFallbacks", Value: `["CLAUDE.md"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "keys.submit", Value: `["enter"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "keys.newline", Value: `["shift+enter","alt+enter","ctrl+j"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "statusline.left", Value: `["model","context","branch"]`, Origin: "default"})
-	assert.Contains(t, entries, Entry{Key: "statusline.right", Value: `["notice","sandbox","mode"]`, Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "statusline.right", Value: `["notice","sandbox","tasks","mode"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "permissions.allow", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "permissions.ask", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "permissions.deny", Value: "[]", Origin: "default"})
@@ -472,6 +502,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 
 	r, err = Resolve(Defaults(), Map("flags", map[string]any{
 		"model":                "a/b",
+		"smallModel":           "c/d",
 		"mode":                 "execute",
 		"instructionFallbacks": []any{},
 		"statusline":           map[string]any{"right": []any{}},
@@ -481,6 +512,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	require.NoError(t, err)
 	entries = r.Entries()
 	assert.Contains(t, entries, Entry{Key: "model", Value: "a/b", Origin: "flags"})
+	assert.Contains(t, entries, Entry{Key: "smallModel", Value: "c/d", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "mode", Value: "execute", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "instructionFallbacks", Value: "[]", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "statusline.right", Value: "[]", Origin: "flags"})

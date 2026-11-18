@@ -19,7 +19,9 @@ import (
 func newBashTool(t *testing.T) (Tool, string) {
 	t.Helper()
 	dir := t.TempDir()
-	return NewBash(NewShell(dir, nil), NewShell(dir, nil)), dir
+	tasks := NewTasks()
+	t.Cleanup(tasks.StopAll)
+	return NewBash(NewShell(dir, nil), NewShell(dir, nil), tasks), dir
 }
 
 func TestBashDescribesItself(t *testing.T) {
@@ -31,16 +33,24 @@ func TestBashDescribesItself(t *testing.T) {
 	assert.False(t, tool.Sandboxed)
 	assert.False(t, tool.PlanSandboxed)
 	assert.NotContains(t, tool.Description, "sandbox")
+	for _, s := range []string{"run_in_background", "TaskOutput", "TaskStop"} {
+		assert.Contains(t, tool.Description, s)
+	}
 	assert.Equal(t, []string{"command"}, tool.Parameters["required"])
 	assert.Equal(t, false, tool.Parameters["additionalProperties"])
+	properties, ok := tool.Parameters["properties"].(map[string]any)
+	require.True(t, ok)
+	background, ok := properties["run_in_background"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "boolean", background["type"])
 	assert.Equal(t, Action{Verb: "Ran", One: "command", Many: "commands"}, tool.Display.Action)
 	_, err := json.Marshal(tool.Parameters)
 	require.NoError(t, err)
-	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), &sandbox.Sandbox{}))
+	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), &sandbox.Sandbox{}), NewTasks())
 	assert.True(t, sandboxed.Sandboxed)
 	assert.True(t, sandboxed.PlanSandboxed)
 	assert.Contains(t, sandboxed.Description, "in execute mode, the workspace")
-	assert.False(t, NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), nil)).PlanSandboxed)
+	assert.False(t, NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), nil), NewTasks()).PlanSandboxed)
 }
 
 func TestBashRunsCommand(t *testing.T) {
@@ -56,10 +66,10 @@ func TestBashRunsCommand(t *testing.T) {
 func TestBashTimeoutIsMilliseconds(t *testing.T) {
 	tool, _ := newBashTool(t)
 
-	_, err := tool.Run(context.Background(), json.RawMessage(`{"command":"sleep 600","timeout":1}`), allowTarget)
+	out, err := tool.Run(context.Background(), json.RawMessage(`{"command":"sleep 600","timeout":1}`), allowTarget)
 
-	require.ErrorIs(t, err, ErrTimedOut)
-	assert.ErrorContains(t, err, "after 1ms")
+	require.NoError(t, err)
+	assert.Contains(t, out.Text, "within its 1ms timeout")
 }
 
 func TestBashRejectsInvalidArgs(t *testing.T) {
@@ -74,6 +84,7 @@ func TestBashRejectsInvalidArgs(t *testing.T) {
 		{"zero timeout", `{"command":"true","timeout":0}`},
 		{"timeout too long", `{"command":"true","timeout":600001}`},
 		{"unknown field", `{"command":"true","description":"x"}`},
+		{"non-boolean run_in_background", `{"command":"true","run_in_background":"yes"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := tool.Run(context.Background(), json.RawMessage(tc.args), allowTarget)
@@ -83,39 +94,50 @@ func TestBashRejectsInvalidArgs(t *testing.T) {
 }
 
 func TestBashDoesNotRunWithoutAdmission(t *testing.T) {
-	tool, dir := newBashTool(t)
-	refused := errors.New("refused")
+	for _, background := range []string{"false", "true"} {
+		t.Run("background "+background, func(t *testing.T) {
+			tool, dir := newBashTool(t)
+			refused := errors.New("refused")
 
-	_, err := tool.Run(context.Background(), json.RawMessage(`{"command":"touch marker"}`), func(policy.Target) (policy.Mode, error) { return policy.Plan, refused })
+			_, err := tool.Run(context.Background(), json.RawMessage(`{"command":"touch marker","run_in_background":`+background+`}`),
+				func(policy.Target) (policy.Mode, error) { return policy.Plan, refused })
 
-	require.ErrorIs(t, err, refused)
-	assert.NoFileExists(t, filepath.Join(dir, "marker"))
+			require.ErrorIs(t, err, refused)
+			assert.NoFileExists(t, filepath.Join(dir, "marker"))
+		})
+	}
 }
 
 func TestBashDoesNotStartWhenAdmissionCancels(t *testing.T) {
-	sh := NewShell(t.TempDir(), nil)
-	// A Start attempt must fail differently from cancellation.
-	sh.shell = filepath.Join(sh.dir, "missing-shell")
-	tool := NewBash(sh, NewShell(sh.dir, nil))
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	admitted := false
+	for _, background := range []string{"false", "true"} {
+		t.Run("background "+background, func(t *testing.T) {
+			sh := NewShell(t.TempDir(), nil)
+			// A Start attempt must fail differently from cancellation.
+			sh.shell = filepath.Join(sh.dir, "missing-shell")
+			tasks := NewTasks()
+			tool := NewBash(sh, NewShell(sh.dir, nil), tasks)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			admitted := false
 
-	out, err := tool.Run(ctx, json.RawMessage(`{"command":"echo unexpected"}`), func(policy.Target) (policy.Mode, error) {
-		admitted = true
-		cancel()
-		return policy.Execute, nil
-	})
+			out, err := tool.Run(ctx, json.RawMessage(`{"command":"echo unexpected","run_in_background":`+background+`}`), func(policy.Target) (policy.Mode, error) {
+				admitted = true
+				cancel()
+				return policy.Execute, nil
+			})
 
-	require.ErrorIs(t, err, context.Canceled)
-	assert.Equal(t, context.Canceled.Error(), err.Error())
-	assert.Empty(t, out.Text)
-	assert.True(t, admitted)
+			require.ErrorIs(t, err, context.Canceled)
+			assert.Equal(t, context.Canceled.Error(), err.Error())
+			assert.Empty(t, out.Text)
+			assert.True(t, admitted)
+			assert.Empty(t, tasks.List())
+		})
+	}
 }
 
 func TestBashRunsInTheShellOfTheAdmittedMode(t *testing.T) {
 	execDir, planDir := t.TempDir(), t.TempDir()
-	tool := NewBash(NewShell(execDir, &sandbox.Sandbox{}), NewShell(planDir, &sandbox.Sandbox{}))
+	tool := NewBash(NewShell(execDir, &sandbox.Sandbox{}), NewShell(planDir, &sandbox.Sandbox{}), NewTasks())
 	for _, tc := range []struct {
 		file string
 		mode policy.Mode
@@ -147,7 +169,7 @@ func TestBashRefusesPlanModeWithoutPlanSandbox(t *testing.T) {
 			if tc.sandboxed {
 				sb = &sandbox.Sandbox{}
 			}
-			tool := NewBash(NewShell(execDir, sb), NewShell(planDir, nil))
+			tool := NewBash(NewShell(execDir, sb), NewShell(planDir, nil), NewTasks())
 
 			_, err := tool.Run(t.Context(), json.RawMessage(`{"command":"touch marker"}`), func(policy.Target) (policy.Mode, error) {
 				return policy.Plan, nil
@@ -186,11 +208,19 @@ func TestBashDisplaySummary(t *testing.T) {
 	assert.Equal(t, "no output", tool.Display.Summary(noOutputNotice))
 	assert.Equal(t, "1 line", tool.Display.Summary("hi\n"))
 	assert.Equal(t, "3 lines", tool.Display.Summary("a\nb\nc"))
+	for _, out := range []string{
+		"Background task t1 started.",
+		"Background task t1: the user moved this command to the background, where it keeps running.",
+		"Background task t1: this command did not finish within its 2m0s timeout and keeps running in the background.",
+	} {
+		assert.Equal(t, "task t1 · running", tool.Display.Summary(out))
+	}
+	assert.Equal(t, "1 line", tool.Display.Summary("Background task t1x"))
 }
 
 func TestBashDisplayPreview(t *testing.T) {
 	unsandboxed, _ := newBashTool(t)
-	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), nil))
+	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), nil), NewTasks())
 	oneLine := json.RawMessage(`{"command":"ls"}`)
 	twoLines := json.RawMessage(`{"command":"cd a\nls\n"}`)
 	long, err := json.Marshal(map[string]string{"command": strings.Repeat("echo\n", maxPreviewLines+5)})

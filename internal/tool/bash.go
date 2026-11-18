@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,17 +20,23 @@ const (
 type bashArgs struct {
 	Command string `json:"command"`
 	// Timeout is a pointer so a missing timeout is told apart from 0.
-	Timeout *int `json:"timeout"`
+	Timeout         *int `json:"timeout"`
+	RunInBackground bool `json:"run_in_background"`
 }
+
+var backgroundResult = regexp.MustCompile(`^Background task (t\d+)[ :.]`)
 
 // NewBash runs execute-mode calls in sh and plan-mode calls in plan, which
 // must keep commands from writing the workspace; with plan unsandboxed, plan
-// mode cannot run commands.
-func NewBash(sh, plan *Shell) Tool {
+// mode cannot run commands. Commands run through tasks, which keeps those
+// moved to the background.
+func NewBash(sh, plan *Shell, tasks *Tasks) Tool {
 	description := "Runs a shell command (bash, else sh) in the workspace and returns its combined stdout and stderr; " +
 		"long output keeps its start and end. Every call starts a fresh shell in the workspace with no input: " +
 		"cd and variables do not carry over. A non-zero exit status is an error that reports the exit code. " +
-		"timeout is in milliseconds (default 120000, at most 600000); a command that runs out of time is killed."
+		"A command still running at its timeout, or one the user moves to the background, keeps running as a background task; " +
+		"run_in_background starts it as one at once. The result then gives the task id: read its output with TaskOutput " +
+		"and stop it with TaskStop; you are told when it ends."
 	if sh.Sandboxed() {
 		description += " Commands run in an OS sandbox that allows writing only in temporary directories, paths the user allowed " +
 			"and, in execute mode, the workspace; it may block reading some paths and the network. " +
@@ -51,7 +58,11 @@ func NewBash(sh, plan *Shell) Tool {
 					"type":        "integer",
 					"minimum":     1,
 					"maximum":     maxBashTimeoutMS,
-					"description": "Milliseconds before the command is killed; default 120000, at most 600000.",
+					"description": "Milliseconds before the command moves to the background; default 120000, at most 600000.",
+				},
+				"run_in_background": map[string]any{
+					"type":        "boolean",
+					"description": "Start the command as a background task and return its id at once; timeout does not apply.",
 				},
 			},
 			"required":             []string{"command"},
@@ -81,19 +92,34 @@ func NewBash(sh, plan *Shell) Tool {
 				}
 				run = plan
 			}
+			if args.RunInBackground {
+				info, err := tasks.Start(ctx, run, args.Command)
+				if err != nil {
+					return Result{}, err
+				}
+				return Result{Text: fmt.Sprintf("Background task %s started.", info.ID)}, nil
+			}
 			timeout := defaultBashTimeoutMS
 			if args.Timeout != nil {
 				timeout = *args.Timeout
 			}
-			out, err := run.Run(ctx, args.Command, time.Duration(timeout)*time.Millisecond)
-			if err != nil {
-				return Result{}, err
+			d := time.Duration(timeout) * time.Millisecond
+			out, moved, err := tasks.Run(ctx, run, args.Command, d)
+			switch {
+			case moved.ID == "":
+				return Result{Text: out}, err
+			case moved.TimedOut:
+				return Result{Text: fmt.Sprintf("Background task %s: this command did not finish within its %v timeout and keeps running in the background.", moved.ID, d)}, nil
+			default:
+				return Result{Text: fmt.Sprintf("Background task %s: the user moved this command to the background, where it keeps running.", moved.ID)}, nil
 			}
-			return Result{Text: out}, nil
 		},
 		Display: Display{
 			Title: bashTitle,
 			Summary: func(output string) string {
+				if m := backgroundResult.FindStringSubmatch(output); m != nil {
+					return "task " + m[1] + " · running"
+				}
 				if output == noOutputNotice {
 					return "no output"
 				}

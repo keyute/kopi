@@ -237,7 +237,7 @@ func TestSeamOpenStreamsFauxTurnWithZeroAmbient(t *testing.T) {
 	})
 	defer unsubscribe()
 
-	res, err := sess.Send(t.Context(), Prompt{Text: "probe please"}, nil)
+	res, err := sess.Send(t.Context(), Prompt{Text: "probe please"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
 
@@ -293,7 +293,7 @@ func TestRuntimeOmitsPiGAttribution(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
 
-	res, err := sess.Send(t.Context(), Prompt{Text: "hello"}, nil)
+	res, err := sess.Send(t.Context(), Prompt{Text: "hello"}, nil, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Sent)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
@@ -344,7 +344,7 @@ func TestSeamCancelDuringToolReportsInterrupted(t *testing.T) {
 	defer cancel()
 	done := make(chan result, 1)
 	go func() {
-		res, err := sess.Send(turnCtx, Prompt{Text: "block"}, nil)
+		res, err := sess.Send(turnCtx, Prompt{Text: "block"}, nil, nil)
 		done <- result{res.Outcome, err}
 	}()
 	<-started
@@ -411,7 +411,7 @@ func TestCancelDuringToolAbortsBeforeCancellationForwarding(t *testing.T) {
 	})
 	go func() {
 		defer close(joined)
-		res, err := sess.Send(ctx, Prompt{Text: "block"}, nil)
+		res, err := sess.Send(ctx, Prompt{Text: "block"}, nil, nil)
 		done <- result{res, err}
 	}()
 	<-started
@@ -436,7 +436,7 @@ func TestCancelledBeforeSendInterruptsWithoutProviderCall(t *testing.T) {
 
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
-	res, err := sess.Send(cancelled, Prompt{Text: "cancelled before start"}, nil)
+	res, err := sess.Send(cancelled, Prompt{Text: "cancelled before start"}, nil, nil)
 	require.NoError(t, err)
 	assert.False(t, res.Sent)
 	assert.Empty(t, res.Undelivered)
@@ -444,7 +444,7 @@ func TestCancelledBeforeSendInterruptsWithoutProviderCall(t *testing.T) {
 	assert.Zero(t, faux.CallCount())
 	assert.Zero(t, sess.MessageCount())
 
-	res, err = sess.Send(t.Context(), Prompt{Text: "next turn"}, nil)
+	res, err = sess.Send(t.Context(), Prompt{Text: "next turn"}, nil, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Sent)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
@@ -469,7 +469,7 @@ func TestCancelBeforeRunStartIsReissued(t *testing.T) {
 	})
 	defer unsubscribe()
 
-	res, err := sess.Send(turnCtx, Prompt{Text: "abort me"}, nil)
+	res, err := sess.Send(turnCtx, Prompt{Text: "abort me"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, event.Outcome{Status: event.Interrupted}, res.Outcome)
 	assert.Zero(t, faux.CallCount())
@@ -490,11 +490,11 @@ func TestCancelRacingSendReturnSparesNextTurn(t *testing.T) {
 			cancel()
 		}
 	})
-	_, err := sess.Send(turnCtx, Prompt{Text: "first turn"}, nil)
+	_, err := sess.Send(turnCtx, Prompt{Text: "first turn"}, nil, nil)
 	require.NoError(t, err)
 	unsubscribe()
 
-	res, err := sess.Send(t.Context(), Prompt{Text: "second turn"}, nil)
+	res, err := sess.Send(t.Context(), Prompt{Text: "second turn"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
 	assert.Equal(t, 2, faux.CallCount())
@@ -516,7 +516,7 @@ func TestCancelAfterTurnFinishedReportsCompleted(t *testing.T) {
 	})
 	defer unsubscribe()
 
-	res, err := sess.Send(turnCtx, Prompt{Text: "finish me"}, nil)
+	res, err := sess.Send(turnCtx, Prompt{Text: "finish me"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
 	assert.Equal(t, 1, faux.CallCount())
@@ -612,7 +612,7 @@ func TestOpenRunsSandboxedToolWithoutApproval(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
 
-	_, err = sess.Send(t.Context(), Prompt{Text: "run it"}, nil)
+	_, err = sess.Send(t.Context(), Prompt{Text: "run it"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, execOutput, lastToolResult(t, <-requests))
 	assert.Equal(t, int32(1), ran.Load())
@@ -623,7 +623,7 @@ func TestSessionsListsOnlyKopiAgentDir(t *testing.T) {
 	r, faux := newTestRuntime(t, sb)
 	faux.SetResponses([]ai.FauxResponseStep{reply("hello back")})
 	sess := openTestSession(t, r)
-	_, err := sess.Send(t.Context(), Prompt{Text: "hello kopi"}, nil)
+	_, err := sess.Send(t.Context(), Prompt{Text: "hello kopi"}, nil, nil)
 	require.NoError(t, err)
 
 	// A decoy session in PiG's default tree, in the same per-workspace
@@ -649,7 +649,7 @@ func sendOnce(t *testing.T, r *Runtime, faux *ai.FauxProviderHandle, prompt, ans
 	faux.SetResponses([]ai.FauxResponseStep{reply(answer)})
 	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
 	require.NoError(t, err)
-	_, err = sess.Send(t.Context(), Prompt{Text: prompt}, nil)
+	_, err = sess.Send(t.Context(), Prompt{Text: prompt}, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, sess.Close(t.Context()))
 	return sess
@@ -673,7 +673,7 @@ func TestResumeFromFreshRuntimeRestoresConversation(t *testing.T) {
 	assert.Equal(t, saved.ID(), sess.ID())
 	assert.Equal(t, 2, sess.MessageCount())
 
-	res, err := sess.Send(t.Context(), Prompt{Text: "second question"}, nil)
+	res, err := sess.Send(t.Context(), Prompt{Text: "second question"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, event.Completed, res.Outcome.Status)
 	raw, err := json.Marshal(<-requests)
@@ -780,7 +780,7 @@ func TestCloseReportsJoinTimeout(t *testing.T) {
 	sent := make(chan struct{})
 	go func() {
 		defer close(sent)
-		_, _ = sess.Send(context.Background(), Prompt{Text: "block"}, nil)
+		_, _ = sess.Send(context.Background(), Prompt{Text: "block"}, nil, nil)
 	}()
 	// Runs before the runtime's Close cleanup.
 	t.Cleanup(func() {
@@ -812,7 +812,7 @@ func TestSendOutcome(t *testing.T) {
 			r, faux := newTestRuntime(t, sb)
 			faux.SetResponses([]ai.FauxResponseStep{tc.step})
 			sess := openTestSession(t, r)
-			res, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil)
+			res, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, res.Outcome)
 		})
@@ -833,7 +833,7 @@ func TestOpenSendsPromptPartsInOrder(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
 
-	_, err = sess.Send(t.Context(), Prompt{Text: "hello"}, nil)
+	_, err = sess.Send(t.Context(), Prompt{Text: "hello"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, kopiText+"\n\nInstructions from /some/dir/AGENTS.md:\nBe brief.\n\nMCP server s tools: mcp__s__t.", ai.GetCurrentSystemPrompt(<-requests))
 }
@@ -848,7 +848,7 @@ func TestResumeRecordsOnlyChangedPromptPart(t *testing.T) {
 	faux.SetResponses([]ai.FauxResponseStep{reply("first answer")})
 	saved, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: parts, Authority: policy.NewAuthority()})
 	require.NoError(t, err)
-	_, err = saved.Send(t.Context(), Prompt{Text: "first question"}, nil)
+	_, err = saved.Send(t.Context(), Prompt{Text: "first question"}, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, saved.Close(t.Context()))
 
@@ -858,7 +858,7 @@ func TestResumeRecordsOnlyChangedPromptPart(t *testing.T) {
 	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, ResumeID: saved.ID(), SystemPrompt: changed, Authority: policy.NewAuthority()})
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
-	_, err = sess.Send(t.Context(), Prompt{Text: "second question"}, nil)
+	_, err = sess.Send(t.Context(), Prompt{Text: "second question"}, nil, nil)
 	require.NoError(t, err)
 
 	req := <-requests
@@ -925,7 +925,7 @@ func TestResumePromptSectionsPreserveOrderAndHistory(t *testing.T) {
 			faux.SetResponses([]ai.FauxResponseStep{reply("first answer")})
 			saved, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: tc.saved, Authority: policy.NewAuthority()})
 			require.NoError(t, err)
-			_, err = saved.Send(t.Context(), Prompt{Text: "first question"}, nil)
+			_, err = saved.Send(t.Context(), Prompt{Text: "first question"}, nil, nil)
 			require.NoError(t, err)
 			history := saved.inner.Agent().MessagesSnapshot()
 			normal := reflect.ValueOf(saved.inner.Agent().PreparePromptHook()).Pointer()
@@ -943,7 +943,7 @@ func TestResumePromptSectionsPreserveOrderAndHistory(t *testing.T) {
 				faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "resumed answer")})
 				sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, ResumeID: saved.ID(), SystemPrompt: tc.desired, Authority: policy.NewAuthority()})
 				require.NoError(t, err)
-				_, err = sess.Send(t.Context(), Prompt{Text: "next question"}, nil)
+				_, err = sess.Send(t.Context(), Prompt{Text: "next question"}, nil, nil)
 				require.NoError(t, err)
 				req := <-requests
 				assert.Equal(t, strings.Join(texts, "\n\n"), ai.GetCurrentSystemPrompt(req))
@@ -990,7 +990,7 @@ func TestResumePromptRepairRetiresOnlyAfterCommit(t *testing.T) {
 				require.NoError(t, err)
 				normal := reflect.ValueOf(saved.inner.Agent().PreparePromptHook()).Pointer()
 				faux.SetResponses([]ai.FauxResponseStep{reply("saved")})
-				_, err = saved.Send(t.Context(), Prompt{Text: "save"}, nil)
+				_, err = saved.Send(t.Context(), Prompt{Text: "save"}, nil, nil)
 				require.NoError(t, err)
 				history := saved.inner.Agent().MessagesSnapshot()
 				require.NoError(t, saved.Close(t.Context()))
@@ -1010,13 +1010,13 @@ func TestResumePromptRepairRetiresOnlyAfterCommit(t *testing.T) {
 				case "pre-cancelled":
 					ctx, cancel := context.WithCancel(t.Context())
 					cancel()
-					res, err := sess.Send(ctx, Prompt{Text: "cancelled"}, nil)
+					res, err := sess.Send(ctx, Prompt{Text: "cancelled"}, nil, nil)
 					require.NoError(t, err)
 					assert.False(t, res.Sent)
 				case "preparation error":
 					model := a.Model()
 					a.SetModel(&ai.Model{})
-					_, err := sess.Send(t.Context(), Prompt{Text: "invalid model"}, nil)
+					_, err := sess.Send(t.Context(), Prompt{Text: "invalid model"}, nil, nil)
 					require.ErrorIs(t, err, agent.ErrNoModelSelected)
 					a.SetModel(model)
 				case "unapplied preparation":
@@ -1029,14 +1029,14 @@ func TestResumePromptRepairRetiresOnlyAfterCommit(t *testing.T) {
 
 				requests := make(chan []ai.Message, 1)
 				faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "repaired")})
-				_, err = sess.Send(t.Context(), Prompt{Text: "retry"}, nil)
+				_, err = sess.Send(t.Context(), Prompt{Text: "retry"}, nil, nil)
 				require.NoError(t, err)
 				assert.Equal(t, kopiText+"\n\nProject instructions.\n\nMCP tools.", ai.GetCurrentSystemPrompt(<-requests))
 				assert.Equal(t, history, a.MessagesSnapshot()[:len(history)])
 				assert.Equal(t, wrapper, reflect.ValueOf(a.PreparePromptHook()).Pointer(), "emitting a repair is not confirmation")
 
 				faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "confirmed")})
-				_, err = sess.Send(t.Context(), Prompt{Text: "confirm"}, nil)
+				_, err = sess.Send(t.Context(), Prompt{Text: "confirm"}, nil, nil)
 				require.NoError(t, err)
 				<-requests
 				assert.Equal(t, normal, reflect.ValueOf(a.PreparePromptHook()).Pointer())
@@ -1044,7 +1044,7 @@ func TestResumePromptRepairRetiresOnlyAfterCommit(t *testing.T) {
 				updated := "Updated instructions."
 				sess.inner.SetSystemPromptSections(ai.OrderedSections{{Name: "preamble", Value: &updated}})
 				faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "updated")})
-				_, err = sess.Send(t.Context(), Prompt{Text: "update"}, nil)
+				_, err = sess.Send(t.Context(), Prompt{Text: "update"}, nil, nil)
 				require.NoError(t, err)
 				assert.Equal(t, updated, ai.GetCurrentSystemPrompt(<-requests), "PiG's per-run updates survive retirement")
 			})

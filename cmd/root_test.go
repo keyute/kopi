@@ -244,6 +244,48 @@ func TestRootRejectsPathRuleForBash(t *testing.T) {
 	assert.NoDirExists(t, e.agentDir)
 }
 
+func TestRootRejectsPathRuleForWebFetch(t *testing.T) {
+	e := newTestEnv(t)
+
+	_, _, err := execute(t, "", "--model", mockModel, "--allowed-tools", "WebFetch(x)", "-p", "hi")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `tool "WebFetch" takes no path`)
+	assert.NoDirExists(t, e.agentDir)
+}
+
+func TestRootUnknownSmallModelFailsAtStart(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
+	e.writeMockModels(t, server.URL)
+	configFile := filepath.Join(e.kopiHome, "config.json")
+	e.writeFile(t, configFile, `{"smallModel":"nosuch/model-1"}`)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.ErrorIs(t, err, pigruntime.ErrUnknownModel)
+	assert.Contains(t, err.Error(), `"smallModel" in `+configFile)
+	assert.Empty(t, server.requests)
+}
+
+// The check on smallModel runs before any session opens, so the credential
+// error must still name the login command.
+func TestRootSmallModelWithoutCredentialFailsAtStart(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
+	e.writeMockModels(t, server.URL)
+	configFile := filepath.Join(e.kopiHome, "config.json")
+	e.writeFile(t, configFile, fmt.Sprintf(`{"smallModel":%q}`, builtinModel(t, "openai-codex")))
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"smallModel" in `+configFile)
+	assert.Contains(t, err.Error(), `run "kopi login openai-codex"`)
+	assert.NotContains(t, err.Error(), "failed to open session")
+	assert.Empty(t, server.requests)
+}
+
 // builtinModel names one of PiG's builtin models for provider.
 func builtinModel(t *testing.T, provider string) string {
 	t.Helper()
@@ -427,7 +469,7 @@ func TestRootStreamsTurnFromMockServer(t *testing.T) {
 	for _, tl := range req.body["tools"].([]any) {
 		tools = append(tools, tl.(map[string]any)["function"].(map[string]any)["name"].(string))
 	}
-	assert.Equal(t, []string{"Read", "Glob", "Grep", "LS", "Write", "Edit", "Bash"}, tools)
+	assert.Equal(t, []string{"Read", "Glob", "Grep", "LS", "Write", "Edit", "Bash", "TaskOutput", "TaskStop", "WebFetch"}, tools)
 	messages := req.body["messages"].([]any)
 	first := messages[0].(map[string]any)
 	assert.Contains(t, []string{"system", "developer"}, first["role"])

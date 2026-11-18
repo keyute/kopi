@@ -13,6 +13,7 @@ import (
 	"github.com/MichaelKinsy/PiG/agent"
 	"github.com/MichaelKinsy/PiG/ai"
 	"github.com/MichaelKinsy/PiG/coding"
+	"github.com/MichaelKinsy/PiG/coding/extension"
 	"github.com/MichaelKinsy/PiG/coding/extension/host/subprocess"
 
 	"github.com/keyute/kopi/internal/event"
@@ -47,6 +48,40 @@ type Image struct {
 type Prompt struct {
 	Text   string
 	Images []Image
+}
+
+// Notice is input Kopi gives the model on its own behalf, not the human's. The
+// model reads Text as user input; the transcript draws Shown where the model
+// reads it, live and on resume.
+type Notice struct {
+	Text  string
+	Shown event.TaskEnded
+}
+
+// noticeType is the PiG custom type of a delivered Notice, stored in session
+// history.
+const noticeType = "kopi.notice"
+
+// noticeDetails is what history keeps of a Notice's Shown.
+type noticeDetails struct {
+	ID        string `json:"id"`
+	Command   string `json:"command"`
+	Status    string `json:"status"`
+	ElapsedMs int64  `json:"elapsedMs"`
+}
+
+func (n Notice) message() extension.CustomMessageRef {
+	return extension.CustomMessageRef{
+		CustomType: noticeType,
+		Content:    n.Text,
+		Display:    true,
+		Details:    noticeDetails{ID: n.Shown.ID, Command: n.Shown.Command, Status: n.Shown.Status, ElapsedMs: n.Shown.Elapsed.Milliseconds()},
+	}
+}
+
+func isNotice(m agent.AgentMessage) bool {
+	t, _ := m.Custom["customType"].(string)
+	return t == noticeType
 }
 
 func toAI(images []Image) []ai.ImageContent {
@@ -111,11 +146,14 @@ type SendResult struct {
 	// Reply is the text of the run's last assistant message when Outcome is
 	// Completed, else "". Its text blocks are joined as History joins them.
 	Reply string
-	// Sent reports that p was delivered; it is false when ctx was already done
-	// or PiG rejected the prompt.
+	// Sent reports that p was delivered or, when p is empty, the first notice
+	// was; it is false when ctx was already done or PiG rejected the input.
 	Sent bool
 	// Undelivered are the handed-over prompts the model never read, as given.
 	Undelivered []Prompt
+	// UndeliveredNotices are the notices, given or handed over, the model
+	// never read, in delivery order.
+	UndeliveredNotices []Notice
 }
 
 type (
@@ -160,17 +198,22 @@ func InterruptTurn(ctx context.Context) bool {
 // errors: they surface as a Failed outcome carrying the provider's error text.
 // An overlapping call returns ErrSendInProgress unless ctx is already done.
 //
+// The model reads notices after p; when p is empty, the notices alone start
+// the run.
+//
 // At the end of each turn that did not fail and was not aborted, while ctx is
-// not cancelled, Send calls more, if not nil, for prompts to hand over; the
-// model reads them at the next boundary of the same run. more is called on
-// PiG's event executor, with no Session lock held. Each handed-over prompt becomes a UserMessage when it is
-// delivered; p does not, as the caller draws it.
-func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (SendResult, error) {
+// not cancelled, Send calls more, if not nil, for prompts and notices to hand
+// over; the model reads them, prompts first, at the next boundary of the same
+// run. more is called on PiG's event executor, with no Session lock held. Each
+// handed-over prompt becomes a UserMessage when it is delivered; p does not, as
+// the caller draws it. Every notice, given or handed over, becomes its Shown
+// when it is delivered.
+func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more func() ([]Prompt, []Notice)) (SendResult, error) {
 	if ctx.Err() != nil {
-		return SendResult{Outcome: event.Outcome{Status: event.Interrupted}}, nil
+		return SendResult{Outcome: event.Outcome{Status: event.Interrupted}, UndeliveredNotices: notices}, nil
 	}
 	if !s.sendInProgress.CompareAndSwap(false, true) {
-		return SendResult{}, fmt.Errorf("failed to send prompt: %w", ErrSendInProgress)
+		return SendResult{UndeliveredNotices: notices}, fmt.Errorf("failed to send prompt: %w", ErrSendInProgress)
 	}
 	defer s.sendInProgress.Store(false)
 	var aborted atomic.Bool
@@ -182,12 +225,18 @@ func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (Sen
 	// ownership, so a hook retaining ctx cannot abort the next Send.
 	defer interrupt.retire()
 	toolCtx := context.WithValue(context.WithValue(ctx, turnInterruptKey{}, interrupt), turnSessionKey{}, s)
+	// PiG gets an uncancellable ctx: a cancelled one makes it return
+	// ctx.Err() instead of the turn, so RequestAbort is the only abort path.
+	pigCtx := context.WithoutCancel(toolCtx)
 	abort := func() { interrupt.interrupt() }
 	abortInLoop := abortOnEvent(ctx, abort)
 	// handed is the handed-over prompts not yet delivered. Send is the only
 	// producer into PiG's queue and PiG delivers in queue order, after p, so
 	// each user message after p's is the head.
 	var handed []Prompt
+	// pending is the notices not yet delivered. PiG delivers them in the
+	// order Send gives them, so each notice message is the head.
+	pending := slices.Clone(notices)
 	var sent bool
 	// last is the run's last assistant message. SendContent returns PiG's
 	// whole transcript, so it cannot say which assistant message is this run's.
@@ -196,6 +245,14 @@ func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (Sen
 		abortInLoop(ev)
 		switch ev := ev.(type) {
 		case agent.MessageStartEvent:
+			if isNotice(ev.Message) {
+				sent = true
+				if len(pending) > 0 {
+					s.notify(pending[0].Shown)
+					pending = pending[1:]
+				}
+				return
+			}
 			if ev.Message.User == nil {
 				return
 			}
@@ -220,10 +277,21 @@ func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (Sen
 			if a := ev.Message.Assistant; a != nil && (a.StopReason == ai.StopReasonError || a.StopReason == ai.StopReasonAborted) {
 				return
 			}
-			for _, q := range more() {
+			prompts, steered := more()
+			for _, q := range prompts {
 				text, images := s.steerContent(q)
 				handed = append(handed, q)
 				s.inner.QueueSteer(text, images)
+			}
+			// Prompts and notices share PiG's steering queue. TriggerTurn stays
+			// nil, so on an idle session a notice is only appended and never
+			// starts a run on the event executor.
+			pending = append(pending, steered...)
+			for _, n := range steered {
+				if err := s.inner.SendCustomMessage(pigCtx, n.message(), &extension.SendMessageOptions{DeliverAs: extension.DeliverAsSteer}); err != nil {
+					slog.Warn("failed to hand over notice", "task", n.Shown.ID, "error", err)
+					break
+				}
 			}
 		}
 	})
@@ -233,19 +301,20 @@ func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (Sen
 		defer close(abortDone)
 		abort()
 	})
-	// PiG gets an uncancellable ctx: a cancelled one makes it return
-	// ctx.Err() instead of the turn, so RequestAbort is the only abort path.
-	_, err := s.inner.SendContent(context.WithoutCancel(toolCtx), coding.BuildUserContent(p.Text, toAI(p.Images)))
+	err := s.deliver(pigCtx, p, notices)
 	// An abort already under way must finish before Send returns, or its
 	// RequestAbort could land on the following turn.
 	if !stop() {
 		<-abortDone
 	}
-	// What PiG has not drained must not reach the next run.
+	// What PiG has not drained must not reach the next run. ClearQueue drops
+	// only queued user messages; Send is the only producer of the rest.
 	_, _ = s.inner.ClearQueue()
-	res := SendResult{Sent: sent, Undelivered: handed}
+	s.inner.Agent().ClearSteeringQueue()
+	s.inner.Agent().TakePendingNextTurn()
+	res := SendResult{Sent: sent, Undelivered: handed, UndeliveredNotices: pending}
 	if err != nil {
-		return res, fmt.Errorf("failed to send prompt: %w", reword(err))
+		return res, err
 	}
 	// A cancel can land after PiG finished the turn but before stop(); a
 	// turn that ended normally is complete whatever the abort hook saw.
@@ -273,6 +342,33 @@ func (s *Session) Send(ctx context.Context, p Prompt, more func() []Prompt) (Sen
 		res.Reply = strings.Join(parts, "\n\n")
 	}
 	return res, nil
+}
+
+// deliver runs p with notices queued as next-turn context after it, or, when p
+// is empty, a run started by the first notice with the rest after it. Either
+// call blocks until the run settles.
+func (s *Session) deliver(ctx context.Context, p Prompt, notices []Notice) error {
+	wake := p.Text == "" && len(p.Images) == 0 && len(notices) > 0
+	queued := notices
+	if wake {
+		queued = notices[1:]
+	}
+	for _, n := range queued {
+		if err := s.inner.SendCustomMessage(ctx, n.message(), &extension.SendMessageOptions{DeliverAs: extension.DeliverAsNextTurn}); err != nil {
+			return fmt.Errorf("failed to send notice: %w", reword(err))
+		}
+	}
+	if wake {
+		trigger := true
+		if err := s.inner.SendCustomMessage(ctx, notices[0].message(), &extension.SendMessageOptions{TriggerTurn: &trigger}); err != nil {
+			return fmt.Errorf("failed to send notice: %w", reword(err))
+		}
+		return nil
+	}
+	if _, err := s.inner.SendContent(ctx, coding.BuildUserContent(p.Text, toAI(p.Images))); err != nil {
+		return fmt.Errorf("failed to send prompt: %w", reword(err))
+	}
+	return nil
 }
 
 // notify sends e to every listener, in the order they subscribed.

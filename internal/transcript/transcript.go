@@ -25,6 +25,7 @@ const (
 	noticeItem
 	errorItem
 	turnItem
+	taskItem
 )
 
 type item struct {
@@ -33,6 +34,7 @@ type item struct {
 	call    Call
 	outcome event.Outcome
 	elapsed time.Duration
+	task    event.TaskEnded
 }
 
 // visible reports whether the item draws a block; whitespace-only assistant
@@ -44,7 +46,10 @@ func (it item) visible() bool {
 func (t *Transcript) Apply(ev event.Event) {
 	switch ev := ev.(type) {
 	case event.TurnStart:
-		t.items = append(t.items, item{kind: userItem, text: ev.Prompt})
+		// A wake turn, started by a background task's end, has no prompt.
+		if ev.Prompt != "" {
+			t.items = append(t.items, item{kind: userItem, text: ev.Prompt})
+		}
 	case event.UserMessage:
 		// History restores a steered message as a TurnStart; both draw the
 		// same block.
@@ -81,6 +86,8 @@ func (t *Transcript) Apply(ev event.Event) {
 	case event.TurnEnd:
 		t.settleUnfinished()
 		t.items = append(t.items, item{kind: turnItem, outcome: ev.Outcome, elapsed: ev.Elapsed})
+	case event.TaskEnded:
+		t.items = append(t.items, item{kind: taskItem, task: ev})
 	}
 }
 

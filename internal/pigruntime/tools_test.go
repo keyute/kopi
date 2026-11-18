@@ -76,7 +76,7 @@ func TestDeferredToolIsDeclaredOnlyAfterLoad(t *testing.T) {
 	var ran atomic.Bool
 	sess := openTestSession(t, r, loaderTool(), deferredTool(&ran))
 
-	res, err := sess.Send(t.Context(), Prompt{Text: "load it"}, nil)
+	res, err := sess.Send(t.Context(), Prompt{Text: "load it"}, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "done", res.Reply)
 	assert.Equal(t, []string{"Load"}, declared(<-requests))
@@ -105,7 +105,7 @@ func TestCallToDeferredToolBeforeLoadIsNotFound(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
 
-	_, err = sess.Send(t.Context(), Prompt{Text: "call it"}, nil)
+	_, err = sess.Send(t.Context(), Prompt{Text: "call it"}, nil, nil)
 	require.NoError(t, err)
 	assert.Contains(t, lastToolResult(t, <-requests), "not found")
 	assert.False(t, ran.Load())
@@ -149,7 +149,7 @@ func TestLoadToolsConcurrentlyPreservesActiveTools(t *testing.T) {
 	}
 	sess := openTestSession(t, r, tools...)
 
-	res, err := sess.Send(t.Context(), Prompt{Text: "load both"}, nil)
+	res, err := sess.Send(t.Context(), Prompt{Text: "load both"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "done", res.Reply)
 	assert.NoError(t, <-loadErrors)
@@ -184,13 +184,13 @@ func TestResumedSessionStartsWithDeferredToolsUnloaded(t *testing.T) {
 	tools := []tool.Tool{loaderTool(), deferredTool(&ran)}
 	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: kopiPrompt, Tools: tools, Authority: policy.NewAuthority()})
 	require.NoError(t, err)
-	_, err = sess.Send(t.Context(), Prompt{Text: "load it"}, nil)
+	_, err = sess.Send(t.Context(), Prompt{Text: "load it"}, nil, nil)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"Load", "Deferred"}, declared(<-requests))
 	require.NoError(t, sess.Close(t.Context()))
 
 	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "again")})
-	_, err = resume(t, r, sess.ID(), tools...).Send(t.Context(), Prompt{Text: "again"}, nil)
+	_, err = resume(t, r, sess.ID(), tools...).Send(t.Context(), Prompt{Text: "again"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Load"}, declared(<-requests))
 }

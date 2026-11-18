@@ -15,4 +15,8 @@ type Status struct {
 	// Shell reports that a tool that runs commands is available, and
 	// Sandboxed that it runs them under the OS sandbox.
 	Shell, Sandboxed bool
+	// Tasks counts the running background tasks; Foreground reports that a
+	// command runs in the foreground, which Background can move.
+	Tasks      int
+	Foreground bool
 }

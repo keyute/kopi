@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/tool"
 	"github.com/keyute/kopi/internal/transcript"
 )
 
@@ -83,6 +84,8 @@ func (c *renderCache) render(b transcript.Block, f blockFolds) []line {
 		return plain(hang("κ ", fg(th.error), b.Text, fg(th.error), width))
 	case transcript.Turn:
 		return plain(renderTurn(b, f.verb, width, th))
+	case transcript.Task:
+		return plain(renderTask(b, width, th))
 	}
 	return nil
 }
@@ -177,6 +180,20 @@ func renderTurn(t transcript.Turn, v verb, width int, th theme) []string {
 		out = append(out, hang("  ", fg(th.error), t.Outcome.Message, fg(th.error), width)...)
 	}
 	return out
+}
+
+// renderTask is one row naming a background task's end, its command's first
+// line cut to fit.
+func renderTask(t transcript.Task, width int, th theme) []string {
+	word, ps, ts := "finished", fg(th.success), lipgloss.NewStyle()
+	if t.Status != string(tool.TaskCompleted) {
+		word, ps, ts = t.Status, fg(th.error), fg(th.error)
+	}
+	head := "task " + oneLine(t.ID) + " " + word + " · "
+	tail := " · " + formatDuration(t.Elapsed)
+	command, _, _ := strings.Cut(t.Command, "\n")
+	command = cut(oneLine(command), width-2-lipgloss.Width(head+tail))
+	return hang("• ", ps, head+command+tail, ts, width)
 }
 
 // formatDuration renders d as "41s", "1m 12s" or "1h 2m".

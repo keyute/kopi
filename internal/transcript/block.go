@@ -64,6 +64,13 @@ type Turn struct {
 	Elapsed time.Duration
 }
 
+// Task is a background task's end; Status is completed, failed or stopped.
+type Task struct {
+	key                 string
+	ID, Command, Status string
+	Elapsed             time.Duration
+}
+
 func (b User) Key() string      { return b.key }
 func (b Assistant) Key() string { return b.key }
 func (b Row) Key() string       { return "call:" + b.Call.ID }
@@ -71,6 +78,7 @@ func (b Group) Key() string     { return b.key }
 func (b Notice) Key() string    { return b.key }
 func (b Error) Key() string     { return b.key }
 func (b Turn) Key() string      { return b.key }
+func (b Task) Key() string      { return b.key }
 
 func (t *Transcript) Blocks() []Block {
 	var (
@@ -105,6 +113,8 @@ func (t *Transcript) Blocks() []Block {
 			blocks = append(blocks, Error{key: key, Text: it.text})
 		case turnItem:
 			blocks = append(blocks, Turn{key: key, Outcome: it.outcome, Elapsed: it.elapsed})
+		case taskItem:
+			blocks = append(blocks, Task{key: key, ID: it.task.ID, Command: it.task.Command, Status: it.task.Status, Elapsed: it.task.Elapsed})
 		}
 	}
 	flush(len(t.items) <= t.boundary)

@@ -15,6 +15,7 @@ import (
 	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/tool"
 )
 
 // Controller is the part of app.Controller the frontend uses.
@@ -33,6 +34,12 @@ type Controller interface {
 	// Arguments and Files may read many files; call them off the event loop.
 	Arguments(name string) ([]app.Candidate, error)
 	Files() ([]app.Candidate, error)
+	// Background moves the live foreground command to the background; false
+	// when there was none.
+	Background() bool
+	Tasks() []tool.TaskInfo
+	TaskOutput(id string) (tool.TaskInfo, error)
+	StopTask(id string) error
 }
 
 // Options are the frontend's settings. Keys maps action names to key

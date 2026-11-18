@@ -60,6 +60,13 @@ var segments = map[string]segment{
 		}
 		return fg(th.warning).Render("unsandboxed"), s.Shell
 	},
+	"tasks": func(s statusInput, th theme) (string, bool) {
+		text := fmt.Sprintf("%d shells", s.Tasks)
+		if s.Tasks == 1 {
+			text = "1 shell"
+		}
+		return fg(th.dim).Render(text), s.Tasks > 0
+	},
 }
 
 // statusLayout names the segments on each side of the status line.
