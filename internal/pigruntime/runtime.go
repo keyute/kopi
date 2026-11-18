@@ -121,8 +121,8 @@ type OpenOptions struct {
 }
 
 // PromptPart is one named piece of the system prompt. Parts are sent in
-// order, separated by a blank line; a resumed session is told only of the
-// parts whose text changed, matched by name.
+// order, separated by a blank line. Resumes record changed parts by name,
+// with suffix removals and additions when needed to restore that order.
 type PromptPart struct{ Name, Text string }
 
 func (r *Runtime) Open(ctx context.Context, o OpenOptions) (*Session, error) {
@@ -224,6 +224,46 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	// InitialActiveToolNames says, and a resumed session restores the tools
 	// its transcript last declared, so deferred tools are deactivated here.
 	sess.SetActiveToolsByName(names)
+	a := sess.Agent()
+	previous := a.PreparePromptHook()
+	a.SetPreparePrompt(func(ctx context.Context, messages []agent.AgentMessage) ([]agent.AgentMessage, error) {
+		if previous != nil {
+			var err error
+			messages, err = previous(ctx, messages)
+			if err != nil {
+				return nil, err
+			}
+		}
+		current := ai.GetCurrentSystemMessage(slices.Concat(a.MessagesSnapshot(), messages))
+		var replayed ai.OrderedSections
+		if current != nil {
+			replayed = current.Sections
+		}
+		prefix := 0
+		for prefix < len(replayed) && prefix < len(sections) && replayed[prefix].Name == sections[prefix].Name {
+			prefix++
+		}
+		if prefix == len(replayed) && prefix == len(sections) {
+			return messages, nil
+		}
+		// PiG updates names in place and appends additions. Remove the whole
+		// mismatched suffix first so replay can append it in the desired order.
+		removed := make(ai.OrderedSections, 0, len(replayed)-prefix)
+		for _, section := range replayed[prefix:] {
+			removed = append(removed, ai.PromptSection{Name: section.Name})
+		}
+		repair := []agent.AgentMessage{
+			{System: &ai.SystemMessage{Content: ai.SystemText(""), Sections: removed, Timestamp: time.Now().UnixMilli()}},
+			{System: &ai.SystemMessage{Content: ai.SystemText(""), Sections: slices.Clone(sections[prefix:]), Timestamp: time.Now().UnixMilli()}},
+		}
+		// Preserve PiG's prepared system updates ahead of the repair and the
+		// user's starting messages after it, without changing either slice.
+		at := 0
+		for at < len(messages) && messages[at].System != nil {
+			at++
+		}
+		return slices.Concat(messages[:at], repair, messages[at:]), nil
+	})
 	return &Session{inner: sess}, nil
 }
 

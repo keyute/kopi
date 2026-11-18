@@ -876,3 +876,99 @@ func TestResumeRecordsOnlyChangedPromptPart(t *testing.T) {
 	}, sections, "the resume records only the changed part")
 	assert.Equal(t, kopiText+"\n\nBe thorough.", ai.GetCurrentSystemPrompt(req))
 }
+
+func TestResumePromptSectionsPreserveOrderAndHistory(t *testing.T) {
+	preamble := PromptPart{Name: "preamble", Text: kopiText}
+	global := PromptPart{Name: "instructions /home", Text: "Global instructions."}
+	project := PromptPart{Name: "instructions /project", Text: "Project instructions."}
+	mcp := PromptPart{Name: "mcp-servers", Text: "MCP server tools."}
+	for _, tc := range []struct {
+		name    string
+		saved   []PromptPart
+		desired []PromptPart
+		patches ai.OrderedSections
+		repair  ai.OrderedSections
+	}{
+		{
+			name:  "add project before MCP",
+			saved: []PromptPart{preamble, mcp}, desired: []PromptPart{preamble, project, mcp},
+			patches: ai.OrderedSections{{Name: project.Name, Value: &project.Text}},
+			repair:  ai.OrderedSections{{Name: mcp.Name}, {Name: project.Name}},
+		},
+		{
+			name:  "add global before project",
+			saved: []PromptPart{preamble, project, mcp}, desired: []PromptPart{preamble, global, project, mcp},
+			patches: ai.OrderedSections{{Name: global.Name, Value: &global.Text}},
+			repair:  ai.OrderedSections{{Name: project.Name}, {Name: mcp.Name}, {Name: global.Name}},
+		},
+		{
+			name:  "omit instruction",
+			saved: []PromptPart{preamble, project, mcp}, desired: []PromptPart{preamble, mcp},
+			patches: ai.OrderedSections{{Name: project.Name}},
+		},
+		{
+			name:  "unchanged",
+			saved: []PromptPart{preamble, project, mcp}, desired: []PromptPart{preamble, project, mcp},
+		},
+		{
+			name:  "remove all",
+			saved: []PromptPart{preamble, project}, desired: []PromptPart{},
+			patches: ai.OrderedSections{{Name: preamble.Name}, {Name: project.Name}},
+		},
+		{name: "explicit empty", saved: []PromptPart{}, desired: []PromptPart{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sb := newSandbox(t)
+			r, faux := newTestRuntime(t, sb)
+			faux.SetResponses([]ai.FauxResponseStep{reply("first answer")})
+			saved, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: tc.saved, Authority: policy.NewAuthority()})
+			require.NoError(t, err)
+			_, err = saved.Send(t.Context(), Prompt{Text: "first question"}, nil)
+			require.NoError(t, err)
+			history := saved.inner.Agent().MessagesSnapshot()
+			require.NoError(t, saved.Close(t.Context()))
+
+			var desired ai.OrderedSections
+			var texts []string
+			for _, part := range tc.desired {
+				desired = append(desired, ai.PromptSection{Name: part.Name, Value: &part.Text})
+				texts = append(texts, part.Text)
+			}
+			// The second reopen must replay the persisted repair, not emit it again.
+			for round := range 2 {
+				requests := make(chan []ai.Message, 1)
+				faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "resumed answer")})
+				sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, ResumeID: saved.ID(), SystemPrompt: tc.desired, Authority: policy.NewAuthority()})
+				require.NoError(t, err)
+				_, err = sess.Send(t.Context(), Prompt{Text: "next question"}, nil)
+				require.NoError(t, err)
+				req := <-requests
+				assert.Equal(t, strings.Join(texts, "\n\n"), ai.GetCurrentSystemPrompt(req))
+				if current := ai.GetCurrentSystemMessage(req); current != nil {
+					assert.Equal(t, desired, current.Sections)
+				} else {
+					assert.Empty(t, desired)
+				}
+				after := sess.inner.Agent().MessagesSnapshot()
+				require.GreaterOrEqual(t, len(after), len(history))
+				assert.Equal(t, history, after[:len(history)], "historical prefix must not change")
+				var updates []ai.OrderedSections
+				for _, message := range after[len(history):] {
+					if message.System != nil && len(message.System.Sections) > 0 {
+						updates = append(updates, message.System.Sections)
+					}
+				}
+				var want []ai.OrderedSections
+				if round == 0 && len(tc.patches) > 0 {
+					want = append(want, tc.patches)
+					if len(tc.repair) > 0 {
+						want = append(want, tc.repair, desired[1:])
+					}
+				}
+				assert.Equal(t, want, updates)
+				history = after
+				require.NoError(t, sess.Close(t.Context()))
+			}
+		})
+	}
+}
