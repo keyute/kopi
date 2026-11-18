@@ -159,8 +159,6 @@ func cellOf(row, sub string) int {
 	return ansi.StringWidth(row[:i])
 }
 
-func abs(n int) int { return max(n, -n) }
-
 func TestQuestionRowsShowThePreviewBesideFromSixtyFourColumns(t *testing.T) {
 	qs := previewQuestion("# Heading\n\nsome text")
 	rows := plainQuestionRows(qs, 0, 80, 6, 100)
@@ -169,12 +167,12 @@ func TestQuestionRowsShowThePreviewBesideFromSixtyFourColumns(t *testing.T) {
 	first := rows[3]
 	assert.True(t, strings.HasPrefix(first, "❭ 1. Postgres"), first)
 	// The column is the widest option row plus one, "  3. Type something." and
-	// its cursor cell; the box is 12 wide, centred in what the gap leaves.
+	// its cursor cell; the box starts previewGap columns after it.
 	list := len("  3. Type something.") + 1
 	box := cellOf(first, "┌")
-	assert.Less(t, abs((box-list)-(80-box-minPreviewBox)), 2, "the margins differ by at most one")
-	assert.Equal(t, box+1, cellOf(rows[4], "Heading"))
-	assert.Equal(t, box+1, cellOf(rows[5], "some text"))
+	assert.Equal(t, list+previewGap, box)
+	assert.Equal(t, box+2, cellOf(rows[4], "Heading"))
+	assert.Equal(t, box+2, cellOf(rows[5], "some text"))
 	assert.Equal(t, "  enter to choose · tab to add a note · esc to dismiss", rows[len(rows)-2], "the hint spans the whole width")
 
 	assert.Contains(t, plainQuestionRows(qs, 0, 64, 6, 100)[3], "┌", "from 64 columns")
@@ -189,8 +187,8 @@ func TestQuestionRowsShowThePreviewBelowUnderSixtyFourColumns(t *testing.T) {
 		"  3. Type something.",
 		"",
 		"  ┌" + box + "┐",
-		"  │Heading" + strings.Repeat(" ", 59-7) + "│",
-		"  │some text" + strings.Repeat(" ", 59-9) + "│",
+		"  │ Heading" + strings.Repeat(" ", 59-8) + "│",
+		"  │ some text" + strings.Repeat(" ", 59-10) + "│",
 		"  └" + box + "┘",
 		"",
 		"  enter to choose · tab to add a note · esc to dismiss",
@@ -198,7 +196,7 @@ func TestQuestionRowsShowThePreviewBelowUnderSixtyFourColumns(t *testing.T) {
 	}, rows[7:])
 }
 
-func TestQuestionRowsSizePreviewBoxToItsContentAndCentreIt(t *testing.T) {
+func TestQuestionRowsSizePreviewBoxToTheWidestPreviewAndAnchorItLeft(t *testing.T) {
 	// "  3. Type something." and its cursor cell make the column 21 wide.
 	const list = 21
 	for name, tt := range map[string]struct {
@@ -206,7 +204,7 @@ func TestQuestionRowsSizePreviewBoxToItsContentAndCentreIt(t *testing.T) {
 		want    int
 	}{
 		"short content": {"ab", minPreviewBox},
-		"wider content": {strings.Repeat("w", 20), 22},
+		"wider content": {strings.Repeat("w", 20), 24},
 		"long content":  {strings.Repeat("w", 100), 80 - list - previewGap},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -216,15 +214,27 @@ func TestQuestionRowsSizePreviewBoxToItsContentAndCentreIt(t *testing.T) {
 			start, end := strings.Index(top, "┌"), strings.LastIndex(top, "┐")
 			require.GreaterOrEqual(t, start, 0)
 			assert.Equal(t, tt.want, ansi.StringWidth(top[start:end+len("┐")]))
-			left := cellOf(top, "┌") - list
-			right := 80 - cellOf(top, "┌") - tt.want
-			if left == previewGap {
-				assert.LessOrEqual(t, right, left+1, "the box fills what the gap leaves")
-			} else {
-				assert.Less(t, abs(left-right), 2, "centred in the space right of the options")
-			}
+			assert.Equal(t, list+previewGap, cellOf(top, "┌"))
 		})
 	}
+}
+
+func TestQuestionRowsKeepThePreviewBoxWidthAsFocusMoves(t *testing.T) {
+	km := newKeyMap(config.DefaultKeys())
+	q := choice("db", false, "A", "B")
+	q.Options[0].Preview = strings.Repeat("w", 30)
+	q.Options[1].Preview = "ab"
+	dlg := newQuestionDialog(event.QuestionRequested{Questions: []tool.Question{q}}, &km, mocha())
+	edges := func() (int, int) {
+		top := plainRows(dlg.rows(80, 6, 100, mocha()))[3]
+		return cellOf(top, "┌"), cellOf(top, "┐")
+	}
+	left, right := edges()
+	require.GreaterOrEqual(t, left, 0)
+	dlg.pages[0].d.move(1)
+	l2, r2 := edges()
+	assert.Equal(t, left, l2)
+	assert.Equal(t, right, r2)
 }
 
 func TestQuestionRowsGrowBesideTheListForALongPreview(t *testing.T) {
@@ -710,7 +720,7 @@ func TestQuestionRowsHintScrollingOnlyWhenSomethingIsCut(t *testing.T) {
 	q := newQuestionDialog(event.QuestionRequested{Questions: previewQuestion(strings.Join(lines, "\n\n"))}, &km, mocha())
 	rows := plainRows(q.rows(80, 6, 100, mocha()))
 	assert.Equal(t, "  pgup/pgdown to scroll · enter to choose · tab to add a note · esc to dismiss", rows[len(rows)-2])
-	assert.Regexp(t, `│… \d+ more lines +│$`, rows[len(rows)-5], "markers sit inside the box")
+	assert.Regexp(t, `│ … \d+ more lines +│$`, rows[len(rows)-5], "markers sit inside the box")
 
 	rows = plainRows(q.rows(80, 100, 100, mocha()))
 	assert.Equal(t, "  enter to choose · tab to add a note · esc to dismiss", rows[len(rows)-2])

@@ -65,7 +65,7 @@
 
 - Puts one to four questions to you and waits for the answers.
 - Each question has a header, shown as its tab and cut with `…` past 16 columns (the model is asked for at most 12 characters), and two to four options, each with a description. A question may allow several options (multi-select).
-- A single-select option may have a markdown preview, shown in a box while the option is focused: beside the options at 64 columns or wider, below them otherwise. Beside the options the box is as wide as its text needs, centred in the room right of them; below them it spans the width. A preview that does not fit shows `… N earlier lines` and `… N more lines` inside the box and scrolls with PgUp and PgDn, or with the mouse wheel over the dialog.
+- A single-select option may have a markdown preview, shown in a box while the option is focused: beside the options at 64 columns or wider, below them otherwise. Beside the options the box is as wide as the widest preview of that question needs, up to the room there; below them it spans the width. A preview that does not fit shows `… N earlier lines` and `… N more lines` inside the box and scrolls with PgUp and PgDn, or with the mouse wheel over the dialog.
 - Every question ends with a `Type something.` row for a typed answer, and an option labelled `Other` is refused. A single-select answer is one option or typed text, a multi-select answer is any options and/or typed text.
 - Tab adds a note to the focused option; the note goes to the model with the option when it is chosen.
 - With several questions a tab strip shows which are answered, and a review page after the last one lists the answers and the gaps before you submit. A single question answers at once.

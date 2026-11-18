@@ -382,7 +382,7 @@ func (q *questionDialog) pageRows(width, maxPreview, avail int, th theme) []stri
 			rows := d.rows(width, budget, fieldCap, th)
 			last := len(rows) - 1
 			out := slices.Clone(rows[:last])
-			if lines := lines(width - 4); len(lines) > 0 {
+			if lines := lines(width - 6); len(lines) > 0 {
 				room := min(maxPreview, budget-len(rows)-3)
 				if room >= 1 {
 					cuts = len(lines) > room
@@ -408,19 +408,24 @@ func (q *questionDialog) pageRows(width, maxPreview, avail int, th theme) []stri
 		}
 		var box []string
 		space := width - listWidth - previewGap
-		if lines := lines(space - 2); len(lines) > 0 {
+		if lines := lines(space - 4); len(lines) > 0 {
 			room := min(maxPreview, budget-len(head)-3)
+			// Every option's preview is measured so the box keeps its width as
+			// focus moves.
 			cw := 0
-			for _, l := range lines {
-				cw = max(cw, ansi.StringWidth(l))
+			for i := range qu.Options {
+				ol := q.previewLines(i, space-4, th)
+				for _, l := range ol {
+					cw = max(cw, ansi.StringWidth(l))
+				}
+				if len(ol) > room {
+					cw = max(cw, ansi.StringWidth(elided(len(ol), "earlier")))
+				}
 			}
-			if len(lines) > room {
-				cw = max(cw, ansi.StringWidth(elided(len(lines), "earlier")))
-			}
-			bw := min(max(cw+2, minPreviewBox), space)
+			bw := min(max(cw+4, minPreviewBox), space)
 			if room >= 1 {
 				cuts = len(lines) > room
-				box = q.previewBox(lines, bw, room, max(previewGap, (width-listWidth-bw)/2), th)
+				box = q.previewBox(lines, bw, room, previewGap, th)
 			}
 		}
 		rows := slices.Clone(head)
@@ -444,16 +449,18 @@ func (q *questionDialog) pageRows(width, maxPreview, avail int, th theme) []stri
 	return rows
 }
 
-// previewBox is lines in a frame bw wide with at most room rows of content,
-// the markers of what is cut inside it; every row is indented by indent.
+// previewBox is lines in a frame bw wide, a column of padding inside each
+// side, with at most room rows of content, the markers of what is cut inside
+// it; every row is indented by indent.
 func (q *questionDialog) previewBox(lines []string, bw, room, indent int, th theme) []string {
 	inner := bw - 2
+	text := inner - 2
 	frame, pad := fg(th.frame), strings.Repeat(" ", indent)
 	bar := strings.Repeat("─", inner)
 	out := []string{pad + frame.Render("┌"+bar+"┐")}
 	for _, l := range q.window(lines, room, th) {
-		l = ansi.Truncate(l, inner, "")
-		out = append(out, pad+frame.Render("│")+l+strings.Repeat(" ", inner-ansi.StringWidth(l))+frame.Render("│"))
+		l = ansi.Truncate(l, text, "")
+		out = append(out, pad+frame.Render("│")+" "+l+strings.Repeat(" ", text-ansi.StringWidth(l)+1)+frame.Render("│"))
 	}
 	return append(out, pad+frame.Render("└"+bar+"┘"))
 }
