@@ -15,6 +15,7 @@ import (
 	"github.com/keyute/kopi/internal/instruction"
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/skill"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -55,6 +56,10 @@ type Config struct {
 	// Wake lets a task's end start a turn on its own; otherwise its notice
 	// waits for a request a human prompt starts.
 	Wake bool
+	// Skills are the loaded skills; users type one as /SkillPrefix:name, or
+	// /name when SkillPrefix is empty.
+	Skills      []skill.Skill
+	SkillPrefix string
 	// Classifier reviews the calls that would otherwise ask; nil means none
 	// are reviewed.
 	Classifier *classifier.Classifier
@@ -75,8 +80,11 @@ type Controller struct {
 	cfg Config
 	// tools and prompt are what every session opens with; set before the
 	// first session and not changed after.
-	tools     []tool.Tool
-	prompt    []pigruntime.PromptPart
+	tools  []tool.Tool
+	prompt []pigruntime.PromptPart
+	// skills is what users can type; skillErrs reports the skills it left out.
+	skills    *skill.Set
+	skillErrs []error
 	authority *policy.Authority
 	relay     relay
 	wg        sync.WaitGroup
@@ -151,6 +159,15 @@ func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
 		cfg.Tasks = tool.NewTasks()
 	}
 	c := &Controller{rt: rt, cfg: cfg, authority: policy.NewAuthority()}
+	var reserved []string
+	for _, cmd := range commandTable() {
+		reserved = append(reserved, cmd.Name)
+	}
+	var dropped []string
+	c.skills, dropped = skill.NewSet(cfg.SkillPrefix, cfg.Skills, reserved)
+	for _, n := range dropped {
+		c.skillErrs = append(c.skillErrs, fmt.Errorf("skill %s cannot be typed: /%s is a control command", n, n))
+	}
 	if cfg.Mode == policy.Execute {
 		c.authority.EnterExecute()
 	}
@@ -206,7 +223,7 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 // prepareStartup sets up the first session from statuses and keeps what it
 // reports once open: Config.Errors, then the events about the servers.
 func (c *Controller) prepareStartup(statuses []pigruntime.ServerStatus) {
-	for _, err := range c.cfg.Errors {
+	for _, err := range slices.Concat(c.cfg.Errors, c.skillErrs) {
 		c.startup = append(c.startup, event.Error{Err: err})
 	}
 	c.startup = append(c.startup, c.setup(statuses)...)
@@ -369,7 +386,16 @@ func (c *Controller) SendNow(ctx context.Context, text string, images ...string)
 // command, for input that must never change mode. It records no history. Like
 // Submit, it returns a nil Work when the input is queued behind a running turn.
 func (c *Controller) Prompt(ctx context.Context, text string) (*Work, error) {
-	return c.submitPrompt(ctx, pigruntime.Prompt{Text: text}, false)
+	return c.submitPrompt(ctx, pigruntime.Prompt{Text: text, Skills: c.skillTexts(text)}, false)
+}
+
+// skillTexts returns the texts of the skills text names, in first-seen order.
+func (c *Controller) skillTexts(text string) []string {
+	var out []string
+	for _, sk := range c.skills.Named(text) {
+		out = append(out, skill.Text(sk))
+	}
+	return out
 }
 
 func (c *Controller) input(ctx context.Context, text string, paths []string, now bool) (*Work, error) {
@@ -390,20 +416,20 @@ func (c *Controller) input(ctx context.Context, text string, paths []string, now
 	if !blank {
 		c.record(text)
 	}
-	name, args, isCommand := parse(text)
-	if !isCommand {
-		prompt := strings.TrimSpace(text)
-		if strings.HasPrefix(prompt, "//") {
-			prompt = prompt[1:]
+	if name, args, isCommand := parse(text); isCommand {
+		cmds := commandTable()
+		if i := slices.IndexFunc(cmds, func(cmd command) bool { return cmd.Name == name }); i >= 0 {
+			return nil, cmds[i].run(c, ctx, args)
 		}
-		return c.submitPrompt(ctx, pigruntime.Prompt{Text: prompt, Images: images}, now)
+		if _, ok := c.skills.Lookup(leadingWord(text)); !ok {
+			return nil, fmt.Errorf("%w: /%s", ErrUnknownCommand, name)
+		}
 	}
-	cmds := commandTable()
-	i := slices.IndexFunc(cmds, func(cmd command) bool { return cmd.Name == name })
-	if i < 0 {
-		return nil, fmt.Errorf("%w: /%s", ErrUnknownCommand, name)
+	prompt := strings.TrimSpace(text)
+	if strings.HasPrefix(prompt, "//") {
+		prompt = prompt[1:]
 	}
-	return nil, cmds[i].run(c, ctx, args)
+	return c.submitPrompt(ctx, pigruntime.Prompt{Text: prompt, Images: images, Skills: c.skillTexts(text)}, now)
 }
 
 func (c *Controller) record(text string) {
@@ -529,7 +555,15 @@ func (c *Controller) Commands() []Command {
 		cm.Argument = cmd.args != nil
 		out = append(out, cm)
 	}
+	for _, sk := range c.skills.Skills() {
+		out = append(out, Command{Name: c.skills.Command(sk), Summary: sk.Description, Skill: true})
+	}
 	return out
+}
+
+// Spans returns the input's highlighted runs.
+func (c *Controller) Spans(text string) []Span {
+	return Spans(text, c.skills)
 }
 
 // Interrupt requests abort of the running root turn or of a running login,
@@ -876,11 +910,17 @@ func settle(stopped, cancelled bool, outcome event.Outcome, sent bool, parts, un
 func joined(ps []pigruntime.Prompt) pigruntime.Prompt {
 	texts := make([]string, 0, len(ps))
 	var images []pigruntime.Image
+	var skills []string
 	for _, p := range ps {
 		texts = append(texts, p.Text)
 		images = append(images, p.Images...)
+		for _, sk := range p.Skills {
+			if !slices.Contains(skills, sk) {
+				skills = append(skills, sk)
+			}
+		}
 	}
-	return pigruntime.Prompt{Text: strings.Join(texts, "\n\n"), Images: images}
+	return pigruntime.Prompt{Text: strings.Join(texts, "\n\n"), Images: images, Skills: skills}
 }
 
 func inputs(ps []pigruntime.Prompt) []event.Input {

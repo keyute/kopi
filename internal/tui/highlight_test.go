@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/app"
+	"github.com/keyute/kopi/internal/skill"
 )
 
 var (
@@ -139,4 +140,13 @@ func TestHighlightKeepsTextAndShade(t *testing.T) {
 		assert.Contains(t, got[0], spanStyle(m.th, tc.kind).Render(tc.piece))
 		assert.Equal(t, shade(m.th).GetBackground(), spanStyle(m.th, tc.kind).GetBackground())
 	}
+}
+
+func TestHighlightMarksSkillCommands(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	c.skills, _ = skill.NewSet("skill", []skill.Skill{{Name: "a"}, {Name: "b"}}, nil)
+
+	pasteText(m, "/skill:a see @x and /skill:b ")
+
+	assert.Equal(t, []string{"/skill:a", "@x", "/skill:b"}, pieces(m))
 }

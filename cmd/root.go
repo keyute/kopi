@@ -31,6 +31,7 @@ import (
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/sandbox"
+	"github.com/keyute/kopi/internal/skill"
 	"github.com/keyute/kopi/internal/tool"
 	"github.com/keyute/kopi/internal/trust"
 	"github.com/keyute/kopi/internal/tui"
@@ -125,8 +126,8 @@ func permissionRules(cwd, home string, tools []tool.Tool, perms config.Permissio
 		{Name: origins["permissions.ask"], Ask: perms.Ask},
 		{Name: origins["permissions.deny"], Deny: perms.Deny},
 	}
-	// ToolSearch and WebSearch are known to rules even when the session lacks them.
-	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil), tool.NewWebSearch(nil)}))
+	// ToolSearch, Skill and WebSearch are known to rules even when the session lacks them.
+	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil), tool.NewSkill(nil, ""), tool.NewWebSearch(nil)}))
 	rules, err := policy.NewRules(cwd, home, specs, append(sources, flagRules...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load permission rules: %w", err)
@@ -293,19 +294,28 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		return err
 	}
 	projectInstructions := instruction.Find(instructionDir, resolved.Config.InstructionFallbacks)
-	set, err := resolveServers(resolved.Config.MCPServers, paths.TrustFile, cwd, userHome, projectInstructions, ask)
+	canonicalHome, err := trust.Canonical(userHome)
+	if err != nil {
+		return err
+	}
+	// The user's own skills are not project skills when Kopi starts in the home directory.
+	projectSkills := skill.Find(instructionDir, filepath.Join(canonicalHome, ".agents", "skills"))
+	set, err := resolveServers(resolved.Config.MCPServers, paths.TrustFile, cwd, userHome, projectInstructions, projectSkills, ask)
 	if err != nil {
 		return err
 	}
 	if set.undecided {
-		skipped := "the MCP servers in its " + policy.ProjectMCPFile + " and its instruction files are"
-		switch {
-		case len(set.untrusted) == 0:
-			skipped = "its instruction files are"
-		case len(projectInstructions) == 0:
-			skipped = "the MCP servers in its " + policy.ProjectMCPFile + " are"
+		var parts []string
+		if len(set.untrusted) > 0 {
+			parts = append(parts, "the MCP servers in its "+policy.ProjectMCPFile)
 		}
-		slog.Warn("this folder is not trusted, so " + skipped + " skipped; run kopi here in a terminal to be asked whether to trust it")
+		if len(projectInstructions) > 0 {
+			parts = append(parts, "its instruction files")
+		}
+		if len(projectSkills) > 0 {
+			parts = append(parts, "its skills")
+		}
+		slog.Warn("this folder is not trusted, so " + skippedList(parts) + " skipped; run kopi here in a terminal to be asked whether to trust it")
 	}
 	instructions, instructionErrs := instruction.Load(paths.InstructionFile, []instruction.Root{{Dir: instructionDir, Trusted: set.trusted}}, resolved.Config.InstructionFallbacks)
 	// From here until the frontend runs, SIGINT does not kill Kopi: stdio
@@ -432,10 +442,20 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			return rt.Search(ctx, smallModel, system, query)
 		}))
 	}
+	var skillDirs []string
+	if set.trusted {
+		skillDirs = projectSkills
+	}
+	skillDirs = append(skillDirs, paths.SkillsDir, filepath.Join(userHome, ".agents", "skills"))
+	skills, skillErrs := rt.Skills(skillDirs)
+	if len(skills) > 0 {
+		tools = append(tools, tool.NewSkill(skills, paths.Home))
+	}
 	// Only the fullscreen interface has a human to answer approvals.
 	cfg := app.Config{
 		Model: model, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
-		Errors: slices.Concat(set.errs, instructionErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review,
+		Errors: slices.Concat(set.errs, instructionErrs, skillErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review,
+		Skills: skills, SkillPrefix: resolved.Config.Skills.Prefix,
 	}
 	if len(set.servers) > 0 {
 		cfg.Servers = func(ctx context.Context) ([]pigruntime.ServerStatus, error) { return waitServers(ctx, servers) }
@@ -512,6 +532,15 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	return errors.Join(runErr, closeErr)
 }
 
+// skippedList joins parts as "A are", "A and B are" or "A, B and C are"; each
+// part is plural.
+func skippedList(parts []string) string {
+	if len(parts) == 1 {
+		return parts[0] + " are"
+	}
+	return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1] + " are"
+}
+
 // mcpServers is the MCP server set of a run in one folder, and whether the
 // folder is trusted.
 type mcpServers struct {
@@ -525,7 +554,7 @@ type mcpServers struct {
 	// undecided means no trust decision applies and none was asked for.
 	undecided bool
 	// trusted means the folder is trusted, so its servers and instruction
-	// files are used.
+	// files and skills are used.
 	trusted bool
 	invalid map[string]error
 	errs    []error
@@ -537,10 +566,11 @@ type askTrust func(tui.TrustRequest) (tui.TrustChoice, error)
 
 // resolveServers decides whether the folder is trusted and merges the
 // project's servers over global ones when it is. The trust file is opened
-// only when the project declares a server or has instruction files, which
-// instructions lists; an undecided folder is asked about through ask and the
-// answer saved, and without ask it is untrusted for this run.
-func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome string, instructions []string, ask askTrust) (mcpServers, error) {
+// only when the project declares a server or has instruction files or skill
+// folders, which instructions and skills list; an undecided folder is asked
+// about through ask and the answer saved, and without ask it is untrusted for
+// this run.
+func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome string, instructions, skills []string, ask askTrust) (mcpServers, error) {
 	s := mcpServers{servers: maps.Clone(global), project: map[string]bool{}}
 	if s.servers == nil {
 		s.servers = map[string]config.MCPServer{}
@@ -554,7 +584,7 @@ func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome
 		s.errs = append(s.errs, fmt.Errorf("MCP server %s: %w", name, invalid[name]))
 		project[name] = config.MCPServer{}
 	}
-	if len(project) == 0 && len(instructions) == 0 {
+	if len(project) == 0 && len(instructions) == 0 && len(skills) == 0 {
 		return s, nil
 	}
 	store, err := trust.Open(trustFile)
@@ -570,7 +600,7 @@ func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome
 	case ask == nil:
 		s.undecided = true
 	default:
-		if d, err = decideTrust(store, cwd, userHome, project, invalid, instructions, ask); err != nil {
+		if d, err = decideTrust(store, cwd, userHome, project, invalid, instructions, skills, ask); err != nil {
 			return mcpServers{}, err
 		}
 	}
@@ -607,7 +637,7 @@ func waitServers(ctx context.Context, servers *pigruntime.Servers) ([]pigruntime
 // symlinks and the case a name was typed in. An answer saved for the user's
 // home or the root would cover almost every folder below it, so there either
 // answer holds for this run only.
-func decideTrust(store *trust.Store, cwd, userHome string, project map[string]config.MCPServer, invalid map[string]error, instructions []string, ask askTrust) (trust.Decision, error) {
+func decideTrust(store *trust.Store, cwd, userHome string, project map[string]config.MCPServer, invalid map[string]error, instructions, skills []string, ask askTrust) (trust.Decision, error) {
 	cwd, err := trust.Canonical(cwd)
 	if err != nil {
 		return 0, err
@@ -617,7 +647,7 @@ func decideTrust(store *trust.Store, cwd, userHome string, project map[string]co
 		return 0, err
 	}
 	broad := cwd == userHome || filepath.Dir(cwd) == cwd
-	req := tui.TrustRequest{Folder: cwd, Instructions: instructions}
+	req := tui.TrustRequest{Folder: cwd, Instructions: instructions, Skills: skills}
 	if parent := filepath.Dir(cwd); !broad && parent != filepath.Dir(parent) && parent != userHome {
 		req.Parent = parent
 	}

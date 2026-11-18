@@ -31,6 +31,7 @@ func withDefaults(c Config) Config {
 	c.Theme = DefaultTheme()
 	c.Permissions = Permissions{Allow: []string{}, Ask: []string{}, Deny: []string{}}
 	c.Sandbox = Sandbox{AllowWrite: []string{}, DenyRead: []string{}}
+	c.Skills = Skills{Prefix: "skill"}
 	c.Classifier = Classifier{Instructions: []string{}}
 	c.MCPServers = map[string]MCPServer{}
 	return c
@@ -94,6 +95,37 @@ func TestResolveRejectsInstructionFallbackNotAFileName(t *testing.T) {
 			assert.Contains(t, err.Error(), "instructionFallbacks[1]")
 		})
 	}
+}
+
+func TestResolveSkillsPrefix(t *testing.T) {
+	r, err := Resolve(Defaults())
+	require.NoError(t, err)
+	assert.Equal(t, "skill", r.Config.Skills.Prefix)
+
+	for _, prefix := range []string{"", "s", "my-skill2"} {
+		global := globalLayer(t, fmt.Sprintf(`{"skills": {"prefix": %q}}`, prefix))
+		r, err = Resolve(Defaults(), global)
+		require.NoError(t, err)
+		assert.Equal(t, prefix, r.Config.Skills.Prefix)
+		assert.Equal(t, global.Name, r.Origins["skills.prefix"])
+	}
+}
+
+func TestResolveRejectsInvalidSkillsPrefix(t *testing.T) {
+	for _, prefix := range []string{"Skill", "a b", "a:b", "a_b", "a/b"} {
+		t.Run(prefix, func(t *testing.T) {
+			global := globalLayer(t, fmt.Sprintf(`{"skills": {"prefix": %q}}`, prefix))
+			_, err := Resolve(Defaults(), global)
+			require.ErrorIs(t, err, ErrInvalidValue)
+			assert.Contains(t, err.Error(), global.Name)
+			assert.Contains(t, err.Error(), "skills.prefix")
+		})
+	}
+}
+
+func TestResolveRejectsUnknownSkillsKey(t *testing.T) {
+	_, err := Resolve(Defaults(), globalLayer(t, `{"skills": {"x": 1}}`))
+	require.ErrorIs(t, err, ErrUnknownKey)
 }
 
 func TestResolveLaterLayersOverrideEarlier(t *testing.T) {
@@ -295,6 +327,8 @@ func TestResolveRejectsInvalidUIValueNamingLayer(t *testing.T) {
 		{"null sandbox", `{"sandbox": null}`},
 		{"instruction fallbacks not a list", `{"instructionFallbacks": "CLAUDE.md"}`},
 		{"null instruction fallbacks", `{"instructionFallbacks": null}`},
+		{"non-string skills prefix", `{"skills": {"prefix": 5}}`},
+		{"skills not an object", `{"skills": "x"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			global := globalLayer(t, tc.content)
@@ -644,7 +678,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	r, err := Resolve(Defaults())
 	require.NoError(t, err)
 	entries := r.Entries()
-	assert.Len(t, entries, 20+len(KeyActions))
+	assert.Len(t, entries, 21+len(KeyActions))
 	assert.IsIncreasing(t, entryKeys(entries))
 	assert.Contains(t, entries, Entry{Key: "model", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "smallModel", Value: "", Origin: "unset"})
@@ -662,6 +696,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "sandbox.allowWrite", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "sandbox.denyRead", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "sandbox.network", Value: "false", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "skills.prefix", Value: "skill", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "classifier.enabled", Value: "false", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "classifier.model", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "classifier.instructions", Value: "[]", Origin: "default"})

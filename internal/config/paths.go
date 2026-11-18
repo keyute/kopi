@@ -7,7 +7,7 @@ import (
 )
 
 type Paths struct {
-	Home, ConfigFile, TrustFile, InstructionFile, AgentDir, LogFile, HistoryFile, ImageDir, ThemeDir string
+	Home, ConfigFile, TrustFile, InstructionFile, SkillsDir, AgentDir, LogFile, HistoryFile, ImageDir, ThemeDir string
 }
 
 // ResolvePaths locates Kopi's home without creating anything: $KOPI_HOME
@@ -32,6 +32,7 @@ func ResolvePaths() (Paths, error) {
 		ConfigFile:      filepath.Join(home, "config.json"),
 		TrustFile:       filepath.Join(home, "trust.json"),
 		InstructionFile: filepath.Join(home, "AGENTS.md"),
+		SkillsDir:       filepath.Join(home, "skills"),
 		AgentDir:        filepath.Join(home, "agent"),
 		LogFile:         filepath.Join(home, "kopi.log"),
 		HistoryFile:     filepath.Join(home, "history.jsonl"),

@@ -35,6 +35,7 @@ type Controller interface {
 	History() []string
 	Status() app.Status
 	Commands() []app.Command
+	Spans(text string) []app.Span
 	// Arguments and Files may read many files; call them off the event loop.
 	Arguments(name string) ([]app.Candidate, error)
 	Files() ([]app.Candidate, error)

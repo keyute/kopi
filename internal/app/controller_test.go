@@ -28,6 +28,7 @@ import (
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/skill"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -2570,4 +2571,118 @@ func TestClosedControllerIsInert(t *testing.T) {
 	h.turn(t, "hello")
 	require.NoError(t, h.c.Close(t.Context()))
 	assertInertAfterClose(t, h)
+}
+
+func skillConfig(prefix string, names ...string) Config {
+	var skills []skill.Skill
+	for _, n := range names {
+		skills = append(skills, skill.Skill{Name: n, Description: "does " + n, Body: "body of " + n, Dir: "/skills/" + n})
+	}
+	return Config{Skills: skills, SkillPrefix: prefix}
+}
+
+func skillText(name string) string {
+	return skill.Text(skill.Skill{Name: name, Body: "body of " + name, Dir: "/skills/" + name})
+}
+
+func TestTypedSkillsLoadWithTheirPrompt(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		want        []string
+	}{
+		{"leading", "/skill:a do it", []string{"/skill:a do it", skillText("a")}},
+		{"mid prompt", "use /skill:b now", []string{"use /skill:b now", skillText("b")}},
+		{"twice", "/skill:a and /skill:a", []string{"/skill:a and /skill:a", skillText("a")}},
+		{"two in order", "/skill:b then /skill:a", []string{"/skill:b then /skill:a", skillText("b"), skillText("a")}},
+		{"escaped", "//skill:a", []string{"/skill:a"}},
+		{"multiline", "/skill:a\nmore", []string{"/skill:a\nmore", skillText("a")}},
+		{"unknown mid prompt", "use /skill:z", []string{"use /skill:z"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := openHarness(t, skillConfig("skill", "a", "b"))
+			requests := make(chan pigruntimetest.Request, 1)
+			h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "ok")})
+
+			h.turn(t, tc.input)
+
+			assert.Equal(t, tc.want, receive(t, requests).UserTexts)
+		})
+	}
+}
+
+func TestUnknownLeadingSkillIsUnknownCommand(t *testing.T) {
+	h, _ := openHarness(t, skillConfig("skill", "a"))
+
+	_, err := h.c.Submit(t.Context(), "/skill:nope x")
+
+	require.ErrorIs(t, err, ErrUnknownCommand)
+	assert.Zero(t, h.faux.CallCount())
+}
+
+func TestSkillNamedLikeControlCommandIsNotTypable(t *testing.T) {
+	h, _ := openHarness(t, skillConfig("", "plan", "a"))
+	h.c.EnterExecute()
+
+	w, err := h.c.Submit(t.Context(), "/plan")
+
+	require.NoError(t, err)
+	assert.Nil(t, w)
+	assert.Equal(t, policy.Plan, h.c.Status().Mode)
+	assert.Equal(t, []Command{{Name: "a", Summary: "does a", Skill: true}}, h.c.Commands()[len(commandTable()):])
+	errs := ofType[event.Error](h.rec.all())
+	require.Len(t, errs, 1)
+	assert.EqualError(t, errs[0].Err, "skill plan cannot be typed: /plan is a control command")
+}
+
+func TestPromptLoadsSkillsButRunsNoCommand(t *testing.T) {
+	h, _ := openHarness(t, skillConfig("skill", "a"))
+	requests := make(chan pigruntimetest.Request, 2)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "ok"), pigruntimetest.Capture(t, requests, "ok")})
+
+	for _, text := range []string{"/skill:a x", "/plan"} {
+		w, err := h.c.Prompt(t.Context(), text)
+		require.NoError(t, err)
+		wait(t, w.Done())
+	}
+
+	assert.Equal(t, []string{"/skill:a x", skillText("a")}, receive(t, requests).UserTexts[:2])
+	assert.Contains(t, receive(t, requests).UserTexts, "/plan")
+}
+
+func TestQueuedPromptKeepsItsSkill(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	cfg := skillConfig("skill", "a")
+	cfg.Tools = []tool.Tool{releaseTool(started, release)}
+	h, _ := openHarness(t, cfg)
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "done")})
+
+	w, err := h.c.Submit(t.Context(), "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	_, err = h.c.Submit(t.Context(), "/skill:a next")
+	require.NoError(t, err)
+	close(release)
+	wait(t, w.Done())
+
+	assert.Equal(t, []string{"hold", "/skill:a next", skillText("a")}, receive(t, requests).UserTexts)
+}
+
+func TestJoinedPromptsMergeSkillsWithoutDuplicates(t *testing.T) {
+	got := joined([]pigruntime.Prompt{{Text: "one", Skills: []string{"a", "b"}}, {Text: "two"}, {Text: "three", Skills: []string{"b", "c"}}})
+	assert.Equal(t, pigruntime.Prompt{Text: "one\n\ntwo\n\nthree", Skills: []string{"a", "b", "c"}}, got)
+}
+
+func TestCommandsListSkillsAfterControlCommands(t *testing.T) {
+	c := NewController(nil, skillConfig("skill", "b", "a"))
+
+	cmds := c.Commands()
+
+	n := len(commandTable())
+	assert.Equal(t, []Command{
+		{Name: "skill:a", Summary: "does a", Skill: true},
+		{Name: "skill:b", Summary: "does b", Skill: true},
+	}, cmds[n:])
+	assert.Equal(t, []Span{{Start: 0, End: 8, Kind: KindCommand}}, c.Spans("/skill:a"))
+	assert.Nil(t, c.Spans("/skill:z"))
 }

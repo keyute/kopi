@@ -1679,7 +1679,7 @@ func TestResolveServersWithoutProjectFile(t *testing.T) {
 	e := newTestEnv(t)
 	trustFile := filepath.Join(e.kopiHome, "trust.json")
 
-	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, noAsk(t))
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, nil, noAsk(t))
 
 	require.NoError(t, err)
 	assert.Equal(t, globalServers, set.servers)
@@ -1689,7 +1689,7 @@ func TestResolveServersWithoutProjectFile(t *testing.T) {
 	assert.NoFileExists(t, trustFile)
 
 	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), `{"mcpServers":{}}`)
-	_, err = resolveServers(globalServers, trustFile, e.workspace, e.home, nil, noAsk(t))
+	_, err = resolveServers(globalServers, trustFile, e.workspace, e.home, nil, nil, noAsk(t))
 	require.NoError(t, err)
 	assert.NoFileExists(t, trustFile, "a file declaring no servers needs no decision")
 }
@@ -1702,7 +1702,7 @@ func TestResolveServersTrustedProjectReplacesGlobal(t *testing.T) {
 	require.NoError(t, err)
 	e.writeFile(t, trustFile, string(b))
 
-	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, noAsk(t))
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, nil, noAsk(t))
 
 	require.NoError(t, err)
 	assert.Equal(t, map[string]config.MCPServer{
@@ -1723,7 +1723,7 @@ func TestResolveServersUntrustedSkipsProject(t *testing.T) {
 	require.NoError(t, err)
 	e.writeFile(t, trustFile, string(b))
 
-	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, noAsk(t))
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, nil, noAsk(t))
 
 	require.NoError(t, err)
 	assert.Equal(t, globalServers, set.servers)
@@ -1738,7 +1738,7 @@ func TestResolveServersUndecidedWithoutAsk(t *testing.T) {
 	trustFile := filepath.Join(e.kopiHome, "trust.json")
 	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), projectMCP)
 
-	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, nil)
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, nil, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, globalServers, set.servers)
@@ -1769,7 +1769,7 @@ func TestResolveServersAsksAndSaves(t *testing.T) {
 				return tt.choice, nil
 			}
 
-			set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, ask)
+			set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, nil, ask)
 
 			require.NoError(t, err)
 			assert.Equal(t, []tui.TrustRequest{{
@@ -1812,7 +1812,7 @@ func TestDecideTrustOffersNoParentAtHomeOrRoot(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var asked tui.TrustRequest
-			_, err := decideTrust(nil, tt.cwd, tt.home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, nil, askOnce(&asked))
+			_, err := decideTrust(nil, tt.cwd, tt.home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, nil, nil, askOnce(&asked))
 			require.NoError(t, err)
 			assert.Equal(t, canonical(t, tt.cwd), asked.Folder)
 			assert.Empty(t, asked.Parent)
@@ -1834,7 +1834,7 @@ func TestDecideTrustTreatsHomeTypedInAnotherCaseAsHome(t *testing.T) {
 	store, err := trust.Open(trustFile)
 	require.NoError(t, err)
 
-	d, err := decideTrust(store, upper, home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, nil, func(tui.TrustRequest) (tui.TrustChoice, error) { return tui.TrustFolder, nil })
+	d, err := decideTrust(store, upper, home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, nil, nil, func(tui.TrustRequest) (tui.TrustChoice, error) { return tui.TrustFolder, nil })
 
 	require.NoError(t, err)
 	assert.Equal(t, trust.Trusted, d)
@@ -1875,7 +1875,7 @@ func TestDecideTrustAtHomeOrRootTrustsForThisRunOnly(t *testing.T) {
 			store, err := trust.Open(trustFile)
 			require.NoError(t, err)
 
-			d, err := decideTrust(store, tt.cwd, home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, nil, func(tui.TrustRequest) (tui.TrustChoice, error) { return tt.choice, nil })
+			d, err := decideTrust(store, tt.cwd, home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, nil, nil, func(tui.TrustRequest) (tui.TrustChoice, error) { return tt.choice, nil })
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, d)
@@ -1900,7 +1900,7 @@ func TestDecideTrustResolvesASymlinkedWorkingDirectory(t *testing.T) {
 		return tui.TrustParent, nil
 	}
 
-	d, err := decideTrust(store, link, e.home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, nil, ask)
+	d, err := decideTrust(store, link, e.home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, nil, nil, ask)
 
 	require.NoError(t, err)
 	assert.Equal(t, trust.Trusted, d)
@@ -1916,7 +1916,7 @@ func TestDecideTrustResolvesASymlinkedWorkingDirectory(t *testing.T) {
 }
 
 func TestDecideTrustFailsOnAnUnresolvableHome(t *testing.T) {
-	_, err := decideTrust(nil, t.TempDir(), filepath.Join(t.TempDir(), "missing"), map[string]config.MCPServer{"a": {Command: "a"}}, nil, nil, noAsk(t))
+	_, err := decideTrust(nil, t.TempDir(), filepath.Join(t.TempDir(), "missing"), map[string]config.MCPServer{"a": {Command: "a"}}, nil, nil, nil, noAsk(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to resolve")
 }
@@ -1967,7 +1967,7 @@ func TestResolveServersInvalidDeclarations(t *testing.T) {
 				}
 			}
 
-			set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, ask)
+			set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, nil, ask)
 
 			require.NoError(t, err)
 			require.Len(t, set.errs, 2)
@@ -1992,7 +1992,7 @@ func TestResolveServersMalformedProjectFileIsANotice(t *testing.T) {
 	trustFile := filepath.Join(e.kopiHome, "trust.json")
 	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), `{"mcpServers":`)
 
-	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, noAsk(t))
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, nil, noAsk(t))
 
 	require.NoError(t, err)
 	assert.Equal(t, globalServers, set.servers)
@@ -2011,7 +2011,7 @@ func TestResolveServersAsksForInstructionFiles(t *testing.T) {
 		return tui.TrustFolder, nil
 	}
 
-	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, files, ask)
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, files, nil, ask)
 
 	require.NoError(t, err)
 	assert.Equal(t, []tui.TrustRequest{{Folder: canonical(t, e.workspace), Parent: canonical(t, e.root), Instructions: files}}, asked)
@@ -2024,7 +2024,7 @@ func TestResolveServersInstructionFilesUndecidedWithoutAsk(t *testing.T) {
 	e := newTestEnv(t)
 	trustFile := filepath.Join(e.kopiHome, "trust.json")
 
-	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, []string{filepath.Join(e.workspace, "AGENTS.md")}, nil)
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, []string{filepath.Join(e.workspace, "AGENTS.md")}, nil, nil)
 
 	require.NoError(t, err)
 	assert.True(t, set.undecided)
@@ -2044,7 +2044,7 @@ func TestResolveServersMalformedProjectFileStillAsksForInstructionFiles(t *testi
 		return tui.TrustFolder, nil
 	}
 
-	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, files, ask)
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, files, nil, ask)
 
 	require.NoError(t, err)
 	assert.Equal(t, files, asked.Instructions)
@@ -2061,7 +2061,7 @@ func TestResolveServersWithoutServersOrInstructionsLeavesTheTrustFileAlone(t *te
 	trustFile := filepath.Join(e.kopiHome, "trust.json")
 	e.writeFile(t, trustFile, `{"version":1,"folders":{"/x":"maybe"}}`)
 
-	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, noAsk(t))
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, nil, noAsk(t))
 
 	require.NoError(t, err, "an invalid trust file is not opened")
 	assert.False(t, set.trusted)
@@ -2074,7 +2074,7 @@ func TestResolveServersInvalidTrustFileIsFatal(t *testing.T) {
 	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), projectMCP)
 	e.writeFile(t, trustFile, `{"version":1,"folders":{"/x":"maybe"}}`)
 
-	_, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, noAsk(t))
+	_, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, nil, noAsk(t))
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), trustFile)
@@ -2278,4 +2278,315 @@ func TestRootPrintWalksInstructionFilesOnTheTrustedPath(t *testing.T) {
 	prompt := systemText(t, server.next(t))
 	assert.Contains(t, prompt, "good rule 1d7e")
 	assert.NotContains(t, prompt, "evil rule 0b3f")
+}
+
+func (e testEnv) writeSkill(t *testing.T, skillsDir, name, description, body string) {
+	t.Helper()
+	e.writeFile(t, filepath.Join(skillsDir, name, "SKILL.md"), fmt.Sprintf("---\nname: %s\ndescription: %s\n---\n%s\n", name, description, body))
+}
+
+// messageTexts is each message's content of a provider request, in order.
+func messageTexts(t *testing.T, req mockRequest) []string {
+	t.Helper()
+	var texts []string
+	for _, m := range req.body["messages"].([]any) {
+		switch content := m.(map[string]any)["content"].(type) {
+		case string:
+			texts = append(texts, content)
+		case []any:
+			var parts []string
+			for _, p := range content {
+				parts = append(parts, p.(map[string]any)["text"].(string))
+			}
+			texts = append(texts, strings.Join(parts, ""))
+		}
+	}
+	return texts
+}
+
+func declaredTools(req mockRequest) []string {
+	var names []string
+	for _, tl := range req.body["tools"].([]any) {
+		names = append(names, tl.(map[string]any)["function"].(map[string]any)["name"].(string))
+	}
+	return names
+}
+
+// printWithMock runs print mode against a mock provider that answers "ok" and
+// returns the first request it received.
+func printWithMock(t *testing.T, e testEnv, args ...string) (req mockRequest, stderr string) {
+	t.Helper()
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+	_, stderr, err := execute(t, "", append([]string{"--model", mockModel}, args...)...)
+	require.NoError(t, err)
+	return server.next(t), stderr
+}
+
+func TestResolveServersAsksForSkillFolders(t *testing.T) {
+	e := newTestEnv(t)
+	trustFile := filepath.Join(e.kopiHome, "trust.json")
+	folders := []string{filepath.Join(e.workspace, ".agents", "skills")}
+	var asked []tui.TrustRequest
+	ask := func(req tui.TrustRequest) (tui.TrustChoice, error) {
+		asked = append(asked, req)
+		return tui.TrustFolder, nil
+	}
+
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, folders, ask)
+
+	require.NoError(t, err)
+	assert.Equal(t, []tui.TrustRequest{{Folder: canonical(t, e.workspace), Parent: canonical(t, e.root), Skills: folders}}, asked)
+	assert.True(t, set.trusted)
+	assert.Equal(t, map[string]string{canonical(t, e.workspace): "trusted"}, trustFolders(t, trustFile))
+}
+
+func TestResolveServersSkillFoldersUndecidedWithoutAsk(t *testing.T) {
+	e := newTestEnv(t)
+	trustFile := filepath.Join(e.kopiHome, "trust.json")
+
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, []string{filepath.Join(e.workspace, ".agents", "skills")}, nil)
+
+	require.NoError(t, err)
+	assert.True(t, set.undecided)
+	assert.False(t, set.trusted)
+	assert.NoFileExists(t, trustFile)
+}
+
+func TestSkippedList(t *testing.T) {
+	assert.Equal(t, "A are", skippedList([]string{"A"}))
+	assert.Equal(t, "A and B are", skippedList([]string{"A", "B"}))
+	assert.Equal(t, "A, B and C are", skippedList([]string{"A", "B", "C"}))
+}
+
+func TestRootPrintSkipsSkillsInAnUndecidedFolder(t *testing.T) {
+	const tail = " skipped; run kopi here in a terminal to be asked whether to trust it"
+	for _, tt := range []struct {
+		name         string
+		servers      bool
+		instructions bool
+		warning      string
+	}{
+		{"skills", false, false, "this folder is not trusted, so its skills are" + tail},
+		{"skills and instruction files", false, true, "this folder is not trusted, so its instruction files and its skills are" + tail},
+		{"servers and skills", true, false, "this folder is not trusted, so the MCP servers in its .mcp.json and its skills are" + tail},
+		{"all three", true, true, "this folder is not trusted, so the MCP servers in its .mcp.json, its instruction files and its skills are" + tail},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			e.writeSkill(t, filepath.Join(e.workspace, ".agents", "skills"), "bar", "project skill", "project body 6a1c")
+			if tt.servers {
+				e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), `{"mcpServers":{"proj":{"command":"kopi-no-such-command-7f3a"}}}`)
+			}
+			if tt.instructions {
+				e.writeFile(t, filepath.Join(e.workspace, "AGENTS.md"), "project rule 8e07")
+			}
+
+			req, stderr := printWithMock(t, e, "-p", "/skill:bar go")
+
+			assert.Equal(t, 1, strings.Count(stderr, tt.warning), stderr)
+			assert.Equal(t, 1, strings.Count(stderr, "not trusted"), stderr)
+			assert.NotContains(t, declaredTools(req), "Skill")
+			assert.NotContains(t, strings.Join(messageTexts(t, req), "\n"), "project body 6a1c")
+			assert.NoFileExists(t, filepath.Join(e.kopiHome, "trust.json"))
+		})
+	}
+}
+
+func TestRootPrintLoadsAKopiHomeSkillWithThePrompt(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeSkill(t, filepath.Join(e.kopiHome, "skills"), "foo", "a skill", "foo body 3d9e")
+
+	req, stderr := printWithMock(t, e, "-p", "/skill:foo do")
+
+	texts := messageTexts(t, req)
+	require.Len(t, texts, 3, texts)
+	assert.Equal(t, "/skill:foo do", texts[1])
+	assert.Contains(t, texts[2], `<skill name="foo"`)
+	assert.Contains(t, texts[2], "foo body 3d9e")
+	assert.Contains(t, declaredTools(req), "Skill")
+	assert.NotContains(t, stderr, "skill")
+}
+
+func TestRootPrintWithoutSkillsHasNoSkillTool(t *testing.T) {
+	e := newTestEnv(t)
+
+	req, _ := printWithMock(t, e, "-p", "hi")
+
+	assert.NotContains(t, declaredTools(req), "Skill")
+}
+
+func TestRootPrintLoadsAUserHomeSkill(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeSkill(t, filepath.Join(e.home, ".agents", "skills"), "baz", "a user skill", "baz body 21f0")
+
+	req, _ := printWithMock(t, e, "-p", "/skill:baz go")
+
+	assert.Contains(t, messageTexts(t, req)[2], "baz body 21f0")
+	assert.Contains(t, declaredTools(req), "Skill")
+}
+
+func TestRootPrintKopiHomeSkillBeatsUserHomeSkill(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeSkill(t, filepath.Join(e.kopiHome, "skills"), "foo", "kopi", "kopi body 5b2a")
+	e.writeSkill(t, filepath.Join(e.home, ".agents", "skills"), "foo", "user", "user body 77c4")
+
+	req, _ := printWithMock(t, e, "-p", "/skill:foo go")
+
+	text := strings.Join(messageTexts(t, req), "\n")
+	assert.Contains(t, text, "kopi body 5b2a")
+	assert.NotContains(t, text, "user body 77c4")
+}
+
+func TestRootPrintTrustedProjectSkillBeatsUserSkill(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeSkill(t, filepath.Join(e.workspace, ".agents", "skills"), "bar", "project", "project body 6a1c")
+	e.writeSkill(t, filepath.Join(e.home, ".agents", "skills"), "bar", "user", "user body 77c4")
+	e.writeTrust(t, e.workspace, "trusted")
+
+	req, stderr := printWithMock(t, e, "-p", "/skill:bar go")
+
+	text := strings.Join(messageTexts(t, req), "\n")
+	assert.Contains(t, text, "project body 6a1c")
+	assert.NotContains(t, text, "user body 77c4")
+	assert.NotContains(t, stderr, "not trusted")
+}
+
+func TestRootPrintUntrustedProjectSkillIsNotLoaded(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeSkill(t, filepath.Join(e.workspace, ".agents", "skills"), "bar", "project", "project body 6a1c")
+	e.writeSkill(t, filepath.Join(e.home, ".agents", "skills"), "bar", "user", "user body 77c4")
+	e.writeTrust(t, e.workspace, "untrusted")
+
+	req, stderr := printWithMock(t, e, "-p", "/skill:bar go")
+
+	text := strings.Join(messageTexts(t, req), "\n")
+	assert.NotContains(t, text, "project body 6a1c")
+	assert.Contains(t, text, "user body 77c4")
+	assert.NotContains(t, stderr, "not trusted", "a decided folder is skipped silently")
+}
+
+func TestRootPrintSkillsInTheHomeDirectoryAreNotProjectSkills(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeSkill(t, filepath.Join(e.home, ".agents", "skills"), "baz", "a user skill", "baz body 21f0")
+	t.Chdir(e.home)
+
+	req, stderr := printWithMock(t, e, "-p", "/skill:baz go")
+
+	assert.Contains(t, messageTexts(t, req)[2], "baz body 21f0")
+	assert.NotContains(t, stderr, "not trusted")
+	assert.NoFileExists(t, filepath.Join(e.kopiHome, "trust.json"))
+}
+
+func TestRootPrintSkillPrefixFromConfig(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeSkill(t, filepath.Join(e.kopiHome, "skills"), "foo", "a skill", "foo body 3d9e")
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"skills":{"prefix":""}}`)
+
+	req, _ := printWithMock(t, e, "-p", "/foo do")
+
+	texts := messageTexts(t, req)
+	require.Len(t, texts, 3, texts)
+	assert.Equal(t, "/foo do", texts[1])
+	assert.Contains(t, texts[2], "foo body 3d9e")
+}
+
+func TestRootPrintReportsSkillProblemsAndRuns(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "skills", "broken", "SKILL.md"), "---\nname: broken\n---\nno description\n")
+	e.writeSkill(t, filepath.Join(e.kopiHome, "skills"), "foo", "a skill", "foo body 3d9e")
+
+	req, stderr := printWithMock(t, e, "-p", "/skill:foo go")
+
+	assert.Contains(t, stderr, "broken")
+	assert.Contains(t, strings.Join(messageTexts(t, req), "\n"), "foo body 3d9e")
+}
+
+func TestRootSkillRules(t *testing.T) {
+	for _, flag := range []string{"--allowed-tools", "--disallowed-tools"} {
+		t.Run(flag, func(t *testing.T) {
+			newTestEnv(t)
+
+			_, _, err := execute(t, "", "--model", "nosuch/model-1", "-p", "hi", flag, "Skill")
+
+			assert.EqualError(t, err, `unknown model "nosuch/model-1": check --model`)
+		})
+	}
+	t.Run("path", func(t *testing.T) {
+		newTestEnv(t)
+
+		_, _, err := execute(t, "", "--model", "nosuch/model-1", "-p", "hi", "--allowed-tools", "Skill(x)")
+
+		assert.EqualError(t, err, `unknown model "nosuch/model-1": check --model`)
+	})
+}
+
+func streamSkill(w http.ResponseWriter, args map[string]any) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	writeChunk(w, map[string]any{"role": "assistant", "content": ""}, nil)
+	raw, _ := json.Marshal(args)
+	writeChunk(w, map[string]any{"tool_calls": []any{map[string]any{
+		"index": 0, "id": "call_0", "type": "function",
+		"function": map[string]any{"name": "Skill", "arguments": string(raw)},
+	}}}, nil)
+	writeChunk(w, map[string]any{}, "tool_calls")
+	fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
+func TestRootPathRuleDeniesASkillFile(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeSkill(t, filepath.Join(e.kopiHome, "skills"), "foo", "a skill", "foo body 3d9e")
+	e.writeFile(t, filepath.Join(e.kopiHome, "skills", "foo", "secret.md"), "secret body 9c41")
+	var calls atomic.Int32
+	server := newMockProvider(t, func(w http.ResponseWriter) {
+		if calls.Add(1) == 1 {
+			streamSkill(w, map[string]any{"name": "foo", "file": "secret.md"})
+			return
+		}
+		streamText(w, "done")
+	})
+	e.writeMockModels(t, server.URL)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "read it", "--disallowed-tools", "*("+filepath.Join(e.kopiHome, "skills", "foo", "secret.md")+")")
+
+	require.NoError(t, err)
+	server.next(t)
+	second := server.next(t)
+	var results []string
+	for _, m := range second.body["messages"].([]any) {
+		if msg := m.(map[string]any); msg["role"] == "tool" {
+			results = append(results, fmt.Sprint(msg["content"]))
+		}
+	}
+	require.Len(t, results, 1)
+	assert.Contains(t, results[0], "--disallowed-tools")
+	assert.NotContains(t, fmt.Sprint(second.body), "secret body 9c41")
+}
+
+func TestRootDisallowedSkillRemovesTheTool(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeSkill(t, filepath.Join(e.kopiHome, "skills"), "foo", "a skill", "foo body 3d9e")
+
+	req, _ := printWithMock(t, e, "-p", "hi", "--disallowed-tools", "Skill")
+
+	assert.NotContains(t, declaredTools(req), "Skill")
+}
+
+func TestRootRejectsInvalidSkillPrefix(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"skills":{"prefix":"Bad Prefix"}}`)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "skills.prefix")
+}
+
+func TestConfigShowsSkillsPrefix(t *testing.T) {
+	newTestEnv(t)
+
+	stdout, _, err := execute(t, "", "config")
+
+	require.NoError(t, err)
+	assert.Regexp(t, `skills\.prefix\s+= skill\s+\(default\)`, stdout)
 }

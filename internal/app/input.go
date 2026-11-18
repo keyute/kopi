@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/sahilm/fuzzy"
+
+	"github.com/keyute/kopi/internal/skill"
 )
 
 type Kind int
@@ -27,13 +29,17 @@ type Span struct {
 }
 
 // Spans returns the input's highlighted runs in line and rune-offset order.
-func Spans(text string) []Span {
+// A control command is highlighted alone; any other input gets its @ references
+// and the skill commands skills types, unless it opens with an unknown command.
+func Spans(text string, skills *skill.Set) []Span {
 	if line, col, ok := commandAt(text); ok {
 		name, _, _ := parse(text)
-		if !slices.ContainsFunc(commandTable(), func(c command) bool { return c.Name == name }) {
+		if isControl(name) {
+			return []Span{{Line: line, Start: col, End: col + 1 + utf8.RuneCountInString(name), Kind: KindCommand}}
+		}
+		if _, ok := skills.Lookup(leadingWord(text)); !ok {
 			return nil
 		}
-		return []Span{{Line: line, Start: col, End: col + 1 + utf8.RuneCountInString(name), Kind: KindCommand}}
 	}
 	var spans []Span
 	for i, l := range strings.Split(text, "\n") {
@@ -43,6 +49,13 @@ func Spans(text string) []Span {
 			}
 		}
 	}
+	refs := len(spans)
+	for _, tok := range skills.Tokens(text) {
+		if !slices.ContainsFunc(spans[:refs], func(r Span) bool { return r.Line == tok.Line && r.Start <= tok.Start && tok.Start < r.End }) {
+			spans = append(spans, Span{Line: tok.Line, Start: tok.Start, End: tok.End, Kind: KindCommand})
+		}
+	}
+	slices.SortStableFunc(spans, func(a, b Span) int { return cmp.Or(cmp.Compare(a.Line, b.Line), cmp.Compare(a.Start, b.Start)) })
 	return spans
 }
 
@@ -60,23 +73,31 @@ type Query struct {
 func QueryAt(text string, line, col int) (Query, bool) {
 	l := []rune(strings.Split(text, "\n")[line])
 	if cl, c, ok := commandAt(text); ok {
-		if line != cl || col <= c {
-			return Query{}, false
-		}
+		cmdLine := []rune(strings.Split(text, "\n")[cl])
 		ne := c + 1
-		for ne < len(l) && l[ne] != ' ' {
+		for ne < len(cmdLine) && cmdLine[ne] != ' ' {
 			ne++
 		}
-		if col <= ne {
+		// Only a control command owns the rest of the input; after a skill or
+		// an unknown name the input is a prompt.
+		if isControl(string(cmdLine[c+1 : ne])) {
+			if line != cl || col <= c {
+				return Query{}, false
+			}
+			if col <= ne {
+				return Query{Kind: KindCommand, Line: line, Start: c, End: ne, Text: string(l[c+1 : col])}, true
+			}
+			start := ne
+			for start < len(l) && unicode.IsSpace(l[start]) {
+				start++
+			}
+			start = min(col, start)
+			end := max(col, len([]rune(strings.TrimRightFunc(string(l), unicode.IsSpace))))
+			return Query{Kind: KindArgument, Command: string(l[c+1 : ne]), Line: line, Start: start, End: end, Text: string(l[start:col])}, true
+		}
+		if line == cl && c < col && col <= ne {
 			return Query{Kind: KindCommand, Line: line, Start: c, End: ne, Text: string(l[c+1 : col])}, true
 		}
-		start := ne
-		for start < len(l) && unicode.IsSpace(l[start]) {
-			start++
-		}
-		start = min(col, start)
-		end := max(col, len([]rune(strings.TrimRightFunc(string(l), unicode.IsSpace))))
-		return Query{Kind: KindArgument, Command: string(l[c+1 : ne]), Line: line, Start: start, End: end, Text: string(l[start:col])}, true
 	}
 	for _, r := range references(l) {
 		if r[0] < col && col <= r[1] {

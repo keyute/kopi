@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -45,6 +46,7 @@ type Config struct {
 	Theme       Theme                `koanf:"theme"`
 	Permissions Permissions          `koanf:"permissions"`
 	Sandbox     Sandbox              `koanf:"sandbox"`
+	Skills      Skills               `koanf:"skills"`
 	Classifier  Classifier           `koanf:"classifier"`
 	MCPServers  map[string]MCPServer `koanf:"mcpServers"`
 }
@@ -55,6 +57,12 @@ type Permissions struct {
 	Allow []string `koanf:"allow"`
 	Ask   []string `koanf:"ask"`
 	Deny  []string `koanf:"deny"`
+}
+
+type Skills struct {
+	// Prefix is typed before a skill's name and a colon to load it: with
+	// "skill", /skill:name. Empty types the bare /name.
+	Prefix string `koanf:"prefix"`
 }
 
 type Sandbox struct {
@@ -115,6 +123,7 @@ func Defaults() Layer {
 	values["instructionFallbacks"] = []string{"CLAUDE.md"}
 	values["permissions"] = map[string]any{"allow": []string{}, "ask": []string{}, "deny": []string{}}
 	values["sandbox"] = map[string]any{"allowWrite": []string{}, "denyRead": []string{}, "network": false}
+	values["skills"] = map[string]any{"prefix": "skill"}
 	values["classifier"] = map[string]any{"enabled": false, "instructions": []string{}}
 	values["mcpServers"] = map[string]any{}
 	return Map("default", values)
@@ -190,6 +199,9 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
 		if err := validateSandbox(c.Sandbox); err != nil {
+			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
+		}
+		if err := validateSkills(c.Skills); err != nil {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
 		if err := validateClassifier(c.Classifier); err != nil {
@@ -346,6 +358,15 @@ func validateSandbox(s Sandbox) error {
 	return nil
 }
 
+var skillPrefixPattern = regexp.MustCompile(`^[a-z0-9-]*$`)
+
+func validateSkills(s Skills) error {
+	if !skillPrefixPattern.MatchString(s.Prefix) {
+		return fmt.Errorf("%w: skills.prefix: %q is not lowercase letters, digits and hyphens", ErrInvalidValue, s.Prefix)
+	}
+	return nil
+}
+
 func validateClassifier(c Classifier) error {
 	for i, ins := range c.Instructions {
 		if strings.TrimSpace(ins) == "" {
@@ -382,24 +403,24 @@ type Entry struct{ Key, Value, Origin string }
 func (r *Resolved) Entries() []Entry {
 	c := r.Config
 	values := map[string]any{
-		"model":                c.Model,
-		"smallModel":           c.SmallModel,
-		"mode":                 c.Mode,
-		"instructionFallbacks": c.InstructionFallbacks,
-		"version":              c.Version,
-		"statusline.left":      c.StatusLine.Left,
-		"statusline.right":     c.StatusLine.Right,
-		"statusline.separator": c.StatusLine.Separator,
-		"theme.dark":           c.Theme.Dark,
-		"theme.light":          c.Theme.Light,
-		"permissions.allow":    c.Permissions.Allow,
-		"permissions.ask":      c.Permissions.Ask,
-		"permissions.deny":     c.Permissions.Deny,
-		"sandbox.enabled":      c.Sandbox.Enabled,
-		"sandbox.allowWrite":   c.Sandbox.AllowWrite,
-		"sandbox.denyRead":     c.Sandbox.DenyRead,
-		"sandbox.network":      c.Sandbox.Network,
-
+		"model":                   c.Model,
+		"smallModel":              c.SmallModel,
+		"mode":                    c.Mode,
+		"instructionFallbacks":    c.InstructionFallbacks,
+		"version":                 c.Version,
+		"statusline.left":         c.StatusLine.Left,
+		"statusline.right":        c.StatusLine.Right,
+		"statusline.separator":    c.StatusLine.Separator,
+		"theme.dark":              c.Theme.Dark,
+		"theme.light":             c.Theme.Light,
+		"permissions.allow":       c.Permissions.Allow,
+		"permissions.ask":         c.Permissions.Ask,
+		"permissions.deny":        c.Permissions.Deny,
+		"sandbox.enabled":         c.Sandbox.Enabled,
+		"sandbox.allowWrite":      c.Sandbox.AllowWrite,
+		"sandbox.denyRead":        c.Sandbox.DenyRead,
+		"sandbox.network":         c.Sandbox.Network,
+		"skills.prefix":           c.Skills.Prefix,
 		"classifier.enabled":      c.Classifier.Enabled,
 		"classifier.model":        c.Classifier.Model,
 		"classifier.instructions": c.Classifier.Instructions,

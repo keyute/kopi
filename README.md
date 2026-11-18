@@ -31,11 +31,12 @@ Commands in the fullscreen interface:
 | `/login <provider>` | Log in to a provider |
 | `/logout <provider>` | Remove a provider's stored credential |
 | `/tasks` | List background tasks, show one's output and stop it |
+| `/skill:<name>` | Load a skill with the prompt (see Skills) |
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
 
 - When stdin and stdout are both terminals and `-p` is not given, Kopi opens a fullscreen interface; otherwise it prints the response to one prompt and exits.
-- The prompt is the argument, piped stdin, or both (stdin, a blank line, then the argument). It is always sent as a prompt, never run as a command. Only the final message of the reply is printed.
+- The prompt is the argument, piped stdin, or both (stdin, a blank line, then the argument). It is always sent as a prompt, never run as a command; a skill it names is loaded. Only the final message of the reply is printed.
 - Ctrl+C interrupts the turn; a failed or interrupted turn exits with status 1. `-c` and `-r` work with `-p`.
 - Resuming (`-c`, `-r` or `/resume`) redraws the earlier conversation in the fullscreen interface, with its tool activity folded.
 - On exit from a session with messages, the fullscreen interface prints the command to resume it.
@@ -46,10 +47,10 @@ Keys in the fullscreen interface (defaults, see Configuration):
 - Ctrl+Enter sends now: it stops the current response and continues the turn with the queued messages plus the draft.
 - Alt+Enter, Shift+Enter or Ctrl+J inserts a newline. Ctrl+Enter and Shift+Enter need a terminal that reports modified Enter.
 - Up at the top of the input pulls queued messages back into it for editing; with nothing queued it browses input history, and Down goes back.
-- `/` at the start of the input lists commands; picking `/resume` from the menu lists this directory's sessions, which you filter by date or first message.
+- `/` at the start of the input lists commands and skills; a skill is filled in rather than run. Picking `/resume` from the menu lists this directory's sessions, which you filter by date or first message.
 - `@` at the start of the input or after a space lists files and directories under the start directory, leaving out `.git`, anything a `.gitignore` in the start directory or below ignores and Kopi's home.
 - While that menu shows, Up and Down choose, Tab fills in, Enter fills in and runs a command (a command that takes an argument, or a file reference, is only filled in), and Esc closes the menu.
-- Known commands and `@` references are highlighted in the input. An `@path` is sent as written; a space in an inserted path is written `\ `.
+- Known commands, skill commands (wherever they appear in the input) and `@` references are highlighted in the input. An `@path` is sent as written; a space in an inserted path is written `\ `.
 - Esc interrupts the running turn.
 - Ctrl+C interrupts the running turn, else clears the draft, else a second press within two seconds exits.
 - After an interrupt, queued messages return to the input; `/new`, `/resume` and exiting discard them.
@@ -89,6 +90,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `AGENTS.md` in the home, when present, is added to the system prompt in every folder, whether or not you trust it.
 - `trust.json` holds which folders you trust (see MCP servers); Kopi writes it and never writes `config.json`.
 - `history.jsonl` holds input history per working directory, written by the fullscreen interface; the last 100 entries are recalled.
+- `skills/` holds your skills (see Skills).
 - `sandbox/` holds the lock and the record of placeholders that Kopi processes sharing the home use to remove them safely (Linux).
 - `images/` holds pasted clipboard images, removed after a day.
 - `installation_id` holds the installation's UUID, created the first time a sign-in asks for it.
@@ -99,6 +101,8 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 `smallModel` (`provider/id`) is the model that answers `WebFetch` and `WebSearch` calls; unset, it is `model`, so set it to a cheaper model. A wrong value, an unknown model or one whose provider has no credential fails at start; in the fullscreen interface, a `smallModel` that shares `model`'s provider without a credential gets the first-run login instead when that provider offers a sign-in or an API key.
 
 `instructionFallbacks` lists bare file names a directory's project instruction file is read from when it has no `AGENTS.md`, the first present winning (default `["CLAUDE.md"]`); `[]` turns the fallback off. Project instruction files load only in a trusted folder (see MCP servers).
+
+`skills.prefix` (default `skill`; lowercase letters, digits and hyphens) is typed before a skill's name and a colon: `/skill:name`. `""` types skills as `/name`, and then a skill named like a built-in command cannot be typed.
 
 `keys` maps each fullscreen action to a list of key strings, and `statusline` lists the status line's `left` and `right` segments from `model`, `context`, `branch`, `cwd`, which shows the workspace with your home directory as `~`, `mode`, `notice`, which shows transient hints such as `Copied`, and `sandbox`, which shows `sandboxed` or `unsandboxed` when Bash is available, and `tasks`, which shows `1 shell` or `N shells` while background tasks run (default left `model, context, branch`, right `notice, sandbox, tasks, mode`) or from your own `segments`. `separator` goes between segments (default ` · `, `""` for none). A segment in `segments` has either `text` or `command`, and an optional `color`: a theme colour role such as `accent`, `#rgb`, `#rrggbb` or a number from 0 to 255. A `command` runs with `sh -c` in the workspace, unsandboxed, with a 5 second timeout; it runs at start, on every status refresh and, with an `interval` such as `"30s"` (at least 1s), on that schedule; a refresh that arrives while it is still running is skipped. The segment shows the first line of its stdout, keeping ANSI colours, and is hidden while the command fails or prints nothing:
 
@@ -194,7 +198,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 ## Modes and tools
 
-- Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab. Plan mode allows `Read`, `Glob`, `Grep`, `LS`, `ToolSearch`, `TaskOutput`, `TaskStop`, `WebFetch`, `WebSearch`, read-only MCP tools, and `Bash` only in the sandbox, where it cannot write the start directory; `Write`, `Edit` and other MCP tools need execute mode.
+- Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab. Plan mode allows `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `TaskOutput`, `TaskStop`, `WebFetch`, `WebSearch`, read-only MCP tools, and `Bash` only in the sandbox, where it cannot write the start directory; `Write`, `Edit` and other MCP tools need execute mode.
 - Sessions start and resume in the configured `mode` (default plan), including ones opened with `/new` and `/resume`; `--mode` overrides the config file. A mode switched to while the first session is opening is the mode it starts in.
 - `Read` reads text files inside the start directory: up to 2000 lines, 2000 characters per line and 100 KiB per call. It returns PNG, JPEG, GIF and WebP images whole, up to 20 MiB (one that cannot be processed is left out with a note); `offset` and `limit` do not apply to them. Other binary files and directories are refused.
 - `Glob` finds files under a directory inside the start directory by glob (`*`, `?`, `**`, `{a,b}`; a pattern without `/` matches names at any depth), up to 100 paths, most recently modified first.
@@ -235,20 +239,20 @@ Permission rules in `config.json` allow, ask about or deny calls:
 }
 ```
 
-- A rule is `Name` or `Name(path)`. The name is a tool name (`Read`, `Glob`, `Grep`, `LS`, `Write`, `Edit`, `Bash`, `TaskOutput`, `TaskStop`, `ToolSearch`, `WebFetch`, `WebSearch`), an MCP tool name (see MCP servers) or `*` for every tool; an unknown name or a malformed rule is rejected at start.
+- A rule is `Name` or `Name(path)`. The name is a tool name (`Read`, `Glob`, `Grep`, `LS`, `Write`, `Edit`, `Bash`, `TaskOutput`, `TaskStop`, `ToolSearch`, `Skill`, `WebFetch`, `WebSearch`), an MCP tool name (see MCP servers) or `*` for every tool; an unknown name or a malformed rule is rejected at start.
 - `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory. `*` and `**` glob. A name with no slash (`.env`) matches at any depth, and a directory covers everything in it. Paths match case-insensitively on macOS and Windows.
 - `Name(!path)` exempts the calls it matches from the other rules in its own list, from the same config layer or flag; it never reaches rules from anywhere else.
 - A bare `Name` in `deny` removes the tool from the model.
 - `Glob`, `Grep` and `LS` leave out entries that a `deny` or `ask` rule with a path for that tool or `*` matches, except that a rule which also matches the searched path itself does not hide what is under it, as it already judged the whole call (unless a `!` exception in the same list is what admitted that path); `Read(path)` rules do not apply to them, so use `*(path)` to keep a path from every tool.
-- `ToolSearch`, `TaskOutput`, `TaskStop`, `WebFetch` and `WebSearch` take no path: only a bare rule naming the tool or `*` applies to them; `ToolSearch(path)` and the like are rejected at start.
+- `ToolSearch`, `TaskOutput`, `TaskStop`, `WebFetch` and `WebSearch` take no path: only a bare rule naming the tool or `*` applies to them; `ToolSearch(path)` and the like are rejected at start. For `Skill` the path is the skill's directory, or the file when the call names one, so path rules apply to it; a rule for a skill outside the start directory needs an absolute or `~/` path.
 - `Bash` takes no path: only a bare `Bash` or `*` rule applies to it, `Bash(path)` is rejected at start, and path rules such as `*(~/.ssh)` never apply to `Bash`. `"ask": ["Bash"]` makes every command ask.
 - Plan mode refuses `Write`, `Edit`, unsandboxed `Bash` and MCP tools not marked read-only before any rule; otherwise rules apply to `Bash` the same in both modes.
-- Deny beats ask, and ask beats allow. With no rule matching, `Read`, `Glob`, `Grep`, `LS`, `ToolSearch`, `TaskOutput`, `TaskStop` and sandboxed `Bash` are allowed and any other call asks, including every `WebFetch` and `WebSearch` call and every `Bash` command without the sandbox.
+- Deny beats ask, and ask beats allow. With no rule matching, `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `TaskOutput`, `TaskStop` and sandboxed `Bash` are allowed and any other call asks, including every `WebFetch` and `WebSearch` call and every `Bash` command without the sandbox.
 - With `classifier.enabled`, plan mode's refusals and deny rules apply first; a call an ask rule matches, including the built-in asks below, still asks you, and a call an allow rule matches runs without review.
 - With `classifier.enabled` and no rule matching, `Write` and `Edit` run without asking.
 - With `classifier.enabled` and no rule matching, any other call that would ask (every `WebFetch` and `WebSearch` call, every MCP tool call, every `Bash` command without the sandbox) is reviewed instead. The classifier allows it, denies it with a one-line reason the model gets while the turn goes on, or leaves it to you; a review that fails, times out or returns anything else is left to you too. Sandboxed `Bash` never asks, so it is never reviewed.
 - The third denial in a row, and the twentieth in a session, goes to you instead of being denied; a call the classifier allows or you approve ends the run of denials.
-- The classifier is sent the session's prompts (the last 8,000 bytes), its last 20 tool calls with their arguments (each cut to 2,000 bytes) and whether each failed, and the call under review; it is not sent the model's text or any tool output.
+- The classifier is sent the session's prompts (the last 8,000 bytes), its last 20 tool calls with their arguments (each cut to 2,000 bytes) and whether each failed, and the call under review; it is not sent the model's text, any tool output or the text of skills a prompt loads.
 - A review is up to two requests to the classifier model, each limited to 30 seconds: one at the lowest reasoning level the model supports and, unless that one allows the call, one at medium whose answer stands.
 - Built in: `Edit` and `Write` under any `.git` directory, and of any file named `.mcp.json` or the file the start directory's `.mcp.json` resolves to when it is a symlink, always ask unless a deny rule refuses them.
 - `--allowed-tools` and `--disallowed-tools` add allow and deny rules to the config's; each is repeatable and takes comma-separated rules (commas inside `()` or `{}` do not split).
@@ -274,8 +278,8 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - `${VAR}` and `${VAR:-default}` expand in `command`, `args`, `env` values, `url` and `headers` values. An unset variable with no default fails that server only.
 - A `.mcp.json` in the start directory adds its `mcpServers`, only once you trust the folder; a server there replaces the `config.json` server of the same name whole. Its unknown keys are ignored, and a server of an unsupported type (`sse`, `ws`) fails alone.
 - A trusted folder's project instruction files are added to the system prompt after the home's `AGENTS.md`: one file per directory from the directory holding `.git` (a directory or a file) down to the start directory (its symlinks resolved first), outermost first, or the start directory alone when none holds `.git`. Each directory's file is `AGENTS.md`, else the first `instructionFallbacks` name present; a symlinked file is followed. Instruction files are read once at startup and have no size limit.
-- When the start directory's `.mcp.json` declares a server or the folder has project instruction files, and you have not decided about the folder, the fullscreen interface lists its instruction files and servers and asks before the session opens: `Yes, trust this folder`, `Yes, trust the parent folder` (not offered when the parent is the root or your home directory), or `No, don't trust`. The answer is saved in `trust.json` and covers the folders below; the closest saved folder decides. In your home directory or the root no parent is offered, and the answer, yes or no, holds for this run only and is not saved. Cancelling saves nothing and skips the servers and instruction files for this run.
-- Print mode never asks: in a folder with no decision it skips the `.mcp.json` servers and project instruction files and warns on stderr.
+- When the start directory's `.mcp.json` declares a server or the folder has project instruction files or project skills, and you have not decided about the folder, the fullscreen interface lists its instruction files, skill folders and servers and asks before the session opens: `Yes, trust this folder`, `Yes, trust the parent folder` (not offered when the parent is the root or your home directory), or `No, don't trust`. The answer is saved in `trust.json` and covers the folders below; the closest saved folder decides. In your home directory or the root no parent is offered, and the answer, yes or no, holds for this run only and is not saved. Cancelling saves nothing and skips the servers, instruction files and skills for this run.
+- Print mode never asks: in a folder with no decision it skips the `.mcp.json` servers, project instruction files and project skills and warns on stderr.
 - To change a saved answer, remove the folder's entry from `trust.json`.
 - Servers start at startup. The fullscreen interface shows at once with "Connecting to MCP servers…", and the session opens when the servers have settled or after 10 seconds; a prompt sent before then is queued and sent when the session opens. Print mode waits for the servers before it runs. A server that fails or is late is reported and its tools are absent for the run; the fullscreen interface shows the reasons in the transcript, print mode on stderr.
 - A server's tools are named `mcp__<server>__<tool>`, with characters outside `A-Z`, `a-z`, `0-9`, `_` and `-` turned into `_`. The normalized server component must be nonempty, must not contain `__`, and must not end in `_`, so a whole-server permission prefix cannot match another server. Invalid server names fail before connecting. A name over 64 characters, or one that two tools share, is skipped and reported.
@@ -284,6 +288,15 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - The system prompt lists each server's tool names; a tool's schema reaches the model only after the model loads it with `ToolSearch`, by keywords or by exact names, at most 20 per keyword search. `ToolSearch` works in both modes and, with no rule matching, never asks. Each new or resumed session starts with no MCP tool loaded.
 - Server instructions are added to the system prompt, at most 2 KB each. Results are text, capped like other tool output; images and other content show as placeholders.
 - `kopi mcp list` starts the servers this directory uses, lists each with where it is declared, its state and its tools (`read-only` or `execute`), and exits. It never asks: undecided and untrusted folders' `.mcp.json` servers show as not trusted and are not started.
+
+## Skills
+
+- A skill is a directory with a `SKILL.md`. Its frontmatter has `name` (default: the directory name), `description` (required) and `disable-model-invocation`.
+- Skills load from, first definition of a name winning: a trusted folder's `.agents/skills`, from the start directory up to the directory holding `.git` (closest first; the start directory alone when none holds `.git`); then `$KOPI_HOME/skills`; then `~/.agents/skills`.
+- A project's skills load only in a trusted folder (see MCP servers): the trust question lists its skill folders, and print mode in an undecided folder skips them and warns. Starting in the home directory does not count `~/.agents/skills` as a project's.
+- Skills are read once at startup. The `Skill` tool refuses, on every read, a file in Kopi's home outside `skills/`, and refuses a skill's files once its directory is no longer the one found at start. Problems loading a skill are reported at start.
+- Type `/skill:<name>` (see `skills.prefix`) anywhere in the prompt, as a whole word. The message is sent as typed, and each skill named is loaded once with it; text after the name is simply the rest of your prompt. `//` at the start escapes it.
+- The `Skill` tool returns a skill's instructions, or with `file` one of its files, read as `Read` reads a file, images included. Its description lists the skills without `disable-model-invocation` to the model. It only reads, so it works in plan mode and is allowed by default; rules match the skill's directory, or the file it reads, and a bare `Skill` in `deny` removes it. It is present only when a skill is loaded.
 
 ## Limitations
 
@@ -322,6 +335,12 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - `Edit` detects identity or content changes at its pinned destination immediately before replacement and refuses detected conflicts. This is best-effort, not atomic compare-and-swap: reads can race and another writer can change the file between the check and rename. `Write` replaces unconditionally.
 - `Write` and `Edit` pin and check parent-directory handles before making changes, so replacing a parent name with a symlink cannot redirect those changes. Another process can still move a checked directory, including into Kopi's home; later changes follow its handle. Permission checks and these protections are not an OS boundary.
 - `Read` and `Grep` protection is by file identity, re-checked on every read and, for the searches, on every directory searched: a hard link into Kopi's home or a credential copied elsewhere is readable, whether Kopi's home exists is observable, and if Kopi's home cannot be inspected all reads are refused.
+- `Read`, `Glob`, `Grep` and `LS` cannot reach a skill's files outside the start directory; the `Skill` tool's `file` can.
+- The `Skill` tool ties a skill to the directory found at start, so a process that swaps that directory while Kopi starts can tie it to another directory, whose files `Skill` then reads (files in Kopi's home outside `skills/` stay refused on every read); and like `Read`, its protection of Kopi's home is by file identity, so a hard link into Kopi's home is readable.
+- Sandboxed `Bash` cannot read `$KOPI_HOME/skills`, so scripts bundled with skills there do not run; those in `~/.agents/skills` and in project skills do.
+- A trusted folder's `.agents/skills` is writable by the model, like its instruction files.
+- A top-level `.md` file with a description in a skills directory loads as a skill, and nothing below a directory that has a `SKILL.md` is searched.
+- Loading skills lists PiG's agent directory and `~/.agents/skills` even when they hold nothing Kopi uses.
 - Kopi refuses no credential locations outside its home; deny them with rules, such as `*(~/.ssh)`, and to `Bash` with `sandbox.denyRead`.
 - `Read` and `Grep` tell binary files, and `Read` images, from their first 8 KiB, not their names. `Read` refuses absolute symlinks, even ones pointing inside the start directory.
 - `Grep` shows only the first 2000 characters of a line; a match past that shows the line cut to that prefix.
@@ -350,6 +369,8 @@ Manual live check: `kopi login openai-codex`, run with a model, ask it to read a
 ## Not implemented
 
 Project-level config, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approving a call the classifier denied after the fact, review of sandboxed `Bash` commands, usage accounting for classifier requests, delegation and workflows, a Kopi provider identity, domain rules for `WebFetch`, domain filters and citation markers for `WebSearch`, other search backends (an MCP server can provide one), PDF and image pages, and release packaging and self-update.
+
+Skills: turning off one skill, a skill menu for a `/` typed mid-prompt, reloading skills during a run, `allowed-tools` and other frontmatter fields, and argument placeholders.
 
 MCP: OAuth for remote servers, the SSE transport, resources and prompts, `tools/list_changed`, image results, sandboxing servers or giving them a restricted environment, and a command or flag to set or change a folder's trust.
 
