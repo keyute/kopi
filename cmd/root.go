@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -20,6 +22,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/keyute/kopi/internal/app"
+	"github.com/keyute/kopi/internal/classifier"
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/headless"
@@ -349,7 +352,18 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		smallModel = model
 	}
 	answer := func(ctx context.Context, system, prompt string) (string, error) {
-		return rt.Answer(ctx, smallModel, system, prompt)
+		return rt.Answer(ctx, smallModel, pigruntime.DefaultEffort, system, prompt)
+	}
+	classifierOn := resolved.Config.Classifier.Enabled
+	classifierModel := cmp.Or(resolved.Config.Classifier.Model, model)
+	var review *classifier.Classifier
+	if classifierOn {
+		stage := func(effort pigruntime.Effort) classifier.Answer {
+			return func(ctx context.Context, system, prompt string) (string, error) {
+				return rt.Answer(ctx, classifierModel, effort, system, prompt)
+			}
+		}
+		review = classifier.New(stage(pigruntime.LowestEffort), stage(pigruntime.MediumEffort), resolved.Config.Classifier.Instructions)
 	}
 	// rules is set below; the search tools consult it only when they run.
 	var rules *policy.Rules
@@ -388,17 +402,29 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			rt.Close()
 		}
 	}()
-	if resolved.Config.SmallModel != "" {
-		if err := rt.Check(startCtx, pigruntime.OpenOptions{Model: smallModel}); err != nil {
-			if errors.Is(err, pigruntime.ErrNoCredential) {
-				providers, listErr := rt.Providers(ctx)
-				if listErr != nil {
-					err = errors.Join(err, listErr)
-				} else {
-					err = diagnose(err, smallModel, resolved.Origins["smallModel"], paths, app.OpenRequest{}, providers)
-				}
+	checkModel := func(key, ref string) error {
+		err := rt.Check(startCtx, pigruntime.OpenOptions{Model: ref})
+		if err == nil || fullscreen && sameProviderNoCredential(err, model, ref) {
+			return nil
+		}
+		if errors.Is(err, pigruntime.ErrNoCredential) {
+			providers, listErr := rt.Providers(ctx)
+			if listErr != nil {
+				err = errors.Join(err, listErr)
+			} else {
+				err = diagnose(err, ref, resolved.Origins[key], paths, app.OpenRequest{}, providers)
 			}
-			return fmt.Errorf("failed to use \"smallModel\" in %s: %w", paths.ConfigFile, err)
+		}
+		return fmt.Errorf("failed to use %q in %s: %w", key, paths.ConfigFile, err)
+	}
+	if resolved.Config.SmallModel != "" {
+		if err := checkModel("smallModel", smallModel); err != nil {
+			return err
+		}
+	}
+	if classifierOn && resolved.Config.Classifier.Model != "" {
+		if err := checkModel("classifier.model", classifierModel); err != nil {
+			return err
 		}
 	}
 	if rt.CanSearch(smallModel) {
@@ -409,7 +435,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// Only the fullscreen interface has a human to answer approvals.
 	cfg := app.Config{
 		Model: model, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
-		Errors: slices.Concat(set.errs, instructionErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen,
+		Errors: slices.Concat(set.errs, instructionErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review,
 	}
 	if len(set.servers) > 0 {
 		cfg.Servers = func(ctx context.Context) ([]pigruntime.ServerStatus, error) { return waitServers(ctx, servers) }
@@ -654,7 +680,7 @@ func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHom
 		return nil, nil, nil, nil
 	}
 	p := sandboxPolicy(cfg, cwd, userHome, kopiHome)
-	sandboxes, err := sandbox.New(ctx, p, planPolicy(p, cwd))
+	sandboxes, err := sandbox.New(ctx, filepath.Join(kopiHome, "sandbox"), p, planPolicy(p, cwd))
 	switch {
 	case cfg.Enabled == nil && errors.Is(err, sandbox.ErrUnavailable):
 		return nil, nil, err, nil
@@ -666,7 +692,8 @@ func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHom
 
 // sandboxPolicy lets commands write only the workspace, temporary
 // directories and the paths the user allowed, never read Kopi's home, and
-// never write the git files that decide which config and hooks git runs, nor
+// never write the git files that decide which config and hooks git runs (on
+// Linux, nothing in the start directory's .git), nor
 // any .mcp.json or what the start directory's .mcp.json resolves to, either of
 // which would run code outside the sandbox.
 func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.Policy {
@@ -687,15 +714,27 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 		return out
 	}
 	gitDir := filepath.Join(cwd, ".git")
+	// The names stay listed on Linux, though gitDir covers them: with paths
+	// listed beneath it, a missing .git gets a directory placeholder rather than
+	// an empty file, so git in a subdirectory of another repository still walks
+	// up. The whole directory is denied there because bubblewrap can block
+	// creating a path only by mounting a placeholder on it, and git refuses an
+	// empty commondir and, in a reftable repository, any commondir.
 	var denyWrite []string
 	for _, name := range []string{"hooks", "config", "commondir", "config.worktree", "worktrees", "modules"} {
 		denyWrite = append(denyWrite, filepath.Join(gitDir, name))
 	}
-	if _, err := os.Lstat(gitDir); errors.Is(err, os.ErrNotExist) {
-		// With no .git, git takes a directory holding HEAD, objects and refs
-		// for a git directory and runs its config.
+	_, err := os.Lstat(gitDir)
+	missing := errors.Is(err, os.ErrNotExist)
+	if missing || runtime.GOOS == "linux" {
+		// Git takes a directory holding HEAD, objects and refs for a git
+		// directory and runs its config. On Linux another command's .git
+		// placeholder can hide that .git was missing.
 		denyWrite = append(denyWrite, filepath.Join(cwd, "HEAD"))
-	} else if info, err := os.Stat(gitDir); err != nil || !info.IsDir() {
+	}
+	if runtime.GOOS == "linux" {
+		denyWrite = append(denyWrite, gitDir)
+	} else if info, err := os.Stat(gitDir); !missing && (err != nil || !info.IsDir()) {
 		// A .git file, as in a linked worktree or submodule, names the git directory.
 		denyWrite = append(denyWrite, gitDir)
 	}
@@ -718,6 +757,15 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 func planPolicy(p sandbox.Policy, cwd string) sandbox.Policy {
 	p.DenyWrite = slices.Concat(p.DenyWrite, []string{cwd})
 	return p
+}
+
+// sameProviderNoCredential reports whether err is the missing credential of
+// the provider a configured model shares with model; in fullscreen the
+// first-run login of model supplies it.
+func sameProviderNoCredential(err error, model, sub string) bool {
+	provider, _, _ := strings.Cut(model, "/")
+	subProvider, _, _ := strings.Cut(sub, "/")
+	return errors.Is(err, pigruntime.ErrNoCredential) && provider == subProvider
 }
 
 // diagnose turns the open failures a user can fix into Kopi's own advice.

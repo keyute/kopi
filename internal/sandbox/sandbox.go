@@ -4,6 +4,8 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -15,28 +17,30 @@ type Policy struct {
 	DenyRead  []string // paths commands may neither read nor write
 	DenyWrite []string // paths commands may read but not write
 	// DenyWriteNames are file names commands may not write, create, rename or
-	// remove in any directory, matched in any letter case.
+	// remove in any directory, matched in any letter case. Only macOS
+	// enforces them.
 	DenyWriteNames []string
 	Network        bool
 }
 
-// Sandbox wraps commands so they run under one Policy.
-type Sandbox struct{ prefix []string }
+// Sandbox runs commands under one Policy.
+type Sandbox struct {
+	prefix []string // macOS: the sandbox-exec argv
+	bwrap  *bwrap   // Linux
+}
 
 // New checks once that the platform sandbox works and builds one Sandbox per
 // policy, in argument order. It returns ErrUnavailable when this platform has
 // no sandbox or it cannot be applied.
-func New(ctx context.Context, policies ...Policy) ([]*Sandbox, error) {
+//
+// dir is where the sandbox keeps what Kopi processes sharing it must agree on,
+// such as when the placeholders a command mounts on the host may be removed.
+// Commands must not be able to write it. Only Linux uses it.
+func New(ctx context.Context, dir string, policies ...Policy) ([]*Sandbox, error) {
 	switch runtime.GOOS {
 	case "darwin":
-		for _, p := range policies {
-			for _, list := range [][]string{p.Write, p.DenyRead, p.DenyWrite} {
-				for _, path := range list {
-					if !filepath.IsAbs(path) {
-						return nil, fmt.Errorf("sandbox path %q is not absolute", path)
-					}
-				}
-			}
+		if err := checkAbsolute(policies); err != nil {
+			return nil, err
 		}
 		if err := probe(ctx); err != nil {
 			return nil, err
@@ -46,12 +50,60 @@ func New(ctx context.Context, policies ...Policy) ([]*Sandbox, error) {
 			sandboxes[i] = &Sandbox{prefix: seatbeltPrefix(p)}
 		}
 		return sandboxes, nil
+	case "linux":
+		if err := checkAbsolute(policies); err != nil {
+			return nil, err
+		}
+		if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+			return nil, fmt.Errorf("%w on %s/%s", ErrUnavailable, runtime.GOOS, runtime.GOARCH)
+		}
+		path, err := exec.LookPath("bwrap")
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to find bwrap: %w", ErrUnavailable, err)
+		}
+		filter, err := seccompFilter()
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
+		}
+		if err := probeBwrap(ctx, path, filter); err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("failed to create the sandbox directory %s: %w", dir, err)
+		}
+		// One record for all: the policies mount under the same directories,
+		// and their commands run side by side.
+		shared := newPlaceholders(dir)
+		sandboxes := make([]*Sandbox, len(policies))
+		for i, p := range policies {
+			sandboxes[i] = &Sandbox{bwrap: &bwrap{path: path, policy: p, shared: shared, seccomp: filter}}
+		}
+		return sandboxes, nil
 	default:
 		return nil, fmt.Errorf("%w on %s", ErrUnavailable, runtime.GOOS)
 	}
 }
 
-// Wrap returns the argv that runs argv inside the sandbox.
-func (s *Sandbox) Wrap(argv []string) []string {
-	return slices.Concat(s.prefix, argv)
+func checkAbsolute(policies []Policy) error {
+	for _, p := range policies {
+		for _, list := range [][]string{p.Write, p.DenyRead, p.DenyWrite} {
+			for _, path := range list {
+				if !filepath.IsAbs(path) {
+					return fmt.Errorf("sandbox path %q is not absolute", path)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// Command returns the command that runs argv inside the sandbox. When err is
+// nil, the caller must call done exactly once, after the command has been
+// reaped or if it never starts.
+func (s *Sandbox) Command(argv []string) (cmd *exec.Cmd, done func(), err error) {
+	if s.bwrap != nil {
+		return s.bwrap.command(argv)
+	}
+	full := slices.Concat(s.prefix, argv)
+	return exec.Command(full[0], full[1:]...), func() {}, nil
 }

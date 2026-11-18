@@ -28,6 +28,8 @@ Commands in the fullscreen interface:
 | `/execute` | Switch to execute mode |
 | `/new` | Start a new session |
 | `/resume <id>` | Resume a session |
+| `/login <provider>` | Log in to a provider |
+| `/logout <provider>` | Remove a provider's stored credential |
 | `/tasks` | List background tasks, show one's output and stop it |
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
@@ -87,13 +89,14 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `AGENTS.md` in the home, when present, is added to the system prompt in every folder, whether or not you trust it.
 - `trust.json` holds which folders you trust (see MCP servers); Kopi writes it and never writes `config.json`.
 - `history.jsonl` holds input history per working directory, written by the fullscreen interface; the last 100 entries are recalled.
+- `sandbox/` holds the lock and the record of placeholders that Kopi processes sharing the home use to remove them safely (Linux).
 - `images/` holds pasted clipboard images, removed after a day.
 - `installation_id` holds the installation's UUID, created the first time a sign-in asks for it.
 - `agent/` is PiG's agent directory, created on first run: its credential file (`auth.json`), session logs (`sessions/`), other PiG state and an optional `models.json`.
 
 `mode` is the mode sessions start in: `plan` (default) or `execute`.
 
-`smallModel` (`provider/id`) is the model that answers `WebFetch` and `WebSearch` calls; unset, it is `model`, so set it to a cheaper model. A wrong value, an unknown model or one whose provider has no credential fails at start.
+`smallModel` (`provider/id`) is the model that answers `WebFetch` and `WebSearch` calls; unset, it is `model`, so set it to a cheaper model. A wrong value, an unknown model or one whose provider has no credential fails at start; in the fullscreen interface, a `smallModel` that shares `model`'s provider without a credential gets the first-run login instead when that provider offers a sign-in or an API key.
 
 `instructionFallbacks` lists bare file names a directory's project instruction file is read from when it has no `AGENTS.md`, the first present winning (default `["CLAUDE.md"]`); `[]` turns the fallback off. Project instruction files load only in a trusted folder (see MCP servers).
 
@@ -158,11 +161,30 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - A later layer's `sandbox.allowWrite` or `sandbox.denyRead` replaces an earlier one's whole.
 - `sandbox.network` (default `false`) allows IP networking in the sandbox.
 
+`classifier` configures the model that reviews calls that would otherwise ask (see Modes and tools):
+
+```json
+{
+  "version": 1,
+  "classifier": {
+    "enabled": true,
+    "model": "provider/id",
+    "instructions": ["Deny pushes to the main branch."]
+  }
+}
+```
+
+- `classifier.enabled` (default `false`) has the classifier review calls that would otherwise ask, in both modes (see Modes and tools).
+- `classifier.model` (`provider/id`) is the model that reviews; unset, it is `model`. A value that is not `provider/id` fails at start; when the classifier is enabled, so does an unknown model or one whose provider has no credential; in the fullscreen interface, a `classifier.model` that shares `model`'s provider without a credential gets the first-run login instead when that provider offers a sign-in or an API key.
+- `classifier.instructions` lists your own rules for the classifier, added after Kopi's; a blank entry is rejected at start. A later layer's list replaces an earlier one's whole.
+
 ## Providers
 
 - `kopi login` lists the providers that offer a login, with their methods and the ones Kopi holds a credential for; `kopi login <provider>` runs one.
 - A provider offers an account sign-in, a stored API key or both; with both, Kopi asks which. An API key is read hidden on a terminal, or as a line from piped stdin.
 - A sign-in prints its URL and opens it in the browser; when the browser does not open, use the printed URL.
+- In the fullscreen interface, `/login <provider>` runs the same login without leaving the session. URLs, device codes and progress appear in the transcript, the browser opens, an API key is entered in a masked field, and Esc cancels. `/logout <provider>` removes a credential. `kopi login` and `kopi logout` remain for headless and scripted use.
+- In the fullscreen interface, when the configured model has no credential and its provider offers a sign-in or an API key, Kopi opens a login for that provider before the session opens; headless use exits with the `kopi login` hint.
 - `kopi logout <provider>` removes the provider's credential from `agent/auth.json`.
 - A credential in the environment works without a login; `kopi login` marks only stored credentials as logged in.
 - After an `anthropic` account sign-in Kopi notes that Anthropic bills third-party tools per token as extra usage, not from Claude plan limits.
@@ -184,13 +206,13 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `Bash` runs a command with `bash -c` (`/bin/sh` when `bash` is not on `PATH`) in the start directory, with Kopi's environment. Every call is a fresh shell with no input; `cd` and variables do not carry over.
 - `Bash`'s `timeout` is in milliseconds, default 120000, at most 600000. A command still running at its timeout keeps running as a background task, as does one started with `run_in_background` or moved with the `background` key; the result names the task. On interrupt a foreground command's whole process group is killed (on Windows, only the shell).
 - `Bash` returns stdout and stderr combined, keeping the first and last 15,000 bytes. A non-zero exit is an error reporting the exit code.
-- On macOS `Bash` runs inside an OS sandbox (`sandbox-exec`), configured with `sandbox` (see Configuration).
-- In the sandbox a command can write only in the start directory, `/tmp`, the temp directory and the `sandbox.allowWrite` paths, and never the files of the start directory's `.git` that choose git's config and hooks (`hooks`, `config`, `config.worktree`, `commondir`, `worktrees`, `modules`); when the start directory has no `.git`, a command cannot write `HEAD` in it. In plan mode nothing in the start directory is writable, including `sandbox.allowWrite` paths inside it.
-- In the sandbox a command cannot create, write, rename or remove a file named `.mcp.json`, in any letter case and in any directory, nor what the start directory's `.mcp.json` resolves to when it is a symlink; git operations that change a `.mcp.json` therefore fail in the sandbox.
+- On macOS and Linux `Bash` runs inside an OS sandbox (`sandbox-exec` on macOS, bubblewrap's `bwrap` on Linux), configured with `sandbox` (see Configuration).
+- In the sandbox a command can write only in the start directory, `/tmp`, the temp directory and the `sandbox.allowWrite` paths, and never, on macOS, the files of the start directory's `.git` that choose git's config and hooks (`hooks`, `config`, `config.worktree`, `commondir`, `worktrees`, `modules`), nor, on Linux, anything in the start directory's `.git`; a command cannot write `HEAD` in the start directory on Linux, or on macOS when it has no `.git`. In plan mode nothing in the start directory is writable, including `sandbox.allowWrite` paths inside it.
+- In the sandbox a command cannot create, write, rename or remove the start directory's `.mcp.json`, nor what it resolves to when it is a symlink; on macOS this holds for a file named `.mcp.json` in any letter case and in any directory. Git operations that change a protected `.mcp.json` therefore fail in the sandbox.
 - In the sandbox a command can read everything except Kopi's home and the `sandbox.denyRead` paths, which it also cannot write, rename or remove.
-- In the sandbox a command has no network unless `sandbox.network` is true, which opens IP networking only; Unix sockets stay blocked.
-- `WebFetch` fetches one http or https page on a public host and has `smallModel` answer the call's prompt from it; the main model gets the answer and the page's final URL, not the page. HTML is converted to markdown from its main content; text, JSON and XML pass through; other content types are refused. Pages are up to 5 MiB, fetched within 30 seconds and without JavaScript, and the small model reads their first 100,000 characters. Redirects on the same host (a leading `www.` and http to https count as the same) are followed, at most 5; any other redirect is returned for the model to fetch in a new call. `localhost`, names without a dot, `.localhost`, `.local` and `.internal` names, and non-public addresses are refused, including ones a name resolves to. Every call asks unless a rule allows it, in both modes.
-- `WebSearch` has `smallModel` search the web with its provider's built-in search and answer the call's query; the main model gets the answer followed by a `Sources:` list of up to 20 `- [title](url)` lines (`- url` when the page has no title), or `Sources: none`; the list is the pages the answer cites, or the pages the provider consulted when it cited none, not the pages themselves. The tool exists only when `smallModel`'s API protocol has hosted search: OpenAI Responses (also Azure and Codex), Anthropic Messages and Google Generative AI. Every call asks unless a rule allows it, in both modes.
+- In the sandbox a command has no network unless `sandbox.network` is true, which opens IP networking only; Unix sockets stay blocked, and on Linux so do VM sockets, Unix datagram socket pairs and io_uring.
+- `WebFetch` fetches one http or https page on a public host and has `smallModel` answer the call's prompt from it; the main model gets the answer and the page's final URL, not the page. HTML is converted to markdown from its main content; text, JSON and XML pass through; other content types are refused. Pages are up to 5 MiB, fetched within 30 seconds and without JavaScript, and the small model reads their first 100,000 characters. Redirects on the same host (a leading `www.` and http to https count as the same) are followed, at most 5; any other redirect is returned for the model to fetch in a new call. `localhost`, names without a dot, `.localhost`, `.local` and `.internal` names, and non-public addresses are refused, including ones a name resolves to. Every call asks unless a rule allows it or the classifier reviews it (see below), in both modes.
+- `WebSearch` has `smallModel` search the web with its provider's built-in search and answer the call's query; the main model gets the answer followed by a `Sources:` list of up to 20 `- [title](url)` lines (`- url` when the page has no title), or `Sources: none`; the list is the pages the answer cites, or the pages the provider consulted when it cited none, not the pages themselves. The tool exists only when `smallModel`'s API protocol has hosted search: OpenAI Responses (also Azure and Codex), Anthropic Messages and Google Generative AI. Every call asks unless a rule allows it or the classifier reviews it (see below), in both modes.
 
 Background tasks:
 
@@ -222,11 +244,17 @@ Permission rules in `config.json` allow, ask about or deny calls:
 - `Bash` takes no path: only a bare `Bash` or `*` rule applies to it, `Bash(path)` is rejected at start, and path rules such as `*(~/.ssh)` never apply to `Bash`. `"ask": ["Bash"]` makes every command ask.
 - Plan mode refuses `Write`, `Edit`, unsandboxed `Bash` and MCP tools not marked read-only before any rule; otherwise rules apply to `Bash` the same in both modes.
 - Deny beats ask, and ask beats allow. With no rule matching, `Read`, `Glob`, `Grep`, `LS`, `ToolSearch`, `TaskOutput`, `TaskStop` and sandboxed `Bash` are allowed and any other call asks, including every `WebFetch` and `WebSearch` call and every `Bash` command without the sandbox.
+- With `classifier.enabled`, plan mode's refusals and deny rules apply first; a call an ask rule matches, including the built-in asks below, still asks you, and a call an allow rule matches runs without review.
+- With `classifier.enabled` and no rule matching, `Write` and `Edit` run without asking.
+- With `classifier.enabled` and no rule matching, any other call that would ask (every `WebFetch` and `WebSearch` call, every MCP tool call, every `Bash` command without the sandbox) is reviewed instead. The classifier allows it, denies it with a one-line reason the model gets while the turn goes on, or leaves it to you; a review that fails, times out or returns anything else is left to you too. Sandboxed `Bash` never asks, so it is never reviewed.
+- The third denial in a row, and the twentieth in a session, goes to you instead of being denied; a call the classifier allows or you approve ends the run of denials.
+- The classifier is sent the session's prompts (the last 8,000 bytes), its last 20 tool calls with their arguments (each cut to 2,000 bytes) and whether each failed, and the call under review; it is not sent the model's text or any tool output.
+- A review is up to two requests to the classifier model, each limited to 30 seconds: one at the lowest reasoning level the model supports and, unless that one allows the call, one at medium whose answer stands.
 - Built in: `Edit` and `Write` under any `.git` directory, and of any file named `.mcp.json` or the file the start directory's `.mcp.json` resolves to when it is a symlink, always ask unless a deny rule refuses them.
 - `--allowed-tools` and `--disallowed-tools` add allow and deny rules to the config's; each is repeatable and takes comma-separated rules (commas inside `()` or `{}` do not split).
 - A rule's path counts as a match on either the path as written or its resolved target when it denies, asks or exempts from an allow, and only on both when it allows or exempts from a deny or ask.
 
-The fullscreen interface asks before a call that needs approval, showing the change or the command (the status line's `sandbox` segment shows whether `Bash` runs sandboxed): `Yes`, `Yes, allow all edits this session` (for `Write` and `Edit` when no rule asked), or `No`, which takes an optional reason typed on its row. While it waits, the working row reads `Waiting for you…`. `No` with a reason refuses the call, gives the model the reason and lets the turn go on; a blank `No` stops the turn. The `menu-up` and `menu-down` keys choose and `submit` answers; a digit answers with that option, or moves to `No` to type the reason; `interrupt` answers `No` without a reason. In the reason, `newline` starts a line, `paste` and terminal paste insert text, and digits are text. Allowing all edits never overrides a deny or ask rule, never covers `Bash`, and lasts until the session ends. Print mode cannot ask, so it denies those calls, and the refusal says to add an allow rule, such as `--allowed-tools Bash`.
+The fullscreen interface asks before a call that needs approval, showing the change or the command (the status line's `sandbox` segment shows whether `Bash` runs sandboxed): `Yes`, `Yes, allow all edits this session` (for `Write` and `Edit` when no rule asked), or `No`, which takes an optional reason typed on its row. While it waits, the working row reads `Waiting for you…`. `No` with a reason refuses the call, gives the model the reason and lets the turn go on; a blank `No` stops the turn. The `menu-up` and `menu-down` keys choose and `submit` answers; a digit answers with that option, or moves to `No` to type the reason; `interrupt` answers `No` without a reason. In the reason, `newline` starts a line, `paste` and terminal paste insert text, and digits are text. Allowing all edits never overrides a deny or ask rule, never covers `Bash`, and lasts until the session ends. When the classifier left a call to the user, the dialog shows why, `the classifier would deny this: <reason>` or `the classifier could not decide`, with `: <reason>` added when the classifier gave one, and does not offer `Yes, allow all edits this session`. Print mode cannot ask, so it denies those calls, and the refusal says to add an allow rule, such as `--allowed-tools Bash`; it also denies a call the classifier leaves to the user and one an ask rule matches, and runs the calls the classifier allows without an allow rule. Interrupting during a review stops it without asking.
 
 ## MCP servers
 
@@ -252,7 +280,7 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - Servers start at startup. The fullscreen interface shows at once with "Connecting to MCP servers…", and the session opens when the servers have settled or after 10 seconds; a prompt sent before then is queued and sent when the session opens. Print mode waits for the servers before it runs. A server that fails or is late is reported and its tools are absent for the run; the fullscreen interface shows the reasons in the transcript, print mode on stderr.
 - A server's tools are named `mcp__<server>__<tool>`, with characters outside `A-Z`, `a-z`, `0-9`, `_` and `-` turned into `_`. The normalized server component must be nonempty, must not contain `__`, and must not end in `_`, so a whole-server permission prefix cannot match another server. Invalid server names fail before connecting. A name over 64 characters, or one that two tools share, is skipped and reported.
 - A tool the server marks read-only (`readOnlyHint`) works in plan mode; any other works only in execute mode.
-- Every MCP call asks unless a rule allows it, read-only or not, and print mode denies it without one. A rule names one tool, `mcp__context7__resolve-library-id`, or ends in `*` to cover a prefix: `mcp__context7__*` for a whole server, `mcp__*` for every server. A prefix must be `mcp__` or run past the server name's `__`, so one that ends inside a server name, such as `mcp__context*`, is rejected at start. MCP rules take no path, and are accepted for servers that are not configured here.
+- Every MCP call asks unless a rule allows it, read-only or not, and print mode denies it without one; with `classifier.enabled` the classifier reviews it instead, and print mode runs a call the classifier allows. A rule names one tool, `mcp__context7__resolve-library-id`, or ends in `*` to cover a prefix: `mcp__context7__*` for a whole server, `mcp__*` for every server. A prefix must be `mcp__` or run past the server name's `__`, so one that ends inside a server name, such as `mcp__context*`, is rejected at start. MCP rules take no path, and are accepted for servers that are not configured here.
 - The system prompt lists each server's tool names; a tool's schema reaches the model only after the model loads it with `ToolSearch`, by keywords or by exact names, at most 20 per keyword search. `ToolSearch` works in both modes and, with no rule matching, never asks. Each new or resumed session starts with no MCP tool loaded.
 - Server instructions are added to the system prompt, at most 2 KB each. Results are text, capped like other tool output; images and other content show as placeholders.
 - `kopi mcp list` starts the servers this directory uses, lists each with where it is declared, its state and its tools (`read-only` or `execute`), and exits. It never asks: undecided and untrusted folders' `.mcp.json` servers show as not trusted and are not started.
@@ -260,28 +288,37 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 ## Limitations
 
 - Permission rules are not an OS boundary: they match the path a call names. Only `Bash` runs under the OS sandbox.
-- The sandbox exists only on macOS; elsewhere it is unavailable.
+- The sandbox exists only on macOS and on Linux on amd64 and arm64; elsewhere it is unavailable.
+- On Linux the sandbox needs `bwrap` on `PATH` and unprivileged user namespaces, and is unavailable without them, as in containers that forbid them or forbid mounting `/proc`. Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor until `bwrap` has an AppArmor profile or `kernel.apparmor_restrict_unprivileged_userns` is `0`; 25.04 and later work as shipped.
 - The sandbox is unavailable when Kopi itself runs inside a Seatbelt sandbox, because profiles do not nest; for the same reason tools that apply their own sandbox (`swift build`, `xcodebuild` packages) fail inside it.
 - MCP servers run outside the sandbox, with your permissions and Kopi's environment, including provider API keys.
 - Sandboxed commands inherit Kopi's environment, including provider API keys, and can read any file outside Kopi's home and `sandbox.denyRead`.
 - With `sandbox.network` true, commands reach the network without asking, in plan mode too.
 - Tools that write outside the start directory and temp directories, such as Go's build cache and package-manager caches, fail in the sandbox until those paths are in `sandbox.allowWrite`.
-- In the sandbox, `git init` in the start directory, `git config` writes, `git worktree add`, commits in a linked worktree (its git directory is outside the start directory), commits inside a submodule and commit signing through an agent socket fail.
+- In the sandbox, `git init` in the start directory, `git config` writes, `git worktree add`, commits in a linked worktree (its git directory is outside the start directory), commits inside a submodule and commit signing through an agent socket fail. On Linux every command that writes the start directory's `.git` fails (`git add`, `commit`, `checkout`, `stash`, `fetch`).
 - The sandbox does not protect the config and hooks of repositories nested inside the start directory, or of the start directory itself when it is a bare repository or a git directory.
-- When the start directory's `.mcp.json` is a symlink, what it resolves to when Kopi starts is protected like `.mcp.json` itself; when that is a directory, sandboxed commands cannot write anywhere in it. Another symlink on the way to it, a link that is broken at startup, a hard link that already exists, and the link targets of `.mcp.json` files in other folders are not protected.
+- When the start directory's `.mcp.json` is a symlink, what it resolves to when Kopi starts is protected like `.mcp.json` itself; when that is a directory, sandboxed commands cannot write anywhere in it. Another symlink on the way to it, a link that is broken at startup, a hard link that already exists, and the link targets of `.mcp.json` files in other folders are not protected. On Linux, while a denied path passes through a symlink whose entry is in a write root, such as a symlinked `.mcp.json` or `.git`, sandboxed commands refuse to run, whether the link is valid or broken. Commands also refuse unresolved aliases outside write roots when, after following a symlink, the first missing component lies inside a write root.
+- On Linux only the start directory's `.mcp.json` is protected by name: a command can create or change a `.mcp.json` in any other directory.
+- On Linux, while a sandboxed command runs, each denied path that does not exist shows outside the sandbox as an empty file or directory, in a typical repository `.mcp.json` and `HEAD`, and `.git` when the start directory has no `.git`. Kopi removes only its recorded creations that are still empty and match their creation-time device, inode and kind, once no sandboxed command, background tasks included, runs in any Kopi using the same home. This identity check is best-effort: outside changes can race removal and inodes can be reused. A killed Kopi's committed creations are cleaned after the next sandboxed command; interruption before recording can leave orphans. Kopi processes with different homes do not coordinate: one running in the same directory can remove the other's placeholders, which unmounts the deny inside the other's running command.
+- On Linux a denied directory reads as empty in the sandbox, and opening a denied file fails with "Permission denied".
+- On Linux sandboxed commands refuse policies whose deny-write self-bind would overlap `/proc` or `/dev`, including an ancestor or descendant, to preserve the private process and device mounts. This includes plan mode when the start directory is `/`. Read-deny masks over those mounts remain supported; a refused command does not run unsandboxed.
+- On Linux, while sandboxed commands run, a program outside the sandbox that removes a protected path or replaces it by renaming over it, such as an editor's save, lifts the protection on that path for those commands.
 - A command can move into a write root a directory that already holds a `.mcp.json`, and a folder moved in takes the trust of its new parent.
 - An MCP tool an allow rule covers can change `.mcp.json` and `.git` files without asking, as MCP rules take no path.
 - The files a `.mcp.json` server runs, such as `./server.sh` or `node_modules/.bin/…`, stay writable.
 - A `.mcp.json` changed outside Kopi, such as by `git pull` or an editor, starts its servers without asking again.
 - In execute mode, sandboxed commands can write anything else in the start directory, so starting Kopi in a directory holding files other programs run, such as the home directory, lets commands change them.
 - Plan mode keeps only the start directory read-only: commands can still write `/tmp`, the temp directory and `sandbox.allowWrite` paths outside it, and act over the network when `sandbox.network` is true. In plan mode `kopi -p` runs sandboxed `Bash` without asking. Commands started in execute mode, including background tasks and processes they leave running, keep their execute-mode access after a switch to plan mode.
-- `ps`, `pgrep` and `top` do not work in the sandbox.
-- Unix sockets (ssh-agent, Docker) are unreachable from the sandbox, even with `sandbox.network` true.
-- A background process a command leaves running (`cmd &`) can outlive the call, and its background task. A running command or background task keeps running if Kopi is killed.
+- On macOS `ps`, `pgrep` and `top` do not work in the sandbox; on Linux they see only the command's own processes.
+- Unix sockets (ssh-agent, Docker) are unreachable from the sandbox, even with `sandbox.network` true, and on Linux so are VM sockets and Unix datagram socket pairs (stream and seqpacket pairs work).
+- On Linux, Kopi processes with different `KOPI_HOME`s running sandboxed commands in the same workspace do not coordinate the placeholder files the sandbox mounts on missing protected paths, such as a missing `.mcp.json`, so one can remove a placeholder the other's running command relies on.
+- On Linux 32-bit programs cannot run in the sandbox: their system calls end the process.
+- On Linux commands cannot create user namespaces in the sandbox, so tools that need them fail there, such as rootless containers, browsers' own sandboxes and nested bubblewrap.
+- Outside the Linux sandbox, a background process a command leaves running (`cmd &`) can outlive the call and its background task, and a running command or background task keeps running if Kopi is killed. In the Linux sandbox everything a command started ends when it does, or when Kopi does.
 - Background tasks and their output live only in memory and do not survive a restart.
 - `sandbox-exec` is deprecated by Apple.
 - Kopi builds for macOS, Linux and Windows only.
-- Symlinks in rule paths, sandbox paths, the start directory and the home directory are resolved once, at start.
+- Symlinks in rule paths, the start directory and the home directory are resolved once, at start; in sandbox paths too on macOS, and before each command on Linux.
 - `Edit` detects identity or content changes at its pinned destination immediately before replacement and refuses detected conflicts. This is best-effort, not atomic compare-and-swap: reads can race and another writer can change the file between the check and rename. `Write` replaces unconditionally.
 - `Write` and `Edit` pin and check parent-directory handles before making changes, so replacing a parent name with a symlink cannot redirect those changes. Another process can still move a checked directory, including into Kopi's home; later changes follow its handle. Permission checks and these protections are not an OS boundary.
 - `Read` and `Grep` protection is by file identity, re-checked on every read and, for the searches, on every directory searched: a hard link into Kopi's home or a credential copied elsewhere is readable, whether Kopi's home exists is observable, and if Kopi's home cannot be inspected all reads are refused.
@@ -294,6 +331,7 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - Provider requests identify as PiG, not Kopi.
 - `WebFetch` connects directly and ignores `HTTP_PROXY` and `HTTPS_PROXY`; `sandbox.network` does not govern it.
 - An approved `WebFetch` URL is requested from its host, and the call's prompt and up to 100,000 characters of the page go to `smallModel`'s provider.
+- With `classifier.enabled`, the session's prompts, recent tool-call arguments and the call under review go to `classifier.model`'s provider; the classifier can be wrong in both directions, and a review can hold the turn for up to a minute.
 - `WebSearch`'s query goes to `smallModel`'s provider, which runs the search. Hosted search is offered by protocol, so an endpoint that speaks one of those protocols but lacks the hosted tool fails at call time with the provider's error; chat-completions providers, Bedrock, Vertex and Mistral get no `WebSearch`. Google returns redirect links, not the pages' own URLs. A search an Anthropic response pauses mid-turn returns what it has.
 - `WebFetch` runs no JavaScript, and only the `Content-Type` header decides a page's charset; without one, the type is sniffed from the body and it is read as UTF-8 unless it starts with a UTF-16 byte-order mark.
 
@@ -311,7 +349,7 @@ Manual live check: `kopi login openai-codex`, run with a model, ask it to read a
 
 ## Not implemented
 
-Project-level config, a Linux sandbox, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approval classification, delegation and workflows, a Kopi provider identity, domain rules for `WebFetch`, domain filters and citation markers for `WebSearch`, other search backends (an MCP server can provide one), PDF and image pages, and release packaging and self-update.
+Project-level config, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approving a call the classifier denied after the fact, review of sandboxed `Bash` commands, usage accounting for classifier requests, delegation and workflows, a Kopi provider identity, domain rules for `WebFetch`, domain filters and citation markers for `WebSearch`, other search backends (an MCP server can provide one), PDF and image pages, and release packaging and self-update.
 
 MCP: OAuth for remote servers, the SSE transport, resources and prompts, `tools/list_changed`, image results, sandboxing servers or giving them a restricted environment, and a command or flag to set or change a folder's trust.
 
@@ -325,7 +363,7 @@ Kopi is opinionated and built around how I work, so I don't accept feature reque
 
 Built on [PiG](https://github.com/MichaelKinsy/PiG) by Michael Kinsy (MIT). Other dependencies are listed in `go.mod`.
 
-The Seatbelt policy in `internal/sandbox/codex/` is adapted from [OpenAI Codex](https://github.com/openai/codex) (Apache-2.0); its `LICENSE` and `NOTICE` are in that directory.
+The Seatbelt policy in `internal/sandbox/codex/` is adapted from [OpenAI Codex](https://github.com/openai/codex) (Apache-2.0); its `LICENSE` and `NOTICE` are in that directory. The Linux sandbox's mount plan in `internal/sandbox/bwrap.go` is adapted from Anthropic's [sandbox-runtime](https://github.com/anthropic-experimental/sandbox-runtime) (Apache-2.0); its `LICENSE` is in `internal/sandbox/srt/`.
 
 ## License
 

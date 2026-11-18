@@ -45,6 +45,7 @@ type Config struct {
 	Theme       Theme                `koanf:"theme"`
 	Permissions Permissions          `koanf:"permissions"`
 	Sandbox     Sandbox              `koanf:"sandbox"`
+	Classifier  Classifier           `koanf:"classifier"`
 	MCPServers  map[string]MCPServer `koanf:"mcpServers"`
 }
 
@@ -61,6 +62,14 @@ type Sandbox struct {
 	AllowWrite []string `koanf:"allowWrite"`
 	DenyRead   []string `koanf:"denyRead"`
 	Network    bool     `koanf:"network"`
+}
+
+// Classifier configures the model that reviews calls that would otherwise ask;
+// a later layer's Instructions replace an earlier one's whole.
+type Classifier struct {
+	Enabled      bool     `koanf:"enabled"`
+	Model        string   `koanf:"model"` // "provider/id"; empty means model
+	Instructions []string `koanf:"instructions"`
 }
 
 // MCPServer is one entry of the standard mcpServers object.
@@ -106,6 +115,7 @@ func Defaults() Layer {
 	values["instructionFallbacks"] = []string{"CLAUDE.md"}
 	values["permissions"] = map[string]any{"allow": []string{}, "ask": []string{}, "deny": []string{}}
 	values["sandbox"] = map[string]any{"allowWrite": []string{}, "denyRead": []string{}, "network": false}
+	values["classifier"] = map[string]any{"enabled": false, "instructions": []string{}}
 	values["mcpServers"] = map[string]any{}
 	return Map("default", values)
 }
@@ -150,7 +160,7 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 		if err := decode(k, &c); err != nil {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
-		for _, ref := range []string{c.Model, c.SmallModel} {
+		for _, ref := range []string{c.Model, c.SmallModel, c.Classifier.Model} {
 			if ref == "" {
 				continue
 			}
@@ -180,6 +190,9 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
 		if err := validateSandbox(c.Sandbox); err != nil {
+			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
+		}
+		if err := validateClassifier(c.Classifier); err != nil {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
 		if err := validateMCPServers(c.MCPServers); err != nil {
@@ -333,6 +346,15 @@ func validateSandbox(s Sandbox) error {
 	return nil
 }
 
+func validateClassifier(c Classifier) error {
+	for i, ins := range c.Instructions {
+		if strings.TrimSpace(ins) == "" {
+			return fmt.Errorf("%w: classifier.instructions[%d]: blank instruction", ErrInvalidValue, i)
+		}
+	}
+	return nil
+}
+
 func validateMCPServers(servers map[string]MCPServer) error {
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		if err := tool.ValidateMCPServerName(name); err != nil {
@@ -377,6 +399,10 @@ func (r *Resolved) Entries() []Entry {
 		"sandbox.allowWrite":   c.Sandbox.AllowWrite,
 		"sandbox.denyRead":     c.Sandbox.DenyRead,
 		"sandbox.network":      c.Sandbox.Network,
+
+		"classifier.enabled":      c.Classifier.Enabled,
+		"classifier.model":        c.Classifier.Model,
+		"classifier.instructions": c.Classifier.Instructions,
 	}
 	for _, action := range KeyActions {
 		values["keys."+action] = c.Keys[action]

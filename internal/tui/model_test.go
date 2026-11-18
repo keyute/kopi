@@ -44,10 +44,12 @@ type fakeController struct {
 	histories  int
 	subscriber func(event.Event)
 	answers    []answer
-	commands   []app.Command
-	args       map[string][]app.Candidate
-	files      []app.Candidate
-	filesErr   error
+	// loginAnswers logs AnswerLogin.
+	loginAnswers []loginAnswer
+	commands     []app.Command
+	args         map[string][]app.Candidate
+	files        []app.Candidate
+	filesErr     error
 	// foreground is what Background returns; backgrounds counts the calls.
 	foreground  bool
 	backgrounds int
@@ -63,8 +65,18 @@ type answer struct {
 	d     policy.Decision
 }
 
+type loginAnswer struct {
+	token  uint64
+	answer string
+}
+
 func (f *fakeController) Answer(token uint64, d policy.Decision) bool {
 	f.answers = append(f.answers, answer{token, d})
+	return true
+}
+
+func (f *fakeController) AnswerLogin(token uint64, answer string) bool {
+	f.loginAnswers = append(f.loginAnswers, loginAnswer{token, answer})
 	return true
 }
 

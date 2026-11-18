@@ -59,13 +59,21 @@ type process struct {
 // the command starts.
 func (s *Shell) start(ctx context.Context, command string) (*process, error) {
 	argv := []string{s.shell, "-c", command}
-	if s.sb != nil {
-		argv = s.sb.Wrap(argv)
+	var cmd *exec.Cmd
+	release := func() {}
+	if s.sb == nil {
+		cmd = exec.Command(argv[0], argv[1:]...)
+	} else {
+		var err error
+		cmd, release, err = s.sb.Command(argv)
+		if err != nil {
+			return nil, fmt.Errorf("failed to sandbox command: %w", err)
+		}
 	}
-	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = s.dir
 	r, w, err := os.Pipe()
 	if err != nil {
+		release()
 		return nil, fmt.Errorf("failed to create output pipe: %w", err)
 	}
 	// An *os.File goes to the shell as is, so exec starts no copy goroutine
@@ -76,12 +84,14 @@ func (s *Shell) start(ctx context.Context, command string) (*process, error) {
 	if err := ctx.Err(); err != nil {
 		_ = w.Close()
 		_ = r.Close()
+		release()
 		return nil, err
 	}
 	err = cmd.Start()
 	_ = w.Close()
 	if err != nil {
 		_ = r.Close()
+		release()
 		return nil, fmt.Errorf("failed to run command: %w", err)
 	}
 	p := &process{out: &outputBuffer{}, stopCh: make(chan error, 1), done: make(chan struct{})}
@@ -91,7 +101,7 @@ func (s *Shell) start(ctx context.Context, command string) (*process, error) {
 		_, _ = io.Copy(p.out, r)
 	}()
 	exited, reap := watchExit(cmd)
-	go p.supervise(cmd, r, drained, exited, reap)
+	go p.supervise(cmd, r, drained, exited, reap, release)
 	return p, nil
 }
 
@@ -105,8 +115,10 @@ func (p *process) stop(reason error) {
 //
 // Every kill happens before the single reap: until then the shell's PID, which
 // is also its process group ID, cannot be reused, so killing the group is safe.
-func (p *process) supervise(cmd *exec.Cmd, r *os.File, drained <-chan struct{}, exited <-chan error, reap func() error) {
+func (p *process) supervise(cmd *exec.Cmd, r *os.File, drained <-chan struct{}, exited <-chan error, reap func() error, release func()) {
 	defer close(p.done)
+	// start returned while the command runs, so release must follow the reap.
+	defer release()
 	defer func() { p.ended = time.Now() }()
 	var exitErr error
 	select {

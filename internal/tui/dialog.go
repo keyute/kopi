@@ -33,6 +33,8 @@ type dialog struct {
 	// areas is where the last rows call drew each field, y counting from its
 	// first row.
 	areas []fieldArea
+	// optionStarts includes the row after the last option.
+	optionStarts []int
 }
 
 // rows draws d between two rules: the title, body and note two in, a blank
@@ -54,7 +56,9 @@ func (d *dialog) rows(width, budget, fieldCap int, th theme) []string {
 	}
 	rows = append(rows, "")
 	var slots []fieldSlot
+	d.optionStarts = nil
 	for i, o := range d.options {
+		d.optionStarts = append(d.optionStarts, len(rows))
 		prefix, st := "  ", none
 		if i == d.sel {
 			prefix, st = cursorMark, fg(th.accent)
@@ -66,12 +70,13 @@ func (d *dialog) rows(width, budget, fieldCap int, th theme) []string {
 		}
 		head := label + "  "
 		if indent := lipgloss.Width(prefix + head); fitsBeside(o.field.value(), width-indent) {
-			slots = append(slots, fieldSlot{at: len(rows), f: o.field, head: fg(th.accent).Render(prefix) + st.Render(head), indent: indent})
+			slots = append(slots, fieldSlot{option: i, at: len(rows), f: o.field, head: fg(th.accent).Render(prefix) + st.Render(head), indent: indent})
 			continue
 		}
 		rows = append(rows, hang(prefix, fg(th.accent), label, st, width)...)
-		slots = append(slots, fieldSlot{at: len(rows), f: o.field, indent: 2, selected: i == d.sel})
+		slots = append(slots, fieldSlot{option: i, at: len(rows), f: o.field, indent: 2, selected: i == d.sel})
 	}
+	d.optionStarts = append(d.optionStarts, len(rows))
 	rows = append(rows, rule)
 	room := min(fieldCap, budget-(len(rows)-len(d.body)))
 	d.areas = nil
@@ -82,6 +87,9 @@ func (d *dialog) rows(width, budget, fieldCap int, th theme) []string {
 			rows = slices.Insert(rows, s.at+off, fr...)
 			d.areas = append(d.areas, fieldArea{c: s.f, x: s.indent, y: s.at + off, h: len(fr)})
 			off += len(fr)
+			for i := s.option + 1; i < len(d.optionStarts); i++ {
+				d.optionStarts[i] += len(fr)
+			}
 		}
 	}
 	return rows
@@ -98,6 +106,7 @@ func fitsBeside(v string, inline int) bool {
 // fieldSlot is where a field's rows go among a dialog's rows: beside its
 // label, which head draws, or below it when head is empty.
 type fieldSlot struct {
+	option   int
 	at       int
 	f        *composer
 	head     string
@@ -109,6 +118,13 @@ func (s fieldSlot) rows(width, fieldMax int, th theme) []string {
 	s.f.fieldStyle(th)
 	s.f.ta.MaxHeight = fieldMax
 	s.f.ta.SetWidth(width - s.indent)
+	if s.f.secret {
+		row := secretRow(s.f, width-s.indent, th)
+		if s.head != "" {
+			return []string{s.head + row}
+		}
+		return []string{strings.Repeat(" ", s.indent) + row}
+	}
 	rows := strings.Split(s.f.ta.View(), "\n")
 	for i := range rows {
 		if i == 0 && s.head != "" {
