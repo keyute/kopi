@@ -65,8 +65,8 @@
 
 - Puts one to four questions to you and waits for the answers.
 - Each question has a header, shown as its tab and cut with `…` past 16 columns (the model is asked for at most 12 characters), and two to four options, each with a description. A question may allow several options (multi-select).
-- A single-select option may have a markdown preview, shown while the option is focused: beside the options at 80 columns or wider, below them otherwise. A preview that does not fit shows `… N more lines` and scrolls with PgUp and PgDn.
-- Every question ends with an `Other` row for a typed answer, so an option labelled `Other` is refused. A single-select answer is one option or typed text, a multi-select answer is any options and/or typed text.
+- A single-select option may have a markdown preview, shown in a box while the option is focused: beside the options at 64 columns or wider, below them otherwise. Beside the options the box is as wide as its text needs, centred in the room right of them; below them it spans the width. A preview that does not fit shows `… N earlier lines` and `… N more lines` inside the box and scrolls with PgUp and PgDn, or with the mouse wheel over the dialog.
+- Every question ends with a `Type something.` row for a typed answer, and an option labelled `Other` is refused. A single-select answer is one option or typed text, a multi-select answer is any options and/or typed text.
 - Tab adds a note to the focused option; the note goes to the model with the option when it is chosen.
 - With several questions a tab strip shows which are answered, and a review page after the last one lists the answers and the gaps before you submit. A single question answers at once.
 - The result lists each question with its answer, any note and any typed text, or says you dismissed the questions.
@@ -77,21 +77,21 @@
 
 | Where | Key | Action |
 |---|---|---|
-| Options | Up, Down | Move; Down from the last option focuses `Other` |
-| Options | a number | Single-select: choose that option and go on. Multi-select: toggle it. The `Other` number focuses its field |
+| Options | Up, Down | Move; Down from the last option focuses the `Type something.` row |
+| Options | a number | Single-select: choose that option and go on. Multi-select: toggle it. The `Type something.` number focuses its field |
 | Options | Space | Toggle the focused option (multi-select) |
 | Options | Enter | Single-select: choose the focused option and go on. Multi-select: go on |
 | Options | Tab | Open a note on the focused option |
 | Options | Left, Right | Previous or next question; Right from the last opens the review |
-| Options | PgUp, PgDn | Scroll a cut preview |
-| `Other` | Enter | Answer with the typed text and go on; blank text asks you to answer unless a multi-select question already has an option chosen, which goes on |
-| `Other` | Up on the first row | Back to the options |
-| `Other` | Left, Right | Switch questions while the field is empty, else move the cursor |
+| Options | PgUp, PgDn | Scroll a cut preview (the mouse wheel over the dialog does too) |
+| `Type something.` | Enter | Answer with the typed text and go on; blank text asks you to answer unless a multi-select question already has an option chosen, which goes on |
+| `Type something.` | Up on the first row | Back to the options |
+| `Type something.` | Left, Right | Switch questions while the field is empty, else move the cursor |
 | Note | Enter or Tab | Save the note; a blank note removes it |
 | Note | Esc | Discard the edit and close the note |
 | Review | Enter | Submit; with a gap, jump to the first unanswered question |
 | Review | Left | Back to the last question |
-| Review | PgUp, PgDn | Scroll a cut review |
+| Review | PgUp, PgDn | Scroll a cut review (the mouse wheel over the dialog does too) |
 | Any | Esc | Dismiss the questions (in a note, close the note) |
 
 ## WebFetch
@@ -137,7 +137,7 @@
   - A search an Anthropic response pauses mid-turn returns what it has.
 - In an `AskUserQuestion` dialog Space, Left, Right and the number keys are fixed keys, not [`keys`](configuration.md#keys) entries.
 - A note on an option that is not chosen is dropped.
-- While a question is open PgUp and PgDn scroll a cut preview or review, not the transcript, and do nothing when nothing is cut.
+- While a question is open PgUp and PgDn, and the mouse wheel over the dialog, scroll a cut preview or review, not the transcript, and do nothing when nothing is cut.
 
 ## Not implemented
 

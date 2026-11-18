@@ -33,18 +33,19 @@ func plainQuestionRows(qs []tool.Question, tab, width, maxPreview, maxRows int) 
 	return plainRows(q.rows(width, maxPreview, maxRows, mocha()))
 }
 
-func TestQuestionRowsShowTitleOptionsDescriptionsAndOther(t *testing.T) {
+func TestQuestionRowsShowTitleOptionsDescriptionsAndTheCustomRow(t *testing.T) {
 	rule60 := strings.Repeat("─", 60)
 	assert.Equal(t, []string{
 		rule60,
 		"  Which db?",
-		"  enter to choose · tab to add a note · esc to dismiss",
 		"",
 		"❭ 1. Postgres",
 		"  about Postgres",
 		"  2. SQLite",
 		"  about SQLite",
-		"  3. Other  Type your answer",
+		"  3. Type something.",
+		"",
+		"  enter to choose · tab to add a note · esc to dismiss",
 		rule60,
 	}, plainQuestionRows([]tool.Question{choice("db", false, "Postgres", "SQLite")}, 0, 60, 6, 100))
 }
@@ -55,16 +56,18 @@ func TestQuestionRowsMarkMultiSelectOptions(t *testing.T) {
 	q := newQuestionDialog(event.QuestionRequested{Questions: qs}, &km, mocha())
 	q.pages[0].picked[1] = true
 	rows := plainRows(q.rows(80, 6, 100, mocha()))
-	assert.Equal(t, "  space to toggle · enter to continue · tab to add a note · esc to dismiss", rows[2])
-	assert.Equal(t, []string{"❭ 1. [ ] A", "  about A", "  2. [✔] B", "  about B", "  3. [ ] Other  Type your answer"}, rows[4:9])
+	assert.Equal(t, "  space to toggle · enter to continue · tab to add a note · esc to dismiss", rows[len(rows)-2])
+	assert.Equal(t, []string{"❭ 1. [ ] A", "  about A", "  2. [✔] B", "  about B", "  3. [ ] Type something."}, rows[3:8])
 }
 
 func TestQuestionRowsDrawTheTabStripOnlyForSeveralQuestions(t *testing.T) {
 	rows := plainQuestionRows([]tool.Question{choice("db", false, "A", "B")}, 0, 60, 6, 100)
-	assert.Equal(t, "  Which db?", rows[1])
+	assert.Equal(t, "  Which db?", rows[1], "the title sits under the rule")
 
 	qs := []tool.Question{choice("Alpha", false, "A", "B"), choice("Bravo", false, "A", "B"), choice("Charlie", false, "A", "B"), choice("Delta", false, "A", "B")}
-	assert.Equal(t, "   ☐ Alpha  ☐ Bravo  ☐ Charlie  ☐ Delta  ✔ Submit", plainQuestionRows(qs, 1, 60, 6, 100)[1])
+	several := plainQuestionRows(qs, 1, 60, 6, 100)
+	assert.Equal(t, "   ☐ Alpha  ☐ Bravo  ☐ Charlie  ☐ Delta  ✔ Submit", several[1])
+	assert.Equal(t, []string{"", "  Which Bravo?"}, several[2:4], "a blank row, then the title")
 	assert.Equal(t, "   ☐ Delta  ✔ Submit", plainQuestionRows(qs, 3, 30, 6, 100)[1], "a narrow strip starts at the active tab")
 	narrow := plainQuestionRows(qs, 2, 30, 6, 100)[1]
 	assert.Contains(t, narrow, "☐ Charlie")
@@ -94,16 +97,17 @@ func TestQuestionRowsReviewShowAnswersAndGaps(t *testing.T) {
 	q.tab = 3
 	rows := plainRows(q.rows(70, 20, 100, mocha()))
 	assert.Equal(t, []string{
-		"  Review your answers",
+		"",
 		"  1. Which One?",
 		"  ↳ B — soon",
 		"  2. Which Two?",
 		"  ↳ C; D; mine",
 		"  3. Which Three?",
-		"  ↳ not answered",
-	}, rows[2:9])
-	assert.Equal(t, "  enter to submit · ← to go back · esc to dismiss", rows[9])
-	assert.Equal(t, "❭ 1. Submit answers", rows[len(rows)-2])
+		"  ↳ Answer required",
+		"",
+		"  enter to submit · ← to go back · esc to dismiss",
+	}, rows[2:11])
+	assert.Len(t, rows, 12)
 }
 
 func TestQuestionRowsKeepTheSelectionAndRulesWhenShort(t *testing.T) {
@@ -137,7 +141,7 @@ func TestQuestionRowsTrimFieldAreasToTheWindow(t *testing.T) {
 	d.move(3)
 	rows := plainRows(q.rows(40, 6, 4, mocha()))
 	require.Len(t, d.areas, 1)
-	assert.Contains(t, rows[d.areas[0].y], "4. Other")
+	assert.Contains(t, rows[d.areas[0].y], "Type something.")
 }
 
 func previewQuestion(preview string) []tool.Question {
@@ -155,32 +159,72 @@ func cellOf(row, sub string) int {
 	return ansi.StringWidth(row[:i])
 }
 
-func TestQuestionRowsShowThePreviewBesideFromEightyColumns(t *testing.T) {
+func abs(n int) int { return max(n, -n) }
+
+func TestQuestionRowsShowThePreviewBesideFromSixtyFourColumns(t *testing.T) {
 	qs := previewQuestion("# Heading\n\nsome text")
 	rows := plainQuestionRows(qs, 0, 80, 6, 100)
 	assert.Equal(t, strings.Repeat("─", 80), rows[0])
 	assert.Equal(t, strings.Repeat("─", 80), rows[len(rows)-1])
-	first := rows[4]
+	first := rows[3]
 	assert.True(t, strings.HasPrefix(first, "❭ 1. Postgres"), first)
-	assert.Equal(t, (80-3)/2+3, cellOf(first, "Heading"), "the preview starts from the first option row, past the gap")
-	assert.Contains(t, rows[5], "some text")
-	assert.Equal(t, "  enter to choose · tab to add a note · esc to dismiss", rows[2], "the hint spans the whole width")
+	// The column is the widest option row plus one, "  3. Type something." and
+	// its cursor cell; the box is 12 wide, centred in what the gap leaves.
+	list := len("  3. Type something.") + 1
+	box := cellOf(first, "┌")
+	assert.Less(t, abs((box-list)-(80-box-minPreviewBox)), 2, "the margins differ by at most one")
+	assert.Equal(t, box+1, cellOf(rows[4], "Heading"))
+	assert.Equal(t, box+1, cellOf(rows[5], "some text"))
+	assert.Equal(t, "  enter to choose · tab to add a note · esc to dismiss", rows[len(rows)-2], "the hint spans the whole width")
+
+	assert.Contains(t, plainQuestionRows(qs, 0, 64, 6, 100)[3], "┌", "from 64 columns")
 }
 
-func TestQuestionRowsShowThePreviewBelowUnderEightyColumns(t *testing.T) {
+func TestQuestionRowsShowThePreviewBelowUnderSixtyFourColumns(t *testing.T) {
 	qs := previewQuestion("# Heading\n\nsome text")
-	rows := plainQuestionRows(qs, 0, 79, 6, 100)
-	var at int
-	for i, r := range rows {
-		if strings.Contains(r, "Heading") {
-			at = i
-		}
+	rows := plainQuestionRows(qs, 0, 63, 6, 100)
+	rule := strings.Repeat("─", 63)
+	box := strings.Repeat("─", 59)
+	assert.Equal(t, []string{
+		"  3. Type something.",
+		"",
+		"  ┌" + box + "┐",
+		"  │Heading" + strings.Repeat(" ", 59-7) + "│",
+		"  │some text" + strings.Repeat(" ", 59-9) + "│",
+		"  └" + box + "┘",
+		"",
+		"  enter to choose · tab to add a note · esc to dismiss",
+		rule,
+	}, rows[7:])
+}
+
+func TestQuestionRowsSizePreviewBoxToItsContentAndCentreIt(t *testing.T) {
+	// "  3. Type something." and its cursor cell make the column 21 wide.
+	const list = 21
+	for name, tt := range map[string]struct {
+		preview string
+		want    int
+	}{
+		"short content": {"ab", minPreviewBox},
+		"wider content": {strings.Repeat("w", 20), 22},
+		"long content":  {strings.Repeat("w", 100), 80 - list - previewGap},
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := choice("db", false, "A", "B")
+			q.Options[0].Preview = tt.preview
+			top := plainQuestionRows([]tool.Question{q}, 0, 80, 6, 100)[3]
+			start, end := strings.Index(top, "┌"), strings.LastIndex(top, "┐")
+			require.GreaterOrEqual(t, start, 0)
+			assert.Equal(t, tt.want, ansi.StringWidth(top[start:end+len("┐")]))
+			left := cellOf(top, "┌") - list
+			right := 80 - cellOf(top, "┌") - tt.want
+			if left == previewGap {
+				assert.LessOrEqual(t, right, left+1, "the box fills what the gap leaves")
+			} else {
+				assert.Less(t, abs(left-right), 2, "centred in the space right of the options")
+			}
+		})
 	}
-	require.NotZero(t, at)
-	assert.Equal(t, "  3. Other  Type your answer", rows[at-2])
-	assert.Equal(t, "", rows[at-1])
-	assert.Equal(t, 2, cellOf(rows[at], "Heading"))
-	assert.Equal(t, strings.Repeat("─", 79), rows[len(rows)-1])
 }
 
 func TestQuestionRowsGrowBesideTheListForALongPreview(t *testing.T) {
@@ -190,7 +234,8 @@ func TestQuestionRowsGrowBesideTheListForALongPreview(t *testing.T) {
 	}
 	qs := previewQuestion(strings.Join(lines, "\n\n"))
 	rows := plainQuestionRows(qs, 0, 80, 100, 100)
-	assert.Contains(t, rows[len(rows)-2], "line 11", "rows are added before the bottom rule")
+	assert.Contains(t, rows[len(rows)-5], "line 11", "rows are added before the bottom of the box, the hint and the rule")
+	assert.Contains(t, rows[len(rows)-4], "└")
 }
 
 func TestQuestionRowsCutAPreviewAndScrollIt(t *testing.T) {
@@ -234,7 +279,7 @@ func TestQuestionRowsKeepTheLayoutWhateverIsFocused(t *testing.T) {
 		for _, r := range q.rows(80, 6, 100, mocha()) {
 			assert.LessOrEqual(t, ansi.StringWidth(r), 80)
 		}
-		assert.Equal(t, 4, d.optionStarts[0], "the options start on the same row")
+		assert.Equal(t, 3, d.optionStarts[0], "the options start on the same row")
 	}
 }
 
@@ -389,7 +434,7 @@ func TestQuestionMultiSelectEnterNeedsAPickOrText(t *testing.T) {
 
 	press(m, digit('3'))
 	typeKeys(m, "typed")
-	assert.Contains(t, strings.Join(screen(m), "\n"), "[✔] Other")
+	assert.Contains(t, strings.Join(screen(m), "\n"), "[✔] typed")
 	press(m, enter)
 	assert.Equal(t, []tool.Answer{{Custom: "typed"}}, sent(t, c, qs))
 }
@@ -436,7 +481,7 @@ func TestQuestionReviewJumpsToTheFirstGap(t *testing.T) {
 	press(m, right)
 	press(m, digit('1'))
 	require.Equal(t, 2, m.question.tab)
-	assert.Contains(t, strings.Join(screen(m), "\n"), "↳ not answered")
+	assert.Contains(t, strings.Join(screen(m), "\n"), "↳ Answer required")
 	press(m, enter)
 	assert.Equal(t, 0, m.question.tab)
 	assert.Contains(t, screen(m), "  Answer this question before submitting.")
@@ -651,7 +696,54 @@ func TestQuestionResizeKeepsTheBottomRuleAboveTheFooter(t *testing.T) {
 		require.Len(t, rows, height)
 		assert.Equal(t, strings.Repeat("─", 40), rows[height-2])
 		if height >= 8 {
-			assert.Contains(t, strings.Join(rows, "\n"), "5. Other")
+			assert.Contains(t, strings.Join(rows, "\n"), "5. x")
 		}
 	}
+}
+
+func TestQuestionRowsHintScrollingOnlyWhenSomethingIsCut(t *testing.T) {
+	km := newKeyMap(config.DefaultKeys())
+	var lines []string
+	for i := range 10 {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	q := newQuestionDialog(event.QuestionRequested{Questions: previewQuestion(strings.Join(lines, "\n\n"))}, &km, mocha())
+	rows := plainRows(q.rows(80, 6, 100, mocha()))
+	assert.Equal(t, "  pgup/pgdown to scroll · enter to choose · tab to add a note · esc to dismiss", rows[len(rows)-2])
+	assert.Regexp(t, `│… \d+ more lines +│$`, rows[len(rows)-5], "markers sit inside the box")
+
+	rows = plainRows(q.rows(80, 100, 100, mocha()))
+	assert.Equal(t, "  enter to choose · tab to add a note · esc to dismiss", rows[len(rows)-2])
+}
+
+func TestQuestionRowsMarkTheChosenOptionAndCustomAnswer(t *testing.T) {
+	km := newKeyMap(config.DefaultKeys())
+	th := mocha()
+	q := newQuestionDialog(event.QuestionRequested{Questions: []tool.Question{choice("db", false, "A", "B")}}, &km, th)
+	p := q.pages[0]
+	p.chosen = 0
+	rows := q.rows(60, 6, 100, th)
+	assert.Equal(t, "❭ 1. A ✔", plainRows(rows)[3])
+	assert.Equal(t, fg(th.accent).Render("❭ ")+fg(th.accent).Bold(true).Render("1. A ✔"), rows[3], "chosen and focused: bold accent")
+	assert.Equal(t, fg(th.accent).Render("  ")+"2. B", rows[5], "an unchosen option stays plain")
+
+	p.custom().ta.SetValue("mine")
+	p.chosen = 2
+	p.d.move(0)
+	rows = plainRows(q.rows(60, 6, 100, th))
+	assert.Equal(t, "  3. mine ✔", rows[7])
+}
+
+func TestQuestionRowsDrawTheNoteEditorBelowTheDetail(t *testing.T) {
+	km := newKeyMap(config.DefaultKeys())
+	q := newQuestionDialog(event.QuestionRequested{Questions: []tool.Question{choice("db", false, "A", "B")}}, &km, mocha())
+	p := q.pages[0]
+	p.notes[0] = "kept"
+	assert.Equal(t, []string{"❭ 1. A", "  about A", "  ↳ note: kept", "  2. B"}, plainRows(q.rows(60, 6, 100, mocha()))[3:7])
+
+	p.openNote()
+	p.note.ta.SetValue("a long note that goes on and on past the end of the row so it wraps")
+	rows := plainRows(q.rows(40, 6, 100, mocha()))
+	assert.Equal(t, []string{"❭ 1. A", "  about A", "  ↳ note: a long note that goes on and"}, rows[3:6])
+	assert.True(t, strings.HasPrefix(rows[6], "          "), "continuation rows hang under the text: %q", rows[6])
 }

@@ -19,9 +19,11 @@ const (
 	chooseNotice   = "Choose an option or enter an answer."
 	unansweredNote = "Answer this question before submitting."
 	// besideWidth is the narrowest screen that shows a preview beside the options.
-	besideWidth = 80
+	besideWidth = 64
 	// previewGap is the columns between the options and a preview beside them.
-	previewGap = 3
+	previewGap = 2
+	// minPreviewBox is the narrowest a preview box is drawn.
+	minPreviewBox = 12
 	// headerWidth is the widest a header is drawn in the tab strip.
 	headerWidth = 16
 )
@@ -71,13 +73,13 @@ func newQuestionDialog(ev event.QuestionRequested, km *keyMap, th theme) *questi
 	q := &questionDialog{token: ev.Token, qs: ev.Questions, km: km, scrollAt: [2]int{-1, -1}}
 	for _, qu := range q.qs {
 		n := len(qu.Options)
-		custom, note := newField(th, km.newline, "Type your answer"), newField(th, km.newline, "Add a note")
+		custom, note := newField(th, km.newline, "Type something."), newField(th, km.newline, "Add a note")
 		p := &questionPage{d: &dialog{options: make([]option, n+1)}, chosen: -1, picked: make([]bool, n), notes: make([]string, n), noting: -1, note: &note}
 		p.d.options[n].field = &custom
 		q.pages = append(q.pages, p)
 	}
 	if len(q.qs) > 1 {
-		q.review = &dialog{title: "Review your answers", options: []option{{label: "Submit answers"}}}
+		q.review = &dialog{options: make([]option, 1)}
 	}
 	return q
 }
@@ -182,7 +184,8 @@ func binding(b key.Binding, verb string) string {
 	return ""
 }
 
-func (q *questionDialog) hint() string {
+// hint is the key hints row; cut adds scrolling, which the note editor lacks.
+func (q *questionDialog) hint(cut bool) string {
 	km := q.km
 	var parts []string
 	switch {
@@ -200,10 +203,24 @@ func (q *questionDialog) hint() string {
 	if len(q.qs) > 1 && q.tab < len(q.qs) {
 		parts = append([]string{"←/→ to switch questions"}, parts...)
 	}
+	if cut {
+		if up, down := km.pageUp.Keys(), km.pageDown.Keys(); len(up) > 0 && len(down) > 0 {
+			parts = append([]string{up[0] + "/" + down[0] + " to scroll"}, parts...)
+		}
+	}
 	return strings.Join(slices.DeleteFunc(parts, isEmpty), " · ")
 }
 
 func isEmpty(s string) bool { return s == "" }
+
+// footer is the notice, or else the hint, below the options.
+func (q *questionDialog) footer(width int, cut bool, th theme) []string {
+	none := lipgloss.NewStyle()
+	if q.notice != "" {
+		return hang("  ", none, q.notice, fg(th.warning), width)
+	}
+	return hang("  ", none, q.hint(cut), fg(th.dim), width)
+}
 
 // strip is the row of tabs, "" for a single question. When it is wider than
 // the dialog it starts at the active tab.
@@ -221,7 +238,7 @@ func (q *questionDialog) strip(width int, th theme) string {
 		cells[i], styles[i] = " "+mark+" "+cut(qu.Header, headerWidth)+" ", st
 	}
 	cells[len(q.qs)], styles[len(q.qs)] = " ✔ Submit ", fg(th.muted)
-	styles[q.tab] = fg(th.accent).Bold(true)
+	styles[q.tab] = fg(th.accent).Bold(true).Background(th.userMessageBg)
 	start, total := 0, 0
 	for _, c := range cells {
 		total += lipgloss.Width(c)
@@ -248,23 +265,23 @@ func (q *questionDialog) rows(width, maxPreview, maxRows int, th theme) []string
 		q.scroll, q.scrollAt = 0, at
 	}
 	strip := q.strip(width, th)
-	head := 1
+	head, avail := 1, maxRows
 	if strip != "" {
-		head = 2
+		head, avail = 2, maxRows-2
 	}
 	var rows []string
 	if q.tab == len(q.qs) {
-		rows = q.reviewRows(width, maxPreview, maxRows-head+1, th)
+		rows = q.reviewRows(width, maxPreview, avail, th)
 	} else {
-		rows = q.pageRows(width, maxPreview, maxRows-head+1, th)
+		rows = q.pageRows(width, maxPreview, avail, th)
 	}
 	if strip != "" {
-		rows = slices.Insert(rows, 1, strip)
+		rows = slices.Insert(rows, 1, strip, "")
 		for i := range d.areas {
-			d.areas[i].y++
+			d.areas[i].y += 2
 		}
 		for i := range d.optionStarts {
-			d.optionStarts[i]++
+			d.optionStarts[i] += 2
 		}
 	}
 	if len(rows) <= maxRows {
@@ -333,68 +350,140 @@ func elided(n int, what string) string {
 	return fmt.Sprintf("… %d %s lines", n, what)
 }
 
-func (q *questionDialog) pageRows(width, maxPreview, maxRows int, th theme) []string {
+// pageRows is the shown question's page within avail rows, without the strip:
+// the title, the options with a preview beside or below them, then the notice
+// or the hint.
+func (q *questionDialog) pageRows(width, maxPreview, avail int, th theme) []string {
 	qu, p := q.qs[q.tab], q.pages[q.tab]
 	p.settle()
 	d := p.d
-	d.title, d.note, d.body = qu.Question, q.hint(), nil
-	if q.notice != "" {
-		d.body = hang("", lipgloss.NewStyle(), q.notice, fg(th.warning), width-2)
-	}
+	d.title, d.note, d.body = qu.Question, "", nil
 	preview := !qu.MultiSelect && slices.ContainsFunc(qu.Options, func(o tool.QuestionOption) bool { return o.Preview != "" })
 	beside := preview && width >= besideWidth
 	listWidth := width
 	if beside {
-		listWidth = (width - previewGap) / 2
+		q.label(p, qu, width, th)
+		listWidth = min(naturalWidth(d), (width-2)/2)
 	}
 	q.label(p, qu, listWidth, th)
 	fieldCap := max(1, maxPreview)
-	if !beside {
-		rows := d.rows(width, maxRows, fieldCap, th)
+	lines := func(width int) []string {
 		if !preview {
-			return rows
+			return nil
 		}
-		last := len(rows) - 1
-		room := min(maxPreview, maxRows-len(rows)-1)
-		pv := q.window(q.previewLines(d.sel, width-4, th), room, th)
-		if len(pv) == 0 {
-			return rows
-		}
-		out := slices.Clone(rows[:last])
-		out = append(out, "")
-		for _, r := range pv {
-			out = append(out, "  "+r)
-		}
-		return append(out, rows[last])
+		return q.previewLines(d.sel, width, th)
 	}
 
-	// The title and hint are drawn across the whole width, the options and
-	// their fields in the left column.
-	head := d.rows(width, maxRows, fieldCap, th)
-	head = head[:d.optionStarts[0]]
-	list := d.rows(listWidth, maxRows, fieldCap, th)
-	opts := list[d.optionStarts[0] : len(list)-1]
-	delta := len(head) - d.optionStarts[0]
-	for i := range d.areas {
-		d.areas[i].y += delta
-	}
-	for i := range d.optionStarts {
-		d.optionStarts[i] += delta
-	}
-	pw := width - listWidth - previewGap
-	pv := q.window(q.previewLines(d.sel, pw, th), min(maxPreview, maxRows-len(head)-1), th)
-	rows := slices.Clone(head)
-	for i := range max(len(opts), len(pv)) {
-		var left, right string
-		if i < len(opts) {
-			left = opts[i]
+	build := func(cut bool) ([]string, bool) {
+		var cuts bool
+		foot := q.footer(width, cut, th)
+		budget := avail - 1 - len(foot)
+		if !beside {
+			rows := d.rows(width, budget, fieldCap, th)
+			last := len(rows) - 1
+			out := slices.Clone(rows[:last])
+			if lines := lines(width - 4); len(lines) > 0 {
+				room := min(maxPreview, budget-len(rows)-3)
+				if room >= 1 {
+					cuts = len(lines) > room
+					out = append(append(out, ""), q.previewBox(lines, width-2, room, 2, th)...)
+				}
+			}
+			out = append(append(out, ""), foot...)
+			return append(out, rows[last]), cuts
 		}
-		if i < len(pv) {
-			right = strings.Repeat(" ", listWidth-ansi.StringWidth(left)+previewGap) + pv[i]
+
+		// The title is drawn across the whole width, the options and their
+		// fields in the left column.
+		head := d.rows(width, budget, fieldCap, th)
+		head = head[:d.optionStarts[0]]
+		list := d.rows(listWidth, budget, fieldCap, th)
+		opts := list[d.optionStarts[0] : len(list)-1]
+		delta := len(head) - d.optionStarts[0]
+		for i := range d.areas {
+			d.areas[i].y += delta
 		}
-		rows = append(rows, left+right)
+		for i := range d.optionStarts {
+			d.optionStarts[i] += delta
+		}
+		var box []string
+		space := width - listWidth - previewGap
+		if lines := lines(space - 2); len(lines) > 0 {
+			room := min(maxPreview, budget-len(head)-3)
+			cw := 0
+			for _, l := range lines {
+				cw = max(cw, ansi.StringWidth(l))
+			}
+			if len(lines) > room {
+				cw = max(cw, ansi.StringWidth(elided(len(lines), "earlier")))
+			}
+			bw := min(max(cw+2, minPreviewBox), space)
+			if room >= 1 {
+				cuts = len(lines) > room
+				box = q.previewBox(lines, bw, room, max(previewGap, (width-listWidth-bw)/2), th)
+			}
+		}
+		rows := slices.Clone(head)
+		for i := range max(len(opts), len(box)) {
+			var left string
+			if i < len(opts) {
+				left = opts[i]
+			}
+			if i < len(box) {
+				left += strings.Repeat(" ", max(0, listWidth-ansi.StringWidth(left))) + box[i]
+			}
+			rows = append(rows, left)
+		}
+		rows = append(append(rows, ""), foot...)
+		return append(rows, head[0]), cuts
 	}
-	return append(rows, head[0])
+	rows, cuts := build(false)
+	if cuts {
+		rows, _ = build(true)
+	}
+	return rows
+}
+
+// previewBox is lines in a frame bw wide with at most room rows of content,
+// the markers of what is cut inside it; every row is indented by indent.
+func (q *questionDialog) previewBox(lines []string, bw, room, indent int, th theme) []string {
+	inner := bw - 2
+	frame, pad := fg(th.frame), strings.Repeat(" ", indent)
+	bar := strings.Repeat("─", inner)
+	out := []string{pad + frame.Render("┌"+bar+"┐")}
+	for _, l := range q.window(lines, room, th) {
+		l = ansi.Truncate(l, inner, "")
+		out = append(out, pad+frame.Render("│")+l+strings.Repeat(" ", inner-ansi.StringWidth(l))+frame.Render("│"))
+	}
+	return append(out, pad+frame.Render("└"+bar+"┘"))
+}
+
+// naturalWidth is the width d's option rows take unwrapped, as drawn.
+func naturalWidth(d *dialog) int {
+	w := 0
+	for i, o := range d.options {
+		head := fmt.Sprintf("%d. %s", i+1, o.label)
+		if o.label == "" {
+			head = fmt.Sprintf("%d. %s", i+1, o.mark)
+		}
+		w = max(w, 2+ansi.StringWidth(head))
+		for _, r := range o.detail {
+			w = max(w, 2+ansi.StringWidth(r))
+		}
+		if o.field != nil {
+			indent := 2
+			switch {
+			case o.fieldPrefix != "":
+				indent += ansi.StringWidth(o.fieldPrefix)
+			case o.label == "":
+				indent += ansi.StringWidth(head)
+			default:
+				indent += ansi.StringWidth(head) + 2
+			}
+			w = max(w, indent+max(ansi.StringWidth(o.field.ta.Placeholder), lipgloss.Width(o.field.value()))+1)
+		}
+	}
+	return w
 }
 
 // previewLines is option i's preview rendered at width, none for the custom
@@ -418,7 +507,9 @@ func (q *questionDialog) previewLines(i, width int, th theme) []string {
 // a list width.
 func (q *questionDialog) label(p *questionPage, qu tool.Question, width int, th theme) {
 	muted := fg(th.muted)
-	set := func(i int, label string, on bool, description string) {
+	for i, o := range qu.Options {
+		on := p.picked[i] || p.chosen == i
+		label := o.Label
 		switch {
 		case qu.MultiSelect && on:
 			label = "[✔] " + label
@@ -427,38 +518,57 @@ func (q *questionDialog) label(p *questionPage, qu tool.Question, width int, th 
 		case on:
 			label += " ✔"
 		}
-		o := &p.d.options[i]
-		o.label, o.detail = label, nil
-		if description != "" {
-			o.detail = hang("", muted, description, muted, width-2)
+		d := &p.d.options[i]
+		d.label, d.chosen, d.detail, d.fieldPrefix = label, on, nil, ""
+		if o.Description != "" {
+			d.detail = hang("", muted, o.Description, muted, width-2)
 		}
-		if i < len(p.notes) && p.notes[i] != "" {
-			o.detail = append(o.detail, hang("", muted, "↳ note: "+p.notes[i], muted, width-2)...)
+		switch {
+		case p.noting == i:
+			d.fieldPrefix = "↳ note: "
+		case p.notes[i] != "":
+			d.detail = append(d.detail, hang("", muted, "↳ note: "+p.notes[i], muted, width-2)...)
 		}
 	}
-	for i, o := range qu.Options {
-		set(i, o.Label, p.picked[i] || p.chosen == i, o.Description)
+	c := &p.d.options[len(qu.Options)]
+	c.chosen = p.hasCustom() && (qu.MultiSelect || p.chosen == len(qu.Options))
+	c.mark = ""
+	switch {
+	case qu.MultiSelect && c.chosen:
+		c.mark = "[✔] "
+	case qu.MultiSelect:
+		c.mark = "[ ] "
 	}
-	n := len(qu.Options)
-	set(n, "Other", p.hasCustom() && (qu.MultiSelect || p.chosen == n), "")
 }
 
-func (q *questionDialog) reviewRows(width, maxPreview, maxRows int, th theme) []string {
+// reviewRows is the review page within avail rows, without the strip: every
+// question with its answer, then the notice or the hint.
+func (q *questionDialog) reviewRows(width, maxPreview, avail int, th theme) []string {
 	d := q.review
-	d.note, d.body = q.hint(), nil
 	var body []string
 	none, muted := lipgloss.NewStyle(), fg(th.muted)
 	for i, qu := range q.qs {
-		body = append(body, hang("", none, fmt.Sprintf("%d. %s", i+1, qu.Question), none, width-2)...)
+		body = append(body, hang("", none, fmt.Sprintf("%d. %s", i+1, qu.Question), none.Bold(true), width-2)...)
 		if !q.answered(i) {
-			body = append(body, hang("", fg(th.warning), "↳ not answered", fg(th.warning), width-2)...)
+			body = append(body, hang("", fg(th.warning), "↳ Answer required", fg(th.warning), width-2)...)
 			continue
 		}
 		body = append(body, hang("", muted, "↳ "+q.pages[i].summary(qu), muted, width-2)...)
 	}
-	room := min(maxPreview, maxRows-len(d.rows(width, maxRows, 1, th)))
-	d.body = q.window(body, room, th)
-	return d.rows(width, maxRows, 1, th)
+	// The rows around the body: both rules, a blank row and the footer.
+	foot := q.footer(width, false, th)
+	room := min(maxPreview, avail-3-len(foot))
+	if room >= 1 && len(body) > room {
+		foot = q.footer(width, true, th)
+		room = min(maxPreview, avail-3-len(foot))
+	}
+	rows := []string{fg(th.frame).Render(strings.Repeat("─", width))}
+	for _, r := range q.window(body, room, th) {
+		rows = append(rows, "  "+r)
+	}
+	d.optionStarts = []int{1, len(rows)}
+	rows = append(append(rows, ""), foot...)
+	return append(rows, rows[0])
 }
 
 // summary is the answer as the review shows it.

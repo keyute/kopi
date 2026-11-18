@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -231,4 +232,53 @@ func TestDialogDetailSitsUnderTheLabelAndBeforeABelowField(t *testing.T) {
 	assert.Equal(t, []int{3, 5, 10, 11}, d.optionStarts)
 	require.Len(t, d.areas, 1)
 	assert.Equal(t, 8, d.areas[0].y)
+}
+
+func TestDialogLabellessFieldIsNumberedUnlessSole(t *testing.T) {
+	km := newKeyMap(config.DefaultKeys())
+	f := newField(mocha(), km.newline, "Type something.")
+	sole := &dialog{title: "Pick", options: []option{{field: &f}}}
+	assert.Equal(t, []string{"❭ Type something."}, plainRows(optionRows(sole, 30)), "a sole option is alone and unnumbered")
+
+	g := newField(mocha(), km.newline, "Type something.")
+	d := &dialog{title: "Pick", options: []option{{label: "Yes"}, {field: &g, mark: "[ ] "}}}
+	assert.Equal(t, []string{"❭ 1. Yes", "  2. [ ] Type something."}, plainRows(optionRows(d, 30)))
+	d.move(1)
+	g.paste("a\nb")
+	assert.Equal(t, []string{"  1. Yes", "❭ 2. [ ] a", "         b"}, plainRows(optionRows(d, 30)), "rows hang under the field's text")
+	require.Len(t, d.areas, 1)
+	assert.Equal(t, 9, d.areas[0].x)
+}
+
+func TestDialogChosenBoldsTheLabel(t *testing.T) {
+	th := mocha()
+	d := &dialog{title: "Pick", options: []option{{label: "Yes", chosen: true}, {label: "No"}}}
+	rows := optionRows(d, 30)
+	assert.Equal(t, fg(th.accent).Render("❭ ")+fg(th.accent).Bold(true).Render("1. Yes"), rows[0])
+	d.move(1)
+	rows = optionRows(d, 30)
+	assert.Equal(t, fg(th.accent).Render("  ")+lipgloss.NewStyle().Bold(true).Render("1. Yes"), rows[0])
+}
+
+func TestDialogChosenLabellessFieldEndsWithATickUnlessSelected(t *testing.T) {
+	km := newKeyMap(config.DefaultKeys())
+	f := newField(mocha(), km.newline, "Type something.")
+	f.ta.SetValue("mine")
+	d := &dialog{title: "Pick", options: []option{{label: "Yes"}, {field: &f, chosen: true}}}
+	assert.Equal(t, []string{"❭ 1. Yes", "  2. mine ✔"}, plainRows(optionRows(d, 30)))
+	d.move(1)
+	assert.Equal(t, []string{"  1. Yes", "❭ 2. mine"}, plainRows(optionRows(d, 30)))
+}
+
+func TestDialogFieldPrefixDrawsTheFieldBelowTheDetail(t *testing.T) {
+	km := newKeyMap(config.DefaultKeys())
+	f := newField(mocha(), km.newline, "Add a note")
+	d := &dialog{title: "Pick", options: []option{{label: "Yes", detail: []string{"says yes"}, field: &f, fieldPrefix: "↳ note: "}, {label: "No"}}}
+	assert.Equal(t, []string{"❭ 1. Yes", "  says yes", "  ↳ note: Add a note", "  2. No"}, plainRows(optionRows(d, 40)))
+	require.Len(t, d.areas, 1)
+	assert.Equal(t, fieldArea{c: &f, x: 10, y: 5, h: 1}, d.areas[0])
+	assert.Equal(t, []int{3, 6, 7}, d.optionStarts)
+
+	f.ta.SetValue("one\ntwo")
+	assert.Equal(t, []string{"❭ 1. Yes", "  says yes", "  ↳ note: one", "          two", "  2. No"}, plainRows(optionRows(d, 40)))
 }
