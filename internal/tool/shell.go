@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/keyute/kopi/internal/sandbox"
@@ -43,12 +44,48 @@ func (s *Shell) Sandboxed() bool { return s.sb != nil }
 
 // Run returns the command's combined output. The error of a command that
 // failed or timed out carries the output, then the reason on a final line.
-//
-// Every kill happens before the single reap: until then the shell's PID, which
-// is also its process group ID, cannot be reused, so killing the group is safe.
 func (s *Shell) Run(ctx context.Context, command string, timeout time.Duration) (string, error) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if runCtx.Err() != nil {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("%s\n%w after %v", noOutputNotice, ErrTimedOut, timeout)
+	}
+	p, err := s.start(ctx, command)
+	if err != nil {
+		return "", err
+	}
+	select {
+	case <-p.done:
+	case <-runCtx.Done():
+		reason := ctx.Err()
+		if reason == nil {
+			reason = fmt.Errorf("%w after %v", ErrTimedOut, timeout)
+		}
+		p.stop(reason)
+		<-p.done
+	}
+	return p.result()
+}
+
+// process is a started command. Its supervisor alone kills and reaps it; the
+// fields after done are written by the supervisor and read only after done.
+type process struct {
+	out    *outputBuffer
+	stopCh chan error
+	once   sync.Once
+	done   chan struct{}
+	reason error
+	err    error
+	exit   error
+	ended  time.Time
+}
+
+// start runs command without tying it to ctx, which is checked only before
+// the command starts.
+func (s *Shell) start(ctx context.Context, command string) (*process, error) {
 	argv := []string{s.shell, "-c", command}
 	if s.sb != nil {
 		argv = s.sb.Wrap(argv)
@@ -57,48 +94,53 @@ func (s *Shell) Run(ctx context.Context, command string, timeout time.Duration) 
 	cmd.Dir = s.dir
 	r, w, err := os.Pipe()
 	if err != nil {
-		return "", fmt.Errorf("failed to create output pipe: %w", err)
+		return nil, fmt.Errorf("failed to create output pipe: %w", err)
 	}
 	// An *os.File goes to the shell as is, so exec starts no copy goroutine
 	// that Wait would drain, and one fd for both keeps the streams
 	// interleaved in order.
 	cmd.Stdout, cmd.Stderr = w, w
 	newSession(cmd)
-	if runCtx.Err() != nil {
+	if err := ctx.Err(); err != nil {
 		_ = w.Close()
 		_ = r.Close()
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		return "", fmt.Errorf("%s\n%w after %v", noOutputNotice, ErrTimedOut, timeout)
+		return nil, err
 	}
 	err = cmd.Start()
 	_ = w.Close()
 	if err != nil {
 		_ = r.Close()
-		return "", fmt.Errorf("failed to run command: %w", err)
+		return nil, fmt.Errorf("failed to run command: %w", err)
 	}
-	out := &outputBuffer{}
+	p := &process{out: &outputBuffer{}, stopCh: make(chan error, 1), done: make(chan struct{})}
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)
-		_, _ = io.Copy(out, r)
+		_, _ = io.Copy(p.out, r)
 	}()
 	exited, reap := watchExit(cmd)
+	go p.supervise(cmd, r, drained, exited, reap)
+	return p, nil
+}
 
-	var reason error
-	stop := func() {
-		reason = ErrTimedOut
-		if err := ctx.Err(); err != nil {
-			reason = err
-		}
-		_ = kill(cmd)
-	}
+// stop kills the command's process group, recording reason as why it ended.
+// It has no effect once the supervisor has finished.
+func (p *process) stop(reason error) {
+	p.once.Do(func() { p.stopCh <- reason })
+}
+
+// supervise waits for the command, kills it on stop, and reaps it.
+//
+// Every kill happens before the single reap: until then the shell's PID, which
+// is also its process group ID, cannot be reused, so killing the group is safe.
+func (p *process) supervise(cmd *exec.Cmd, r *os.File, drained <-chan struct{}, exited <-chan error, reap func() error) {
+	defer close(p.done)
+	defer func() { p.ended = time.Now() }()
 	var exitErr error
 	select {
 	case exitErr = <-exited:
-	case <-runCtx.Done():
-		stop()
+	case p.reason = <-p.stopCh:
+		_ = kill(cmd)
 		exitErr = <-exited
 	}
 	if exitErr != nil {
@@ -106,20 +148,21 @@ func (s *Shell) Run(ctx context.Context, command string, timeout time.Duration) 
 		_ = r.Close()
 		<-drained
 		_ = reap()
-		return "", fmt.Errorf("failed to wait for command: %w", exitErr)
+		p.err = fmt.Errorf("failed to wait for command: %w", exitErr)
+		return
 	}
 
 	timer := time.NewTimer(waitDelay)
 	defer timer.Stop()
-	done := runCtx.Done()
-	if reason != nil {
-		done = nil
+	stopCh := p.stopCh
+	if p.reason != nil {
+		stopCh = nil
 	}
 	select {
 	case <-drained:
 	case <-timer.C:
-	case <-done:
-		stop()
+	case p.reason = <-stopCh:
+		_ = kill(cmd)
 		select {
 		case <-drained:
 		case <-timer.C:
@@ -127,39 +170,51 @@ func (s *Shell) Run(ctx context.Context, command string, timeout time.Duration) 
 	}
 	_ = r.Close()
 	<-drained
-	err = reap()
+	p.exit = reap()
+}
 
-	text := out.String()
+// result is the command's output, or the error carrying it, once done.
+func (p *process) result() (string, error) {
+	if p.err != nil {
+		return "", p.err
+	}
+	text := p.out.String()
 	switch {
-	case errors.Is(reason, ErrTimedOut):
-		return "", fmt.Errorf("%s\n%w after %v", text, ErrTimedOut, timeout)
-	case reason != nil:
-		return "", reason
+	case errors.Is(p.reason, context.Canceled), errors.Is(p.reason, context.DeadlineExceeded):
+		return "", p.reason
+	case p.reason != nil:
+		return "", fmt.Errorf("%s\n%w", text, p.reason)
 	}
 	var exitStatus *exec.ExitError
 	switch {
-	case err == nil:
+	case p.exit == nil:
 		return text, nil
-	case errors.As(err, &exitStatus):
-		status := fmt.Sprintf("exit code %d", exitStatus.ExitCode())
-		if exitStatus.ExitCode() == -1 {
-			status = exitStatus.String()
-		}
-		return "", fmt.Errorf("%s\n%w: %s", text, ErrExitStatus, status)
+	case errors.As(p.exit, &exitStatus):
+		return "", fmt.Errorf("%s\n%w: %s", text, ErrExitStatus, exitReason(exitStatus))
 	default:
-		return "", fmt.Errorf("failed to run command: %w", err)
+		return "", fmt.Errorf("failed to run command: %w", p.exit)
 	}
+}
+
+func exitReason(e *exec.ExitError) string {
+	if e.ExitCode() == -1 {
+		return e.String()
+	}
+	return fmt.Sprintf("exit code %d", e.ExitCode())
 }
 
 // outputBuffer keeps the first maxOutputPart bytes written and a sliding
 // window of the last maxOutputPart, so memory stays bounded however much a
 // command prints.
 type outputBuffer struct {
+	mu         sync.Mutex
 	head, tail []byte
 	total      int
 }
 
 func (b *outputBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.total += len(p)
 	n := min(len(p), maxOutputPart-len(b.head))
 	b.head = append(b.head, p[:n]...)
@@ -176,6 +231,8 @@ func (b *outputBuffer) Write(p []byte) (int, error) {
 }
 
 func (b *outputBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.total == 0 {
 		return noOutputNotice
 	}

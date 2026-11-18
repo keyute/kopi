@@ -17,4 +17,6 @@ var (
 	ErrAmbiguousMatch       = errors.New("old_string matches more than once")
 	ErrTimedOut             = errors.New("command timed out")
 	ErrExitStatus           = errors.New("command failed")
+	ErrStopped              = errors.New("command stopped")
+	ErrUnknownTask          = errors.New("unknown task")
 )

@@ -64,7 +64,7 @@ func (j *textJoiner) translate(ev agent.AgentEvent) (event.Event, bool) {
 	case agent.AgentStartEvent:
 		j.afterText = false
 	case agent.MessageStartEvent:
-		if ev.Message.User != nil {
+		if ev.Message.User != nil || isNotice(ev.Message) {
 			j.afterText = false
 		}
 	case agent.MessageUpdateEvent:

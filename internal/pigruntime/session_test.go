@@ -9,6 +9,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"testing"
+	"time"
 
 	"github.com/MichaelKinsy/PiG/agent"
 	"github.com/MichaelKinsy/PiG/ai"
@@ -37,19 +38,20 @@ func sendAsync(t *testing.T, sess *Session, text string) <-chan error {
 	t.Helper()
 	done := make(chan error, 1)
 	go func() {
-		_, err := sess.Send(t.Context(), Prompt{Text: text}, nil)
+		_, err := sess.Send(t.Context(), Prompt{Text: text}, nil, nil)
 		done <- err
 	}()
 	return done
 }
 
-// recordUserMessages collects the UserMessage events; all of a turn's have
-// been sent once its Send returned.
-func recordUserMessages(t *testing.T, sess *Session) <-chan event.Event {
+// recordDelivered collects the UserMessage and TaskEnded events; all of a
+// turn's have been sent once its Send returned.
+func recordDelivered(t *testing.T, sess *Session) <-chan event.Event {
 	t.Helper()
 	evs := make(chan event.Event, 32)
 	t.Cleanup(sess.Subscribe(func(ev event.Event) {
-		if _, ok := ev.(event.UserMessage); ok {
+		switch ev.(type) {
+		case event.UserMessage, event.TaskEnded:
 			evs <- ev
 		}
 	}))
@@ -243,14 +245,19 @@ func TestPiGSteerFromTurnEndAfterProviderError(t *testing.T) {
 
 // moreOnce hands over prompts at its first call and nothing after; calls
 // counts its calls.
-func moreOnce(prompts ...Prompt) (more func() []Prompt, calls *int) {
+func moreOnce(prompts ...Prompt) (more func() ([]Prompt, []Notice), calls *int) {
+	return handOnce(prompts, nil)
+}
+
+// handOnce is moreOnce for prompts and notices.
+func handOnce(prompts []Prompt, notices []Notice) (more func() ([]Prompt, []Notice), calls *int) {
 	n := 0
-	return func() []Prompt {
+	return func() ([]Prompt, []Notice) {
 		n++
 		if n > 1 {
-			return nil
+			return nil, nil
 		}
-		return prompts
+		return prompts, notices
 	}, &n
 }
 
@@ -262,10 +269,10 @@ func TestSendHandsOverAtToolTurnEnd(t *testing.T) {
 	requests := make(chan []ai.Message, 1)
 	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done")})
 	sess := openTestSession(t, r, probeTool(okProbe))
-	evs := recordUserMessages(t, sess)
+	evs := recordDelivered(t, sess)
 	more, _ := moreOnce(Prompt{Text: "x"}, Prompt{Text: "y"})
 
-	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
 	require.NoError(t, err)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
 	assert.True(t, res.Sent)
@@ -283,7 +290,7 @@ func TestSendHandsOverAfterTextReply(t *testing.T) {
 	sess := openTestSession(t, r)
 	more, _ := moreOnce(Prompt{Text: "x"})
 
-	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
 	require.NoError(t, err)
 	assert.True(t, res.Sent)
 	assert.Empty(t, res.Undelivered)
@@ -300,7 +307,7 @@ func TestSendSkipsMore(t *testing.T) {
 		sess := openTestSession(t, r)
 		more, calls := moreOnce(Prompt{Text: "x"})
 
-		res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+		res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
 		require.NoError(t, err)
 		assert.Equal(t, event.Failed, res.Outcome.Status)
 		assert.Zero(t, *calls)
@@ -314,7 +321,7 @@ func TestSendSkipsMore(t *testing.T) {
 		sess := openTestSession(t, r)
 		more, calls := moreOnce(Prompt{Text: "x"})
 
-		res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+		res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
 		require.NoError(t, err)
 		assert.Equal(t, event.Interrupted, res.Outcome.Status)
 		assert.Zero(t, *calls)
@@ -332,7 +339,7 @@ func TestSendSkipsMore(t *testing.T) {
 		}))
 		more, calls := moreOnce(Prompt{Text: "x"})
 
-		_, err := sess.Send(turnCtx, Prompt{Text: "prompt"}, more)
+		_, err := sess.Send(turnCtx, Prompt{Text: "prompt"}, nil, more)
 		require.NoError(t, err)
 		assert.Zero(t, *calls)
 	})
@@ -347,7 +354,7 @@ func TestSendHandOverOmitsUnprocessableImage(t *testing.T) {
 	good := Image{MimeType: "image/png", Data: pngBytes(t)}
 	more, _ := moreOnce(Prompt{Text: "x [image #1] [image #2]", Images: []Image{corruptPNG(), good}})
 
-	_, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+	_, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
 	require.NoError(t, err)
 
 	msgs := <-requests
@@ -367,7 +374,7 @@ func TestSendHandOverCarriesImages(t *testing.T) {
 	handed := Image{MimeType: "image/jpeg", Data: jpegBytes(t)}
 	more, _ := moreOnce(Prompt{Text: "and [image #2]", Images: []Image{handed}})
 
-	_, err := sess.Send(t.Context(), Prompt{Text: "look [image #1]", Images: []Image{sent}}, more)
+	_, err := sess.Send(t.Context(), Prompt{Text: "look [image #1]", Images: []Image{sent}}, nil, more)
 	require.NoError(t, err)
 
 	assert.Equal(t, []ai.ImageContent{
@@ -384,7 +391,7 @@ func TestSendHandOverResizesLargeImage(t *testing.T) {
 	sess := openTestSession(t, r, probeTool(okProbe))
 	more, _ := moreOnce(Prompt{Text: "x [image #1]", Images: []Image{{MimeType: "image/png", Data: widePNG(t)}}})
 
-	_, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+	_, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
 	require.NoError(t, err)
 
 	images := userImages(<-requests)
@@ -406,7 +413,7 @@ func TestSendRejectedPromptIsNotSent(t *testing.T) {
 
 	done := sendAsync(t, sess, "first")
 	<-started
-	res, err := sess.Send(t.Context(), Prompt{Text: "second"}, nil)
+	res, err := sess.Send(t.Context(), Prompt{Text: "second"}, nil, nil)
 	close(release)
 	require.NoError(t, <-done)
 
@@ -431,7 +438,7 @@ func TestSendRejectedCallPreservesOwner(t *testing.T) {
 		})
 		return toolOutput, nil
 	}))
-	evs := recordUserMessages(t, sess)
+	evs := recordDelivered(t, sess)
 	more, _ := moreOnce(Prompt{Text: "steering"})
 	type result struct {
 		res SendResult
@@ -439,19 +446,21 @@ func TestSendRejectedCallPreservesOwner(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		res, err := sess.Send(t.Context(), Prompt{Text: "owner"}, more)
+		res, err := sess.Send(t.Context(), Prompt{Text: "owner"}, nil, more)
 		done <- result{res: res, err: err}
 	}()
 	<-handed
 
 	ctx, cancel := context.WithCancel(t.Context())
-	res, err := sess.Send(ctx, Prompt{Text: "rejected"}, nil)
+	rejected := []Notice{testNotice("t1")}
+	res, err := sess.Send(ctx, Prompt{Text: "rejected"}, rejected, nil)
 	cancel()
 	assert.ErrorIs(t, err, ErrSendInProgress)
 	assert.False(t, res.Sent)
 	assert.Empty(t, res.Undelivered)
+	assert.Equal(t, rejected, res.UndeliveredNotices)
 
-	res, err = sess.Send(ctx, Prompt{Text: "already cancelled"}, nil)
+	res, err = sess.Send(ctx, Prompt{Text: "already cancelled"}, nil, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, event.Interrupted, res.Outcome.Status)
 	assert.False(t, res.Sent)
@@ -467,7 +476,7 @@ func TestSendRejectedCallPreservesOwner(t *testing.T) {
 	assert.Equal(t, []string{"owner", "steering"}, userTexts(<-requests))
 	assert.Equal(t, []event.Event{event.UserMessage{Text: "steering"}}, drain(evs))
 
-	res, err = sess.Send(t.Context(), Prompt{Text: "next"}, nil)
+	res, err = sess.Send(t.Context(), Prompt{Text: "next"}, nil, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Sent)
 	assert.Equal(t, event.Completed, res.Outcome.Status)
@@ -493,11 +502,223 @@ func TestSendReturnsUndeliveredHandOver(t *testing.T) {
 	handed := Prompt{Text: "x [image #1] [image #2]", Images: []Image{wide, broken}}
 	more, _ := moreOnce(handed)
 
-	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, more)
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
 	require.NoError(t, err)
 	assert.True(t, res.Sent)
 	assert.Equal(t, []Prompt{handed}, res.Undelivered)
 	assert.Equal(t, []string{"prompt"}, userTexts(<-requests))
+}
+
+func testNotice(id string) Notice {
+	return Notice{
+		Text:  "Background task " + id + " completed: make " + id,
+		Shown: event.TaskEnded{ID: id, Command: "make " + id, Status: "completed", Elapsed: 1500 * time.Millisecond},
+	}
+}
+
+// toolResultBefore reports whether msgs has a tool result before the user
+// message whose text is text.
+func toolResultBefore(msgs []ai.Message, text string) bool {
+	seenResult := false
+	for _, m := range msgs {
+		switch m := m.(type) {
+		case ai.ToolResultMessage, *ai.ToolResultMessage:
+			seenResult = true
+		case ai.UserMessage:
+			if userText(m.Content) == text {
+				return seenResult
+			}
+		case *ai.UserMessage:
+			if userText(m.Content) == text {
+				return seenResult
+			}
+		}
+	}
+	return false
+}
+
+func TestSendNoticeOnlyStartsRun(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "noted")})
+	sess := openTestSession(t, r)
+	evs := recordDelivered(t, sess)
+	n := testNotice("t1")
+
+	res, err := sess.Send(t.Context(), Prompt{}, []Notice{n}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
+	assert.Equal(t, "noted", res.Reply)
+	assert.True(t, res.Sent)
+	assert.Empty(t, res.UndeliveredNotices)
+	texts := userTexts(<-requests)
+	require.NotEmpty(t, texts)
+	assert.Equal(t, n.Text, texts[len(texts)-1])
+	assert.Equal(t, []event.Event{n.Shown}, drain(evs))
+}
+
+func TestSendPromptThenNotices(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "done")})
+	sess := openTestSession(t, r)
+	evs := recordDelivered(t, sess)
+	n1, n2 := testNotice("t1"), testNotice("t2")
+
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, []Notice{n1, n2}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, event.Completed, res.Outcome.Status)
+	assert.True(t, res.Sent)
+	assert.Empty(t, res.UndeliveredNotices)
+	assert.Equal(t, []string{"prompt", n1.Text, n2.Text}, userTexts(<-requests))
+	assert.Equal(t, []event.Event{n1.Shown, n2.Shown}, drain(evs))
+}
+
+func TestSendHandsOverNoticeAfterToolBatch(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done")})
+	sess := openTestSession(t, r, probeTool(okProbe))
+	evs := recordDelivered(t, sess)
+	n := testNotice("t1")
+	more, _ := handOnce(nil, []Notice{n})
+
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
+	require.NoError(t, err)
+	assert.Equal(t, event.Completed, res.Outcome.Status)
+	assert.Empty(t, res.UndeliveredNotices)
+	assert.Equal(t, 2, faux.CallCount())
+	msgs := <-requests
+	assert.Equal(t, []string{"prompt", n.Text}, userTexts(msgs))
+	assert.True(t, toolResultBefore(msgs, n.Text))
+	assert.Equal(t, []event.Event{n.Shown}, drain(evs))
+}
+
+func TestSendNoticeAtFinalTurnExtendsRun(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{reply("first"), captureRequest(requests, "second")})
+	sess := openTestSession(t, r)
+	n := testNotice("t1")
+	more, _ := handOnce(nil, []Notice{n})
+
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
+	require.NoError(t, err)
+	assert.Equal(t, event.Completed, res.Outcome.Status)
+	assert.Equal(t, "second", res.Reply)
+	assert.Equal(t, 2, faux.CallCount())
+	assert.Equal(t, []string{"prompt", n.Text}, userTexts(<-requests))
+}
+
+func TestSendHandsOverPromptBeforeNotice(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done")})
+	sess := openTestSession(t, r, probeTool(okProbe))
+	evs := recordDelivered(t, sess)
+	n := testNotice("t1")
+	more, _ := handOnce([]Prompt{{Text: "x"}}, []Notice{n})
+
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
+	require.NoError(t, err)
+	assert.Empty(t, res.Undelivered)
+	assert.Empty(t, res.UndeliveredNotices)
+	assert.Equal(t, []string{"prompt", "x", n.Text}, userTexts(<-requests))
+	assert.Equal(t, []event.Event{event.UserMessage{Text: "x"}, n.Shown}, drain(evs))
+}
+
+// PiG delivers a handover the same run reaches, so the notice is kept in PiG's
+// queue past the run by draining steering one message at a time and cancelling
+// at the handover; the next run must not replay it.
+func TestSendReturnsUndeliveredNoticeAndClearsIt(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 2)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "aborted"), captureRequest(requests, "done")})
+	turnCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var sess *Session
+	// Subscribed while the run is going, so after Send's listener.
+	sess = openTestSession(t, r, probeTool(func(context.Context, json.RawMessage) (string, error) {
+		onFirstTurnEnd(t, sess, func() {
+			sess.inner.Agent().SetSteeringMode(agent.QueueModeOneAtATime)
+			cancel()
+		})
+		return toolOutput, nil
+	}))
+	n := testNotice("t1")
+	more, _ := handOnce([]Prompt{{Text: "x"}}, []Notice{n})
+
+	res, err := sess.Send(turnCtx, Prompt{Text: "prompt"}, nil, more)
+	require.NoError(t, err)
+	assert.Equal(t, event.Interrupted, res.Outcome.Status)
+	assert.Empty(t, res.Undelivered)
+	assert.Equal(t, []Notice{n}, res.UndeliveredNotices)
+
+	res, err = sess.Send(t.Context(), Prompt{Text: "next"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, event.Completed, res.Outcome.Status)
+	texts := userTexts(lastRequest(requests))
+	assert.Contains(t, texts, "next")
+	assert.NotContains(t, texts, n.Text)
+}
+
+func TestSendWakeIsAbortable(t *testing.T) {
+	t.Run("during a tool", func(t *testing.T) {
+		sb := newSandbox(t)
+		r, faux := newTestRuntime(t, sb)
+		requests := make(chan []ai.Message, 1)
+		faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "after")})
+		started := make(chan struct{})
+		sess := openTestSession(t, r, heldProbe(started, make(chan struct{})))
+		turnCtx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go func() {
+			<-started
+			cancel()
+		}()
+
+		res, err := sess.Send(turnCtx, Prompt{}, []Notice{testNotice("t1")}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, event.Interrupted, res.Outcome.Status)
+		assert.True(t, res.Sent)
+		assert.Empty(t, res.UndeliveredNotices)
+
+		res, err = sess.Send(t.Context(), Prompt{Text: "next"}, nil, nil)
+		require.NoError(t, err)
+		assert.Equal(t, event.Completed, res.Outcome.Status)
+		assert.Equal(t, "after", res.Reply)
+		assert.Contains(t, userTexts(<-requests), "next")
+	})
+	t.Run("at run start", func(t *testing.T) {
+		sb := newSandbox(t)
+		r, faux := newTestRuntime(t, sb)
+		faux.SetResponses([]ai.FauxResponseStep{reply("should not be requested"), reply("after")})
+		sess := openTestSession(t, r)
+		turnCtx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		unsubscribe := sess.inner.Subscribe(func(ev agent.AgentEvent) {
+			if _, ok := ev.(agent.AgentStartEvent); ok {
+				cancel()
+			}
+		})
+
+		res, err := sess.Send(turnCtx, Prompt{}, []Notice{testNotice("t1")}, nil)
+		unsubscribe()
+		require.NoError(t, err)
+		assert.Equal(t, event.Interrupted, res.Outcome.Status)
+		assert.Zero(t, faux.CallCount())
+
+		res, err = sess.Send(t.Context(), Prompt{Text: "next"}, nil, nil)
+		require.NoError(t, err)
+		assert.Equal(t, event.Completed, res.Outcome.Status)
+		assert.Equal(t, 1, faux.CallCount())
+	})
 }
 
 func countOf(texts []string, text string) int {
@@ -588,7 +809,7 @@ func TestReply(t *testing.T) {
 			}
 			sess := openTestSession(t, r, probe)
 
-			res, err := sess.Send(turnCtx, Prompt{Text: "prompt"}, nil)
+			res, err := sess.Send(turnCtx, Prompt{Text: "prompt"}, nil, nil)
 			require.NoError(t, err)
 			assert.Equal(t, tt.status, res.Outcome.Status)
 			assert.Equal(t, tt.want, res.Reply)

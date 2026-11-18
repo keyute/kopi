@@ -44,6 +44,12 @@ type Config struct {
 	// error unchanged; Start reports it as an Error event. Nil means there are
 	// no servers.
 	Servers func(ctx context.Context) ([]pigruntime.ServerStatus, error)
+	// Tasks is the background task manager the Bash tool shares; nil means one
+	// no tool shares, so there are never tasks.
+	Tasks Tasks
+	// Wake lets a task's end start a turn on its own; otherwise its notice
+	// waits for a request a human prompt starts.
+	Wake bool
 }
 
 const maxReferenceEntries = 10000
@@ -54,7 +60,8 @@ const maxReferenceEntries = 10000
 // Lock order is life, then queue, then mu. mu is never held while calling
 // into PiG or delivering events; life is held across both and queue across
 // delivering events, which is safe because subscribers must not call back into
-// the Controller.
+// the Controller. Neither queue nor mu is held while calling Config.Tasks,
+// whose callback takes both.
 type Controller struct {
 	rt  *pigruntime.Runtime
 	cfg Config
@@ -84,6 +91,13 @@ type Controller struct {
 	// the first open was started by Start and until a session opens and takes
 	// it.
 	pending []pigruntime.Prompt
+	// notices are the task notices waiting for the model, also guarded by
+	// queue. They are never part of pending: they are not the human's input,
+	// so they are never reported, handed back or taken.
+	notices []pendingNotice
+	// hold, guarded by queue, keeps notices from waking the model after an
+	// Interrupt until a human prompt starts a turn.
+	hold bool
 
 	mu     sync.Mutex
 	sess   *pigruntime.Session
@@ -116,11 +130,16 @@ type sessionSwitch struct {
 
 func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
 	cfg.Tools = slices.DeleteFunc(slices.Clone(cfg.Tools), func(t tool.Tool) bool { return cfg.Rules.Removes(t.Name) })
+	if cfg.Tasks == nil {
+		cfg.Tasks = tool.NewTasks()
+	}
 	c := &Controller{rt: rt, cfg: cfg, authority: policy.NewAuthority()}
 	if cfg.Mode == policy.Execute {
 		c.authority.EnterExecute()
 	}
 	c.setup(nil)
+	cfg.Tasks.OnChange(c.taskChanged)
+	cfg.Tasks.OnForeground(func() { c.relay.emit(event.TasksChanged{}) })
 	return c
 }
 
@@ -291,8 +310,9 @@ func (c *Controller) Sessions() ([]pigruntime.SessionInfo, error) {
 
 // Submit takes one message of human input with the paths of its images. A
 // control command is executed and returns (nil, nil), ErrQuit for /quit,
-// ErrMissingArgument for /resume without an id or ErrUnknownCommand. /new and
-// /resume with an id return at once and report their result through events.
+// ErrShowTasks for /tasks, ErrMissingArgument for /resume without an id or
+// ErrUnknownCommand. /new and /resume with an id return at once and report
+// their result through events.
 // Anything else is a prompt: it starts a root turn or, while one runs, is
 // queued for that turn and returns (nil, nil). After Close every input but a
 // blank line returns ErrNoSession.
@@ -468,7 +488,8 @@ func (c *Controller) Commands() []Command {
 }
 
 // Interrupt requests abort of the running root turn without waiting for it.
-// Input still queued is handed back in the turn's TurnEnd.Unsent.
+// Input still queued is handed back in the turn's TurnEnd.Unsent; task notices
+// are not, and wait for the next human prompt without waking the model.
 func (c *Controller) Interrupt() bool {
 	c.queue.Lock()
 	defer c.queue.Unlock()
@@ -478,11 +499,12 @@ func (c *Controller) Interrupt() bool {
 	if w == nil {
 		return false
 	}
+	c.hold = true
 	c.stop(w, emit)
 	return true
 }
 
-// stop must be called with queue held.
+// stop must be called with queue held. It leaves notices queued.
 func (c *Controller) stop(w *Work, emit func(event.Event)) {
 	w.handBack = append(w.handBack, c.take(emit)...)
 	w.stopped = true
@@ -549,11 +571,17 @@ func (c *Controller) Status() Status {
 			break
 		}
 	}
+	for _, info := range c.cfg.Tasks.List() {
+		if info.Status == tool.TaskRunning {
+			s.Tasks++
+		}
+	}
+	s.Foreground = c.cfg.Tasks.Foreground()
 	return s
 }
 
-// Close stops running work and closes the session within min(ctx,
-// JoinTimeout). Before that it waits for any session start or listing
+// Close stops running work and every task, and closes the session within
+// min(ctx, JoinTimeout). Before that it waits for any session start or listing
 // already in progress, which that bound does not cover. It does not close the Runtime. If work does not stop, the
 // session is left open, the work stays tracked and the error wraps
 // pigruntime.ErrJoinTimeout; a later Close tries again. No event is delivered
@@ -566,26 +594,41 @@ func (c *Controller) Close(ctx context.Context) error {
 	c.queue.Lock()
 	c.mu.Lock()
 	c.closed = true
-	sess, unsubscribe, w := c.sess, c.unsubscribe, c.turn
+	c.notices = nil
+	sess, unsubscribe, w, emit := c.sess, c.unsubscribe, c.turn, c.emit
 	if c.switching != nil && c.switching.cancelWait != nil {
 		c.switching.cancelWait()
 	}
 	if c.switching != nil && c.switching.work != nil {
 		w = c.switching.work
+	}
+	c.mu.Unlock()
+	if w != nil {
+		// Permanently, even if the join below times out.
 		w.discard = true
 		w.switchHold = false
 		w.terminal = nil
+		c.stop(w, emit)
 	}
-	c.mu.Unlock()
 	c.queue.Unlock()
+	// After the stop, so the work is already being cancelled, and before the
+	// join, so a join that times out leaves running no command StopAll can
+	// reach. The abort reaches a running tool call asynchronously, so a
+	// command can still be adopted just after StopAll returns; cmd/root.go
+	// stops the tasks again at exit.
+	c.cfg.Tasks.StopAll()
 	if sess == nil {
 		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, c.cfg.JoinTimeout)
 	defer cancel()
-	if w != nil && !c.halt(ctx, w) {
-		return fmt.Errorf("failed to close controller: work %s did not stop: %w", w.id, pigruntime.ErrJoinTimeout)
+	if w != nil {
+		select {
+		case <-w.done:
+		case <-ctx.Done():
+			return fmt.Errorf("failed to close controller: work %s did not stop: %w", w.id, pigruntime.ErrJoinTimeout)
+		}
 	}
 	c.wg.Wait()
 	unsubscribe()
@@ -598,9 +641,15 @@ func (c *Controller) Close(ctx context.Context) error {
 	return nil
 }
 
-// startTurn must be called with queue and mu held; it releases mu.
+// startTurn must be called with queue and mu held; it releases mu. The turn
+// takes every queued notice; with no parts it is a wake, which the notices
+// alone start.
 func (c *Controller) startTurn(ctx context.Context, parts []pigruntime.Prompt) *Work {
 	sess, emit := c.sess, c.emit
+	notices := c.takeNotices()
+	if len(parts) > 0 {
+		c.hold = false
+	}
 	// The turn outlives the Submit call: only Interrupt, SendNow, a session
 	// switch or Close may stop a send, by cancelling its context. Cancelling
 	// it after the send has ended is harmless, so no abort can reach a later
@@ -613,20 +662,20 @@ func (c *Controller) startTurn(ctx context.Context, parts []pigruntime.Prompt) *
 	c.mu.Unlock()
 
 	emit(event.TurnStart{WorkID: w.id, Prompt: joined(parts).Text})
-	c.wg.Go(func() { c.runTurn(base, sendCtx, sess, emit, w, parts) })
+	c.wg.Go(func() { c.runTurn(base, sendCtx, sess, emit, w, parts, notices) })
 	return w
 }
 
-// runTurn sends parts, then keeps sending while settle finds input to continue
-// with. The decision, the final TurnEnd and what follows it are one queue
-// section, so no input or interrupt lands after the Work found nothing left
-// but before it is deregistered. Only a switch-held terminal TurnEnd may be
-// deferred past deregistration; the switch resolves it before advancing the
-// relay epoch.
-func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session, emit func(event.Event), w *Work, parts []pigruntime.Prompt) {
+// runTurn sends parts and notices, then keeps sending while settle finds input
+// to continue with or a waking notice is queued. The decision, the final
+// TurnEnd and what follows it are one queue section, so no input, notice or
+// interrupt lands after the Work found nothing left but before it is
+// deregistered. Only a switch-held terminal TurnEnd may be deferred past
+// deregistration; the switch resolves it before advancing the relay epoch.
+func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session, emit func(event.Event), w *Work, parts []pigruntime.Prompt, notices []pigruntime.Notice) {
 	for {
 		start := time.Now()
-		res, err := sess.Send(ctx, joined(parts), c.pull(ctx, emit))
+		res, err := sess.Send(ctx, joined(parts), notices, c.pull(ctx, emit))
 		elapsed := time.Since(start)
 		if err != nil {
 			res.Outcome = event.Outcome{Status: event.Failed, Message: err.Error()}
@@ -635,14 +684,24 @@ func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session
 		c.queue.Lock()
 		cancelled := ctx.Err() != nil
 		w.cancel()
+		c.mu.Lock()
+		closed := c.closed
+		c.mu.Unlock()
+		if !closed {
+			c.requeue(res.UndeliveredNotices)
+		}
 		next, unsent := settle(w.stopped, cancelled, res.Outcome, res.Sent, parts, res.Undelivered, w.handBack, c.pending)
 		if !w.stopped {
 			c.take(emit)
 		}
-		if len(next) > 0 {
+		// A failed or unsent send never continues for notices alone, so a
+		// failing provider cannot be woken in a loop.
+		wake := !w.stopped && c.cfg.Wake && (cancelled || res.Outcome.Status == event.Completed && res.Sent) && c.waking()
+		if len(next) > 0 || wake {
 			ctx, w.cancel = context.WithCancel(base)
 			w.sendCtx = ctx
 			parts = next
+			notices = c.takeNotices()
 			emit(event.TurnEnd{WorkID: w.id, Outcome: res.Outcome, Elapsed: elapsed})
 			emit(event.TurnStart{WorkID: w.id, Prompt: joined(parts).Text})
 			c.queue.Unlock()
@@ -666,24 +725,33 @@ func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session
 	}
 }
 
-// pull returns the callback through which the send on ctx takes pending at a
-// boundary. It hands nothing over once ctx is cancelled: a stop or a send-now
-// cancels ctx in the same queue section as it changes pending, and input handed
-// to a run being cancelled would enter history with no reply.
-func (c *Controller) pull(ctx context.Context, emit func(event.Event)) func() []pigruntime.Prompt {
-	return func() []pigruntime.Prompt {
+// pull returns the callback through which the send on ctx takes pending and
+// the queued notices at a boundary. Notices go only with a prompt or a waking
+// notice: at a run's last boundary a hand-over extends the run by a request,
+// which a non-waking notice alone must not cause. It hands nothing over once
+// ctx is cancelled: a stop or a send-now cancels ctx in the same queue section
+// as it changes pending, and input handed to a run being cancelled would enter
+// history with no reply.
+func (c *Controller) pull(ctx context.Context, emit func(event.Event)) func() ([]pigruntime.Prompt, []pigruntime.Notice) {
+	return func() ([]pigruntime.Prompt, []pigruntime.Notice) {
 		c.queue.Lock()
 		defer c.queue.Unlock()
 		if ctx.Err() != nil {
-			return nil
+			return nil, nil
 		}
-		return c.take(emit)
+		prompts := c.take(emit)
+		if len(prompts) == 0 && !c.waking() {
+			return nil, nil
+		}
+		return prompts, c.takeNotices()
 	}
 }
 
 // finish deregisters the ended w and starts the next turn with the input given
 // after w was stopped, unless the session is closing or being switched; that
-// input is then dropped. It must be called with queue held.
+// input is then dropped. Notices alone start no turn here: a waking one would
+// have continued w, unless w failed or was stopped. It must be called with
+// queue held.
 func (c *Controller) finish(base context.Context, w *Work, emit func(event.Event)) {
 	parts := c.take(emit)
 	c.mu.Lock()
@@ -856,6 +924,15 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 			c.relay.emit(event.Error{Err: err})
 		}
 		cancel()
+		// The tasks and their notices belong to the old session; a failed
+		// open keeps both. Cleared after StopAll so that no notice queued
+		// while it ran survives.
+		c.cfg.Tasks.StopAll()
+		c.queue.Lock()
+		c.notices = nil
+		c.hold = false
+		c.queue.Unlock()
+		c.relay.emit(event.TasksChanged{})
 	}
 	// A session opened after the first open was tried, even one that failed,
 	// starts in the configured mode, never in the mode it was left in; the
@@ -891,25 +968,6 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	}
 	c.startup = nil
 	return nil
-}
-
-// halt permanently discards Close's input and joins without queue held.
-func (c *Controller) halt(ctx context.Context, w *Work) bool {
-	c.queue.Lock()
-	c.mu.Lock()
-	emit := c.emit
-	c.mu.Unlock()
-	w.discard = true
-	w.switchHold = false
-	w.terminal = nil
-	c.stop(w, emit)
-	c.queue.Unlock()
-	select {
-	case <-w.done:
-		return true
-	case <-ctx.Done():
-		return false
-	}
 }
 
 // releaseSwitch resolves the held terminal event through the old session's

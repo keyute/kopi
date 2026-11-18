@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
@@ -40,6 +41,39 @@ func TestSteeredMessageDrawsAsRestored(t *testing.T) {
 
 	want := []Block{
 		User{key: "item:0", Text: "go"}, row("a", OK), User{key: "item:2", Text: "x"}, Assistant{key: "item:3", Text: "ok"},
+	}
+	assert.Equal(t, want, live.Blocks())
+	assert.Equal(t, want, restored.Blocks())
+}
+
+func TestWakeTurnAddsNoUserBlock(t *testing.T) {
+	var tr Transcript
+	tr.Apply(event.TurnStart{})
+	tr.Apply(event.TextDelta{Text: "it finished"})
+	tr.Apply(event.TurnEnd{})
+	assert.Equal(t, []Block{Assistant{key: "item:0", Text: "it finished"}, Turn{key: "item:1"}}, tr.Blocks())
+}
+
+func TestTaskEndedDrawsAsRestored(t *testing.T) {
+	events := []event.Event{
+		event.TurnStart{Prompt: "go"},
+		start("a"), end("a"),
+		event.TaskEnded{ID: "t1", Command: "go test ./...", Status: "failed", Elapsed: 3 * time.Second},
+		start("b"), end("b"),
+		event.TurnEnd{},
+	}
+	var live, restored Transcript
+	for _, ev := range events {
+		live.Apply(ev)
+	}
+	restored.Restore(events)
+
+	want := []Block{
+		User{key: "item:0", Text: "go"},
+		row("a", OK),
+		Task{key: "item:2", ID: "t1", Command: "go test ./...", Status: "failed", Elapsed: 3 * time.Second},
+		row("b", OK),
+		Turn{key: "item:4"},
 	}
 	assert.Equal(t, want, live.Blocks())
 	assert.Equal(t, want, restored.Blocks())

@@ -232,7 +232,7 @@ func TestSeamOpenStreamsFauxTurnWithZeroAmbient(t *testing.T) {
 	})
 	defer unsubscribe()
 
-	res, err := sess.Send(t.Context(), Prompt{Text: "probe please"}, nil)
+	res, err := sess.Send(t.Context(), Prompt{Text: "probe please"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
 
@@ -288,7 +288,7 @@ func TestRuntimeOmitsPiGAttribution(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
 
-	res, err := sess.Send(t.Context(), Prompt{Text: "hello"}, nil)
+	res, err := sess.Send(t.Context(), Prompt{Text: "hello"}, nil, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Sent)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
@@ -339,7 +339,7 @@ func TestSeamCancelDuringToolReportsInterrupted(t *testing.T) {
 	defer cancel()
 	done := make(chan result, 1)
 	go func() {
-		res, err := sess.Send(turnCtx, Prompt{Text: "block"}, nil)
+		res, err := sess.Send(turnCtx, Prompt{Text: "block"}, nil, nil)
 		done <- result{res.Outcome, err}
 	}()
 	<-started
@@ -406,7 +406,7 @@ func TestCancelDuringToolAbortsBeforeCancellationForwarding(t *testing.T) {
 	})
 	go func() {
 		defer close(joined)
-		res, err := sess.Send(ctx, Prompt{Text: "block"}, nil)
+		res, err := sess.Send(ctx, Prompt{Text: "block"}, nil, nil)
 		done <- result{res, err}
 	}()
 	<-started
@@ -431,7 +431,7 @@ func TestCancelledBeforeSendInterruptsWithoutProviderCall(t *testing.T) {
 
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
-	res, err := sess.Send(cancelled, Prompt{Text: "cancelled before start"}, nil)
+	res, err := sess.Send(cancelled, Prompt{Text: "cancelled before start"}, nil, nil)
 	require.NoError(t, err)
 	assert.False(t, res.Sent)
 	assert.Empty(t, res.Undelivered)
@@ -439,7 +439,7 @@ func TestCancelledBeforeSendInterruptsWithoutProviderCall(t *testing.T) {
 	assert.Zero(t, faux.CallCount())
 	assert.Zero(t, sess.MessageCount())
 
-	res, err = sess.Send(t.Context(), Prompt{Text: "next turn"}, nil)
+	res, err = sess.Send(t.Context(), Prompt{Text: "next turn"}, nil, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Sent)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
@@ -464,7 +464,7 @@ func TestCancelBeforeRunStartIsReissued(t *testing.T) {
 	})
 	defer unsubscribe()
 
-	res, err := sess.Send(turnCtx, Prompt{Text: "abort me"}, nil)
+	res, err := sess.Send(turnCtx, Prompt{Text: "abort me"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, event.Outcome{Status: event.Interrupted}, res.Outcome)
 	assert.Zero(t, faux.CallCount())
@@ -485,11 +485,11 @@ func TestCancelRacingSendReturnSparesNextTurn(t *testing.T) {
 			cancel()
 		}
 	})
-	_, err := sess.Send(turnCtx, Prompt{Text: "first turn"}, nil)
+	_, err := sess.Send(turnCtx, Prompt{Text: "first turn"}, nil, nil)
 	require.NoError(t, err)
 	unsubscribe()
 
-	res, err := sess.Send(t.Context(), Prompt{Text: "second turn"}, nil)
+	res, err := sess.Send(t.Context(), Prompt{Text: "second turn"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
 	assert.Equal(t, 2, faux.CallCount())
@@ -511,7 +511,7 @@ func TestCancelAfterTurnFinishedReportsCompleted(t *testing.T) {
 	})
 	defer unsubscribe()
 
-	res, err := sess.Send(turnCtx, Prompt{Text: "finish me"}, nil)
+	res, err := sess.Send(turnCtx, Prompt{Text: "finish me"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
 	assert.Equal(t, 1, faux.CallCount())
@@ -607,7 +607,7 @@ func TestOpenRunsSandboxedToolWithoutApproval(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
 
-	_, err = sess.Send(t.Context(), Prompt{Text: "run it"}, nil)
+	_, err = sess.Send(t.Context(), Prompt{Text: "run it"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, execOutput, lastToolResult(t, <-requests))
 	assert.Equal(t, int32(1), ran.Load())
@@ -618,7 +618,7 @@ func TestSessionsListsOnlyKopiAgentDir(t *testing.T) {
 	r, faux := newTestRuntime(t, sb)
 	faux.SetResponses([]ai.FauxResponseStep{reply("hello back")})
 	sess := openTestSession(t, r)
-	_, err := sess.Send(t.Context(), Prompt{Text: "hello kopi"}, nil)
+	_, err := sess.Send(t.Context(), Prompt{Text: "hello kopi"}, nil, nil)
 	require.NoError(t, err)
 
 	// A decoy session in PiG's default tree, in the same per-workspace
@@ -644,7 +644,7 @@ func sendOnce(t *testing.T, r *Runtime, faux *ai.FauxProviderHandle, prompt, ans
 	faux.SetResponses([]ai.FauxResponseStep{reply(answer)})
 	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
 	require.NoError(t, err)
-	_, err = sess.Send(t.Context(), Prompt{Text: prompt}, nil)
+	_, err = sess.Send(t.Context(), Prompt{Text: prompt}, nil, nil)
 	require.NoError(t, err)
 	require.NoError(t, sess.Close(t.Context()))
 	return sess
@@ -668,7 +668,7 @@ func TestResumeFromFreshRuntimeRestoresConversation(t *testing.T) {
 	assert.Equal(t, saved.ID(), sess.ID())
 	assert.Equal(t, 2, sess.MessageCount())
 
-	res, err := sess.Send(t.Context(), Prompt{Text: "second question"}, nil)
+	res, err := sess.Send(t.Context(), Prompt{Text: "second question"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, event.Completed, res.Outcome.Status)
 	raw, err := json.Marshal(<-requests)
@@ -775,7 +775,7 @@ func TestCloseReportsJoinTimeout(t *testing.T) {
 	sent := make(chan struct{})
 	go func() {
 		defer close(sent)
-		_, _ = sess.Send(context.Background(), Prompt{Text: "block"}, nil)
+		_, _ = sess.Send(context.Background(), Prompt{Text: "block"}, nil, nil)
 	}()
 	// Runs before the runtime's Close cleanup.
 	t.Cleanup(func() {
@@ -807,7 +807,7 @@ func TestSendOutcome(t *testing.T) {
 			r, faux := newTestRuntime(t, sb)
 			faux.SetResponses([]ai.FauxResponseStep{tc.step})
 			sess := openTestSession(t, r)
-			res, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil)
+			res, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, res.Outcome)
 		})

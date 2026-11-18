@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/MichaelKinsy/PiG/agent"
 	"github.com/MichaelKinsy/PiG/ai"
@@ -83,7 +84,7 @@ func TestHistoryReplaysStoredTurnAsLiveEvents(t *testing.T) {
 
 	live := []event.Event{event.TurnStart{Prompt: "probe please"}}
 	unsubscribe := sess.Subscribe(func(ev event.Event) { live = append(live, ev) })
-	res, err := sess.Send(t.Context(), Prompt{Text: "probe please"}, nil)
+	res, err := sess.Send(t.Context(), Prompt{Text: "probe please"}, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
 	unsubscribe()
@@ -137,7 +138,7 @@ func TestHistoryReplaysTextAroundToolCallsAsLiveEvents(t *testing.T) {
 			require.NoError(t, err)
 			live := []event.Event{event.TurnStart{Prompt: "go"}}
 			unsubscribe := sess.Subscribe(func(ev event.Event) { live = append(live, ev) })
-			res, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil)
+			res, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
 			require.NoError(t, err)
 			require.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
 			unsubscribe()
@@ -146,6 +147,57 @@ func TestHistoryReplaysTextAroundToolCallsAsLiveEvents(t *testing.T) {
 			assert.Equal(t, unstreamed(live), unstreamed(resume(t, r, sess.ID(), probe).History()))
 		})
 	}
+}
+
+func TestHistoryRestoresNotices(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), reply("noted"), captureRequest(requests, "again")})
+	probe := probeTool(okProbe)
+	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: kopiPrompt, Tools: []tool.Tool{probe}, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	n := testNotice("t1")
+	more, _ := handOnce(nil, []Notice{n})
+
+	live := []event.Event{event.TurnStart{Prompt: "go"}}
+	unsubscribe := sess.Subscribe(func(ev event.Event) { live = append(live, ev) })
+	res, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, more)
+	require.NoError(t, err)
+	require.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
+	unsubscribe()
+	require.NoError(t, sess.Close(t.Context()))
+
+	resumed := resume(t, r, sess.ID(), probe)
+	assert.Equal(t, []event.Event{
+		event.TurnStart{Prompt: "go"},
+		event.ToolStart{CallID: "call-1", Name: "Probe", Args: "{}"},
+		event.ToolEnd{CallID: "call-1", Name: "Probe", Output: toolOutput},
+		n.Shown,
+		event.TextDelta{Text: "noted"},
+	}, resumed.History())
+	assert.Equal(t, unstreamed(live), unstreamed(resumed.History()))
+
+	_, err = resumed.Send(t.Context(), Prompt{Text: "next"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"go", n.Text, "next"}, userTexts(<-requests))
+}
+
+func TestHistorySkipsForeignCustomMessages(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	sess := openTestSession(t, r)
+	manager := sess.inner.SessionManager()
+	appendHistoryMessage(t, manager, `{"role":"user","content":"go","timestamp":1}`)
+	_, err := manager.AppendCustomMessageEntry("other.extension", "not for kopi", true, map[string]any{"id": "t9"})
+	require.NoError(t, err)
+	appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"stop","timestamp":2}`)
+	require.NoError(t, sess.Close(t.Context()))
+
+	assert.Equal(t, []event.Event{
+		event.TurnStart{Prompt: "go"},
+		event.TextDelta{Text: "done"},
+	}, resume(t, r, sess.ID()).History())
 }
 
 func TestHistoryEndsFailedAndInterruptedTurns(t *testing.T) {
@@ -157,7 +209,7 @@ func TestHistoryEndsFailedAndInterruptedTurns(t *testing.T) {
 		})
 		sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, Authority: policy.NewAuthority()})
 		require.NoError(t, err)
-		_, err = sess.Send(t.Context(), Prompt{Text: "go"}, nil)
+		_, err = sess.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
 		require.NoError(t, err)
 		require.NoError(t, sess.Close(t.Context()))
 
@@ -175,7 +227,7 @@ func TestHistoryEndsFailedAndInterruptedTurns(t *testing.T) {
 		})
 		sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, Authority: policy.NewAuthority()})
 		require.NoError(t, err)
-		res, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil)
+		res, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
 		require.NoError(t, err)
 		require.NoError(t, sess.Close(t.Context()))
 
@@ -201,7 +253,7 @@ func TestHistoryEndsFailedAndInterruptedTurns(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			_, _ = sess.Send(turnCtx, Prompt{Text: "block"}, nil)
+			_, _ = sess.Send(turnCtx, Prompt{Text: "block"}, nil, nil)
 		}()
 		<-started
 		cancel()
@@ -498,6 +550,19 @@ func TestHistoryMapsStoredShapes(t *testing.T) {
 			},
 		},
 		{
+			name: "notice separates text",
+			msgs: []agent.AgentMessage{
+				assistant(ai.StopReasonStop, "", text("before")),
+				{Custom: map[string]any{"role": agent.RoleCustom, "customType": noticeType, "details": noticeDetails{ID: "t1", Command: "make", Status: "failed", ElapsedMs: 2500}}},
+				assistant(ai.StopReasonStop, "", text("after")),
+			},
+			want: []event.Event{
+				event.TextDelta{Text: "before"},
+				event.TaskEnded{ID: "t1", Command: "make", Status: "failed", Elapsed: 2500 * time.Millisecond},
+				event.TextDelta{Text: "after"},
+			},
+		},
+		{
 			name: "aborted",
 			msgs: []agent.AgentMessage{assistant(ai.StopReasonAborted, "", text("partial"))},
 			want: []event.Event{event.TextDelta{Text: "partial"}, event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}}},
@@ -530,7 +595,7 @@ func TestContextUsageMirrorsPiG(t *testing.T) {
 		return tokens
 	}
 	before := mirrors()
-	_, err := sess.Send(t.Context(), Prompt{Text: "count me"}, nil)
+	_, err := sess.Send(t.Context(), Prompt{Text: "count me"}, nil, nil)
 	require.NoError(t, err)
 	assert.Greater(t, mirrors(), before)
 }

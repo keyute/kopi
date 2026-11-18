@@ -147,3 +147,23 @@ func TestShellReportsNoOutput(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, noOutputNotice, out)
 }
+
+func TestOutputBufferReadsWhileWritten(t *testing.T) {
+	var b outputBuffer
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 1000 {
+			_, _ = b.Write([]byte("x"))
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			assert.Equal(t, strings.Repeat("x", 1000), b.String())
+			return
+		default:
+			_ = b.String()
+		}
+	}
+}
