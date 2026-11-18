@@ -4,7 +4,7 @@
 
 - Sessions are in plan or execute mode. Only the user switches, with `/plan`, `/execute` or Shift+Tab.
 - Plan mode allows:
-  - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `TaskOutput`, `TaskStop`, `WebFetch`, `WebSearch`
+  - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `Agent`, `SendMessage`, `TaskOutput`, `TaskStop`, `WebFetch`, `WebSearch`
   - read-only MCP tools
   - `Bash` only in the [sandbox](sandbox.md), where it cannot write the start directory
 - `Write`, `Edit` and other MCP tools need execute mode.
@@ -51,15 +51,21 @@
 
 ## Background tasks
 
-- Tasks are numbered `t1`, `t2`, … per run.
-- They have no time limit and keep the sandbox profile of the mode they started in.
-- `TaskOutput` returns a task's status and its output so far, kept like `Bash` output.
-- `TaskStop` kills a task's process group (on Windows, only the shell), whichever mode it started in.
-- When a task completes or fails, the model is told its status and its last 20 non-empty output lines at the next boundary of the running turn, or in a new turn when none runs. After an interrupt such notices wait for the next prompt; they never return to the input.
+- Tasks are background commands and [subagents](subagents.md), numbered `t1`, `t2`, … per run in one sequence.
+- They have no time limit. A command keeps the sandbox profile of the mode it started in; a subagent follows the session's mode unless its definition pins plan mode.
+- `TaskOutput` returns a task's status and its output so far, kept like `Bash` output; for a subagent, its activity so far.
+- `TaskStop` kills a command task's process group (on Windows, only the shell), whichever mode it started in, and stops a subagent.
+- When a task completes or fails, the model is told, for a command, its status and its last 20 non-empty output lines, and for a subagent its final message, at the next boundary of the running turn, or in a new turn when none runs. After an interrupt such notices wait for the next prompt; they never return to the input.
 - A task stopped from `/tasks` is reported to the model along with the next prompt or the next task notice, without starting a turn. One the model stops is not reported again.
 - A task that completes, fails or is stopped from `/tasks` adds a `• task t1 finished · <command> · 12s` row to the transcript (`failed` or `stopped` in place of `finished`), restored on resume.
 - Tasks are stopped on exit, when `/new` or `/resume` opens another session, and at the end of `kopi -p`.
-- `kopi -p` never starts a turn for a task's end, so a task still running at the final reply is killed.
+- `kopi -p` never starts a turn for a command's end, so a command still running at the final reply is killed. It waits for running [subagents](subagents.md#what-you-see).
+
+## Agent and SendMessage
+
+- `Agent` starts a [subagent](subagents.md) on a prompt and returns its task id at once; the subagent runs in the background.
+- `SendMessage` sends a further message to a subagent by task id.
+- Both exist only when a subagent is defined.
 
 ## WebFetch
 
@@ -106,7 +112,7 @@
 ## Not implemented
 
 - Streaming command output.
-- Delegation and workflows.
+- Workflows.
 - Domain rules for `WebFetch`.
 - Domain filters and citation markers for `WebSearch`.
 - Other search backends (an MCP server can provide one).

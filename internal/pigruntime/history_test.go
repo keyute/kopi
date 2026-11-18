@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -647,4 +648,37 @@ func TestHistoryAndSessionListOmitSkills(t *testing.T) {
 	_, err = resumed.Send(t.Context(), Prompt{Text: "next"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, countOf(userTexts(<-requests), "SKILL-TEXT"))
+}
+
+func TestHistoryRestoresNoticeAgent(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{reply("noted")})
+	sess := openTestSession(t, r)
+	n := testNotice("t1")
+	n.Shown.Agent = "explore"
+	more, _ := handOnce(nil, []Notice{n})
+	_, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, more)
+	require.NoError(t, err)
+	require.NoError(t, sess.Close(t.Context()))
+
+	assert.Contains(t, unstreamed(resume(t, r, sess.ID()).History()), event.Event(n.Shown))
+}
+
+func TestHistoryNoticeWithoutAgentKeyRestoresEmpty(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{reply("noted")})
+	sess := openTestSession(t, r)
+	n := testNotice("t1")
+	more, _ := handOnce(nil, []Notice{n})
+	_, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, more)
+	require.NoError(t, err)
+	require.NoError(t, sess.Close(t.Context()))
+
+	raw, err := os.ReadFile(sess.inner.Path())
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), `"agent"`)
+	got := unstreamed(resume(t, r, sess.ID()).History())
+	assert.Contains(t, got, event.Event(event.TaskEnded{ID: "t1", Command: n.Shown.Command, Status: n.Shown.Status, Elapsed: n.Shown.Elapsed}))
 }

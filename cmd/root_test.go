@@ -339,6 +339,188 @@ func toolNames(req mockRequest) []string {
 	return names
 }
 
+// writeAgent writes a subagent definition named "scout" under Kopi's home and
+// returns its path.
+func (e testEnv) writeAgent(t *testing.T, frontmatter string) string {
+	t.Helper()
+	path := filepath.Join(e.kopiHome, "agents", "scout.md")
+	e.writeFile(t, path, "---\nname: scout\ndescription: Looks around\n"+frontmatter+"---\n")
+	return path
+}
+
+func TestRootWithoutAgentsOffersNoAgentTool(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	tools := toolNames(server.next(t))
+	assert.NotContains(t, tools, "Agent")
+	assert.NotContains(t, tools, "SendMessage")
+}
+
+func TestRootOffersAgentToolForDefinition(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+	e.writeAgent(t, "model: "+mockModel+"\n")
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	req := server.next(t)
+	assert.Contains(t, toolNames(req), "Agent")
+	assert.Contains(t, toolNames(req), "SendMessage")
+	for _, tl := range req.body["tools"].([]any) {
+		fn := tl.(map[string]any)["function"].(map[string]any)
+		if fn["name"] == "Agent" {
+			assert.Contains(t, fn["description"], "scout")
+		}
+	}
+}
+
+// streamAgentCall answers with one Agent tool call for the subagent scout.
+func streamAgentCall(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	writeChunk(w, map[string]any{"role": "assistant", "content": ""}, nil)
+	args, _ := json.Marshal(map[string]any{"description": "look", "prompt": "look around", "subagent_type": "scout"})
+	writeChunk(w, map[string]any{"tool_calls": []any{map[string]any{
+		"index": 0, "id": "call_0", "type": "function",
+		"function": map[string]any{"name": "Agent", "arguments": string(args)},
+	}}}, nil)
+	writeChunk(w, map[string]any{}, "tool_calls")
+	fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
+func TestSubagentToolsNeverBackgroundOrDelegate(t *testing.T) {
+	e := newTestEnv(t)
+	var calls atomic.Int32
+	server := newMockProvider(t, func(w http.ResponseWriter) {
+		if calls.Add(1) == 1 {
+			streamAgentCall(w)
+			return
+		}
+		streamText(w, "ok")
+	})
+	e.writeMockModels(t, server.URL)
+	e.writeAgent(t, "")
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	var child mockRequest
+	for range 3 {
+		req := server.next(t)
+		if strings.Contains(fmt.Sprint(req.body["messages"].([]any)[0].(map[string]any)["content"]), "You are the subagent scout") {
+			child = req
+			break
+		}
+	}
+	require.NotNil(t, child.body, "the subagent made no request")
+	tools := toolNames(child)
+	for _, name := range []string{"Agent", "SendMessage", "TaskOutput", "TaskStop"} {
+		assert.NotContains(t, tools, name)
+	}
+	require.Contains(t, tools, "Bash")
+	for _, tl := range child.body["tools"].([]any) {
+		fn := tl.(map[string]any)["function"].(map[string]any)
+		if fn["name"] == "Bash" {
+			assert.NotContains(t, fn["parameters"].(map[string]any)["properties"], "run_in_background")
+		}
+	}
+}
+
+func TestRootRejectsInvalidAgentDefinition(t *testing.T) {
+	e := newTestEnv(t)
+	path := e.writeAgent(t, "color: red\n")
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), path)
+	assert.NoDirExists(t, e.agentDir)
+}
+
+func TestRootAgentModelFailsAtStart(t *testing.T) {
+	for _, model := range []string{"nosuch/model-1", "malformed"} {
+		t.Run(model, func(t *testing.T) {
+			e := newTestEnv(t)
+			server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
+			e.writeMockModels(t, server.URL)
+			path := e.writeAgent(t, "model: "+model+"\n")
+
+			_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), fmt.Sprintf("failed to use model %q in %s", model, path))
+			assert.Empty(t, server.requests)
+		})
+	}
+}
+
+func TestRootAgentModelWithoutCredentialFailsAtStart(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
+	e.writeMockModels(t, server.URL)
+	path := e.writeAgent(t, "model: "+builtinModel(t, "openai-codex")+"\n")
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "in "+path)
+	assert.Contains(t, err.Error(), `run "kopi login openai-codex"`)
+	assert.Empty(t, server.requests)
+}
+
+func TestRootAgentEffortFailsAtStart(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
+	e.writeMockModels(t, server.URL)
+	path := e.writeAgent(t, "effort: huge\n")
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.ErrorIs(t, err, pigruntime.ErrUnknownEffort)
+	assert.Contains(t, err.Error(), path)
+	assert.Empty(t, server.requests)
+}
+
+func TestRootAgentRules(t *testing.T) {
+	t.Run("accepted without definitions", func(t *testing.T) {
+		e := newTestEnv(t)
+		server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+		e.writeMockModels(t, server.URL)
+
+		_, _, err := execute(t, "", "--model", mockModel, "--disallowed-tools", "Agent,SendMessage", "-p", "hi")
+
+		require.NoError(t, err)
+	})
+	t.Run("deny removes the tools", func(t *testing.T) {
+		e := newTestEnv(t)
+		server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+		e.writeMockModels(t, server.URL)
+		e.writeAgent(t, "")
+
+		_, _, err := execute(t, "", "--model", mockModel, "--disallowed-tools", "Agent", "-p", "hi")
+
+		require.NoError(t, err)
+		tools := toolNames(server.next(t))
+		assert.NotContains(t, tools, "Agent")
+		assert.NotContains(t, tools, "SendMessage")
+	})
+	t.Run("path rejected", func(t *testing.T) {
+		e := newTestEnv(t)
+
+		_, _, err := execute(t, "", "--model", mockModel, "--allowed-tools", "Agent(x)", "-p", "hi")
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `tool "Agent" takes no path`)
+		assert.NoDirExists(t, e.agentDir)
+	})
+}
+
 func TestRootUnknownSmallModelFailsAtStart(t *testing.T) {
 	e := newTestEnv(t)
 	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })

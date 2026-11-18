@@ -31,9 +31,11 @@ type pendingLogin struct {
 }
 
 // beginLogin registers a login of provider and returns its context, which
-// ends when the login is cancelled. It refuses while a turn runs, a switch is
-// under way or another login runs.
+// ends when the login is cancelled. It refuses while a turn runs or a subagent
+// is running, a switch is under way or another login runs.
 func (c *Controller) beginLogin(ctx context.Context, provider string) (*loginRun, context.Context, error) {
+	c.queue.Lock()
+	defer c.queue.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	switch {
@@ -43,7 +45,7 @@ func (c *Controller) beginLogin(ctx context.Context, provider string) (*loginRun
 		return nil, nil, ErrLoggingIn
 	case c.switching != nil:
 		return nil, nil, ErrBusy
-	case c.turn != nil:
+	case c.turn != nil || c.live > 0:
 		return nil, nil, fmt.Errorf("failed to log in to %q: %w", provider, ErrWorkStillRunning)
 	}
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))

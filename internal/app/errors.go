@@ -1,6 +1,9 @@
 package app
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 var (
 	ErrQuit             = errors.New("quit requested")
@@ -12,4 +15,5 @@ var (
 	ErrWorkStillRunning = errors.New("work is still running")
 	ErrMissingArgument  = errors.New("missing argument")
 	ErrLoggingIn        = errors.New("a login is under way")
+	ErrTooManyAgents    = fmt.Errorf("%d subagents are already running", maxAgents)
 )

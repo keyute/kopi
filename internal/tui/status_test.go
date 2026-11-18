@@ -48,8 +48,11 @@ func TestStatusLine(t *testing.T) {
 		{"sandboxed shell", app.Status{Model: "a/b", Shell: true, Sandboxed: true}, defaultLayout, "", 30, "  b" + strings.Repeat(" ", 9) + "sandboxed · plan  "},
 		{"unsandboxed shell", app.Status{Model: "a/b", Shell: true}, defaultLayout, "", 30, "  b" + strings.Repeat(" ", 7) + "unsandboxed · plan  "},
 		{"no shell", app.Status{Model: "a/b", Sandboxed: true}, defaultLayout, "", 30, "  b" + strings.Repeat(" ", 21) + "plan  "},
-		{"one background shell", app.Status{Model: "a/b", Tasks: 1}, defaultLayout, "", 30, "  b" + strings.Repeat(" ", 11) + "1 shell · plan  "},
-		{"background shells", app.Status{Model: "a/b", Tasks: 3}, defaultLayout, "", 30, "  b" + strings.Repeat(" ", 10) + "3 shells · plan  "},
+		{"one background shell", app.Status{Model: "a/b", Shells: 1}, defaultLayout, "", 30, "  b" + strings.Repeat(" ", 11) + "1 shell · plan  "},
+		{"background shells", app.Status{Model: "a/b", Shells: 3}, defaultLayout, "", 30, "  b" + strings.Repeat(" ", 10) + "3 shells · plan  "},
+		{"background agents", app.Status{Model: "a/b", Agents: 2}, defaultLayout, "", 40, "  b" + strings.Repeat(" ", 20) + "2 agents · plan  "},
+		{"agents then shells", app.Status{Model: "a/b", Agents: 2, Shells: 1}, defaultLayout, "", 40, "  b" + strings.Repeat(" ", 11) + "2 agents, 1 shell · plan  "},
+		{"singular agent and shell", app.Status{Model: "a/b", Agents: 1, Shells: 1}, defaultLayout, "", 40, "  b" + strings.Repeat(" ", 12) + "1 agent, 1 shell · plan  "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, ansi.Strip(statusLine(statusInput{Status: tc.s, notice: tc.notice}, tc.layout, tc.width, mocha())))
@@ -97,7 +100,7 @@ func TestStatusLineWarnsWhenUnsandboxed(t *testing.T) {
 
 func TestStatusLineDimsTheTaskCount(t *testing.T) {
 	th := mocha()
-	assert.Contains(t, statusLine(statusInput{Status: app.Status{Tasks: 1}}, defaultLayout, 40, th), fg(th.dim).Render("1 shell"))
+	assert.Contains(t, statusLine(statusInput{Status: app.Status{Shells: 1}}, defaultLayout, 40, th), fg(th.dim).Render("1 shell"))
 }
 
 func TestStatusLineShowsCwdUnderHome(t *testing.T) {

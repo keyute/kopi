@@ -141,7 +141,7 @@ func history(msgs []agent.AgentMessage) []event.Event {
 			afterText = false
 		case isNotice(m):
 			d, _ := m.Custom["details"].(noticeDetails)
-			out = append(out, event.TaskEnded{ID: d.ID, Command: d.Command, Status: d.Status, Elapsed: time.Duration(d.ElapsedMs) * time.Millisecond})
+			out = append(out, event.TaskEnded{ID: d.ID, Command: d.Command, Agent: d.Agent, Status: d.Status, Elapsed: time.Duration(d.ElapsedMs) * time.Millisecond})
 			afterText = false
 		}
 	}

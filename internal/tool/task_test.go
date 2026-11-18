@@ -18,6 +18,14 @@ func newTasks(t *testing.T) (*Tasks, chan TaskInfo) {
 	return m, events
 }
 
+// startAgent starts an agent task whose stop func ends it, so StopAll in the
+// cleanup does not wait on it forever.
+func startAgent(m *Tasks, description string) *AgentTask {
+	var a *AgentTask
+	a = m.StartAgent("explore", description, func() { a.End(TaskStopped, "", "") })
+	return a
+}
+
 func nextEvent(t *testing.T, events <-chan TaskInfo) TaskInfo {
 	t.Helper()
 	select {
@@ -211,6 +219,7 @@ func TestTaskInfoStatusText(t *testing.T) {
 		{TaskInfo{Status: TaskCompleted, Reason: "exit code 0"}, "completed (exit code 0)"},
 		{TaskInfo{Status: TaskFailed, Reason: "exit code 3"}, "failed (exit code 3)"},
 		{TaskInfo{Status: TaskStopped}, "stopped"},
+		{TaskInfo{Status: TaskCompleted}, "completed"},
 	} {
 		assert.Equal(t, tc.want, tc.info.StatusText())
 	}
@@ -254,4 +263,216 @@ func TestTasksStopAllWaitsForEndedCallback(t *testing.T) {
 	case <-time.After(testTimeout):
 		t.Fatal("timed out waiting for StopAll")
 	}
+}
+
+func TestTasksAgentSharesIDsWithShells(t *testing.T) {
+	sh := NewShell(t.TempDir(), nil)
+	m, events := newTasks(t)
+	_, err := m.Start(t.Context(), sh, "true")
+	require.NoError(t, err)
+	agent := startAgent(m, "find it")
+	_, err = m.Start(t.Context(), sh, "true")
+	require.NoError(t, err)
+
+	assert.Equal(t, "t2", agent.ID())
+	list := m.List()
+	require.Len(t, list, 3)
+	assert.Equal(t, []string{"t1", "t2", "t3"}, []string{list[0].ID, list[1].ID, list[2].ID})
+	assert.Equal(t, "", list[0].Agent)
+	assert.Equal(t, "explore", list[1].Agent)
+	assert.Equal(t, "find it", list[1].Command)
+	assert.Equal(t, TaskRunning, list[1].Status)
+	assert.False(t, list[1].Started.IsZero())
+	// Only the shells report: two starts and two ends.
+	for range 4 {
+		assert.NotEqual(t, "t2", nextEvent(t, events).ID)
+	}
+}
+
+func TestTasksAgentEndNeverCallsOnChange(t *testing.T) {
+	m, events := newTasks(t)
+	agent := startAgent(m, "find it")
+
+	info, ok := agent.End(TaskCompleted, "", "the answer")
+	require.True(t, ok)
+	assert.Equal(t, "t1", info.ID)
+	assert.Equal(t, "explore", info.Agent)
+	assert.Equal(t, TaskCompleted, info.Status)
+	assert.Equal(t, "the answer", info.Result)
+	assert.False(t, info.Ended.IsZero())
+	got, err := m.Output("t1")
+	require.NoError(t, err)
+	assert.Equal(t, info, got)
+	_, ok = agent.End(TaskFailed, "again", "")
+	assert.False(t, ok)
+	assert.Empty(t, events)
+}
+
+func TestTasksAgentKeepsOutputAcrossRuns(t *testing.T) {
+	m, _ := newTasks(t)
+	agent := startAgent(m, "find it")
+	_, err := agent.Write([]byte("first\n"))
+	require.NoError(t, err)
+	assert.False(t, agent.Run(func() {}), "a running task cannot run again")
+	ended, ok := agent.End(TaskCompleted, "", "one")
+	require.True(t, ok)
+
+	require.True(t, agent.Run(func() { agent.End(TaskStopped, "", "") }))
+
+	_, err = agent.Write([]byte("second\n"))
+	require.NoError(t, err)
+	info, err := m.Output("t1")
+	require.NoError(t, err)
+	assert.Equal(t, TaskRunning, info.Status)
+	assert.True(t, info.Ended.IsZero())
+	assert.Empty(t, info.Result)
+	assert.Equal(t, "first\nsecond\n", info.Output)
+	assert.False(t, info.Started.Before(ended.Started))
+	assert.Equal(t, "t1", info.ID)
+	assert.Equal(t, "t2", startAgent(m, "other").ID())
+}
+
+func TestTasksAgentStopWaitsForEnd(t *testing.T) {
+	m, _ := newTasks(t)
+	stopping, release := make(chan struct{}), make(chan struct{})
+	var agent *AgentTask
+	agent = m.StartAgent("explore", "find it", func() {
+		close(stopping)
+		<-release
+		agent.End(TaskCompleted, "", "finished anyway")
+	})
+	type stopped struct {
+		info TaskInfo
+		err  error
+	}
+	result := make(chan stopped, 1)
+	go func() {
+		info, err := m.Stop("t1")
+		result <- stopped{info, err}
+	}()
+	select {
+	case <-stopping:
+	case <-time.After(testTimeout):
+		t.Fatal("timed out waiting for the stop func")
+	}
+	select {
+	case <-result:
+		t.Fatal("Stop returned before End")
+	default:
+	}
+
+	close(release)
+
+	select {
+	case r := <-result:
+		require.NoError(t, r.err)
+		assert.Equal(t, TaskStopped, r.info.Status)
+		assert.Empty(t, r.info.Result)
+		assert.False(t, r.info.Ended.IsZero())
+	case <-time.After(testTimeout):
+		t.Fatal("timed out waiting for Stop")
+	}
+	again, err := m.Stop("t1")
+	require.NoError(t, err)
+	assert.Equal(t, TaskStopped, again.Status)
+}
+
+func TestTasksStopOfEndedAgentOnlyReturnsIt(t *testing.T) {
+	m, _ := newTasks(t)
+	calls := 0
+	agent := m.StartAgent("explore", "find it", func() { calls++ })
+	_, ok := agent.End(TaskCompleted, "", "done")
+	require.True(t, ok)
+
+	info, err := m.Stop("t1")
+
+	require.NoError(t, err)
+	assert.Equal(t, TaskCompleted, info.Status)
+	assert.Equal(t, "done", info.Result)
+	assert.Zero(t, calls)
+}
+
+func TestTasksStopAllForgetsAgentTask(t *testing.T) {
+	m, events := newTasks(t)
+	stopping := make(chan struct{})
+	var agent *AgentTask
+	reported := make(chan bool, 1)
+	agent = m.StartAgent("explore", "find it", func() {
+		close(stopping)
+		_, ok := agent.End(TaskCompleted, "", "late")
+		reported <- ok
+	})
+
+	m.StopAll()
+
+	select {
+	case <-stopping:
+	default:
+		t.Fatal("StopAll did not call the stop func")
+	}
+	assert.False(t, <-reported, "End after StopAll forgot the task")
+	assert.False(t, agent.Run(func() {}))
+	assert.Empty(t, m.List())
+	_, err := m.Output("t1")
+	require.ErrorIs(t, err, ErrUnknownTask)
+	assert.Empty(t, events)
+	assert.Equal(t, "t2", startAgent(m, "next").ID())
+}
+
+func TestTasksAdoptReportsEndedProcessAsRunning(t *testing.T) {
+	m := NewTasks()
+	p := &process{out: &outputBuffer{}, stopCh: make(chan error), done: make(chan struct{})}
+	close(p.done)
+	started := time.Now()
+	tk := &task{command: "true", started: started, p: p}
+
+	m.mu.Lock()
+	info := m.adopt(tk)
+	m.mu.Unlock()
+
+	assert.Equal(t, "t1", info.ID)
+	assert.Equal(t, TaskRunning, info.Status)
+	assert.True(t, info.Ended.IsZero())
+	assert.Empty(t, info.Reason)
+	assert.Equal(t, started, info.Started)
+	assert.Equal(t, TaskCompleted, tk.info().Status)
+}
+
+func TestTasksStopRetainsSelectedRunAcrossRestart(t *testing.T) {
+	m, _ := newTasks(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	a := m.StartAgent("explore", "find it", func() {
+		close(entered)
+		<-release
+	})
+	result := make(chan TaskInfo, 1)
+	go func() {
+		info, err := m.Stop(a.ID())
+		assert.NoError(t, err)
+		result <- info
+	}()
+	select {
+	case <-entered:
+	case <-time.After(testTimeout):
+		t.Fatal("the agent run did not start")
+	}
+	select {
+	case <-result:
+		t.Fatal("Stop returned before the selected run ended")
+	default:
+	}
+	first, ok := a.End(TaskCompleted, "", "stopped run")
+	require.True(t, ok)
+	require.True(t, a.Run(func() { a.End(TaskStopped, "", "") }))
+	close(release)
+	select {
+	case info := <-result:
+		assert.Equal(t, first, info)
+	case <-time.After(testTimeout):
+		t.Fatal("Stop waited for the replacement run")
+	}
+	info, err := m.Output(a.ID())
+	require.NoError(t, err)
+	assert.Equal(t, TaskRunning, info.Status)
+	a.End(TaskCompleted, "", "replacement")
 }

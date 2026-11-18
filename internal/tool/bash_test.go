@@ -239,3 +239,37 @@ func TestBashDisplayPreview(t *testing.T) {
 		assert.Equal(t, []PreviewLine{{Kind: Context, Text: wideCommand}}, bash.Display.Preview(wide))
 	}
 }
+
+func TestForegroundBashDescribesItself(t *testing.T) {
+	tool := NewBash(NewShell(t.TempDir(), nil), NewShell(t.TempDir(), nil), nil)
+
+	assert.Contains(t, tool.Description, "stopped")
+	assert.NotContains(t, tool.Description, "background")
+	assert.NotContains(t, tool.Description, "TaskOutput")
+	properties, ok := tool.Parameters["properties"].(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, properties, "command")
+	assert.Contains(t, properties, "timeout")
+	assert.NotContains(t, properties, "run_in_background")
+	_, err := json.Marshal(tool.Parameters)
+	require.NoError(t, err)
+}
+
+func TestForegroundBashRunsCommand(t *testing.T) {
+	tool := NewBash(NewShell(t.TempDir(), nil), NewShell(t.TempDir(), nil), nil)
+
+	out, err := tool.Run(t.Context(), json.RawMessage(`{"command":"echo one; exit 0"}`), allowTarget)
+
+	require.NoError(t, err)
+	assert.Equal(t, "one\n", out.Text)
+	_, err = tool.Run(t.Context(), json.RawMessage(`{"command":"exit 3"}`), allowTarget)
+	require.ErrorIs(t, err, ErrExitStatus)
+}
+
+func TestForegroundBashRefusesBackground(t *testing.T) {
+	tool := NewBash(NewShell(t.TempDir(), nil), NewShell(t.TempDir(), nil), nil)
+
+	_, err := tool.Run(t.Context(), json.RawMessage(`{"command":"true","run_in_background":true}`), allowTarget)
+
+	require.ErrorIs(t, err, ErrInvalidArgs)
+}

@@ -13,7 +13,7 @@ func NewTaskStop(tasks *Tasks) Tool {
 	return Tool{
 		Name:        "TaskStop",
 		Label:       "TaskStop",
-		Description: "Stops a running background task, killing its command and the processes it started.",
+		Description: "Stops a running background task, a command or a subagent; a command is killed with the processes it started.",
 		Parameters:  taskIDParameters(),
 		Capability:  policy.Read,
 		Run: func(_ context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (Result, error) {

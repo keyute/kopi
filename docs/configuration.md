@@ -15,6 +15,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `trust.json` | Which folders you trust, see [trust](trust.md#folder-trust); Kopi writes it |
 | `history.jsonl` | Input history per working directory, written by the fullscreen interface; the last 100 entries are recalled |
 | `skills/` | Your [skills](skills.md) |
+| `agents/` | Your [subagents](subagents.md), one Markdown file each |
 | `sandbox/` | The lock and the record of placeholders that Kopi processes sharing the home use to remove them safely (Linux), see [sandbox](sandbox.md#linux-placeholders) |
 | `images/` | Pasted clipboard images, removed after a day |
 | `installation_id` | The installation's UUID, created the first time a sign-in asks for it |
@@ -43,7 +44,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `provider/id` of the session model; `--model` overrides it.
 - Unset, each start uses the default model of a provider with a credential, environment credentials included. Nothing is saved, and a notice names the model and the config file to set it in.
 - With credentials for several providers, the default depends on the order the runtime prefers; set `model` to pin it.
-- With no credential at all, the fullscreen interface asks which provider to log in to, then opens the session; print mode fails with a hint to run `kopi login`. Start fails first, naming the provider, when `smallModel` or an enabled `classifier.model` names a provider with no credential.
+- With no credential at all, the fullscreen interface asks which provider to log in to, then opens the session; print mode fails with a hint to run `kopi login`. Start fails first, naming the provider, when `smallModel`, an enabled `classifier.model` or a [subagent](subagents.md) definition's `model` names a provider with no credential.
 
 ## `mode`
 
@@ -109,7 +110,7 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 | `cwd` | The workspace, with your home directory as `~` |
 | `notice` | Transient hints such as `Copied` |
 | `sandbox` | `sandboxed` or `unsandboxed` when `Bash` is available |
-| `tasks` | `1 shell` or `N shells` while background tasks run |
+| `tasks` | Running background work, such as `2 agents, 1 shell` |
 
 A segment in `segments`:
 

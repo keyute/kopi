@@ -331,3 +331,28 @@ func TestTasksStartSignalsNoForeground(t *testing.T) {
 	assert.Equal(t, TaskCompleted, nextEvent(t, events).Status)
 	assert.Empty(t, signals)
 }
+
+func TestTasksStopAllStopsShellAndAgentTogether(t *testing.T) {
+	sh := NewShell(t.TempDir(), nil)
+	m, events := newTasks(t)
+	command, started, dead := holdFIFO(t, t.TempDir())
+	_, err := m.Start(t.Context(), sh, command)
+	require.NoError(t, err)
+	waitFor(t, started, "the grandchild to start")
+	var agent *AgentTask
+	agentStopped := make(chan struct{})
+	agent = m.StartAgent("explore", "find it", func() {
+		go func() {
+			agent.End(TaskStopped, "", "")
+			close(agentStopped)
+		}()
+	})
+
+	m.StopAll()
+
+	waitFor(t, dead, "the grandchild to die")
+	waitFor(t, agentStopped, "the agent task to end")
+	assert.Empty(t, m.List())
+	assert.Equal(t, TaskRunning, nextEvent(t, events).Status)
+	assert.Empty(t, events)
+}

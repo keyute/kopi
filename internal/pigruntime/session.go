@@ -77,6 +77,7 @@ const noticeType = "kopi.notice"
 type noticeDetails struct {
 	ID        string `json:"id"`
 	Command   string `json:"command"`
+	Agent     string `json:"agent,omitempty"`
 	Status    string `json:"status"`
 	ElapsedMs int64  `json:"elapsedMs"`
 }
@@ -86,7 +87,7 @@ func (n Notice) message() extension.CustomMessageRef {
 		CustomType: noticeType,
 		Content:    n.Text,
 		Display:    true,
-		Details:    noticeDetails{ID: n.Shown.ID, Command: n.Shown.Command, Status: n.Shown.Status, ElapsedMs: n.Shown.Elapsed.Milliseconds()},
+		Details:    noticeDetails{ID: n.Shown.ID, Command: n.Shown.Command, Agent: n.Shown.Agent, Status: n.Shown.Status, ElapsedMs: n.Shown.Elapsed.Milliseconds()},
 	}
 }
 
