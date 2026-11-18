@@ -122,6 +122,13 @@ type Controller struct {
 	// approval is the call waiting for Answer; nil when none is.
 	approval    *pendingApproval
 	approvalSeq uint64
+	// login is the running login; nil when none is. A login and a turn never
+	// run together: each is refused while the other is registered.
+	login    *loginRun
+	loginSeq uint64
+	// deferred is the first open that Start put off for a login; cleared once
+	// any session opens.
+	deferred *OpenRequest
 }
 
 // sessionSwitch retains work even after it deregisters while start waits for life.
@@ -233,10 +240,24 @@ func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
 // as an Error event. Prompts given until the session opens are queued and
 // start its first turn; /new and /resume are refused with ErrBusy meanwhile.
 // The wait for the servers runs without life, so Close can end it.
+//
+// When the check fails only because the model's provider has no credential,
+// an attended Start instead returns nil and runs that provider's login, as
+// /login does; the open follows once it succeeds. If the login is cancelled or
+// fails, no session opens and a later /login that succeeds retries the open.
 func (c *Controller) Start(ctx context.Context, req OpenRequest) error {
 	if err := c.check(ctx, req); err != nil {
-		return err
+		if !c.canLoginFirst(ctx, err) {
+			return err
+		}
+		return c.loginFirst(ctx, req, c.withLoginHint(err))
 	}
+	return c.startFirst(ctx, req, nil)
+}
+
+// startFirst opens the first session in the background; notices are reported
+// after it opens, ahead of the other startup events.
+func (c *Controller) startFirst(ctx context.Context, req OpenRequest, notices []event.Event) error {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	op, err := c.beginSwitch(cancel)
 	if err != nil {
@@ -255,6 +276,7 @@ func (c *Controller) Start(ctx context.Context, req OpenRequest) error {
 		c.life.Lock()
 		defer c.life.Unlock()
 		if err == nil {
+			c.startup = append(c.startup, notices...)
 			c.prepareStartup(statuses)
 			err = c.startSwitch(ctx, req, op)
 		} else {
@@ -262,6 +284,9 @@ func (c *Controller) Start(ctx context.Context, req OpenRequest) error {
 			c.mu.Lock()
 			c.switching = nil
 			c.mu.Unlock()
+			for _, ev := range notices {
+				c.relay.emit(ev)
+			}
 		}
 		if err != nil {
 			c.relay.emit(event.Error{Err: err})
@@ -316,11 +341,13 @@ func (c *Controller) Sessions() ([]pigruntime.SessionInfo, error) {
 
 // Submit takes one message of human input with the paths of its images. A
 // control command is executed and returns (nil, nil), ErrQuit for /quit,
-// ErrShowTasks for /tasks, ErrMissingArgument for /resume without an id or
-// ErrUnknownCommand. /new and /resume with an id return at once and report
-// their result through events.
+// ErrShowTasks for /tasks, ErrMissingArgument for /resume, /login or /logout
+// without an argument, or ErrUnknownCommand. /new, /resume with an id and
+// /login with a provider return at once and report their result through
+// events; while a login runs, /new and /resume return ErrLoggingIn.
 // Anything else is a prompt: it starts a root turn or, while one runs, is
-// queued for that turn and returns (nil, nil). After Close every input but a
+// queued for that turn and returns (nil, nil); while a login runs it returns
+// ErrLoggingIn. After Close every input but a
 // blank line returns ErrNoSession.
 func (c *Controller) Submit(ctx context.Context, text string, images ...string) (*Work, error) {
 	return c.input(ctx, text, images, false)
@@ -417,7 +444,15 @@ func (c *Controller) submitPrompt(ctx context.Context, p pigruntime.Prompt, now 
 	defer c.queue.Unlock()
 	c.mu.Lock()
 	first := c.switching != nil && c.switching.cancelWait != nil
-	if c.sess == nil && !first || c.closed {
+	if c.closed {
+		c.mu.Unlock()
+		return nil, ErrNoSession
+	}
+	if c.login != nil {
+		c.mu.Unlock()
+		return nil, ErrLoggingIn
+	}
+	if c.sess == nil && !first {
 		c.mu.Unlock()
 		return nil, ErrNoSession
 	}
@@ -493,15 +528,20 @@ func (c *Controller) Commands() []Command {
 	return out
 }
 
-// Interrupt requests abort of the running root turn without waiting for it.
-// Input still queued is handed back in the turn's TurnEnd.Unsent; task notices
-// are not, and wait for the next human prompt without waking the model.
+// Interrupt requests abort of the running root turn or of a running login,
+// without waiting for it, and reports whether there was one. Input still queued
+// is handed back in the turn's TurnEnd.Unsent; task notices are not, and wait
+// for the next human prompt without waking the model.
 func (c *Controller) Interrupt() bool {
 	c.queue.Lock()
 	defer c.queue.Unlock()
 	c.mu.Lock()
-	w, emit := c.turn, c.emit
+	w, emit, login := c.turn, c.emit, c.login
 	c.mu.Unlock()
+	if login != nil {
+		login.cancel()
+		return true
+	}
 	if w == nil {
 		return false
 	}
@@ -588,9 +628,9 @@ func (c *Controller) Status() Status {
 
 // Close stops running work and every task, and closes the session within
 // min(ctx, JoinTimeout). Before that it waits for any session start or listing
-// already in progress, which that bound does not cover. It does not close the Runtime. If work does not stop, the
-// session is left open, the work stays tracked and the error wraps
-// pigruntime.ErrJoinTimeout; a later Close tries again. No event is delivered
+// already in progress, which that bound does not cover. It does not close the Runtime. If work or a
+// login does not stop, the session is left open, the work stays tracked and the
+// error wraps pigruntime.ErrJoinTimeout; a later Close tries again. No event is delivered
 // after Close returns.
 func (c *Controller) Close(ctx context.Context) error {
 	c.life.Lock()
@@ -601,7 +641,10 @@ func (c *Controller) Close(ctx context.Context) error {
 	c.mu.Lock()
 	c.closed = true
 	c.notices = nil
-	sess, unsubscribe, w, emit := c.sess, c.unsubscribe, c.turn, c.emit
+	sess, unsubscribe, w, emit, login := c.sess, c.unsubscribe, c.turn, c.emit, c.login
+	if login != nil {
+		login.cancel()
+	}
 	if c.switching != nil && c.switching.cancelWait != nil {
 		c.switching.cancelWait()
 	}
@@ -619,6 +662,16 @@ func (c *Controller) Close(ctx context.Context) error {
 	c.queue.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, c.cfg.JoinTimeout)
 	defer cancel()
+	// closed is set, so no login starts now. The login needs neither life nor
+	// queue, and it does not end before its last emit, so after this nothing of
+	// it reaches the runtime or a subscriber.
+	if login != nil {
+		select {
+		case <-login.done:
+		case <-ctx.Done():
+			return fmt.Errorf("failed to close controller: login did not stop: %w", pigruntime.ErrJoinTimeout)
+		}
+	}
 	if err := c.stopTasks(ctx); err != nil {
 		return err
 	}
@@ -857,7 +910,8 @@ func (c *Controller) start(ctx context.Context, req OpenRequest) error {
 
 // beginSwitch marks and stops in one queue section, before settlement can
 // drain input queued after an earlier Interrupt. cancelWait is non-nil only
-// for the first open started by Start.
+// for the first open started by Start, which a login's deferred open also
+// starts; every other switch is refused with ErrLoggingIn while a login runs.
 func (c *Controller) beginSwitch(cancelWait context.CancelFunc) (*sessionSwitch, error) {
 	c.queue.Lock()
 	defer c.queue.Unlock()
@@ -865,6 +919,10 @@ func (c *Controller) beginSwitch(cancelWait context.CancelFunc) (*sessionSwitch,
 	if c.closed {
 		c.mu.Unlock()
 		return nil, ErrNoSession
+	}
+	if c.login != nil && cancelWait == nil {
+		c.mu.Unlock()
+		return nil, ErrLoggingIn
 	}
 	if c.switching != nil {
 		c.mu.Unlock()
@@ -980,6 +1038,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		c.hold = false
 	}
 	c.sess, c.sessID, c.emit, c.unsubscribe = sess, id, emit, unsubscribe
+	c.deferred = nil
 	c.mu.Unlock()
 	c.queue.Unlock()
 	changed := event.SessionChanged{

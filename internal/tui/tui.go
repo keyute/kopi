@@ -27,6 +27,9 @@ type Controller interface {
 	Interrupt() bool
 	// Answer answers the pending approval for token; false when it is stale.
 	Answer(token uint64, d policy.Decision) bool
+	// AnswerLogin answers the pending login question for token; false when it
+	// is stale.
+	AnswerLogin(token uint64, answer string) bool
 	ToggleMode()
 	History() []string
 	Status() app.Status
