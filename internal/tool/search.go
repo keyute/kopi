@@ -77,6 +77,10 @@ func (w *Workspace) openWalked(p string, info fs.FileInfo) (*os.File, error) {
 		f.Close()
 		return nil, fmt.Errorf("%w: %s", ErrTargetChanged, p)
 	}
+	if err := w.check(f, filepath.FromSlash(p), p); err != nil {
+		f.Close()
+		return nil, err
+	}
 	return f, nil
 }
 

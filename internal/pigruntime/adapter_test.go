@@ -110,6 +110,37 @@ func TestToolResultCarriesImages(t *testing.T) {
 	assert.Equal(t, base64.StdEncoding.EncodeToString(buf.Bytes()), img.Data)
 }
 
+func TestToolResultResizesOversizedImage(t *testing.T) {
+	data := widePNG(t)
+	original, _, err := image.Decode(bytes.NewReader(data))
+	require.NoError(t, err)
+	probe := probeTool(nil)
+	probe.Run = func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (tool.Result, error) {
+		if _, err := admit(policy.Target{}); err != nil {
+			return tool.Result{}, err
+		}
+		return tool.Result{Text: "wide image", Images: []tool.Image{{MimeType: "image/png", Data: data}}}, nil
+	}
+	gate := policy.NewGate(policy.NewAuthority(), tool.Specs([]tool.Tool{probe}), nil, nil)
+	args := json.RawMessage(`{}`)
+	require.NoError(t, gate.Before(t.Context(), "call-1", probe.Name, args))
+
+	res, err := (agentTool{tool: probe, gate: gate}).Execute(t.Context(), "call-1", args, nil)
+	require.NoError(t, err)
+	require.False(t, res.IsError, toolResultContentText(res.Content))
+	require.Len(t, res.Content, 2)
+	assert.Equal(t, ai.TextContent{Text: "wide image"}, res.Content[0])
+	img, ok := res.Content[1].(ai.ImageContent)
+	require.True(t, ok, "%T", res.Content[1])
+	encoded, err := base64.StdEncoding.DecodeString(img.Data)
+	require.NoError(t, err)
+	resized, format, err := image.Decode(bytes.NewReader(encoded))
+	require.NoError(t, err)
+	assert.Less(t, resized.Bounds().Dx(), original.Bounds().Dx())
+	assert.Less(t, resized.Bounds().Dy(), original.Bounds().Dy())
+	assert.Equal(t, "image/"+format, img.MimeType)
+}
+
 func TestToolResultOmitsUnprocessableImage(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)

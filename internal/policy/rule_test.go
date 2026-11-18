@@ -753,6 +753,59 @@ func TestHidesHonoursExceptions(t *testing.T) {
 	assert.True(t, r.Hides("Read", *at(d.ws), *at(filepath.Join(d.ws, "secrets/b"))))
 }
 
+func TestHidesExceptionsRequireBothPaths(t *testing.T) {
+	d := newDirs(t)
+	root := *at(d.ws)
+	public := filepath.Join(d.ws, "secrets/public/a")
+	private := filepath.Join(d.ws, "secrets/private/a")
+	rules := []string{"Read(secrets/**)", "Read(!secrets/public/**)"}
+	for _, source := range []Source{
+		{Name: "deny", Deny: rules},
+		{Name: "ask", Ask: rules},
+	} {
+		t.Run(source.Name, func(t *testing.T) {
+			r := d.rules(t, source)
+			for _, tc := range []struct {
+				name   string
+				target Target
+				want   bool
+			}{
+				{"lexical exception only", Target{Path: public, Real: private}, true},
+				{"resolved exception only", Target{Path: private, Real: public}, true},
+				{"both paths excepted", *at(public), false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					assert.Equal(t, tc.want, r.Hides("Read", root, tc.target))
+				})
+			}
+		})
+	}
+}
+
+func TestHidesExceptionDoesNotReachAnotherSource(t *testing.T) {
+	d := newDirs(t)
+	root := *at(d.ws)
+	public := *at(filepath.Join(d.ws, "secrets/public/a"))
+	rules := []string{"Read(secrets/**)", "Read(!secrets/public/**)"}
+	for _, excepted := range []Source{
+		{Name: "deny exception", Deny: rules},
+		{Name: "ask exception", Ask: rules},
+	} {
+		t.Run(excepted.Name, func(t *testing.T) {
+			assert.False(t, d.rules(t, excepted).Hides("Read", root, public))
+			for _, other := range []Source{
+				{Name: "other deny", Deny: []string{"Read(secrets/**)"}},
+				{Name: "other ask", Ask: []string{"Read(secrets/**)"}},
+			} {
+				t.Run(other.Name, func(t *testing.T) {
+					assert.True(t, d.rules(t, excepted, other).Hides("Read", root, public))
+					assert.True(t, d.rules(t, other, excepted).Hides("Read", root, public))
+				})
+			}
+		})
+	}
+}
+
 func TestHidesSkipsRuleThatMatchedTheRoot(t *testing.T) {
 	d := newDirs(t)
 	src := *at(filepath.Join(d.ws, "src"))

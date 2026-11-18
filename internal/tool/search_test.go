@@ -176,3 +176,17 @@ func TestSearchTitle(t *testing.T) {
 	assert.Equal(t, "Grep TODO", title(json.RawMessage(`{"pattern":"TODO"}`)))
 	assert.Equal(t, "Grep", title(json.RawMessage(`{"path":"internal"}`)))
 }
+
+func TestOpenWalkedRefusesFileMovedIntoProtection(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "allowed", "file"), "secret")
+	ws := newWorkspace(t, dir, []string{filepath.Join(dir, "protected")})
+	info, err := ws.root.Lstat("allowed/file")
+	require.NoError(t, err)
+	require.NoError(t, os.Rename(filepath.Join(dir, "allowed"), filepath.Join(dir, "protected")))
+	require.NoError(t, os.Symlink("protected", filepath.Join(dir, "allowed")))
+
+	f, err := ws.openWalked("allowed/file", info)
+	require.ErrorIs(t, err, ErrProtected)
+	assert.Nil(t, f)
+}

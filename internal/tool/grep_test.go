@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -228,7 +229,7 @@ func TestGrepCancelsDuringLine(t *testing.T) {
 			}
 			done := make(chan error, 1)
 			go func() {
-				_, err := readGrepLine(ctx, bufio.NewReaderSize(r, 64<<10), regexp.MustCompile(tc.pattern))
+				_, err := readGrepLine(ctx, bufio.NewReaderSize(r, 64<<10), regexp.MustCompile(tc.pattern), grepContent)
 				done <- err
 			}()
 			<-r.waiting
@@ -486,6 +487,118 @@ func TestGrepDisplay(t *testing.T) {
 			out, err := runGrep(t, tool, tc.args)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, tool.Display.Summary(out))
+		})
+	}
+}
+
+func TestGrepRefusesFileMovedIntoProtectionDuringAdmission(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "allowed", "file"), "needle secret")
+	ws := newWorkspace(t, dir, []string{filepath.Join(dir, "protected")})
+	tool := NewGrep(ws, nil)
+	res, err := tool.Run(t.Context(), json.RawMessage(`{"pattern":"needle","path":"allowed/file","output_mode":"content"}`), func(policy.Target) (policy.Mode, error) {
+		require.NoError(t, os.Rename(filepath.Join(dir, "allowed"), filepath.Join(dir, "protected")))
+		require.NoError(t, os.Symlink("protected", filepath.Join(dir, "allowed")))
+		return policy.Execute, nil
+	})
+	require.ErrorIs(t, err, ErrProtected)
+	assert.Empty(t, res.Text)
+}
+
+func TestGrepReservesMatchingLineBeforeContext(t *testing.T) {
+	for _, first := range []bool{false, true} {
+		name := "later match"
+		if first {
+			name = "first match long path"
+		}
+		t.Run(name, func(t *testing.T) {
+			if first && runtime.GOOS != "linux" {
+				t.Skip("1600-byte path exceeds macOS path limits; later match covers reservation portably")
+			}
+			tool, dir := newGrepTool(t)
+			path := "a.txt"
+			text := ""
+			if first {
+				path = strings.Repeat(strings.Repeat("p", 199)+"/", 8) + "a.txt"
+			} else {
+				text = strings.Repeat("hit"+strings.Repeat("😀", maxLineChars-3)+"\n", 3)
+				text += strings.Repeat("gap\n", 11)
+			}
+			text += strings.Repeat(strings.Repeat("😀", maxLineChars)+"\n", 10)
+			text += "hit" + strings.Repeat("😀", maxLineChars-3) + "\n"
+			writeFile(t, filepath.Join(dir, path), text)
+			out, err := runGrep(t, tool, `{"pattern":"hit","output_mode":"content","context":10}`)
+			require.NoError(t, err)
+			assert.LessOrEqual(t, len(out), maxReadBytes)
+			line, count := 25, 4
+			if first {
+				line, count = 11, 1
+			}
+			assert.True(t, strings.HasPrefix(out, fmt.Sprintf("Found %s in 1 file\n", grepNoun(count, "match", "matches"))))
+			assert.Contains(t, out, fmt.Sprintf("%s:%d:hit", path, line))
+			assert.Contains(t, out, "[Some preceding context omitted to fit output.]")
+			assert.NotContains(t, out, "No matches found")
+			firstContext := 17
+			if first {
+				firstContext = 2
+			} else {
+				assert.Contains(t, out, "--\n"+path+"-17-")
+			}
+			assert.NotContains(t, out, fmt.Sprintf("%s-%d-", path, firstContext-1))
+			assert.Less(t, strings.Index(out, fmt.Sprintf("%s-%d-", path, firstContext)), strings.Index(out, fmt.Sprintf("%s:%d:", path, line)))
+		})
+	}
+}
+
+type grepCountingReader struct {
+	r     io.Reader
+	bytes int
+}
+
+func (r *grepCountingReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.bytes += n
+	return n, err
+}
+
+func TestGrepFilesStopsReadingAfterEarlyMatch(t *testing.T) {
+	r := &grepCountingReader{r: strings.NewReader("hit" + strings.Repeat("x", 1<<20))}
+	line, err := readGrepLine(t.Context(), bufio.NewReaderSize(r, 4096), regexp.MustCompile("^hit"), grepFiles)
+	require.NoError(t, err)
+	assert.True(t, line.matched)
+	assert.Empty(t, line.text)
+	assert.Equal(t, 4096, r.bytes)
+}
+
+func TestReadGrepLineModesPreserveLogicalLines(t *testing.T) {
+	for _, mode := range []string{grepFiles, grepCount, grepContent} {
+		t.Run(mode, func(t *testing.T) {
+			for _, tc := range []struct {
+				text, pattern string
+				matched       bool
+			}{
+				{"\xffhit\r\n", "^\\x{FFFD}hit\\r$", true},
+				{"hit\r\n", "hit$", false},
+				{"\n", "^$", true},
+				{"hit", "hit$", true},
+			} {
+				r := bufio.NewReader(strings.NewReader(tc.text))
+				line, err := readGrepLine(t.Context(), r, regexp.MustCompile(tc.pattern), mode)
+				require.NoError(t, err)
+				assert.Equal(t, tc.matched, line.matched)
+				if mode != grepContent {
+					assert.Empty(t, line.text)
+				}
+			}
+			for _, text := range []string{"", "miss\n"} {
+				r := bufio.NewReader(strings.NewReader(text))
+				if text != "" {
+					_, err := readGrepLine(t.Context(), r, regexp.MustCompile("^$"), mode)
+					require.NoError(t, err)
+				}
+				_, err := readGrepLine(t.Context(), r, regexp.MustCompile("^$"), mode)
+				require.ErrorIs(t, err, io.EOF)
+			}
 		})
 	}
 }

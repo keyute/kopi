@@ -165,14 +165,15 @@ type grepLine struct {
 // grepLineReader exposes one logical line to regexp, retaining only its display
 // prefix. LF ends the line; CR remains part of both the pattern input and text.
 type grepLineReader struct {
-	ctx   context.Context
-	r     *bufio.Reader
-	text  strings.Builder
-	chars int
-	cut   bool
-	got   bool
-	done  bool
-	err   error
+	ctx     context.Context
+	r       *bufio.Reader
+	display bool
+	text    strings.Builder
+	chars   int
+	cut     bool
+	got     bool
+	done    bool
+	err     error
 }
 
 func (l *grepLineReader) ReadRune() (rune, int, error) {
@@ -184,7 +185,7 @@ func (l *grepLineReader) ReadRune() (rune, int, error) {
 		return 0, 0, err
 	}
 	var first byte
-	if l.chars < maxLineChars {
+	if l.display && l.chars < maxLineChars {
 		if head, _ := l.r.Peek(1); len(head) > 0 {
 			first = head[0]
 		}
@@ -199,7 +200,7 @@ func (l *grepLineReader) ReadRune() (rune, int, error) {
 		l.done = true
 		return 0, 0, io.EOF
 	}
-	if l.chars < maxLineChars {
+	if l.display && l.chars < maxLineChars {
 		if r == utf8.RuneError && size == 1 {
 			// Matching decodes invalid UTF-8, but displayed text keeps its bytes.
 			l.text.WriteByte(first)
@@ -213,13 +214,33 @@ func (l *grepLineReader) ReadRune() (rune, int, error) {
 	return r, size, nil
 }
 
-func readGrepLine(ctx context.Context, r *bufio.Reader, re *regexp.Regexp) (grepLine, error) {
-	l := grepLineReader{ctx: ctx, r: r}
+func readGrepLine(ctx context.Context, r *bufio.Reader, re *regexp.Regexp, mode string) (grepLine, error) {
+	l := grepLineReader{ctx: ctx, r: r, display: mode == grepContent}
 	matched := re.MatchReader(&l)
-	// MatchReader can stop early; finish the display prefix and consume the
-	// remainder so the next match starts at the next logical line.
-	for !l.done {
+	if matched && mode == grepFiles && l.got && l.err == nil {
+		return grepLine{matched: true}, ctx.Err()
+	}
+	// Finish the display prefix before draining the tail in buffered chunks.
+	for !l.done && l.display && l.chars < maxLineChars {
 		_, _, _ = l.ReadRune()
+	}
+	for !l.done {
+		if err := ctx.Err(); err != nil {
+			return grepLine{}, err
+		}
+		tail, err := r.ReadSlice('\n')
+		if len(tail) > 0 {
+			l.got = true
+			if len(tail) > 1 || tail[0] != '\n' {
+				l.cut = true
+			}
+		}
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			l.done, l.err = true, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return grepLine{}, err
 	}
 	if l.err != nil && !errors.Is(l.err, io.EOF) {
 		return grepLine{}, l.err
@@ -254,7 +275,7 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 			return
 		}
 		for n := 1; ctx.Err() == nil; n++ {
-			line, err := readGrepLine(ctx, r, re)
+			line, err := readGrepLine(ctx, r, re, mode)
 			line.n = n
 			if err != nil || !onLine(line) {
 				return
@@ -268,6 +289,7 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 		out            strings.Builder
 		more, limited  bool
 		printed        bool
+		contextTrimmed bool
 	)
 	// searchFile reports whether the search goes on past p.
 	searchFile := func(p string, f *os.File, fi fs.FileInfo) bool {
@@ -320,6 +342,26 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 					if matches == limit {
 						more, limited = true, true
 						return false
+					}
+					// Reserve the match and a possible group separator before context.
+					needed := len(p) + 2 + len(fmt.Sprint(l.n)) + len(l.text) + 1 + 3
+					if l.cut {
+						needed += len(lineCutMarker)
+					}
+					for _, b := range before {
+						needed += len(p) + 2 + len(fmt.Sprint(b.n)) + len(b.text) + 1
+						if b.cut {
+							needed += len(lineCutMarker)
+						}
+					}
+					for len(before) > 0 && out.Len()+needed > maxReadBytes-noticeReserve {
+						b := before[0]
+						needed -= len(p) + 2 + len(fmt.Sprint(b.n)) + len(b.text) + 1
+						if b.cut {
+							needed -= len(lineCutMarker)
+						}
+						before = before[1:]
+						contextTrimmed = true
 					}
 					for _, b := range before {
 						if !emit(b, "-") {
@@ -390,6 +432,9 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 	if mode == grepContent {
 		fmt.Fprintf(&res, "Found %s in %s\n", grepNoun(matches, "match", "matches"), grepNoun(files, "file", "files"))
 		res.WriteString(out.String())
+		if contextTrimmed {
+			res.WriteString("[Some preceding context omitted to fit output.]\n")
+		}
 		if more {
 			raise := ""
 			if limited && limit < maxGrepResults {
