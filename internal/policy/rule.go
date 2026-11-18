@@ -325,6 +325,44 @@ func (r *Rules) decide(tool string, t *Target) (eff effect, text, src string) {
 	return effectNone, "", ""
 }
 
+// Hides reports whether a search by tool rooted at root leaves t out: a
+// deny or ask rule with a path matches t, no exception in its list does, and
+// that rule does not match root, where the gate already judged the call,
+// unless an exception in its list admitted root.
+func (r *Rules) Hides(tool string, root, t Target) bool {
+	if r == nil {
+		return false
+	}
+	for _, s := range r.sources {
+		for _, rules := range [][]rule{s.deny, s.ask} {
+			if r.listHides(rules, tool, root, t) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (r *Rules) listHides(rules []rule, tool string, root, t Target) bool {
+	_, rootJudged := r.listMatches(rules, tool, &root, true)
+	hit := false
+	for _, ru := range rules {
+		if !nameMatches(ru.name, tool) {
+			continue
+		}
+		if ru.except {
+			if r.matches(ru, &t, false) {
+				return false
+			}
+			continue
+		}
+		if ru.patterns != nil && r.matches(ru, &t, true) && (!rootJudged || !r.matches(ru, &root, true)) {
+			hit = true
+		}
+	}
+	return hit
+}
+
 func (r *Rules) underGit(p string) bool {
 	p = filepath.ToSlash(filepath.Clean(p))
 	if r.fold {

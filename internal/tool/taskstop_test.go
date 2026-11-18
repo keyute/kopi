@@ -38,14 +38,14 @@ func TestTaskStopStopsRunningTask(t *testing.T) {
 
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 	require.NoError(t, err)
-	assert.Equal(t, "Task t1 stopped.", out)
+	assert.Equal(t, "Task t1 stopped.", out.Text)
 	ended := nextEvent(t, events)
 	assert.Equal(t, "t1", ended.ID)
 	assert.Equal(t, TaskStopped, ended.Status)
 
 	out, err = tool.Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 	require.NoError(t, err)
-	assert.Equal(t, "Task t1 stopped.", out)
+	assert.Equal(t, "Task t1 stopped.", out.Text)
 }
 
 func TestTaskStopReportsEndedTask(t *testing.T) {
@@ -58,7 +58,7 @@ func TestTaskStopReportsEndedTask(t *testing.T) {
 	out, err := NewTaskStop(tasks).Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 
 	require.NoError(t, err)
-	assert.Equal(t, "Task t1 already completed (exit code 0).", out)
+	assert.Equal(t, "Task t1 already completed (exit code 0).", out.Text)
 }
 
 func TestTaskStopRefusesUnknownTask(t *testing.T) {
@@ -82,7 +82,7 @@ func TestTaskStopDoesNotStopWithoutAdmission(t *testing.T) {
 	})
 
 	require.ErrorIs(t, err, refused)
-	assert.Empty(t, out)
+	assert.Empty(t, out.Text)
 	info, err := tasks.Output("t1")
 	require.NoError(t, err)
 	assert.Equal(t, TaskRunning, info.Status)
