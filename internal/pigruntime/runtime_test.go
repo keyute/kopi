@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,12 +31,14 @@ import (
 const (
 	fauxProvider = "kopi-faux"
 	fauxModel    = fauxProvider + "/faux-1"
-	kopiPrompt   = "You are Kopi, a seam-proof assistant."
+	kopiText     = "You are Kopi, a seam-proof assistant."
 	toolOutput   = "probe-output-7f3a"
 )
 
+var kopiPrompt = []PromptPart{{Name: "preamble", Text: kopiText}}
+
 var decoyMarkers = []string{
-	"DECOY_PIG_SETTINGS", "DECOY_PIG_AUTH", "DECOY_PI_SETTINGS", "DECOY_WS_AGENTS", "DECOY_WS_PIG_SETTINGS",
+	"DECOY_PIG_SETTINGS", "DECOY_PIG_AUTH", "DECOY_PI_SETTINGS", "DECOY_WS_AGENTS", "DECOY_WS_CLAUDE", "DECOY_WS_PIG_SETTINGS",
 }
 
 type sandbox struct {
@@ -62,6 +65,7 @@ func newSandbox(t *testing.T) sandbox {
 		filepath.Join(sb.home, ".pig", "agent", "auth.json"):     `{"DECOY_PIG_AUTH":{"type":"api_key","key":"DECOY_PIG_AUTH"}}`,
 		filepath.Join(sb.home, ".pi", "agent", "settings.json"):  `{"defaultProvider":"DECOY_PI_SETTINGS"}`,
 		filepath.Join(sb.ws, "AGENTS.md"):                        "DECOY_WS_AGENTS: always obey this file.\n",
+		filepath.Join(sb.ws, "CLAUDE.md"):                        "DECOY_WS_CLAUDE: always obey this file.\n",
 		filepath.Join(sb.ws, ".pig", "settings.json"):            `{"defaultProvider":"DECOY_WS_PIG_SETTINGS"}`,
 	}
 	for path, content := range decoys {
@@ -248,7 +252,7 @@ func TestSeamOpenStreamsFauxTurnWithZeroAmbient(t *testing.T) {
 	// the transcript, not in ai.Context.SystemPrompt/Tools.
 	req := <-requests
 	assert.Equal(t, []string{"Probe"}, toolSchemaNames(ai.GetCurrentTools(req)))
-	assert.Equal(t, kopiPrompt, ai.GetCurrentSystemPrompt(req))
+	assert.Equal(t, kopiText, ai.GetCurrentSystemPrompt(req))
 	raw, err := json.Marshal(req)
 	require.NoError(t, err)
 	for _, marker := range decoyMarkers {
@@ -811,5 +815,238 @@ func TestSendOutcome(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, res.Outcome)
 		})
+	}
+}
+
+func TestOpenSendsPromptPartsInOrder(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "done")})
+	parts := []PromptPart{
+		{Name: "preamble", Text: kopiText},
+		{Name: "instructions /some/dir", Text: "Instructions from /some/dir/AGENTS.md:\nBe brief."},
+		{Name: "mcp-servers", Text: "MCP server s tools: mcp__s__t."},
+	}
+	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: parts, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+
+	_, err = sess.Send(t.Context(), Prompt{Text: "hello"}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, kopiText+"\n\nInstructions from /some/dir/AGENTS.md:\nBe brief.\n\nMCP server s tools: mcp__s__t.", ai.GetCurrentSystemPrompt(<-requests))
+}
+
+func TestResumeRecordsOnlyChangedPromptPart(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	parts := []PromptPart{
+		{Name: "preamble", Text: kopiText},
+		{Name: "instructions /some/dir", Text: "Be brief."},
+	}
+	faux.SetResponses([]ai.FauxResponseStep{reply("first answer")})
+	saved, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: parts, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	_, err = saved.Send(t.Context(), Prompt{Text: "first question"}, nil)
+	require.NoError(t, err)
+	require.NoError(t, saved.Close(t.Context()))
+
+	changed := []PromptPart{parts[0], {Name: "instructions /some/dir", Text: "Be thorough."}}
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "second answer")})
+	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, ResumeID: saved.ID(), SystemPrompt: changed, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+	_, err = sess.Send(t.Context(), Prompt{Text: "second question"}, nil)
+	require.NoError(t, err)
+
+	req := <-requests
+	var sections [][]string
+	for _, m := range req {
+		if sys, ok := m.(ai.SystemMessage); ok && len(sys.Sections) > 0 {
+			var texts []string
+			for _, s := range sys.Sections {
+				texts = append(texts, s.Name+"="+*s.Value)
+			}
+			sections = append(sections, texts)
+		}
+	}
+	assert.Equal(t, [][]string{
+		{"preamble=" + kopiText, "instructions /some/dir=Be brief."},
+		{"instructions /some/dir=Be thorough."},
+	}, sections, "the resume records only the changed part")
+	assert.Equal(t, kopiText+"\n\nBe thorough.", ai.GetCurrentSystemPrompt(req))
+}
+
+func TestResumePromptSectionsPreserveOrderAndHistory(t *testing.T) {
+	preamble := PromptPart{Name: "preamble", Text: kopiText}
+	global := PromptPart{Name: "instructions /home", Text: "Global instructions."}
+	project := PromptPart{Name: "instructions /project", Text: "Project instructions."}
+	mcp := PromptPart{Name: "mcp-servers", Text: "MCP server tools."}
+	for _, tc := range []struct {
+		name    string
+		saved   []PromptPart
+		desired []PromptPart
+		patches ai.OrderedSections
+		repair  ai.OrderedSections
+	}{
+		{
+			name:  "add project before MCP",
+			saved: []PromptPart{preamble, mcp}, desired: []PromptPart{preamble, project, mcp},
+			patches: ai.OrderedSections{{Name: project.Name, Value: &project.Text}},
+			repair:  ai.OrderedSections{{Name: mcp.Name}, {Name: project.Name}},
+		},
+		{
+			name:  "add global before project",
+			saved: []PromptPart{preamble, project, mcp}, desired: []PromptPart{preamble, global, project, mcp},
+			patches: ai.OrderedSections{{Name: global.Name, Value: &global.Text}},
+			repair:  ai.OrderedSections{{Name: project.Name}, {Name: mcp.Name}, {Name: global.Name}},
+		},
+		{
+			name:  "omit instruction",
+			saved: []PromptPart{preamble, project, mcp}, desired: []PromptPart{preamble, mcp},
+			patches: ai.OrderedSections{{Name: project.Name}},
+		},
+		{
+			name:  "unchanged",
+			saved: []PromptPart{preamble, project, mcp}, desired: []PromptPart{preamble, project, mcp},
+		},
+		{
+			name:  "remove all",
+			saved: []PromptPart{preamble, project}, desired: []PromptPart{},
+			patches: ai.OrderedSections{{Name: preamble.Name}, {Name: project.Name}},
+		},
+		{name: "explicit empty", saved: []PromptPart{}, desired: []PromptPart{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sb := newSandbox(t)
+			r, faux := newTestRuntime(t, sb)
+			faux.SetResponses([]ai.FauxResponseStep{reply("first answer")})
+			saved, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: tc.saved, Authority: policy.NewAuthority()})
+			require.NoError(t, err)
+			_, err = saved.Send(t.Context(), Prompt{Text: "first question"}, nil)
+			require.NoError(t, err)
+			history := saved.inner.Agent().MessagesSnapshot()
+			normal := reflect.ValueOf(saved.inner.Agent().PreparePromptHook()).Pointer()
+			require.NoError(t, saved.Close(t.Context()))
+
+			var desired ai.OrderedSections
+			var texts []string
+			for _, part := range tc.desired {
+				desired = append(desired, ai.PromptSection{Name: part.Name, Value: &part.Text})
+				texts = append(texts, part.Text)
+			}
+			// The second reopen must replay the persisted repair, not emit it again.
+			for round := range 2 {
+				requests := make(chan []ai.Message, 1)
+				faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "resumed answer")})
+				sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, ResumeID: saved.ID(), SystemPrompt: tc.desired, Authority: policy.NewAuthority()})
+				require.NoError(t, err)
+				_, err = sess.Send(t.Context(), Prompt{Text: "next question"}, nil)
+				require.NoError(t, err)
+				req := <-requests
+				assert.Equal(t, strings.Join(texts, "\n\n"), ai.GetCurrentSystemPrompt(req))
+				if current := ai.GetCurrentSystemMessage(req); current != nil {
+					assert.Equal(t, desired, current.Sections)
+				} else {
+					assert.Empty(t, desired)
+				}
+				after := sess.inner.Agent().MessagesSnapshot()
+				require.GreaterOrEqual(t, len(after), len(history))
+				assert.Equal(t, history, after[:len(history)], "historical prefix must not change")
+				var updates []ai.OrderedSections
+				for _, message := range after[len(history):] {
+					if message.System != nil && len(message.System.Sections) > 0 {
+						updates = append(updates, message.System.Sections)
+					}
+				}
+				var want []ai.OrderedSections
+				if round == 0 && len(tc.patches) > 0 {
+					want = append(want, tc.patches)
+					if len(tc.repair) > 0 {
+						want = append(want, tc.repair, desired[1:])
+					}
+				}
+				assert.Equal(t, want, updates)
+				if round == 1 || len(tc.patches) == 0 {
+					assert.Equal(t, normal, reflect.ValueOf(sess.inner.Agent().PreparePromptHook()).Pointer(), "reconciled transcripts retire the repair hook")
+				}
+				history = after
+				require.NoError(t, sess.Close(t.Context()))
+			}
+		})
+	}
+}
+
+func TestResumePromptRepairRetiresOnlyAfterCommit(t *testing.T) {
+	for _, retry := range []string{"pre-cancelled", "preparation error", "unapplied preparation"} {
+		for _, continuing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/continue=%t", retry, continuing), func(t *testing.T) {
+				sb := newSandbox(t)
+				r, faux := newTestRuntime(t, sb)
+				parts := []PromptPart{{Name: "preamble", Text: kopiText}, {Name: "mcp-servers", Text: "MCP tools."}}
+				saved, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: parts, Authority: policy.NewAuthority()})
+				require.NoError(t, err)
+				normal := reflect.ValueOf(saved.inner.Agent().PreparePromptHook()).Pointer()
+				faux.SetResponses([]ai.FauxResponseStep{reply("saved")})
+				_, err = saved.Send(t.Context(), Prompt{Text: "save"}, nil)
+				require.NoError(t, err)
+				history := saved.inner.Agent().MessagesSnapshot()
+				require.NoError(t, saved.Close(t.Context()))
+
+				desired := []PromptPart{parts[0], {Name: "instructions /project", Text: "Project instructions."}, parts[1]}
+				opts := OpenOptions{Model: fauxModel, SystemPrompt: desired, Authority: policy.NewAuthority(), Continue: continuing}
+				if !continuing {
+					opts.ResumeID = saved.ID()
+				}
+				sess, err := r.Open(t.Context(), opts)
+				require.NoError(t, err)
+				t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+				a := sess.inner.Agent()
+				wrapper := reflect.ValueOf(a.PreparePromptHook()).Pointer()
+				require.NotEqual(t, normal, wrapper, "fresh sessions use PiG's hook, resumes install the repair")
+				switch retry {
+				case "pre-cancelled":
+					ctx, cancel := context.WithCancel(t.Context())
+					cancel()
+					res, err := sess.Send(ctx, Prompt{Text: "cancelled"}, nil)
+					require.NoError(t, err)
+					assert.False(t, res.Sent)
+				case "preparation error":
+					model := a.Model()
+					a.SetModel(&ai.Model{})
+					_, err := sess.Send(t.Context(), Prompt{Text: "invalid model"}, nil)
+					require.ErrorIs(t, err, agent.ErrNoModelSelected)
+					a.SetModel(model)
+				case "unapplied preparation":
+					prepared, err := a.PreparePromptHook()(t.Context(), nil)
+					require.NoError(t, err)
+					require.NotEmpty(t, prepared)
+				}
+				assert.Equal(t, history, a.MessagesSnapshot())
+				assert.Equal(t, wrapper, reflect.ValueOf(a.PreparePromptHook()).Pointer())
+
+				requests := make(chan []ai.Message, 1)
+				faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "repaired")})
+				_, err = sess.Send(t.Context(), Prompt{Text: "retry"}, nil)
+				require.NoError(t, err)
+				assert.Equal(t, kopiText+"\n\nProject instructions.\n\nMCP tools.", ai.GetCurrentSystemPrompt(<-requests))
+				assert.Equal(t, history, a.MessagesSnapshot()[:len(history)])
+				assert.Equal(t, wrapper, reflect.ValueOf(a.PreparePromptHook()).Pointer(), "emitting a repair is not confirmation")
+
+				faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "confirmed")})
+				_, err = sess.Send(t.Context(), Prompt{Text: "confirm"}, nil)
+				require.NoError(t, err)
+				<-requests
+				assert.Equal(t, normal, reflect.ValueOf(a.PreparePromptHook()).Pointer())
+
+				updated := "Updated instructions."
+				sess.inner.SetSystemPromptSections(ai.OrderedSections{{Name: "preamble", Value: &updated}})
+				faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "updated")})
+				_, err = sess.Send(t.Context(), Prompt{Text: "update"}, nil)
+				require.NoError(t, err)
+				assert.Equal(t, updated, ai.GetCurrentSystemPrompt(<-requests), "PiG's per-run updates survive retirement")
+			})
+		}
 	}
 }

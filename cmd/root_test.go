@@ -1264,7 +1264,7 @@ func TestResolveServersWithoutProjectFile(t *testing.T) {
 	e := newTestEnv(t)
 	trustFile := filepath.Join(e.kopiHome, "trust.json")
 
-	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, noAsk(t))
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, noAsk(t))
 
 	require.NoError(t, err)
 	assert.Equal(t, globalServers, set.servers)
@@ -1274,7 +1274,7 @@ func TestResolveServersWithoutProjectFile(t *testing.T) {
 	assert.NoFileExists(t, trustFile)
 
 	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), `{"mcpServers":{}}`)
-	_, err = resolveServers(globalServers, trustFile, e.workspace, e.home, noAsk(t))
+	_, err = resolveServers(globalServers, trustFile, e.workspace, e.home, nil, noAsk(t))
 	require.NoError(t, err)
 	assert.NoFileExists(t, trustFile, "a file declaring no servers needs no decision")
 }
@@ -1287,7 +1287,7 @@ func TestResolveServersTrustedProjectReplacesGlobal(t *testing.T) {
 	require.NoError(t, err)
 	e.writeFile(t, trustFile, string(b))
 
-	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, noAsk(t))
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, noAsk(t))
 
 	require.NoError(t, err)
 	assert.Equal(t, map[string]config.MCPServer{
@@ -1308,7 +1308,7 @@ func TestResolveServersUntrustedSkipsProject(t *testing.T) {
 	require.NoError(t, err)
 	e.writeFile(t, trustFile, string(b))
 
-	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, noAsk(t))
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, noAsk(t))
 
 	require.NoError(t, err)
 	assert.Equal(t, globalServers, set.servers)
@@ -1323,7 +1323,7 @@ func TestResolveServersUndecidedWithoutAsk(t *testing.T) {
 	trustFile := filepath.Join(e.kopiHome, "trust.json")
 	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), projectMCP)
 
-	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil)
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, globalServers, set.servers)
@@ -1354,7 +1354,7 @@ func TestResolveServersAsksAndSaves(t *testing.T) {
 				return tt.choice, nil
 			}
 
-			set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, ask)
+			set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, ask)
 
 			require.NoError(t, err)
 			assert.Equal(t, []tui.TrustRequest{{
@@ -1397,7 +1397,7 @@ func TestDecideTrustOffersNoParentAtHomeOrRoot(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var asked tui.TrustRequest
-			_, err := decideTrust(nil, tt.cwd, tt.home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, askOnce(&asked))
+			_, err := decideTrust(nil, tt.cwd, tt.home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, nil, askOnce(&asked))
 			require.NoError(t, err)
 			assert.Equal(t, canonical(t, tt.cwd), asked.Folder)
 			assert.Empty(t, asked.Parent)
@@ -1419,7 +1419,7 @@ func TestDecideTrustTreatsHomeTypedInAnotherCaseAsHome(t *testing.T) {
 	store, err := trust.Open(trustFile)
 	require.NoError(t, err)
 
-	d, err := decideTrust(store, upper, home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, func(tui.TrustRequest) (tui.TrustChoice, error) { return tui.TrustFolder, nil })
+	d, err := decideTrust(store, upper, home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, nil, func(tui.TrustRequest) (tui.TrustChoice, error) { return tui.TrustFolder, nil })
 
 	require.NoError(t, err)
 	assert.Equal(t, trust.Trusted, d)
@@ -1460,7 +1460,7 @@ func TestDecideTrustAtHomeOrRootTrustsForThisRunOnly(t *testing.T) {
 			store, err := trust.Open(trustFile)
 			require.NoError(t, err)
 
-			d, err := decideTrust(store, tt.cwd, home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, func(tui.TrustRequest) (tui.TrustChoice, error) { return tt.choice, nil })
+			d, err := decideTrust(store, tt.cwd, home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, nil, func(tui.TrustRequest) (tui.TrustChoice, error) { return tt.choice, nil })
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, d)
@@ -1485,7 +1485,7 @@ func TestDecideTrustResolvesASymlinkedWorkingDirectory(t *testing.T) {
 		return tui.TrustParent, nil
 	}
 
-	d, err := decideTrust(store, link, e.home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, ask)
+	d, err := decideTrust(store, link, e.home, map[string]config.MCPServer{"a": {Command: "a"}}, nil, nil, ask)
 
 	require.NoError(t, err)
 	assert.Equal(t, trust.Trusted, d)
@@ -1501,7 +1501,7 @@ func TestDecideTrustResolvesASymlinkedWorkingDirectory(t *testing.T) {
 }
 
 func TestDecideTrustFailsOnAnUnresolvableHome(t *testing.T) {
-	_, err := decideTrust(nil, t.TempDir(), filepath.Join(t.TempDir(), "missing"), map[string]config.MCPServer{"a": {Command: "a"}}, nil, noAsk(t))
+	_, err := decideTrust(nil, t.TempDir(), filepath.Join(t.TempDir(), "missing"), map[string]config.MCPServer{"a": {Command: "a"}}, nil, nil, noAsk(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to resolve")
 }
@@ -1552,7 +1552,7 @@ func TestResolveServersInvalidDeclarations(t *testing.T) {
 				}
 			}
 
-			set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, ask)
+			set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, ask)
 
 			require.NoError(t, err)
 			require.Len(t, set.errs, 2)
@@ -1577,7 +1577,7 @@ func TestResolveServersMalformedProjectFileIsANotice(t *testing.T) {
 	trustFile := filepath.Join(e.kopiHome, "trust.json")
 	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), `{"mcpServers":`)
 
-	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, noAsk(t))
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, noAsk(t))
 
 	require.NoError(t, err)
 	assert.Equal(t, globalServers, set.servers)
@@ -1586,13 +1586,80 @@ func TestResolveServersMalformedProjectFileIsANotice(t *testing.T) {
 	assert.NoFileExists(t, trustFile)
 }
 
+func TestResolveServersAsksForInstructionFiles(t *testing.T) {
+	e := newTestEnv(t)
+	trustFile := filepath.Join(e.kopiHome, "trust.json")
+	files := []string{filepath.Join(e.workspace, "AGENTS.md")}
+	var asked []tui.TrustRequest
+	ask := func(req tui.TrustRequest) (tui.TrustChoice, error) {
+		asked = append(asked, req)
+		return tui.TrustFolder, nil
+	}
+
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, files, ask)
+
+	require.NoError(t, err)
+	assert.Equal(t, []tui.TrustRequest{{Folder: canonical(t, e.workspace), Parent: canonical(t, e.root), Instructions: files}}, asked)
+	assert.True(t, set.trusted)
+	assert.Equal(t, globalServers, set.servers)
+	assert.Equal(t, map[string]string{canonical(t, e.workspace): "trusted"}, trustFolders(t, trustFile))
+}
+
+func TestResolveServersInstructionFilesUndecidedWithoutAsk(t *testing.T) {
+	e := newTestEnv(t)
+	trustFile := filepath.Join(e.kopiHome, "trust.json")
+
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, []string{filepath.Join(e.workspace, "AGENTS.md")}, nil)
+
+	require.NoError(t, err)
+	assert.True(t, set.undecided)
+	assert.False(t, set.trusted)
+	assert.Empty(t, set.untrusted)
+	assert.NoFileExists(t, trustFile)
+}
+
+func TestResolveServersMalformedProjectFileStillAsksForInstructionFiles(t *testing.T) {
+	e := newTestEnv(t)
+	trustFile := filepath.Join(e.kopiHome, "trust.json")
+	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), `{"mcpServers":`)
+	files := []string{filepath.Join(e.workspace, "AGENTS.md")}
+	var asked tui.TrustRequest
+	ask := func(req tui.TrustRequest) (tui.TrustChoice, error) {
+		asked = req
+		return tui.TrustFolder, nil
+	}
+
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, files, ask)
+
+	require.NoError(t, err)
+	assert.Equal(t, files, asked.Instructions)
+	assert.Empty(t, asked.Servers)
+	assert.True(t, set.trusted)
+	assert.Equal(t, globalServers, set.servers)
+	assert.Empty(t, set.project)
+	require.Len(t, set.errs, 1)
+	assert.ErrorContains(t, set.errs[0], "skipped this folder's MCP servers: failed to parse MCP config")
+}
+
+func TestResolveServersWithoutServersOrInstructionsLeavesTheTrustFileAlone(t *testing.T) {
+	e := newTestEnv(t)
+	trustFile := filepath.Join(e.kopiHome, "trust.json")
+	e.writeFile(t, trustFile, `{"version":1,"folders":{"/x":"maybe"}}`)
+
+	set, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, noAsk(t))
+
+	require.NoError(t, err, "an invalid trust file is not opened")
+	assert.False(t, set.trusted)
+	assert.False(t, set.undecided)
+}
+
 func TestResolveServersInvalidTrustFileIsFatal(t *testing.T) {
 	e := newTestEnv(t)
 	trustFile := filepath.Join(e.kopiHome, "trust.json")
 	e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), projectMCP)
 	e.writeFile(t, trustFile, `{"version":1,"folders":{"/x":"maybe"}}`)
 
-	_, err := resolveServers(globalServers, trustFile, e.workspace, e.home, noAsk(t))
+	_, err := resolveServers(globalServers, trustFile, e.workspace, e.home, nil, noAsk(t))
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), trustFile)
@@ -1624,4 +1691,176 @@ func TestRootPrintLogsServerFailures(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, stderr, "MCP server broken failed to start: ")
 	assert.Contains(t, stderr, "kopi-no-such-command-7f3a")
+}
+
+// systemText is the system message of a provider request.
+func systemText(t *testing.T, req mockRequest) string {
+	t.Helper()
+	first := req.body["messages"].([]any)[0].(map[string]any)
+	require.Contains(t, []string{"system", "developer"}, first["role"])
+	return first["content"].(string)
+}
+
+func (e testEnv) writeTrust(t *testing.T, dir, decision string) {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{"version": 1, "folders": map[string]string{canonical(t, dir): decision}})
+	require.NoError(t, err)
+	e.writeFile(t, filepath.Join(e.kopiHome, "trust.json"), string(b))
+}
+
+func TestRootPrintLoadsTheGlobalInstructionFile(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+	e.writeFile(t, filepath.Join(e.kopiHome, "AGENTS.md"), "global rule 51c2")
+
+	_, stderr, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	assert.Contains(t, systemText(t, server.next(t)), "global rule 51c2")
+	assert.NotContains(t, stderr, "not trusted")
+	assert.NoFileExists(t, filepath.Join(e.kopiHome, "trust.json"))
+}
+
+func TestRootPrintSkipsInstructionFilesInAnUndecidedFolder(t *testing.T) {
+	for _, tt := range []struct {
+		name, servers, warning string
+	}{
+		{"instruction files", "", "this folder is not trusted, so its instruction files are skipped; run kopi here in a terminal to be asked whether to trust it"},
+		{"servers and instruction files", `{"mcpServers":{"proj":{"command":"kopi-no-such-command-7f3a"}}}`, "this folder is not trusted, so the MCP servers in its .mcp.json and its instruction files are skipped; run kopi here in a terminal to be asked whether to trust it"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+			e.writeMockModels(t, server.URL)
+			e.writeFile(t, filepath.Join(e.kopiHome, "AGENTS.md"), "global rule 51c2")
+			e.writeFile(t, filepath.Join(e.workspace, "AGENTS.md"), "project rule 8e07")
+			if tt.servers != "" {
+				e.writeFile(t, filepath.Join(e.workspace, ".mcp.json"), tt.servers)
+			}
+
+			_, stderr, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+			require.NoError(t, err)
+			prompt := systemText(t, server.next(t))
+			assert.Contains(t, prompt, "global rule 51c2")
+			assert.NotContains(t, prompt, "project rule 8e07")
+			assert.Equal(t, 1, strings.Count(stderr, tt.warning), stderr)
+			assert.Equal(t, 1, strings.Count(stderr, "not trusted"), stderr)
+			assert.NoFileExists(t, filepath.Join(e.kopiHome, "trust.json"))
+		})
+	}
+}
+
+func TestRootPrintLoadsInstructionFilesOfATrustedFolder(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+	e.writeFile(t, filepath.Join(e.kopiHome, "AGENTS.md"), "global rule 51c2")
+	e.writeFile(t, filepath.Join(e.workspace, "AGENTS.md"), "project rule 8e07")
+	e.writeTrust(t, e.workspace, "trusted")
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	prompt := systemText(t, server.next(t))
+	global, project := strings.Index(prompt, "global rule 51c2"), strings.Index(prompt, "project rule 8e07")
+	require.GreaterOrEqual(t, global, 0)
+	assert.Greater(t, project, global)
+}
+
+func TestRootPrintSkipsInstructionFilesOfAnUntrustedFolderSilently(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+	e.writeFile(t, filepath.Join(e.workspace, "AGENTS.md"), "project rule 8e07")
+	e.writeTrust(t, e.workspace, "untrusted")
+
+	_, stderr, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	assert.NotContains(t, systemText(t, server.next(t)), "project rule 8e07")
+	assert.NotContains(t, stderr, "not trusted")
+}
+
+func TestRootPrintInstructionFallback(t *testing.T) {
+	for _, tt := range []struct {
+		name, config string
+		agents       bool
+		want, absent []string
+	}{
+		{name: "AGENTS.md wins", agents: true, want: []string{"agents rule 2b4d"}, absent: []string{"claude rule 6f1a"}},
+		{name: "fallback without AGENTS.md", want: []string{"claude rule 6f1a"}},
+		{name: "fallback off", config: `{"instructionFallbacks":[]}`, absent: []string{"claude rule 6f1a"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+			e.writeMockModels(t, server.URL)
+			if tt.config != "" {
+				e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), tt.config)
+			}
+			if tt.agents {
+				e.writeFile(t, filepath.Join(e.workspace, "AGENTS.md"), "agents rule 2b4d")
+			}
+			e.writeFile(t, filepath.Join(e.workspace, "CLAUDE.md"), "claude rule 6f1a")
+			e.writeTrust(t, e.workspace, "trusted")
+
+			_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+			require.NoError(t, err)
+			prompt := systemText(t, server.next(t))
+			for _, s := range tt.want {
+				assert.Contains(t, prompt, s)
+			}
+			for _, s := range tt.absent {
+				assert.NotContains(t, prompt, s)
+			}
+		})
+	}
+}
+
+func TestRootPrintLoadsInstructionFilesFromTheGitRootDown(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+	e.writeFile(t, filepath.Join(e.workspace, ".git"), "gitdir: /elsewhere/.git/worktrees/ws\n")
+	e.writeFile(t, filepath.Join(e.workspace, "AGENTS.md"), "root rule 4c19")
+	sub := filepath.Join(e.workspace, "sub")
+	e.writeFile(t, filepath.Join(sub, "AGENTS.md"), "sub rule 93ad")
+	e.writeTrust(t, e.workspace, "trusted")
+	t.Chdir(sub)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	prompt := systemText(t, server.next(t))
+	root, below := strings.Index(prompt, "root rule 4c19"), strings.Index(prompt, "sub rule 93ad")
+	require.GreaterOrEqual(t, root, 0)
+	assert.Greater(t, below, root)
+}
+
+func TestRootPrintWalksInstructionFilesOnTheTrustedPath(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+	good, evil := filepath.Join(e.root, "code", "good"), filepath.Join(e.root, "code", "evil")
+	require.NoError(t, os.MkdirAll(filepath.Join(good, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(evil, ".git"), 0o755))
+	require.NoError(t, os.Mkdir(filepath.Join(good, "pkg"), 0o755))
+	e.writeFile(t, filepath.Join(good, "AGENTS.md"), "good rule 1d7e")
+	e.writeFile(t, filepath.Join(evil, "AGENTS.md"), "evil rule 0b3f")
+	require.NoError(t, os.Symlink(filepath.Join("..", "good", "pkg"), filepath.Join(evil, "sub")))
+	e.writeTrust(t, good, "trusted")
+	t.Chdir(filepath.Join(evil, "sub"))
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(evil, "sub"), wd, "the process sees the symlinked path")
+
+	_, _, err = execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	prompt := systemText(t, server.next(t))
+	assert.Contains(t, prompt, "good rule 1d7e")
+	assert.NotContains(t, prompt, "evil rule 0b3f")
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/headless"
 	"github.com/keyute/kopi/internal/history"
+	"github.com/keyute/kopi/internal/instruction"
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/sandbox"
@@ -279,13 +280,27 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			return tui.AskTrust(askCtx, cmd.InOrStdin(), cmd.OutOrStdout(), tui.Options{Keys: resolved.Config.Keys}, req)
 		}
 	}
-	set, err := resolveServers(resolved.Config.MCPServers, paths.TrustFile, cwd, userHome, ask)
+	// The instruction walk runs on the path trust is decided on.
+	instructionDir, err := trust.Canonical(cwd)
+	if err != nil {
+		return err
+	}
+	projectInstructions := instruction.Find(instructionDir, resolved.Config.InstructionFallbacks)
+	set, err := resolveServers(resolved.Config.MCPServers, paths.TrustFile, cwd, userHome, projectInstructions, ask)
 	if err != nil {
 		return err
 	}
 	if set.undecided {
-		slog.Warn("this folder is not trusted, so the MCP servers in its " + policy.ProjectMCPFile + " are skipped; run kopi here in a terminal to be asked whether to trust it")
+		skipped := "the MCP servers in its " + policy.ProjectMCPFile + " and its instruction files are"
+		switch {
+		case len(set.untrusted) == 0:
+			skipped = "its instruction files are"
+		case len(projectInstructions) == 0:
+			skipped = "the MCP servers in its " + policy.ProjectMCPFile + " are"
+		}
+		slog.Warn("this folder is not trusted, so " + skipped + " skipped; run kopi here in a terminal to be asked whether to trust it")
 	}
+	instructions, instructionErrs := instruction.Load(paths.InstructionFile, []instruction.Root{{Dir: instructionDir, Trusted: set.trusted}}, resolved.Config.InstructionFallbacks)
 	// From here until the frontend runs, SIGINT does not kill Kopi: stdio
 	// servers run in their own process group, so the terminal's SIGINT does not
 	// reach them, and the deferred Close must run. In print mode it ends startup
@@ -369,7 +384,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// Only the fullscreen interface has a human to answer approvals.
 	cfg := app.Config{
 		Model: model, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
-		Errors: set.errs,
+		Errors: slices.Concat(set.errs, instructionErrs), Instructions: instructions,
 	}
 	if len(set.servers) > 0 {
 		cfg.Servers = func(ctx context.Context) ([]pigruntime.ServerStatus, error) { return waitServers(ctx, servers) }
@@ -446,7 +461,8 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	return errors.Join(runErr, closeErr)
 }
 
-// mcpServers is the MCP server set of a run in one folder.
+// mcpServers is the MCP server set of a run in one folder, and whether the
+// folder is trusted.
 type mcpServers struct {
 	// servers are the servers to start: the global ones and, in a trusted
 	// folder, the project ones, which replace global ones of the same name.
@@ -457,19 +473,23 @@ type mcpServers struct {
 	untrusted map[string]config.MCPServer
 	// undecided means no trust decision applies and none was asked for.
 	undecided bool
-	invalid   map[string]error
-	errs      []error
+	// trusted means the folder is trusted, so its servers and instruction
+	// files are used.
+	trusted bool
+	invalid map[string]error
+	errs    []error
 }
 
 // askTrust asks the human whether to trust a folder; nil means no human can
 // be asked.
 type askTrust func(tui.TrustRequest) (tui.TrustChoice, error)
 
-// resolveServers merges the project's servers over global ones when the
-// folder is trusted. The trust file is opened only when the project declares
-// a server; an undecided folder is asked about through ask and the answer
-// saved, and without ask it is untrusted for this run.
-func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome string, ask askTrust) (mcpServers, error) {
+// resolveServers decides whether the folder is trusted and merges the
+// project's servers over global ones when it is. The trust file is opened
+// only when the project declares a server or has instruction files, which
+// instructions lists; an undecided folder is asked about through ask and the
+// answer saved, and without ask it is untrusted for this run.
+func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome string, instructions []string, ask askTrust) (mcpServers, error) {
 	s := mcpServers{servers: maps.Clone(global), project: map[string]bool{}}
 	if s.servers == nil {
 		s.servers = map[string]config.MCPServer{}
@@ -477,13 +497,13 @@ func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome
 	project, invalid, err := config.ProjectServers(filepath.Join(cwd, policy.ProjectMCPFile))
 	if err != nil {
 		s.errs = append(s.errs, fmt.Errorf("skipped this folder's MCP servers: %w", err))
-		return s, nil
+		project, invalid = nil, nil
 	}
 	for _, name := range slices.Sorted(maps.Keys(invalid)) {
 		s.errs = append(s.errs, fmt.Errorf("MCP server %s: %w", name, invalid[name]))
 		project[name] = config.MCPServer{}
 	}
-	if len(project) == 0 {
+	if len(project) == 0 && len(instructions) == 0 {
 		return s, nil
 	}
 	store, err := trust.Open(trustFile)
@@ -499,7 +519,7 @@ func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome
 	case ask == nil:
 		s.undecided = true
 	default:
-		if d, err = decideTrust(store, cwd, userHome, project, invalid, ask); err != nil {
+		if d, err = decideTrust(store, cwd, userHome, project, invalid, instructions, ask); err != nil {
 			return mcpServers{}, err
 		}
 	}
@@ -507,6 +527,7 @@ func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome
 		s.untrusted = project
 		return s, nil
 	}
+	s.trusted = true
 	s.invalid = invalid
 	for name, p := range project {
 		s.project[name] = true
@@ -535,7 +556,7 @@ func waitServers(ctx context.Context, servers *pigruntime.Servers) ([]pigruntime
 // symlinks and the case a name was typed in. An answer saved for the user's
 // home or the root would cover almost every folder below it, so there either
 // answer holds for this run only.
-func decideTrust(store *trust.Store, cwd, userHome string, project map[string]config.MCPServer, invalid map[string]error, ask askTrust) (trust.Decision, error) {
+func decideTrust(store *trust.Store, cwd, userHome string, project map[string]config.MCPServer, invalid map[string]error, instructions []string, ask askTrust) (trust.Decision, error) {
 	cwd, err := trust.Canonical(cwd)
 	if err != nil {
 		return 0, err
@@ -545,7 +566,7 @@ func decideTrust(store *trust.Store, cwd, userHome string, project map[string]co
 		return 0, err
 	}
 	broad := cwd == userHome || filepath.Dir(cwd) == cwd
-	req := tui.TrustRequest{Folder: cwd}
+	req := tui.TrustRequest{Folder: cwd, Instructions: instructions}
 	if parent := filepath.Dir(cwd); !broad && parent != filepath.Dir(parent) && parent != userHome {
 		req.Parent = parent
 	}

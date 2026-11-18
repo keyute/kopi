@@ -6,6 +6,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/keyute/kopi/internal/instruction"
+	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
 )
@@ -23,8 +25,10 @@ type mcpServer struct {
 
 // systemPrompt lists only tools that are not deferred as available; the
 // read-only and execute-mode sentence still counts the deferred ones, which
-// the model can load and call.
-func systemPrompt(workspace string, tools []tool.Tool, servers []mcpServer) string {
+// the model can load and call. The parts run from what changes least to
+// most: Kopi's own text, the instruction groups, then what the MCP servers
+// report.
+func systemPrompt(workspace string, tools []tool.Tool, groups []instruction.Group, servers []mcpServer) []pigruntime.PromptPart {
 	names := make([]string, 0, len(tools))
 	for _, t := range tools {
 		if !t.Deferred {
@@ -52,16 +56,32 @@ func systemPrompt(workspace string, tools []tool.Tool, servers []mcpServer) stri
 		lines = append(lines, "Tools of MCP servers are deferred: they are listed below by name and cannot be called until ToolSearch loads them. "+
 			"Call ToolSearch with keywords for what you need, or with exact tool names; the tools it loads can be called in your next response, not in the one that calls ToolSearch.")
 	}
+	parts := []pigruntime.PromptPart{{Name: "preamble", Text: strings.Join(lines, "\n")}}
+	for _, g := range groups {
+		texts := make([]string, 0, len(g.Files))
+		for _, f := range g.Files {
+			texts = append(texts, "Instructions from "+f.Path+":\n"+f.Text)
+		}
+		scope := "project"
+		if g.Global {
+			scope = "global"
+		}
+		parts = append(parts, pigruntime.PromptPart{Name: "instructions " + scope + " " + g.Dir, Text: strings.Join(texts, "\n\n")})
+	}
+	var serverLines []string
 	servers = slices.SortedFunc(slices.Values(servers), func(a, b mcpServer) int { return strings.Compare(a.name, b.name) })
 	for _, s := range servers {
 		if len(s.tools) > 0 {
-			lines = append(lines, "MCP server "+s.name+" tools: "+strings.Join(s.tools, ", ")+".")
+			serverLines = append(serverLines, "MCP server "+s.name+" tools: "+strings.Join(s.tools, ", ")+".")
 		}
 		if text := strings.TrimSpace(s.instructions); text != "" {
-			lines = append(lines, "Instructions from MCP server "+s.name+":", truncate(text, maxServerInstructions))
+			serverLines = append(serverLines, "Instructions from MCP server "+s.name+":", truncate(text, maxServerInstructions))
 		}
 	}
-	return strings.Join(lines, "\n")
+	if len(serverLines) > 0 {
+		parts = append(parts, pigruntime.PromptPart{Name: "mcp-servers", Text: strings.Join(serverLines, "\n")})
+	}
+	return parts
 }
 
 // truncate cuts s to at most n bytes without splitting a character.
