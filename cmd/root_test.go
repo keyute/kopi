@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -880,6 +881,27 @@ func TestRootSandboxEnabledButUnavailableFails(t *testing.T) {
 	assert.Equal(t, before, pigruntimetest.Snapshot(t, e.root))
 }
 
+func TestRootSandboxEnabledButUnusableBwrapFails(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bubblewrap is the Linux sandbox")
+	}
+	e := newTestEnv(t)
+	bin := t.TempDir()
+	path := filepath.Join(bin, "bwrap")
+	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexit 1\n"), 0o700))
+	t.Setenv("PATH", bin)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"sandbox":{"enabled":true}}`)
+	before := pigruntimetest.Snapshot(t, e.root)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.ErrorIs(t, err, sandbox.ErrUnavailable)
+	assert.Contains(t, err.Error(), "failed to start the sandbox")
+	assert.NotContains(t, err.Error(), "failed to find bwrap")
+	assert.Equal(t, before, pigruntimetest.Snapshot(t, e.root))
+	assert.NoDirExists(t, e.agentDir)
+}
+
 func TestRootSandboxUnavailableWarns(t *testing.T) {
 	if !sandboxUnavailableInRun(t) {
 		t.Skip("the sandbox is available here")
@@ -1025,6 +1047,67 @@ func TestRootSandboxedBashProtectsGitMetadata(t *testing.T) {
 	}
 }
 
+func TestSandboxPolicyProtectsHEADWithConcurrentLinuxPlaceholder(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bubblewrap is the Linux sandbox")
+	}
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	for _, exists := range []bool{false, true} {
+		t.Run(fmt.Sprintf("HEAD exists=%t", exists), func(t *testing.T) {
+			e := newSandboxedEnv(t)
+			head := filepath.Join(e.workspace, "HEAD")
+			const original = "ref: refs/heads/main\n"
+			if exists {
+				e.writeFile(t, head, original)
+			}
+			first, _, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
+			require.NoError(t, err)
+			require.NotNil(t, first)
+			cmd, done, err := first.Command([]string{"/bin/bash", "-c", `echo ready; read -r _ || true`})
+			require.NoError(t, err)
+			defer done()
+			stdin, err := cmd.StdinPipe()
+			require.NoError(t, err)
+			defer stdin.Close()
+			stdout, err := cmd.StdoutPipe()
+			require.NoError(t, err)
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			require.NoError(t, cmd.Start())
+			defer func() {
+				_ = stdin.Close()
+				require.NoError(t, cmd.Wait(), stderr.String())
+			}()
+			line, err := bufio.NewReader(stdout).ReadString('\n')
+			require.NoError(t, err)
+			require.Equal(t, "ready\n", line)
+			assert.DirExists(t, filepath.Join(e.workspace, ".git"))
+
+			p := sandboxPolicy(config.Sandbox{}, e.workspace, e.home, e.kopiHome)
+			assert.Contains(t, p.DenyWrite, head)
+			second, _, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
+			require.NoError(t, err)
+			require.NotNil(t, second)
+			attempt, cleanup, err := second.Command([]string{"/bin/bash", "-c", `/bin/mkdir -p objects refs && printf '[core]\n' > config && printf changed > HEAD`})
+			require.NoError(t, err)
+			attempt.Dir = e.workspace
+			out, err := attempt.CombinedOutput()
+			cleanup()
+			require.Error(t, err, string(out))
+			assert.Contains(t, string(out), readOnly)
+			content, err := os.ReadFile(head)
+			require.NoError(t, err)
+			if exists {
+				assert.Equal(t, original, string(content))
+			} else {
+				assert.Empty(t, content, "only the first command's empty placeholder remains")
+			}
+		})
+	}
+}
+
 func TestRootSandboxedBashProtectsMCPFile(t *testing.T) {
 	if !sandboxAvailable(t) {
 		t.Skip("the sandbox is unavailable here")
@@ -1060,8 +1143,12 @@ func TestRootSandboxedBashProtectsMCPFile(t *testing.T) {
 
 			result, _ := printBash(t, e, tc.command, "--mode", "execute")
 
-			assert.Contains(t, result, tool.ErrExitStatus.Error())
-			assert.Contains(t, result, refused(tc.linux))
+			if runtime.GOOS == "linux" && tc.link != "" {
+				assert.Contains(t, result, sandbox.ErrDeniedSymlink.Error())
+			} else {
+				assert.Contains(t, result, tool.ErrExitStatus.Error())
+				assert.Contains(t, result, refused(tc.linux))
+			}
 			if tc.exists {
 				content, err := os.ReadFile(path)
 				require.NoError(t, err)
@@ -1188,12 +1275,12 @@ func TestSandboxPolicy(t *testing.T) {
 		}
 		return out
 	}
-	// Linux denies the whole .git, after the names and any HEAD.
+	// Linux always denies HEAD and the whole .git, after the names.
 	linuxGit := func(cwd string) []string {
 		if runtime.GOOS != "linux" {
 			return nil
 		}
-		return []string{filepath.Join(cwd, ".git")}
+		return []string{filepath.Join(cwd, "HEAD"), filepath.Join(cwd, ".git")}
 	}
 
 	t.Run("git directory", func(t *testing.T) {
@@ -1220,7 +1307,11 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, slices.Concat(gitFiles(cwd), []string{filepath.Join(cwd, ".git"), filepath.Join(cwd, ".mcp.json")}), p.DenyWrite)
+		git := linuxGit(cwd)
+		if runtime.GOOS != "linux" {
+			git = []string{filepath.Join(cwd, ".git")}
+		}
+		assert.Equal(t, slices.Concat(gitFiles(cwd), git, []string{filepath.Join(cwd, ".mcp.json")}), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 	})
 
@@ -1229,7 +1320,11 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, slices.Concat(gitFiles(cwd), []string{filepath.Join(cwd, "HEAD")}, linuxGit(cwd), []string{filepath.Join(cwd, ".mcp.json")}), p.DenyWrite)
+		git := linuxGit(cwd)
+		if runtime.GOOS != "linux" {
+			git = []string{filepath.Join(cwd, "HEAD")}
+		}
+		assert.Equal(t, slices.Concat(gitFiles(cwd), git, []string{filepath.Join(cwd, ".mcp.json")}), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 	})
 

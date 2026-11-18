@@ -637,9 +637,10 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 	}
 	_, err := os.Lstat(gitDir)
 	missing := errors.Is(err, os.ErrNotExist)
-	if missing {
-		// With no .git, git takes a directory holding HEAD, objects and refs
-		// for a git directory and runs its config.
+	if missing || runtime.GOOS == "linux" {
+		// Git takes a directory holding HEAD, objects and refs for a git
+		// directory and runs its config. On Linux another command's .git
+		// placeholder can hide that .git was missing.
 		denyWrite = append(denyWrite, filepath.Join(cwd, "HEAD"))
 	}
 	if runtime.GOOS == "linux" {

@@ -26,6 +26,24 @@ func TestLinuxSandboxSmoke(t *testing.T) {
 	require.NoError(t, bash(t, sbs[0], `echo ready >/dev/null; test -r /proc/self/status`))
 }
 
+func TestNewUnusableBwrap(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bubblewrap is the Linux sandbox")
+	}
+	bin := t.TempDir()
+	path := filepath.Join(bin, "bwrap")
+	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexit 1\n"), 0o700))
+	t.Setenv("PATH", bin)
+	dir := filepath.Join(t.TempDir(), "sandbox")
+
+	sbs, err := New(t.Context(), dir, Policy{})
+
+	require.ErrorIs(t, err, ErrUnavailable)
+	assert.NotContains(t, err.Error(), "failed to find bwrap")
+	assert.Nil(t, sbs)
+	assert.NoDirExists(t, dir)
+}
+
 func TestNewRejectsRelativePath(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("only darwin and linux build a sandbox from the paths")
