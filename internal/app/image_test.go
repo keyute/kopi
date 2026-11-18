@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/keyute/kopi/internal/tool"
 )
 
 func pngBytes(t *testing.T) []byte {
@@ -35,7 +37,7 @@ func badImages(t *testing.T) map[string]string {
 	// A PNG header, then sparse bytes up to one past the limit.
 	large := filepath.Join(dir, "large.png")
 	require.NoError(t, os.WriteFile(large, pngBytes(t), 0o600))
-	require.NoError(t, os.Truncate(large, maxImageBytes+1))
+	require.NoError(t, os.Truncate(large, tool.MaxImageBytes+1))
 	sub := filepath.Join(dir, "dir.png")
 	require.NoError(t, os.Mkdir(sub, 0o700))
 	return map[string]string{

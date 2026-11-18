@@ -358,7 +358,7 @@ func TestSendHandOverOmitsUnprocessableImage(t *testing.T) {
 	require.NoError(t, err)
 
 	msgs := <-requests
-	assert.Equal(t, []string{"prompt", "x [image #1] [image #2]\n\n" + omittedImageNote}, userTexts(msgs))
+	assert.Equal(t, []string{"prompt", "x [image #1] [image #2]\n\n" + tool.OmittedImageNote}, userTexts(msgs))
 	images := userImages(msgs)
 	require.Len(t, images, 1)
 	assert.Equal(t, "image/png", images[0].MimeType)

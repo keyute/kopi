@@ -50,25 +50,25 @@ func NewToolSearch(deferred []Tool, rank func(query string, tools []Tool, limit 
 			"additionalProperties": false,
 		},
 		Capability: policy.Read,
-		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (Result, error) {
 			args, err := decodeToolSearchArgs(raw)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
 			if _, err := admit(policy.Target{}); err != nil {
-				return "", err
+				return Result{}, err
 			}
 			names := exactToolNames(args.Query, deferred)
 			if names == nil {
 				names = rank(args.Query, deferred, *args.Limit)
 			}
 			if len(names) == 0 {
-				return fmt.Sprintf("%s%q. Try other keywords, or exact names from the system prompt.", toolSearchNoMatch, args.Query), nil
+				return Result{Text: fmt.Sprintf("%s%q. Try other keywords, or exact names from the system prompt.", toolSearchNoMatch, args.Query)}, nil
 			}
 			if err := load(ctx, names); err != nil {
-				return "", fmt.Errorf("failed to load tools: %w", err)
+				return Result{}, fmt.Errorf("failed to load tools: %w", err)
 			}
-			return loadedText(names, deferred), nil
+			return Result{Text: loadedText(names, deferred)}, nil
 		},
 		Display: Display{
 			Title: func(raw json.RawMessage) string {

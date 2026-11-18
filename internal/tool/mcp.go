@@ -79,9 +79,9 @@ func NewMCP(t MCPTool, call func(ctx context.Context, args json.RawMessage) (str
 		Capability:  capability,
 		Ask:         true,
 		Deferred:    true,
-		Run: func(ctx context.Context, args json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+		Run: func(ctx context.Context, args json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (Result, error) {
 			if _, err := admit(policy.Target{}); err != nil {
-				return "", err
+				return Result{}, err
 			}
 			text, err := call(ctx, args)
 			out := &outputBuffer{}
@@ -91,10 +91,10 @@ func NewMCP(t MCPTool, call func(ctx context.Context, args json.RawMessage) (str
 					_, _ = out.Write([]byte(": "))
 					_, _ = out.Write([]byte(text))
 				}
-				return "", &mcpError{text: out.String(), err: err}
+				return Result{}, &mcpError{text: out.String(), err: err}
 			}
 			_, _ = out.Write([]byte(text))
-			return out.String(), nil
+			return Result{Text: out.String()}, nil
 		},
 		Display: Display{
 			Title: func(raw json.RawMessage) string {

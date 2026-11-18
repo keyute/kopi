@@ -110,7 +110,7 @@ func TestWebFetchAnswersFromThePage(t *testing.T) {
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"url":"http://example.com/notes","prompt":"Which version?"}`), admitRead)
 
 	require.NoError(t, err)
-	assert.Equal(t, "It was 1.27.\n\nSource: http://example.com/notes", out)
+	assert.Equal(t, "It was 1.27.\n\nSource: http://example.com/notes", out.Text)
 	require.Len(t, *calls, 1)
 	call := (*calls)[0]
 	assert.Equal(t, webFetchSystemPrompt, call.system)
@@ -149,9 +149,9 @@ func TestWebFetchReturnsCrossHostRedirect(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, `http://example.com/a redirects (HTTP 301) to https://other.example.org/x, which was not followed. `+
-		`To read it, call WebFetch again with url "https://other.example.org/x".`, out)
+		`To read it, call WebFetch again with url "https://other.example.org/x".`, out.Text)
 	assert.Empty(t, *calls)
-	assert.Equal(t, "redirected", tool.Display.Summary(out))
+	assert.Equal(t, "redirected", tool.Display.Summary(out.Text))
 }
 
 func TestWebFetchRedirectNamesThePageThatRedirected(t *testing.T) {
@@ -170,7 +170,7 @@ func TestWebFetchRedirectNamesThePageThatRedirected(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, `http://example.com/b redirects (HTTP 301) to https://other.example.org/x, which was not followed. `+
-		`To read it, call WebFetch again with url "https://other.example.org/x".`, out)
+		`To read it, call WebFetch again with url "https://other.example.org/x".`, out.Text)
 }
 
 func TestWebFetchWrapsAnswerError(t *testing.T) {
