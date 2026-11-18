@@ -334,7 +334,20 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			ws.Close()
 		}
 	}()
-	tools := []tool.Tool{tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb), tool.NewShell(cwd, planSB))}
+	// rt opens only once the rules are checked, so a bad rule creates nothing;
+	// WebFetch's calls come after that.
+	var rt *pigruntime.Runtime
+	smallModel := resolved.Config.SmallModel
+	if smallModel == "" {
+		smallModel = model
+	}
+	answer := func(ctx context.Context, system, prompt string) (string, error) {
+		return rt.Answer(ctx, smallModel, system, prompt)
+	}
+	tools := []tool.Tool{
+		tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb), tool.NewShell(cwd, planSB)),
+		tool.NewWebFetch("Kopi/"+kopiVersion(), answer),
+	}
 	rules, err := permissionRules(cwd, userHome, tools, resolved.Config.Permissions, resolved.Origins, flagRules)
 	if err != nil {
 		return err
@@ -354,7 +367,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	if unavailable != nil {
 		slog.Warn("sandbox is unavailable; Bash runs without it and needs approval or an allow rule, and plan mode refuses it", "err", unavailable)
 	}
-	rt, err := openRuntime(ctx, paths, cwd)
+	rt, err = openRuntime(ctx, paths, cwd)
 	if err != nil {
 		return err
 	}
@@ -363,6 +376,19 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			rt.Close()
 		}
 	}()
+	if resolved.Config.SmallModel != "" {
+		if err := rt.Check(startCtx, pigruntime.OpenOptions{Model: smallModel}); err != nil {
+			if errors.Is(err, pigruntime.ErrNoCredential) {
+				providers, listErr := rt.Providers(ctx)
+				if listErr != nil {
+					err = errors.Join(err, listErr)
+				} else {
+					err = diagnose(err, smallModel, resolved.Origins["smallModel"], paths, app.OpenRequest{}, providers)
+				}
+			}
+			return fmt.Errorf("failed to use \"smallModel\" in %s: %w", paths.ConfigFile, err)
+		}
+	}
 	// Only the fullscreen interface has a human to answer approvals.
 	cfg := app.Config{
 		Model: model, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
