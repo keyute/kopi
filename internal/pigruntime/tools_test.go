@@ -24,11 +24,12 @@ func readTool(name string, run func(ctx context.Context) (string, error)) tool.T
 		Description: "Test-only read tool.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 		Capability:  policy.Read,
-		Run: func(ctx context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+		Run: func(ctx context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (tool.Result, error) {
 			if _, err := admit(policy.Target{}); err != nil {
-				return "", err
+				return tool.Result{}, err
 			}
-			return run(ctx)
+			out, err := run(ctx)
+			return tool.Result{Text: out}, err
 		},
 	}
 }

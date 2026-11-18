@@ -148,11 +148,12 @@ func probeTool(run func(ctx context.Context, args json.RawMessage) (string, erro
 		Description: "Returns a fixed probe string.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 		Capability:  policy.Read,
-		Run: func(ctx context.Context, args json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+		Run: func(ctx context.Context, args json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (tool.Result, error) {
 			if _, err := admit(policy.Target{}); err != nil {
-				return "", err
+				return tool.Result{}, err
 			}
-			return run(ctx, args)
+			out, err := run(ctx, args)
+			return tool.Result{Text: out}, err
 		},
 	}
 }

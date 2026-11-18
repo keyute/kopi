@@ -1,8 +1,12 @@
 package pigruntime
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -35,12 +39,12 @@ func execTool(ran *atomic.Int32) tool.Tool {
 		Description: "Test-only tool that needs execute mode.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 		Capability:  policy.Exec,
-		Run: func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+		Run: func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (tool.Result, error) {
 			if _, err := admit(policy.Target{}); err != nil {
-				return "", err
+				return tool.Result{}, err
 			}
 			ran.Add(1)
-			return execOutput, nil
+			return tool.Result{Text: execOutput}, nil
 		},
 	}
 }
@@ -76,6 +80,69 @@ func TestHookBlocksToolUnknownToGate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, lastToolResult(t, <-requests), policy.ErrUnknownTool.Error())
 	assert.False(t, ran.Load())
+}
+
+func TestToolResultCarriesImages(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 2, 2))))
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "seen")})
+
+	probe := probeTool(nil)
+	probe.Run = func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (tool.Result, error) {
+		if _, err := admit(policy.Target{}); err != nil {
+			return tool.Result{}, err
+		}
+		return tool.Result{Text: "img", Images: []tool.Image{{MimeType: "image/png", Data: buf.Bytes()}}}, nil
+	}
+	sess := openTestSession(t, r, probe)
+
+	_, err := sess.Send(t.Context(), Prompt{Text: "look"}, nil)
+	require.NoError(t, err)
+	content := toolResultContent(<-requests)
+	require.Len(t, content, 2)
+	assert.Equal(t, ai.TextContent{Text: "img"}, content[0])
+	img, ok := content[1].(ai.ImageContent)
+	require.True(t, ok, "%T", content[1])
+	assert.Equal(t, "image/png", img.MimeType)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(buf.Bytes()), img.Data)
+}
+
+func TestToolResultOmitsUnprocessableImage(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "seen")})
+
+	probe := probeTool(nil)
+	probe.Run = func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (tool.Result, error) {
+		if _, err := admit(policy.Target{}); err != nil {
+			return tool.Result{}, err
+		}
+		data := []byte("\x89PNG\r\n\x1a\ngarbage-bytes")
+		return tool.Result{Text: "(image/png, 20 bytes)", Images: []tool.Image{{MimeType: "image/png", Data: data}}}, nil
+	}
+	sess := openTestSession(t, r, probe)
+
+	_, err := sess.Send(t.Context(), Prompt{Text: "look"}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []ai.ToolResultMessageContent{ai.TextContent{Text: "(image/png, 20 bytes)\n" + omittedImageNote}}, toolResultContent(<-requests))
+}
+
+// toolResultContent returns the content of the last tool result in msgs.
+func toolResultContent(msgs []ai.Message) []ai.ToolResultMessageContent {
+	var content []ai.ToolResultMessageContent
+	for _, m := range msgs {
+		switch m := m.(type) {
+		case ai.ToolResultMessage:
+			content = m.Content
+		case *ai.ToolResultMessage:
+			content = m.Content
+		}
+	}
+	return content
 }
 
 func TestExecToolRunsOnlyInExecuteMode(t *testing.T) {
@@ -131,13 +198,13 @@ func TestExecutePassesTheAdmittedModeToTheTool(t *testing.T) {
 		gate := policy.NewGate(authority, map[string]policy.ToolSpec{"Exec": {Capability: policy.Exec, Sandboxed: true, PlanSandboxed: true}}, nil, nil)
 		require.NoError(t, gate.Before(t.Context(), "call-1", "Exec", json.RawMessage(`{}`)))
 		got := make(chan policy.Mode, 1)
-		exec := tool.Tool{Name: "Exec", Capability: policy.Exec, Run: func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+		exec := tool.Tool{Name: "Exec", Capability: policy.Exec, Run: func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (tool.Result, error) {
 			mode, err := admit(policy.Target{})
 			if err != nil {
-				return "", err
+				return tool.Result{}, err
 			}
 			got <- mode
-			return execOutput, nil
+			return tool.Result{Text: execOutput}, nil
 		}}
 
 		res, err := agentTool{tool: exec, gate: gate}.Execute(t.Context(), "call-1", json.RawMessage(`{}`), nil)

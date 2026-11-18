@@ -319,8 +319,14 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			ws.Close()
 		}
 	}()
-	tools := []tool.Tool{tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb), tool.NewShell(cwd, planSB))}
-	rules, err := permissionRules(cwd, userHome, tools, resolved.Config.Permissions, resolved.Origins, flagRules)
+	// rules is set below; the search tools consult it only when they run.
+	var rules *policy.Rules
+	hidden := func(name string, root, t policy.Target) bool { return rules.Hides(name, root, t) }
+	tools := []tool.Tool{
+		tool.NewRead(ws), tool.NewGlob(ws, hidden), tool.NewGrep(ws, hidden), tool.NewLS(ws, hidden),
+		tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb), tool.NewShell(cwd, planSB)),
+	}
+	rules, err = permissionRules(cwd, userHome, tools, resolved.Config.Permissions, resolved.Origins, flagRules)
 	if err != nil {
 		return err
 	}

@@ -27,8 +27,19 @@ type Tool struct {
 	// Run must acquire a nonmutating operation, call admit with its bound
 	// target before reading content or modifying files, and use that operation.
 	// admit returns the mode the call is admitted under.
-	Run     func(ctx context.Context, args json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error)
+	Run     func(ctx context.Context, args json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (Result, error)
 	Display Display
+}
+
+// Result is what a call returns to the model: its text, then any images.
+type Result struct {
+	Text   string
+	Images []Image
+}
+
+type Image struct {
+	MimeType string
+	Data     []byte
 }
 
 // Specs returns what the policy needs to know of each tool, by name.

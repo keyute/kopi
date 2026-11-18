@@ -3,16 +3,11 @@ package app
 import (
 	"fmt"
 	"io"
-	"net/http"
 	"os"
-	"slices"
 
 	"github.com/keyute/kopi/internal/pigruntime"
+	"github.com/keyute/kopi/internal/tool"
 )
-
-const maxImageBytes = 20 << 20
-
-var imageTypes = []string{"image/png", "image/jpeg", "image/gif", "image/webp"}
 
 // loadImages reads every attachment or none: one bad path refuses them all.
 func loadImages(paths []string) ([]pigruntime.Image, error) {
@@ -40,19 +35,19 @@ func loadImage(path string) (pigruntime.Image, error) {
 	if !info.Mode().IsRegular() {
 		return pigruntime.Image{}, fmt.Errorf("%w: not a regular file", ErrBadImage)
 	}
-	if info.Size() > maxImageBytes {
-		return pigruntime.Image{}, fmt.Errorf("%w: larger than %d MiB", ErrBadImage, maxImageBytes>>20)
+	if info.Size() > tool.MaxImageBytes {
+		return pigruntime.Image{}, fmt.Errorf("%w: larger than %d MiB", ErrBadImage, tool.MaxImageBytes>>20)
 	}
 	// The limit also catches a file that grew since Stat.
-	data, err := io.ReadAll(io.LimitReader(f, maxImageBytes+1))
+	data, err := io.ReadAll(io.LimitReader(f, tool.MaxImageBytes+1))
 	if err != nil {
 		return pigruntime.Image{}, fmt.Errorf("%w: %w", ErrBadImage, err)
 	}
-	if len(data) > maxImageBytes {
-		return pigruntime.Image{}, fmt.Errorf("%w: larger than %d MiB", ErrBadImage, maxImageBytes>>20)
+	if len(data) > tool.MaxImageBytes {
+		return pigruntime.Image{}, fmt.Errorf("%w: larger than %d MiB", ErrBadImage, tool.MaxImageBytes>>20)
 	}
-	mime := http.DetectContentType(data)
-	if !slices.Contains(imageTypes, mime) {
+	mime, ok := tool.ImageType(data)
+	if !ok {
 		return pigruntime.Image{}, fmt.Errorf("%w: content is %s", ErrBadImage, mime)
 	}
 	return pigruntime.Image{Path: path, MimeType: mime, Data: data}, nil

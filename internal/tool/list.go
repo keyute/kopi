@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"io/fs"
@@ -24,63 +25,112 @@ func (w *Workspace) List(limit int) ([]string, error) {
 	if protected {
 		return nil, nil
 	}
-	stores, err := w.statProtected()
+	var out []string
+	err = w.walk(context.Background(), ".", nil, func(p string, info fs.FileInfo) bool {
+		if info.IsDir() {
+			p += "/"
+		}
+		out = append(out, p)
+		return len(out) != limit
+	})
 	if err != nil {
 		return nil, err
 	}
+	return out, nil
+}
+
+// walk visits the entries below dir breadth-first, each directory's in name order,
+// as slash-separated workspace paths with their Lstat info; visit returning false
+// ends it. dir has no symlinks; vetted is its identity, nil only for ".". Skips
+// .git, ignored and protected entries and does not follow symlinks. Ancestors'
+// patterns apply unless they ignore dir itself. Only failing to list dir is returned.
+func (w *Workspace) walk(ctx context.Context, dir string, vetted fs.FileInfo, visit func(p string, info fs.FileInfo) bool) error {
 	type queued struct {
 		dir      string
 		patterns []gitignore.Pattern
-		// vetted is the identity dir had when its parent was listed; nil for ".".
+		// vetted is the identity dir had when its parent was listed.
 		vetted fs.FileInfo
 	}
-	var out []string
-	// Breadth-first, so the limit keeps shallow entries and a directory's
+	var ancestors []gitignore.Pattern
+	if dir != "." {
+		parts := split(dir)
+		for i := range parts {
+			a := "."
+			if i > 0 {
+				a = path.Join(parts[:i]...)
+			}
+			ancestors = append(ancestors, w.gitignore(a, split(a))...)
+		}
+		// A search pointed explicitly inside an ignored directory searches it,
+		// as ripgrep does for an explicit path.
+		if gitignore.NewMatcher(ancestors).Match(parts, true) {
+			ancestors = nil
+		}
+	}
+	// Breadth-first, so a limit keeps shallow entries and a directory's
 	// patterns are loaded before its children's. Each pattern is scoped to its
 	// directory, and later patterns take priority, as in git.
-	queue := []queued{{dir: "."}}
+	queue := []queued{{dir: dir, patterns: ancestors, vetted: vetted}}
 	for len(queue) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		q := queue[0]
 		queue = queue[1:]
-		var domain []string
-		if q.dir != "." {
-			domain = strings.Split(q.dir, "/")
+		entries, err := w.readDir(q.dir, q.vetted)
+		if err != nil {
+			if q.dir != dir {
+				continue
+			}
+			if dir == "." {
+				return fmt.Errorf("failed to list workspace: %w", err)
+			}
+			return fmt.Errorf("failed to list %s: %w", dir, err)
+		}
+		// Stat'd after each read, so what is visited was read while not a store.
+		stores, err := w.statProtected()
+		if err != nil {
+			return err
+		}
+		isStore := func(info fs.FileInfo) bool {
+			return slices.ContainsFunc(stores, func(s os.FileInfo) bool { return os.SameFile(info, s) })
+		}
+		if q.vetted != nil && isStore(q.vetted) {
+			continue
 		}
 		// Appending must not overwrite patterns shared by queued siblings.
 		patterns := q.patterns[:len(q.patterns):len(q.patterns)]
-		patterns = append(patterns, w.gitignore(q.dir, domain)...)
+		patterns = append(patterns, w.gitignore(q.dir, split(q.dir))...)
 		m := gitignore.NewMatcher(patterns)
-		entries, err := w.readDir(q.dir, q.vetted)
-		if err != nil {
-			if q.dir == "." {
-				return nil, fmt.Errorf("failed to list workspace: %w", err)
-			}
-			continue
-		}
 		for _, d := range entries {
 			p := path.Join(q.dir, d.Name())
 			if d.Name() == ".git" {
 				continue
 			}
 			info, err := d.Info()
-			if err != nil || slices.ContainsFunc(stores, func(s os.FileInfo) bool { return os.SameFile(info, s) }) {
+			if err != nil || isStore(info) {
 				continue
 			}
-			if m.Match(strings.Split(p, "/"), d.IsDir()) {
+			if m.Match(split(p), d.IsDir()) {
 				continue
 			}
 			if d.IsDir() {
-				out = append(out, p+"/")
 				queue = append(queue, queued{dir: p, patterns: patterns, vetted: info})
-			} else {
-				out = append(out, p)
 			}
-			if len(out) == limit {
-				return out, nil
+			if !visit(p, info) {
+				return nil
 			}
 		}
 	}
-	return out, nil
+	return nil
+}
+
+// split returns the names of a slash-separated workspace path, none for ".".
+func split(p string) []string {
+	if p == "." {
+		return nil
+	}
+	return strings.Split(p, "/")
 }
 
 // gitignore returns the patterns of dir's .gitignore, none if it cannot be read.

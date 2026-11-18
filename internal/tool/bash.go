@@ -60,24 +60,24 @@ func NewBash(sh, plan *Shell) Tool {
 		Capability:    policy.Exec,
 		Sandboxed:     sh.Sandboxed(),
 		PlanSandboxed: planSandboxed,
-		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (Result, error) {
 			args, err := decodeBashArgs(raw)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
 			if err := ctx.Err(); err != nil {
-				return "", err
+				return Result{}, err
 			}
 			mode, err := admit(policy.Target{})
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
 			// The shell is chosen from the admitted mode only: a later read of
 			// the mode could run a plan-admitted call with a writable workspace.
 			run := sh
 			if mode != policy.Execute {
 				if !planSandboxed {
-					return "", fmt.Errorf("failed to run command: plan mode runs commands only in the OS sandbox, which is off or unavailable: %w", policy.ErrDenied)
+					return Result{}, fmt.Errorf("failed to run command: plan mode runs commands only in the OS sandbox, which is off or unavailable: %w", policy.ErrDenied)
 				}
 				run = plan
 			}
@@ -85,7 +85,11 @@ func NewBash(sh, plan *Shell) Tool {
 			if args.Timeout != nil {
 				timeout = *args.Timeout
 			}
-			return run.Run(ctx, args.Command, time.Duration(timeout)*time.Millisecond)
+			out, err := run.Run(ctx, args.Command, time.Duration(timeout)*time.Millisecond)
+			if err != nil {
+				return Result{}, err
+			}
+			return Result{Text: out}, nil
 		},
 		Display: Display{
 			Title: bashTitle,

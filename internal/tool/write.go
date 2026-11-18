@@ -41,26 +41,26 @@ func NewWrite(ws *Workspace) Tool {
 		},
 		Capability: policy.Write,
 		Target:     pathTarget(ws),
-		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (Result, error) {
 			args, err := decodeWriteArgs(raw)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
 			if err := ctx.Err(); err != nil {
-				return "", err
+				return Result{}, err
 			}
 			dest, err := ws.prepare(args.FilePath)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
 			defer func() { dest.parent.Close() }()
 			if _, err := admit(dest.target); err != nil {
-				return "", err
+				return Result{}, err
 			}
 			if err := dest.write(ws, []byte(*args.Content)); err != nil {
-				return "", err
+				return Result{}, err
 			}
-			return fmt.Sprintf("wrote %s to %s", lineCount(countLines(*args.Content)), args.FilePath), nil
+			return Result{Text: fmt.Sprintf("wrote %s to %s", lineCount(countLines(*args.Content)), args.FilePath)}, nil
 		},
 		Display: Display{
 			Title: pathTitle("Write"),

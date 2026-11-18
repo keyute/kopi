@@ -25,7 +25,8 @@ func newReadTool(t *testing.T) (Tool, string) {
 
 func runRead(t *testing.T, tool Tool, args string) (string, error) {
 	t.Helper()
-	return tool.Run(context.Background(), json.RawMessage(args), allowTarget)
+	res, err := tool.Run(context.Background(), json.RawMessage(args), allowTarget)
+	return res.Text, err
 }
 
 func numberedLines(n int) string {
@@ -155,6 +156,30 @@ func TestReadReturnsNoticeForEmptyFile(t *testing.T) {
 	assert.Equal(t, "(empty file)", out)
 }
 
+const pngSignature = "\x89PNG\r\n\x1a\n"
+
+func TestReadReturnsImage(t *testing.T) {
+	tool, dir := newReadTool(t)
+	content := pngSignature + "\x00\x00\x00\rIHDR"
+	writeFile(t, filepath.Join(dir, "a.png"), content)
+
+	res, err := tool.Run(context.Background(), json.RawMessage(`{"file_path":"a.png","offset":5}`), allowTarget)
+	require.NoError(t, err)
+	assert.Equal(t, fmt.Sprintf("(image/png, %d bytes)", len(content)), res.Text)
+	assert.Equal(t, []Image{{MimeType: "image/png", Data: []byte(content)}}, res.Images)
+}
+
+func TestReadRefusesOversizedImage(t *testing.T) {
+	tool, dir := newReadTool(t)
+	path := filepath.Join(dir, "big.png")
+	writeFile(t, path, pngSignature)
+	require.NoError(t, os.Truncate(path, MaxImageBytes+1))
+
+	out, err := runRead(t, tool, `{"file_path":"big.png"}`)
+	require.ErrorIs(t, err, ErrTooLarge)
+	assert.Empty(t, out)
+}
+
 func TestReadDisplayTitle(t *testing.T) {
 	tool, _ := newReadTool(t)
 
@@ -179,6 +204,7 @@ func TestReadDisplaySummary(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "one.txt"), "only")
 	writeFile(t, filepath.Join(dir, "empty.txt"), "")
 	writeFile(t, filepath.Join(dir, "big.txt"), numberedLines(maxReadLines+5))
+	writeFile(t, filepath.Join(dir, "a.png"), pngSignature+"\x00\x00\x00\rIHDR")
 
 	for _, tc := range []struct {
 		name, args, want string
@@ -189,6 +215,7 @@ func TestReadDisplaySummary(t *testing.T) {
 		{"line cap with notice", `{"file_path":"big.txt"}`, "2000 lines"},
 		{"empty file", `{"file_path":"empty.txt"}`, "empty file"},
 		{"offset past end", `{"file_path":"a.txt","offset":11}`, "past end of file"},
+		{"image", `{"file_path":"a.png"}`, "image"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, err := runRead(t, tool, tc.args)
@@ -288,16 +315,40 @@ func TestToolsDoNotReadContentBeforeAdmission(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "binary"), "secret\x00")
 	ws := newWorkspace(t, dir, nil)
-	for _, tool := range []Tool{NewRead(ws), NewEdit(ws)} {
+	args := map[string]string{
+		"Read": `{"file_path":"binary"}`,
+		"Edit": `{"file_path":"binary","old_string":"secret","new_string":"new"}`,
+		"Glob": `{"pattern":"*"}`,
+		"Grep": `{"pattern":"secret"}`,
+		"LS":   `{}`,
+	}
+	for _, tool := range []Tool{NewRead(ws), NewEdit(ws), NewGlob(ws, nil), NewGrep(ws, nil), NewLS(ws, nil)} {
 		t.Run(tool.Name, func(t *testing.T) {
-			raw := json.RawMessage(`{"file_path":"binary","old_string":"secret","new_string":"new"}`)
-			if tool.Name == "Read" {
-				raw = json.RawMessage(`{"file_path":"binary"}`)
-			}
-			out, err := tool.Run(t.Context(), raw, func(policy.Target) (policy.Mode, error) { return policy.Plan, policy.ErrDenied })
+			out, err := tool.Run(t.Context(), json.RawMessage(args[tool.Name]), func(policy.Target) (policy.Mode, error) { return policy.Plan, policy.ErrDenied })
 			require.ErrorIs(t, err, policy.ErrDenied)
 			assert.Empty(t, out)
 			assert.Equal(t, "secret\x00", readContent(t, filepath.Join(dir, "binary")))
+		})
+	}
+}
+
+func TestWalkingToolsListOnlyAfterAdmission(t *testing.T) {
+	args := map[string]string{
+		"Glob": `{"pattern":"*"}`,
+		"Grep": `{"pattern":"needle"}`,
+		"LS":   `{}`,
+	}
+	for _, name := range []string{"Glob", "Grep", "LS"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			ws := newWorkspace(t, dir, nil)
+			tools := map[string]Tool{"Glob": NewGlob(ws, nil), "Grep": NewGrep(ws, nil), "LS": NewLS(ws, nil)}
+			out, err := tools[name].Run(t.Context(), json.RawMessage(args[name]), func(policy.Target) (policy.Mode, error) {
+				writeFile(t, filepath.Join(dir, "late.txt"), "needle\n")
+				return policy.Execute, nil
+			})
+			require.NoError(t, err)
+			assert.Contains(t, out.Text, "late.txt")
 		})
 	}
 }
@@ -327,8 +378,8 @@ func TestToolsUseAdmittedHandlesAfterParentRetarget(t *testing.T) {
 			})
 			require.NoError(t, err)
 			if name == "Read" {
-				assert.Contains(t, out, "alpha")
-				assert.NotContains(t, out, "secret")
+				assert.Contains(t, out.Text, "alpha")
+				assert.NotContains(t, out.Text, "secret")
 			} else {
 				assert.Equal(t, "updated", readContent(t, filepath.Join(dir, "pinned", "file")))
 			}

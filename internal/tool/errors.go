@@ -10,6 +10,7 @@ var (
 	ErrProtected            = errors.New("path is protected")
 	ErrBinary               = errors.New("file is binary")
 	ErrIsDirectory          = errors.New("path is a directory")
+	ErrNotDirectory         = errors.New("path is not a directory")
 	ErrNotRegular           = errors.New("path is not a regular file")
 	ErrInvalidArgs          = errors.New("invalid arguments")
 	ErrTooLarge             = errors.New("file is too large")

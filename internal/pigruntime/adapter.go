@@ -2,10 +2,13 @@ package pigruntime
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 
 	"github.com/MichaelKinsy/PiG/agent"
 	"github.com/MichaelKinsy/PiG/ai"
+	"github.com/MichaelKinsy/PiG/coding/extension/host/subprocess"
 
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
@@ -28,7 +31,7 @@ func (a agentTool) Schema() ai.ToolSchema {
 // mode may have changed in between.
 func (a agentTool) Execute(ctx context.Context, toolCallID string, params json.RawMessage, _ agent.ToolUpdateCallback) (agent.AgentToolResult, error) {
 	defer a.gate.Finish(toolCallID)
-	out, err := a.tool.Run(ctx, params, func(target policy.Target) (policy.Mode, error) {
+	res, err := a.tool.Run(ctx, params, func(target policy.Target) (policy.Mode, error) {
 		var path *policy.Target
 		if a.tool.Target != nil {
 			path = &target
@@ -38,7 +41,20 @@ func (a agentTool) Execute(ctx context.Context, toolCallID string, params json.R
 	if err != nil {
 		return errorResult(err), nil
 	}
-	return agent.AgentToolResult{Content: []ai.ToolResultMessageContent{ai.TextContent{Text: out}}}, nil
+	// PiG sends an image it fails to process unchanged, which the provider
+	// rejects, so one that does not survive resizing here is left out.
+	text := res.Text
+	var images []ai.ToolResultMessageContent
+	for _, img := range res.Images {
+		r, err := subprocess.ResizeImage(subprocess.ResizeImageArgs{Data: base64.StdEncoding.EncodeToString(img.Data), MimeType: img.MimeType})
+		if err != nil || r.Image == nil {
+			slog.Warn("failed to resize tool result image; omitting it", "tool", a.tool.Name, "mime", img.MimeType, "error", err)
+			text += "\n" + omittedImageNote
+			continue
+		}
+		images = append(images, ai.ImageContent{Data: r.Image.Data, MimeType: r.Image.MimeType})
+	}
+	return agent.AgentToolResult{Content: append([]ai.ToolResultMessageContent{ai.TextContent{Text: text}}, images...)}, nil
 }
 
 func (a agentTool) ExecutionMode() agent.ToolExecutionMode {

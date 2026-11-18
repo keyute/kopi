@@ -1,6 +1,8 @@
 package tool
 
 import (
+	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -177,4 +179,88 @@ func TestListDoesNotApplyGitignoreLinkedToProtectedStore(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+// walked runs walk from dir and returns the paths it visits.
+func walked(t *testing.T, ws *Workspace, dir string) []string {
+	t.Helper()
+	var vetted fs.FileInfo
+	if dir != "." {
+		var err error
+		vetted, err = ws.root.Lstat(dir)
+		require.NoError(t, err)
+	}
+	var got []string
+	require.NoError(t, ws.walk(context.Background(), dir, vetted, func(p string, _ fs.FileInfo) bool {
+		got = append(got, p)
+		return true
+	}))
+	return got
+}
+
+func TestWalkFromSubdirectoryAppliesAncestorGitignore(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".gitignore"), "*.log\n")
+	writeFile(t, filepath.Join(dir, "sub", "a.log"), "")
+	writeFile(t, filepath.Join(dir, "sub", "a.go"), "")
+	ws := newWorkspace(t, dir, nil)
+
+	assert.Equal(t, []string{"sub/a.go"}, walked(t, ws, "sub"))
+}
+
+func TestWalkSearchesIgnoredStartDirectory(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".gitignore"), "build/\n")
+	writeFile(t, filepath.Join(dir, "build", "out", "a.o"), "")
+	ws := newWorkspace(t, dir, nil)
+
+	assert.Equal(t, []string{"build/out", "build/out/a.o"}, walked(t, ws, "build"))
+	assert.Equal(t, []string{".gitignore"}, walked(t, ws, "."))
+}
+
+func TestWalkStopsWhenCancelled(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "a.txt"), "")
+	ws := newWorkspace(t, dir, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := ws.walk(ctx, ".", nil, func(string, fs.FileInfo) bool {
+		t.Fatal("visited after cancellation")
+		return true
+	})
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestWalkSkipsStoreCreatedDuringWalk(t *testing.T) {
+	home, kopiHome := syntheticHome(t)
+	require.NoError(t, os.Mkdir(filepath.Join(home, "a"), 0o755))
+	ws := newWorkspace(t, home, append(protectedStores(home, kopiHome), filepath.Join(home, "a", "store")))
+
+	var got []string
+	require.NoError(t, ws.walk(context.Background(), ".", nil, func(p string, _ fs.FileInfo) bool {
+		if p == "a" {
+			writeFile(t, filepath.Join(home, "a", "store", "key"), "secret")
+		}
+		got = append(got, p)
+		return true
+	}))
+	assert.Equal(t, []string{".env", "a"}, got)
+}
+
+func TestWalkSkipsQueuedDirectoryThatBecameStore(t *testing.T) {
+	home, kopiHome := syntheticHome(t)
+	writeFile(t, filepath.Join(home, "a", "key"), "secret")
+	store := filepath.Join(t.TempDir(), "store")
+	ws := newWorkspace(t, home, append(protectedStores(home, kopiHome), store))
+
+	var got []string
+	require.NoError(t, ws.walk(context.Background(), ".", nil, func(p string, _ fs.FileInfo) bool {
+		if p == "a" {
+			require.NoError(t, os.Symlink(filepath.Join(home, "a"), store))
+		}
+		got = append(got, p)
+		return true
+	}))
+	assert.Equal(t, []string{".env", "a"}, got)
 }

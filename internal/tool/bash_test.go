@@ -49,8 +49,8 @@ func TestBashRunsCommand(t *testing.T) {
 	out, err := tool.Run(context.Background(), json.RawMessage(`{"command":"echo one; echo two","timeout":60000}`), allowTarget)
 
 	require.NoError(t, err)
-	assert.Equal(t, "one\ntwo\n", out)
-	assert.Equal(t, "2 lines", tool.Display.Summary(out))
+	assert.Equal(t, "one\ntwo\n", out.Text)
+	assert.Equal(t, "2 lines", tool.Display.Summary(out.Text))
 }
 
 func TestBashTimeoutIsMilliseconds(t *testing.T) {
@@ -109,7 +109,7 @@ func TestBashDoesNotStartWhenAdmissionCancels(t *testing.T) {
 
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, context.Canceled.Error(), err.Error())
-	assert.Empty(t, out)
+	assert.Empty(t, out.Text)
 	assert.True(t, admitted)
 }
 

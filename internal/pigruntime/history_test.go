@@ -69,11 +69,11 @@ func TestHistoryReplaysStoredTurnAsLiveEvents(t *testing.T) {
 			Name: "Fail", Label: "Fail", Description: "Always fails.",
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{}},
 			Capability: policy.Read,
-			Run: func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+			Run: func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (tool.Result, error) {
 				if _, err := admit(policy.Target{}); err != nil {
-					return "", err
+					return tool.Result{}, err
 				}
-				return "", errors.New("probe failed")
+				return tool.Result{}, errors.New("probe failed")
 			},
 		},
 	}
