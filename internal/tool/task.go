@@ -130,8 +130,10 @@ func (m *Tasks) Start(ctx context.Context, sh *Shell, command string) (TaskInfo,
 	return info, nil
 }
 
-// Run returns like Shell.Run, except that at timeout, or after Detach, the
-// command keeps running as a background task and Run returns where it went.
+// Run returns the command's combined output. The error of a failed command
+// carries the output, then the reason on a final line. At timeout, or after
+// Detach, the command keeps running as a background task and Run returns where
+// it went.
 // A cancel of ctx kills the command only while it is in the foreground.
 func (m *Tasks) Run(ctx context.Context, sh *Shell, command string, timeout time.Duration) (string, Moved, error) {
 	t := &task{command: command, ready: make(chan struct{}), moved: make(chan struct{})}
