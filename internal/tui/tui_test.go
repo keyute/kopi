@@ -27,6 +27,39 @@ func TestNewQueuesEventsBeforeRun(t *testing.T) {
 	assert.Equal(t, eventsMsg{event.SessionChanged{SessionID: "s1"}, event.Notice{Text: "hi"}}, f.bridge.wait()())
 }
 
+type quitController struct {
+	fakeController
+	ctx chan context.Context
+}
+
+func (c *quitController) Submit(ctx context.Context, _ string, _ ...string) (*app.Work, error) {
+	c.ctx <- ctx
+	return nil, app.ErrQuit
+}
+
+func TestRunNormalQuitCancelsOwnedContext(t *testing.T) {
+	parent, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	c := &quitController{ctx: make(chan context.Context, 1)}
+	f := New(c, strings.NewReader("/quit\r"), &lockedBuffer{}, testOptions())
+	done := make(chan error, 1)
+	go func() { done <- f.Run(parent, nil) }()
+	var owned context.Context
+	select {
+	case owned = <-c.ctx:
+	case <-time.After(waitLimit):
+		t.Fatal("quit was not submitted")
+	}
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(waitLimit):
+		t.Fatal("Run did not return")
+	}
+	assert.ErrorIs(t, owned.Err(), context.Canceled)
+	assert.NoError(t, parent.Err())
+}
+
 func TestExitHint(t *testing.T) {
 	assert.Empty(t, exitHint(app.Status{SessionID: "s1", Model: "anthropic/claude-sonnet-4-5"}))
 	for _, tt := range []struct {

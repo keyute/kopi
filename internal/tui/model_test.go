@@ -1372,6 +1372,62 @@ func TestRowsFillTheScreenStatusLast(t *testing.T) {
 	}
 }
 
+type contextRunner struct {
+	started chan context.Context
+}
+
+func (r *contextRunner) run(ctx context.Context, _, _ string) (string, error) {
+	r.started <- ctx
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func TestCommandSegmentDeadlineClearsRunningAndRetries(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newStatusCommandModel(t, config.StatusSegment{Command: "blocked"})
+		r := &contextRunner{started: make(chan context.Context, 1)}
+		m.runner = r
+		start := time.Now()
+		msgs := runCmd(m.runCommand("git"))
+		ctx := <-r.started
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		assert.Equal(t, start.Add(5*time.Second), deadline)
+		assert.True(t, m.running["git"])
+		result := await(msgs, statusResultMsg{}).(statusResultMsg)
+		assert.ErrorIs(t, result.err, context.DeadlineExceeded)
+		assert.Equal(t, 5*time.Second, time.Since(start))
+		m.Update(result)
+		assert.False(t, m.running["git"])
+		assert.True(t, m.failing["git"])
+		msgs = runCmd(m.runCommand("git"))
+		<-r.started
+		assert.True(t, m.running["git"])
+		result = await(msgs, statusResultMsg{}).(statusResultMsg)
+		assert.ErrorIs(t, result.err, context.DeadlineExceeded)
+		m.Update(result)
+		assert.False(t, m.running["git"])
+	})
+}
+
+func TestCommandSegmentParentCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newStatusCommandModel(t, config.StatusSegment{Command: "blocked"})
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m.ctx = ctx
+		r := &contextRunner{started: make(chan context.Context, 1)}
+		m.runner = r
+		msgs := runCmd(m.runCommand("git"))
+		<-r.started
+		cancel()
+		result := await(msgs, statusResultMsg{}).(statusResultMsg)
+		assert.ErrorIs(t, result.err, context.Canceled)
+		m.Update(result)
+		assert.False(t, m.running["git"])
+	})
+}
+
 type runResult struct {
 	out string
 	err error

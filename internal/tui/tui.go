@@ -61,6 +61,7 @@ type Frontend struct {
 	out         io.Writer
 	opts        Options
 	bridge      *bridge
+	runner      statusRunner
 	unsubscribe func()
 }
 
@@ -68,18 +69,23 @@ type Frontend struct {
 // drawn. Run unsubscribes when it returns.
 func New(c Controller, in io.Reader, out io.Writer, opts Options) *Frontend {
 	b := newBridge()
-	return &Frontend{c: c, in: in, out: out, opts: opts, bridge: b, unsubscribe: c.Subscribe(b.push)}
+	return &Frontend{c: c, in: in, out: out, opts: opts, bridge: b, runner: shellRunner{}, unsubscribe: c.Subscribe(b.push)}
 }
 
 // Run shows the UI until /quit, ctx cancellation, the quit key on an empty
 // draft, or two cancels (the cancel key or SIGINT) in a row at idle with an
 // empty draft. interrupts delivers SIGINT.
 func (f *Frontend) Run(ctx context.Context, interrupts <-chan os.Signal) error {
+	ctx, cancel := context.WithCancel(ctx)
+	runs := &statusRuns{runner: f.runner, cancel: cancel}
+	defer runs.close()
 	defer f.unsubscribe()
 	defer f.bridge.close()
 	pruneImages(f.opts.ImageDir, time.Now())
 
-	p := tea.NewProgram(newModel(ctx, f.c, f.bridge, f.opts),
+	m := newModel(ctx, f.c, f.bridge, f.opts)
+	m.runner = runs
+	p := tea.NewProgram(m,
 		tea.WithInput(f.in), tea.WithOutput(f.out), tea.WithoutSignalHandler())
 	stopped := make(chan struct{})
 	defer close(stopped)

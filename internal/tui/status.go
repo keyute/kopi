@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"image/color"
-	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/lipgloss/v2"
@@ -205,14 +205,35 @@ type statusRunner interface {
 
 type shellRunner struct{}
 
-func (shellRunner) run(ctx context.Context, dir, command string) (string, error) {
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
-	cmd.Dir = dir
-	// A background process that inherited stdout must not hold the run past
-	// its timeout.
-	cmd.WaitDelay = time.Second
-	out, err := cmd.Output()
-	return string(out), err
+// statusRuns registers commands only when they execute, not when Tea queues
+// them. Closing admission before waiting prevents a late command from escaping
+// shutdown or adding to an empty WaitGroup while it is being waited on.
+type statusRuns struct {
+	runner statusRunner
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	closed bool
+	active sync.WaitGroup
+}
+
+func (r *statusRuns) run(ctx context.Context, dir, command string) (string, error) {
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return "", context.Canceled
+	}
+	r.active.Add(1)
+	r.mu.Unlock()
+	defer r.active.Done()
+	return r.runner.run(ctx, dir, command)
+}
+
+func (r *statusRuns) close() {
+	r.mu.Lock()
+	r.closed = true
+	r.mu.Unlock()
+	r.cancel()
+	r.active.Wait()
 }
 
 // statusLine sits two in from both edges. Left segments that do not fit
