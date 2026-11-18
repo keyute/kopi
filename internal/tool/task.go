@@ -54,6 +54,7 @@ type Tasks struct {
 	next         int
 	tasks        []*task // background only, in id order
 	fg           map[*task]struct{}
+	pending      map[*task]struct{}
 	onChange     func(TaskInfo)
 	onForeground func()
 }
@@ -62,7 +63,7 @@ type task struct {
 	id, command string
 	started     time.Time
 	p           *process
-	// ready closes once a foreground task's start has returned, setting p on
+	// ready closes once a task's start has returned, setting p on
 	// success.
 	ready chan struct{}
 	moved chan struct{}
@@ -74,7 +75,7 @@ type task struct {
 }
 
 func NewTasks() *Tasks {
-	return &Tasks{fg: map[*task]struct{}{}}
+	return &Tasks{fg: map[*task]struct{}{}, pending: map[*task]struct{}{}}
 }
 
 // OnChange registers f, called without the manager's lock when a task enters
@@ -99,12 +100,34 @@ func (m *Tasks) OnForeground(f func()) {
 // Start runs command as a background task; ctx is checked only before it
 // starts.
 func (m *Tasks) Start(ctx context.Context, sh *Shell, command string) (TaskInfo, error) {
+	t := &task{command: command, ready: make(chan struct{})}
+	m.mu.Lock()
+	m.pending[t] = struct{}{}
+	m.mu.Unlock()
 	p, err := sh.start(ctx, command)
-	if err != nil {
-		return TaskInfo{}, err
+	m.mu.Lock()
+	delete(m.pending, t)
+	t.p = p
+	if err != nil || t.stopped {
+		close(t.ready)
+		m.mu.Unlock()
+		if err != nil {
+			return TaskInfo{}, err
+		}
+		p.stop(ErrStopped)
+		<-p.done
+		return TaskInfo{}, ErrStopped
 	}
-	t := &task{command: command, started: time.Now(), p: p}
-	return m.adopt(t), nil
+	t.started = time.Now()
+	info := m.adopt(t)
+	f := m.onChange
+	close(t.ready)
+	m.mu.Unlock()
+	if f != nil {
+		f(info)
+	}
+	go m.watch(t)
+	return info, nil
 }
 
 // Run returns like Shell.Run, except that at timeout, or after Detach, the
@@ -143,17 +166,24 @@ func (m *Tasks) Run(ctx context.Context, sh *Shell, command string, timeout time
 	case <-ctx.Done():
 		canceled = true
 	}
-	// Once t leaves fg, neither Detach nor StopAll can reach it.
 	m.mu.Lock()
 	delete(m.fg, t)
 	detach, stopped := t.detached, t.stopped
+	var info TaskInfo
+	if (detach || timedOut) && !stopped && !ended(p) {
+		info = m.adopt(t)
+	}
+	change := m.onChange
 	f = m.onForeground
 	m.mu.Unlock()
 	if f != nil {
 		f()
 	}
-	if (detach || timedOut) && !stopped && !ended(p) {
-		info := m.adopt(t)
+	if info.ID != "" {
+		if change != nil {
+			change(info)
+		}
+		go m.watch(t)
 		return "", Moved{ID: info.ID, TimedOut: !detach}, nil
 	}
 	if canceled {
@@ -164,21 +194,13 @@ func (m *Tasks) Run(ctx context.Context, sh *Shell, command string, timeout time
 	return out, Moved{}, err
 }
 
-// adopt makes t a background task and reports it running.
+// adopt registers t in the background while the caller holds m.mu.
 func (m *Tasks) adopt(t *task) TaskInfo {
-	m.mu.Lock()
 	m.next++
 	t.id = fmt.Sprintf("t%d", m.next)
 	t.watched = make(chan struct{})
 	m.tasks = append(m.tasks, t)
-	info := t.report(false)
-	f := m.onChange
-	m.mu.Unlock()
-	if f != nil {
-		f(info)
-	}
-	go m.watch(t)
-	return info
+	return t.report(false)
 }
 
 func (m *Tasks) watch(t *task) {
@@ -244,15 +266,20 @@ func (m *Tasks) Stop(id string) (TaskInfo, error) {
 	return t.report(true), nil
 }
 
-// StopAll stops every foreground and background command, waits for them, and
-// forgets the background tasks without reporting their end: when it returns,
-// no ended call to the OnChange callback for them is still running.
+// StopAll stops every pending, foreground and background command, waits for
+// them, and forgets the background tasks without reporting their end: when it
+// returns, no ended call to the OnChange callback for them is still running.
 func (m *Tasks) StopAll() {
 	m.mu.Lock()
 	fg := make([]*task, 0, len(m.fg))
 	for t := range m.fg {
 		t.stopped = true
 		fg = append(fg, t)
+	}
+	pending := make([]*task, 0, len(m.pending))
+	for t := range m.pending {
+		t.stopped = true
+		pending = append(pending, t)
 	}
 	bg := m.tasks
 	for _, t := range bg {
@@ -268,6 +295,13 @@ func (m *Tasks) StopAll() {
 	}
 	for _, t := range bg {
 		t.p.stop(ErrStopped)
+	}
+	for _, t := range pending {
+		<-t.ready
+		if t.p != nil {
+			t.p.stop(ErrStopped)
+			<-t.p.done
+		}
 	}
 	for _, t := range fg {
 		if t.p != nil {

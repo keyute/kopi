@@ -156,6 +156,15 @@ func (t *taskDialog) rows(width, maxBody, maxRows int, th theme) []string {
 		t.d.body = t.tail(min(maxBody, maxRows-len(t.d.rows(width, maxRows, 1, th))), width-2, th)
 	}
 	rows := t.d.rows(width, maxRows, 1, th)
+	if t.open == "" && len(rows) > maxRows {
+		head := len(rows) - len(t.d.options) - 1
+		room := maxRows - head - 1
+		if room > 0 {
+			start := max(0, t.d.sel-room+1)
+			rows = append(rows[:head], rows[head+start:head+start+room]...)
+			return append(rows, rows[0])
+		}
+	}
 	return rows[max(0, len(rows)-maxRows):]
 }
 

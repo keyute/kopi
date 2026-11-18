@@ -177,6 +177,46 @@ func TestTasksStopAllKillsEveryCommand(t *testing.T) {
 	assert.Empty(t, m.List())
 }
 
+func TestTasksStopAllOwnsPromotion(t *testing.T) {
+	sh := NewShell(t.TempDir(), nil)
+	m, events := newTasks(t)
+	command, started, dead := holdFIFO(t, t.TempDir())
+	leaving, release := make(chan struct{}), make(chan struct{})
+	m.OnForeground(func() {
+		if !m.Foreground() {
+			close(leaving)
+			<-release
+		}
+	})
+	result := runAsync(t.Context(), m, sh, command)
+	waitFor(t, started, "the grandchild to start")
+	require.True(t, m.Detach())
+	waitFor(t, leaving, "the foreground exit signal")
+	stopped := make(chan struct{})
+	go func() {
+		m.StopAll()
+		close(stopped)
+	}()
+
+	// Release the deliberately paused callback while StopAll drains the
+	// background watch; waiting for StopAll first would deadlock.
+	select {
+	case <-dead:
+	case <-stopped:
+		t.Error("StopAll returned while the promoted command was still live")
+	case <-time.After(waitLimit):
+		t.Error("timed out waiting for the promoted process group to die")
+	}
+	close(release)
+	r := waitResult(t, result)
+	require.NoError(t, r.err)
+	assert.Equal(t, Moved{ID: "t1"}, r.moved)
+	waitFor(t, stopped, "StopAll to drain the watch")
+	assert.Empty(t, m.List())
+	assert.Equal(t, TaskRunning, nextEvent(t, events).Status)
+	assert.Empty(t, events, "a forgotten task must not report its end")
+}
+
 // foregroundSignals records Foreground as each foreground signal observes it.
 func foregroundSignals(m *Tasks) <-chan bool {
 	ch := make(chan bool, 16)

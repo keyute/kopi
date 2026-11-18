@@ -29,6 +29,80 @@ func nextEvent(t *testing.T, events <-chan TaskInfo) TaskInfo {
 	}
 }
 
+type startingContext struct {
+	context.Context
+	entered, release chan struct{}
+}
+
+func (c *startingContext) Err() error {
+	close(c.entered)
+	<-c.release
+	return nil
+}
+
+func TestTasksStopAllOwnsPendingStart(t *testing.T) {
+	sh := NewShell(t.TempDir(), nil)
+	m, events := newTasks(t)
+	signals := make(chan struct{}, 2)
+	m.OnForeground(func() { signals <- struct{}{} })
+	ctx := &startingContext{Context: t.Context(), entered: make(chan struct{}), release: make(chan struct{})}
+	result := make(chan error, 1)
+	go func() {
+		_, err := m.Start(ctx, sh, "sleep 600")
+		result <- err
+	}()
+	select {
+	case <-ctx.entered:
+	case <-time.After(testTimeout):
+		t.Fatal("timed out waiting for Start")
+	}
+
+	// A synthetic background process acknowledges StopAll's snapshot before
+	// the real pending start is released into the OS.
+	p := &process{stopCh: make(chan error), done: make(chan struct{})}
+	close(p.done)
+	watched := make(chan struct{})
+	close(watched)
+	m.mu.Lock()
+	var pending *task
+	for task := range m.pending {
+		pending = task
+	}
+	m.tasks = append(m.tasks, &task{p: p, watched: watched})
+	m.mu.Unlock()
+	stopped := make(chan struct{})
+	go func() {
+		m.StopAll()
+		close(stopped)
+	}()
+	select {
+	case err := <-p.stopCh:
+		assert.ErrorIs(t, err, ErrStopped)
+	case <-time.After(testTimeout):
+		t.Fatal("timed out waiting for StopAll's snapshot")
+	}
+	close(ctx.release)
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, ErrStopped)
+	case <-time.After(testTimeout):
+		t.Fatal("timed out waiting for Start to return")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(testTimeout):
+		t.Fatal("timed out waiting for StopAll")
+	}
+	require.NotNil(t, pending)
+	assert.True(t, ended(pending.p))
+	assert.Empty(t, m.List())
+	assert.Empty(t, events)
+	assert.Empty(t, signals)
+	info, err := m.Start(t.Context(), sh, "true")
+	require.NoError(t, err)
+	assert.Equal(t, "t1", info.ID)
+}
+
 func TestTasksRunPassesForegroundResult(t *testing.T) {
 	sh := NewShell(t.TempDir(), nil)
 	m, events := newTasks(t)

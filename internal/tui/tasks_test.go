@@ -7,6 +7,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -242,6 +243,75 @@ func TestTasksChangedRefreshesKeepingTheSelection(t *testing.T) {
 		rows := dialogRows(t, m)
 		assert.Equal(t, []string{"  1. t0 · failed · 0s · true", "  2. t1 · running · 1m 2s · sleep 30", "❭ 3. t2 · completed · 5s · make build"}, rows[3:6])
 	})
+}
+
+func TestTasksOverflowKeepsTheSelectedOptionVisible(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{60, 30}, {40, 15}, {40, 10}} {
+		t.Run(fmt.Sprintf("%dx%d", size.width, size.height), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				m, c := tasksModel(t)
+				c.tasks = nil
+				for i := 1; i <= 40; i++ {
+					c.tasks = append(c.tasks, tool.TaskInfo{ID: fmt.Sprintf("t%d", i), Command: "true", Started: time.Now(), Ended: time.Now(), Status: tool.TaskCompleted})
+				}
+				m.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
+				submitText(m, "/tasks")
+
+				check := func(number int) []string {
+					t.Helper()
+					rows := dialogRows(t, m)
+					rule := strings.Repeat("─", m.width)
+					assert.Equal(t, rule, rows[0])
+					assert.Equal(t, "  Background tasks", rows[1])
+					assert.Equal(t, rule, rows[len(rows)-1])
+					assert.Contains(t, rows, fmt.Sprintf("❭ %d. t%d · completed · 0s · true", number, number))
+					s := screen(m)
+					assert.Len(t, s, m.height)
+					assert.Contains(t, s[len(s)-1], "plan")
+					return rows
+				}
+				rows := check(1)
+				assert.Equal(t, "❭ 1. t1 · completed · 0s · true", rows[3])
+				assert.NotContains(t, rows, "  40. t40 · completed · 0s · true")
+
+				for i := 2; i <= 40; i++ {
+					press(m, down)
+					check(i)
+				}
+				for i := 39; i >= 1; i-- {
+					press(m, up)
+					check(i)
+				}
+				for range 19 {
+					press(m, down)
+				}
+				check(20)
+				press(m, enter)
+				assert.Equal(t, "t20", m.tasks.open, "Enter opens the visible global selection")
+				press(m, escape)
+				check(20)
+
+				c.tasks = append([]tool.TaskInfo{{ID: "t0", Command: "true", Started: time.Now(), Ended: time.Now(), Status: tool.TaskCompleted}}, c.tasks...)
+				send(m, event.TasksChanged{})
+				assert.Equal(t, "t20", m.tasks.list[m.tasks.d.sel].ID)
+				assert.Contains(t, dialogRows(t, m), "❭ 21. t20 · completed · 0s · true")
+				for _, height := range []int{10, 30, 15} {
+					m.Update(tea.WindowSizeMsg{Width: size.width, Height: height})
+					assert.Equal(t, 20, m.tasks.d.sel)
+					rows := dialogRows(t, m)
+					assert.Contains(t, rows, "❭ 21. t20 · completed · 0s · true")
+					assert.Equal(t, strings.Repeat("─", m.width), rows[0])
+					assert.Equal(t, "  Background tasks", rows[1])
+					assert.Equal(t, rows[0], rows[len(rows)-1])
+					assert.Len(t, screen(m), height)
+					assert.Contains(t, screen(m)[height-1], "plan")
+				}
+
+				press(m, digit('2'))
+				assert.Equal(t, "t1", m.tasks.open, "digits still pick global options, not visible row numbers")
+			})
+		})
+	}
 }
 
 func TestTasksChangedRefreshesTheOpenTask(t *testing.T) {

@@ -240,6 +240,35 @@ func TestTaskEndDuringFinalReplyIsDeliveredOnce(t *testing.T) {
 	assert.Len(t, ofType[event.TaskEnded](h.rec.all()), 1)
 }
 
+func TestTaskEndDuringFinalReplyWithoutWakeWaitsForNextPrompt(t *testing.T) {
+	h, _ := openHarness(t, Config{Wake: false})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		ai.FauxFactoryStep(func(ai.TranscriptContext, ai.StreamOptions, *ai.FauxProviderState, *ai.Model) (ai.AssistantMessage, error) {
+			h.tasks.end(endedTask("t1"))
+			return ai.FauxAssistantMessage(ai.FauxContentString("final"), ai.FauxAssistantMessageOptions{}), nil
+		}),
+		pigruntimetest.Capture(t, requests, "noted"),
+	})
+
+	w := h.turn(t, "go")
+
+	assert.Equal(t, "final", w.Reply())
+	require.Equal(t, 1, h.faux.CallCount())
+	assert.True(t, h.idle())
+	assert.Len(t, ofType[event.TurnStart](h.rec.all()), 1)
+	require.Len(t, h.queuedNotices(), 1)
+
+	h.turn(t, "next")
+
+	assert.Equal(t, []string{"go", "next", endText("t1")}, receive(t, requests).UserTexts)
+	assert.Equal(t, 2, h.faux.CallCount())
+	assert.True(t, h.idle())
+	assert.Empty(t, h.queuedNotices())
+	assert.Len(t, ofType[event.TurnStart](h.rec.all()), 2)
+	assert.Len(t, ofType[event.TaskEnded](h.rec.all()), 1)
+}
+
 // The task ends while the finished Work delivers its TurnEnd: whether the end
 // lands before or after the Work deregisters, the notice starts exactly one
 // new turn.

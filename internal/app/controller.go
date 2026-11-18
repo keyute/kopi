@@ -740,7 +740,7 @@ func (c *Controller) pull(ctx context.Context, emit func(event.Event)) func() ([
 			return nil, nil
 		}
 		prompts := c.take(emit)
-		if len(prompts) == 0 && !c.waking() {
+		if len(prompts) == 0 && (!c.cfg.Wake || !c.waking()) {
 			return nil, nil
 		}
 		return prompts, c.takeNotices()
