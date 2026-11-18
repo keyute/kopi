@@ -50,10 +50,18 @@ func (s *Shell) Run(ctx context.Context, command string, timeout time.Duration) 
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	argv := []string{s.shell, "-c", command}
-	if s.sb != nil {
-		argv = s.sb.Wrap(argv)
+	var cmd *exec.Cmd
+	if s.sb == nil {
+		cmd = exec.Command(argv[0], argv[1:]...)
+	} else {
+		sandboxed, done, err := s.sb.Command(argv)
+		if err != nil {
+			return "", fmt.Errorf("failed to sandbox command: %w", err)
+		}
+		// Deferred, so it runs after the reap on every path.
+		defer done()
+		cmd = sandboxed
 	}
-	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = s.dir
 	r, w, err := os.Pipe()
 	if err != nil {

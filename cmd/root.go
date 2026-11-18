@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -625,7 +626,16 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 	gitDir := filepath.Join(cwd, ".git")
 	var denyWrite []string
 	for _, name := range []string{"hooks", "config", "commondir", "config.worktree", "worktrees", "modules"} {
-		denyWrite = append(denyWrite, filepath.Join(gitDir, name))
+		path := filepath.Join(gitDir, name)
+		if name == "commondir" && runtime.GOOS == "linux" {
+			// Bubblewrap can block creating a path only by mounting a
+			// placeholder on it, and git refuses to run with an empty
+			// commondir. Under a .git file nothing can exist.
+			if _, err := os.Lstat(path); err != nil {
+				continue
+			}
+		}
+		denyWrite = append(denyWrite, path)
 	}
 	if _, err := os.Lstat(gitDir); errors.Is(err, os.ErrNotExist) {
 		// With no .git, git takes a directory holding HEAD, objects and refs

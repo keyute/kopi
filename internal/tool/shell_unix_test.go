@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -167,6 +168,9 @@ func orphan(t *testing.T, dir string) (command string, exited <-chan int, dead <
 func TestShellCancelAfterShellExitKillsProcessGroup(t *testing.T) {
 	for _, name := range []string{"unsandboxed", "sandboxed"} {
 		t.Run(name, func(t *testing.T) {
+			if name == "sandboxed" && runtime.GOOS == "linux" {
+				t.Skip("in bubblewrap's PID namespace the child dies with the shell, and $$ is not a host PID")
+			}
 			dir := t.TempDir()
 			sh := lifecycleShell(t, dir, name == "sandboxed")
 			command, exited, dead := orphan(t, dir)

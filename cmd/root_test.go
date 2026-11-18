@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -743,8 +744,57 @@ func TestRootDisallowedToolsBeatsAllowedTools(t *testing.T) {
 	assert.Equal(t, "alpha\n", content)
 }
 
+// sandboxUnavailableInRun reports whether a run under newTestEnv has no
+// sandbox: always on Linux, where its empty PATH hides bwrap, and elsewhere
+// when this machine cannot run the sandbox at all.
+func sandboxUnavailableInRun(t *testing.T) bool {
+	t.Helper()
+	return runtime.GOOS == "linux" || !sandboxAvailable(t)
+}
+
+// newSandboxedEnv is newTestEnv for a run whose Bash uses the OS sandbox. On
+// Linux PATH holds links to the two programs the sandbox runs by name, bwrap
+// and the probe's true, and nothing else, so commands still find no tools.
+func newSandboxedEnv(t *testing.T) testEnv {
+	t.Helper()
+	var tools []string
+	if runtime.GOOS == "linux" {
+		for _, name := range []string{"bwrap", "true"} {
+			path, err := exec.LookPath(name)
+			require.NoError(t, err)
+			tools = append(tools, path)
+		}
+	}
+	e := newTestEnv(t)
+	if tools != nil {
+		bin := t.TempDir()
+		for _, path := range tools {
+			require.NoError(t, os.Symlink(path, filepath.Join(bin, filepath.Base(path))))
+		}
+		t.Setenv("PATH", bin)
+	}
+	return e
+}
+
+// refused is the error text of a sandbox refusal: Seatbelt words them all
+// alike, while on Linux it names what the refusing mount does.
+func refused(linux string) string {
+	if runtime.GOOS == "linux" {
+		return linux
+	}
+	return "Operation not permitted"
+}
+
+const (
+	readOnly = "Read-only file system"   // a write under a read-only mount
+	busy     = "Device or resource busy" // a rename or removal of a mount point
+	// The open of a /dev/null placeholder, which bubblewrap mounts nodev.
+	permissionDenied = "Permission denied"
+)
+
 // sandboxAvailable reports whether this machine can run the OS sandbox; it
-// cannot on Linux, nor on macOS when the tests themselves run under Seatbelt.
+// cannot without bubblewrap on Linux, nor on macOS when the tests themselves
+// run under Seatbelt.
 func sandboxAvailable(t *testing.T) bool {
 	t.Helper()
 	_, err := sandbox.New(t.Context(), sandbox.Policy{})
@@ -810,7 +860,7 @@ func printBash(t *testing.T, e testEnv, command string, flags ...string) (result
 }
 
 func TestRootSandboxEnabledButUnavailableFails(t *testing.T) {
-	if sandboxAvailable(t) {
+	if !sandboxUnavailableInRun(t) {
 		t.Skip("the sandbox is available here")
 	}
 	e := newTestEnv(t)
@@ -825,7 +875,7 @@ func TestRootSandboxEnabledButUnavailableFails(t *testing.T) {
 }
 
 func TestRootSandboxUnavailableWarns(t *testing.T) {
-	if sandboxAvailable(t) {
+	if !sandboxUnavailableInRun(t) {
 		t.Skip("the sandbox is available here")
 	}
 	e := newTestEnv(t)
@@ -849,7 +899,7 @@ func TestRootSandboxDisabledBashNeedsApproval(t *testing.T) {
 }
 
 func TestRootSandboxUnavailableBashNeedsApproval(t *testing.T) {
-	if sandboxAvailable(t) {
+	if !sandboxUnavailableInRun(t) {
 		t.Skip("the sandbox is available here")
 	}
 
@@ -884,7 +934,7 @@ func TestRootSandboxedBashRunsWithoutAllowRule(t *testing.T) {
 		t.Skip("the sandbox is unavailable here")
 	}
 
-	result, _ := printBash(t, newTestEnv(t), "echo hi", "--mode", "execute")
+	result, _ := printBash(t, newSandboxedEnv(t), "echo hi", "--mode", "execute")
 
 	assert.Equal(t, "hi\n", result)
 }
@@ -893,7 +943,7 @@ func TestRootSandboxedBashRefusesKopiHomeRead(t *testing.T) {
 	if !sandboxAvailable(t) {
 		t.Skip("the sandbox is unavailable here")
 	}
-	e := newTestEnv(t)
+	e := newSandboxedEnv(t)
 	secret := filepath.Join(e.kopiHome, "secret's.txt")
 	const sentinel = "synthetic kopi Bash secret"
 	e.writeFile(t, secret, sentinel+"\n")
@@ -912,7 +962,7 @@ func TestRootSandboxedBashRefusesKopiHomeWrite(t *testing.T) {
 	if !sandboxAvailable(t) {
 		t.Skip("the sandbox is unavailable here")
 	}
-	e := newTestEnv(t)
+	e := newSandboxedEnv(t)
 	path := filepath.Join(e.kopiHome, "config.json")
 	const original = "{}\n"
 	e.writeFile(t, path, original)
@@ -934,13 +984,14 @@ func TestRootSandboxedBashProtectsGitMetadata(t *testing.T) {
 	for _, tc := range []struct {
 		name, path, command string
 		exists              bool
+		linux               string
 	}{
-		{"no git cannot create HEAD", "HEAD", "printf changed > HEAD", false},
-		{"git file cannot be overwritten", ".git", "printf changed > .git", true},
-		{"git file cannot be replaced", ".git", "/bin/mv -f replacement .git", true},
+		{"no git cannot create HEAD", "HEAD", "printf changed > HEAD", false, permissionDenied},
+		{"git file cannot be overwritten", ".git", "printf changed > .git", true, readOnly},
+		{"git file cannot be replaced", ".git", "/bin/mv -f replacement .git", true, busy},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e := newTestEnv(t)
+			e := newSandboxedEnv(t)
 			const original = "gitdir: synthetic-git-dir\n"
 			path := filepath.Join(e.workspace, tc.path)
 			if tc.exists {
@@ -951,7 +1002,7 @@ func TestRootSandboxedBashProtectsGitMetadata(t *testing.T) {
 			result, _ := printBash(t, e, tc.command, "--mode", "execute")
 
 			assert.Contains(t, result, tool.ErrExitStatus.Error())
-			assert.Contains(t, result, "Operation not permitted")
+			assert.Contains(t, result, refused(tc.linux))
 			if tc.exists {
 				content, err := os.ReadFile(path)
 				require.NoError(t, err)
@@ -971,17 +1022,21 @@ func TestRootSandboxedBashProtectsMCPFile(t *testing.T) {
 		name, path, command string
 		link                string
 		exists              bool
+		linux               string
 	}{
-		{"cannot be created", ".mcp.json", "printf changed > .mcp.json", "", false},
-		{"cannot be replaced", ".mcp.json", "/bin/mv -f replacement .mcp.json", "", true},
-		{"nested cannot be overwritten", "sub/.mcp.json", "printf changed > sub/.mcp.json", "", true},
-		{"linked cannot be overwritten", "servers.json", "printf changed > servers.json", "servers.json", true},
-		{"linked cannot be replaced", "servers.json", "/bin/mv -f replacement servers.json", "servers.json", true},
-		{"linked directory cannot be written", "conf/keep", "printf changed > conf/keep", "conf", true},
-		{"linked directory cannot be replaced", "conf/keep", "/bin/mv conf moved", "conf", true},
+		{"cannot be created", ".mcp.json", "printf changed > .mcp.json", "", false, permissionDenied},
+		{"cannot be replaced", ".mcp.json", "/bin/mv -f replacement .mcp.json", "", true, busy},
+		{"nested cannot be overwritten", "sub/.mcp.json", "printf changed > sub/.mcp.json", "", true, ""},
+		{"linked cannot be overwritten", "servers.json", "printf changed > servers.json", "servers.json", true, readOnly},
+		{"linked cannot be replaced", "servers.json", "/bin/mv -f replacement servers.json", "servers.json", true, busy},
+		{"linked directory cannot be written", "conf/keep", "printf changed > conf/keep", "conf", true, readOnly},
+		{"linked directory cannot be replaced", "conf/keep", "/bin/mv conf moved", "conf", true, busy},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e := newTestEnv(t)
+			if tc.linux == "" && runtime.GOOS == "linux" {
+				t.Skip("only Seatbelt denies .mcp.json by name in every directory")
+			}
+			e := newSandboxedEnv(t)
 			const original = `{"mcpServers":{}}` + "\n"
 			path := filepath.Join(e.workspace, tc.path)
 			if tc.exists {
@@ -995,7 +1050,7 @@ func TestRootSandboxedBashProtectsMCPFile(t *testing.T) {
 			result, _ := printBash(t, e, tc.command, "--mode", "execute")
 
 			assert.Contains(t, result, tool.ErrExitStatus.Error())
-			assert.Contains(t, result, "Operation not permitted")
+			assert.Contains(t, result, refused(tc.linux))
 			if tc.exists {
 				content, err := os.ReadFile(path)
 				require.NoError(t, err)
@@ -1011,7 +1066,12 @@ func TestRootSandboxedBashHonorsConfiguredPaths(t *testing.T) {
 	if !sandboxAvailable(t) {
 		t.Skip("the sandbox is unavailable here")
 	}
-	e := newTestEnv(t)
+	if runtime.GOOS == "linux" {
+		// t.TempDir() is under /tmp there; /var/tmp is the other temporary
+		// directory, outside every write root.
+		t.Setenv("TMPDIR", "/var/tmp")
+	}
+	e := newSandboxedEnv(t)
 	root, err := filepath.EvalSymlinks(e.root)
 	require.NoError(t, err)
 	// /tmp is always writable; TMPDIR must not cover the external targets.
@@ -1050,19 +1110,19 @@ func TestRootSandboxedBashHonorsConfiguredPaths(t *testing.T) {
 	result, _ = printBash(t, e, "printf changed > "+quotedSibling, "--mode", "execute")
 
 	assert.Contains(t, result, tool.ErrExitStatus.Error())
-	assert.Contains(t, result, "Operation not permitted")
+	assert.Contains(t, result, refused(readOnly))
 	assert.NoFileExists(t, siblingFile)
 
 	result, stderr := printBash(t, e, `IFS= read -r secret < `+quotedSecret+` && printf '%s\n' "$secret"`, "--mode", "execute")
 
 	assert.Contains(t, result, tool.ErrExitStatus.Error())
-	assert.Contains(t, result, "Operation not permitted")
+	assert.Contains(t, result, refused(permissionDenied))
 	assert.NotContains(t, result+stderr, sentinel)
 
 	result, _ = printBash(t, e, "printf changed > "+quotedSecret, "--mode", "execute")
 
 	assert.Contains(t, result, tool.ErrExitStatus.Error())
-	assert.Contains(t, result, "Operation not permitted")
+	assert.Contains(t, result, refused(permissionDenied))
 	content, err = os.ReadFile(secret)
 	require.NoError(t, err)
 	assert.Equal(t, sentinel+"\n", string(content))
@@ -1072,7 +1132,7 @@ func TestRootSandboxedBashCannotWriteWorkspaceInPlan(t *testing.T) {
 	if !sandboxAvailable(t) {
 		t.Skip("the sandbox is unavailable here")
 	}
-	e := newTestEnv(t)
+	e := newSandboxedEnv(t)
 	// The workspace lies inside a write root, which must not make it writable.
 	cfg, err := json.Marshal(map[string]any{"sandbox": map[string]any{"allowWrite": []string{e.root}}})
 	require.NoError(t, err)
@@ -1085,7 +1145,7 @@ func TestRootSandboxedBashCannotWriteWorkspaceInPlan(t *testing.T) {
 	result, _ := printBash(t, e, "printf changed > "+quotedWS, "--mode", "plan")
 
 	assert.Contains(t, result, tool.ErrExitStatus.Error())
-	assert.Contains(t, result, "Operation not permitted")
+	assert.Contains(t, result, refused(readOnly))
 	assert.NoFileExists(t, wsFile)
 
 	result, _ = printBash(t, e, "printf 'temp\\n' > "+quotedTemp+" && printf 'write succeeded\\n'", "--mode", "plan")
@@ -1113,6 +1173,9 @@ func TestSandboxPolicy(t *testing.T) {
 	gitFiles := func(cwd string) []string {
 		var out []string
 		for _, name := range []string{"hooks", "config", "commondir", "config.worktree", "worktrees", "modules"} {
+			if name == "commondir" && runtime.GOOS == "linux" {
+				continue
+			}
 			out = append(out, filepath.Join(cwd, ".git", name))
 		}
 		return out
@@ -1134,6 +1197,17 @@ func TestSandboxPolicy(t *testing.T) {
 		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".mcp.json")), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 		assert.True(t, p.Network)
+	})
+
+	t.Run("existing commondir", func(t *testing.T) {
+		cwd := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(cwd, ".git"), 0o755))
+		commondir := filepath.Join(cwd, ".git", "commondir")
+		require.NoError(t, os.WriteFile(commondir, []byte("../..\n"), 0o600))
+
+		p := sandboxPolicy(cfg, cwd, home, kopiHome)
+
+		assert.Contains(t, p.DenyWrite, commondir)
 	})
 
 	t.Run("git file", func(t *testing.T) {
@@ -1180,6 +1254,28 @@ func TestSandboxPolicy(t *testing.T) {
 		plan.DenyWrite[0] = "changed"
 		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".mcp.json")), p.DenyWrite)
 	})
+}
+
+// TestEmptyCommondirBreaksGit is why Linux leaves out a missing commondir: a
+// placeholder there would be empty.
+func TestEmptyCommondirBreaksGit(t *testing.T) {
+	dir := t.TempDir()
+	env := append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+	git := func(args ...string) ([]byte, error) {
+		cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = env
+		return cmd.CombinedOutput()
+	}
+	out, err := git("init", "-q")
+	require.NoError(t, err, string(out))
+	out, err = git("status")
+	require.NoError(t, err, string(out))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "commondir"), nil, 0o600))
+
+	out, err = git("status")
+
+	require.Error(t, err)
+	assert.Contains(t, string(out), "commondir")
 }
 
 func TestSandboxPolicyPreservesSymlinkParent(t *testing.T) {
