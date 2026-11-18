@@ -1,15 +1,14 @@
 package pigruntime
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,6 +51,44 @@ func oauthTestProvider(t *testing.T) *ai.ModelsProvider {
 	return &p
 }
 
+// scriptedUI answers prompts from a script and records what it was asked and
+// shown.
+type scriptedUI struct {
+	mu      sync.Mutex
+	answers []string
+	prompts []LoginPrompt
+	shown   []string
+}
+
+func script(answers ...string) *scriptedUI { return &scriptedUI{answers: answers} }
+
+func (u *scriptedUI) ui() LoginUI {
+	return LoginUI{
+		Ask: func(_ context.Context, p LoginPrompt) (string, error) {
+			u.mu.Lock()
+			defer u.mu.Unlock()
+			u.prompts = append(u.prompts, p)
+			if len(u.answers) == 0 {
+				return "", fmt.Errorf("unscripted prompt %q", p.Message)
+			}
+			a := u.answers[0]
+			u.answers = u.answers[1:]
+			return a, nil
+		},
+		Show: func(text string) {
+			u.mu.Lock()
+			defer u.mu.Unlock()
+			u.shown = append(u.shown, text)
+		},
+	}
+}
+
+func (u *scriptedUI) shownText() string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return strings.Join(u.shown, "\n")
+}
+
 func TestLoginPersistsCredentialForFreshRuntime(t *testing.T) {
 	sb := newSandbox(t)
 	r, _ := newTestRuntime(t, sb)
@@ -60,12 +97,16 @@ func TestLoginPersistsCredentialForFreshRuntime(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, ok)
 
-	var out strings.Builder
-	require.NoError(t, r.Login(t.Context(), oauthProvider, strings.NewReader("code-123\n2\n"), &out))
+	ui := script("code-123", "blue")
+	_, err = r.Login(t.Context(), oauthProvider, ui.ui())
+	require.NoError(t, err)
 
-	assert.Contains(t, out.String(), loginURL)
-	assert.Contains(t, out.String(), "2) Blue")
-	assert.NotContains(t, out.String(), syntheticToken)
+	assert.Contains(t, ui.shownText(), loginURL)
+	assert.Equal(t, []LoginPrompt{
+		{Message: "Code:"},
+		{Message: "Team:", Options: []LoginOption{{ID: "red", Label: "Red"}, {ID: "blue", Label: "Blue"}}},
+	}, ui.prompts)
+	assert.NotContains(t, ui.shownText(), syntheticToken)
 
 	authFile := filepath.Join(sb.agentDir, "auth.json")
 	info, err := os.Stat(authFile)
@@ -92,24 +133,25 @@ func TestLoginOpensSignInURLInBrowser(t *testing.T) {
 		return errors.New("no browser")
 	}
 
-	var out strings.Builder
-	require.NoError(t, r.Login(t.Context(), oauthProvider, strings.NewReader("code-123\n2\n"), &out))
+	ui := script("code-123", "blue")
+	_, err := r.Login(t.Context(), oauthProvider, ui.ui())
+	require.NoError(t, err)
 
 	assert.Equal(t, loginURL, <-opened)
-	assert.Contains(t, out.String(), loginURL, "the printed URL is the fallback")
+	assert.Contains(t, ui.shownText(), loginURL, "the shown URL is the fallback")
 }
 
 func TestLoginOpensDeviceVerificationURLInBrowser(t *testing.T) {
 	opened := make(chan string, 1)
-	var out strings.Builder
-	l := &loginIO{out: &out, openURL: func(u string) error {
+	ui := script()
+	l := newLoginAdapter(ui.ui(), func(u string) error {
 		opened <- u
 		return nil
-	}}
+	})
 	l.notify(ai.AuthDeviceCodeEvent{VerificationURI: loginURL, UserCode: "TEST-CODE"})
 
-	assert.Contains(t, out.String(), loginURL)
-	assert.Contains(t, out.String(), "TEST-CODE")
+	assert.Contains(t, ui.shownText(), loginURL)
+	assert.Contains(t, ui.shownText(), "TEST-CODE")
 	select {
 	case u := <-opened:
 		assert.Equal(t, loginURL, u)
@@ -120,17 +162,17 @@ func TestLoginOpensDeviceVerificationURLInBrowser(t *testing.T) {
 
 func TestLoginOpensOnlyWebURLsInBrowser(t *testing.T) {
 	opened := make(chan string, 8)
-	var out strings.Builder
-	l := &loginIO{out: &out, openURL: func(u string) error {
+	ui := script()
+	l := newLoginAdapter(ui.ui(), func(u string) error {
 		opened <- u
 		return nil
-	}}
+	})
 	for _, bad := range []string{"file:///etc/passwd", "javascript:alert(1)", "http://[::1"} {
 		l.open(bad)
 		assert.Empty(t, opened, "%s must not open in the browser", bad)
 		l.notify(ai.AuthURLEvent{URL: bad})
 		l.notify(ai.AuthDeviceCodeEvent{VerificationURI: bad, UserCode: "TEST-CODE"})
-		assert.Equal(t, 2, strings.Count(out.String(), bad), "%s is printed for both events", bad)
+		assert.Equal(t, 2, strings.Count(ui.shownText(), bad), "%s is printed for both events", bad)
 	}
 	for _, web := range []string{loginURL, "http://login.example/authorize"} {
 		l.open(web)
@@ -200,7 +242,8 @@ func TestLoginIntroducesKopi(t *testing.T) {
 			calls := make(chan loginCall, 1)
 			require.NoError(t, r.RegisterProvider(loginTestProvider(provider, ai.ProviderAuth{OAuth: recordingSignIn(calls, false)})))
 
-			require.NoError(t, r.Login(t.Context(), provider, strings.NewReader(""), io.Discard))
+			_, err := r.Login(t.Context(), provider, script().ui())
+			require.NoError(t, err)
 
 			call := <-calls
 			require.NotNil(t, call.opts.AgentName)
@@ -216,7 +259,8 @@ func TestLoginDeviceIDIsInstallationID(t *testing.T) {
 		r, _ := newTestRuntime(t, sb)
 		calls := make(chan loginCall, 1)
 		require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{OAuth: recordingSignIn(calls, true)})))
-		require.NoError(t, r.Login(t.Context(), oauthProvider, strings.NewReader(""), io.Discard))
+		_, err := r.Login(t.Context(), oauthProvider, script().ui())
+		require.NoError(t, err)
 		return (<-calls).deviceID
 	}
 
@@ -237,7 +281,8 @@ func TestLoginNotAskingForDeviceIDCreatesNoInstallationID(t *testing.T) {
 	calls := make(chan loginCall, 1)
 	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{OAuth: recordingSignIn(calls, false)})))
 
-	require.NoError(t, r.Login(t.Context(), oauthProvider, strings.NewReader(""), io.Discard))
+	_, err := r.Login(t.Context(), oauthProvider, script().ui())
+	require.NoError(t, err)
 
 	<-calls
 	assert.NoFileExists(t, filepath.Join(sb.kopiHome, "installation_id"))
@@ -251,7 +296,7 @@ func TestLoginReportsInvalidInstallationID(t *testing.T) {
 	calls := make(chan loginCall, 1)
 	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{OAuth: recordingSignIn(calls, true)})))
 
-	err := r.Login(t.Context(), oauthProvider, strings.NewReader(""), io.Discard)
+	_, err := r.Login(t.Context(), oauthProvider, script().ui())
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), file)
@@ -263,11 +308,12 @@ func TestLoginStoresAPIKey(t *testing.T) {
 	r, _ := newTestRuntime(t, sb)
 	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{APIKey: storedKeyAuth()})))
 
-	var out strings.Builder
-	require.NoError(t, r.Login(t.Context(), oauthProvider, strings.NewReader(syntheticToken+"\n"), &out))
+	ui := script(syntheticToken)
+	_, err := r.Login(t.Context(), oauthProvider, ui.ui())
+	require.NoError(t, err)
 
-	assert.Contains(t, out.String(), "Enter API key")
-	assert.NotContains(t, out.String(), syntheticToken)
+	assert.Equal(t, []LoginPrompt{{Message: "Enter API key", Secret: true}}, ui.prompts)
+	assert.NotContains(t, ui.shownText(), syntheticToken)
 	content, err := os.ReadFile(filepath.Join(sb.agentDir, "auth.json"))
 	require.NoError(t, err)
 	assert.Contains(t, string(content), syntheticToken)
@@ -276,14 +322,26 @@ func TestLoginStoresAPIKey(t *testing.T) {
 	assert.True(t, ok)
 }
 
+func TestLoginTrimsAnswers(t *testing.T) {
+	ui := script("  "+syntheticToken+"\r\n", "\t\n")
+	l := newLoginAdapter(ui.ui(), nil)
+
+	got, err := l.ask(t.Context(), LoginPrompt{Message: "Key:", Secret: true})
+	require.NoError(t, err)
+	assert.Equal(t, syntheticToken, got)
+
+	_, err = l.ask(t.Context(), LoginPrompt{Message: "Key:", Secret: true})
+	assert.ErrorContains(t, err, "empty answer")
+}
+
 func TestLoginRejectsEmptyAPIKey(t *testing.T) {
 	sb := newSandbox(t)
 	r, _ := newTestRuntime(t, sb)
 	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{APIKey: storedKeyAuth()})))
 
-	err := r.Login(t.Context(), oauthProvider, strings.NewReader("\n"), io.Discard)
+	_, err := r.Login(t.Context(), oauthProvider, script("").ui())
 
-	require.Error(t, err)
+	require.ErrorContains(t, err, "empty answer")
 	providers, err := r.Providers(t.Context())
 	require.NoError(t, err)
 	i := slices.IndexFunc(providers, func(p Provider) bool { return p.ID == oauthProvider })
@@ -301,7 +359,7 @@ func TestLoginRewordsSignInFailure(t *testing.T) {
 	}
 	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{OAuth: signIn})))
 
-	err := r.Login(t.Context(), oauthProvider, strings.NewReader(""), io.Discard)
+	_, err := r.Login(t.Context(), oauthProvider, script().ui())
 
 	require.ErrorIs(t, err, errPort)
 	assert.Contains(t, err.Error(), "another Kopi session")
@@ -314,24 +372,28 @@ func TestLoginAsksForMethodWhenProviderOffersBoth(t *testing.T) {
 	calls := make(chan loginCall, 1)
 	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{OAuth: recordingSignIn(calls, false), APIKey: storedKeyAuth()})))
 
-	var out strings.Builder
-	require.NoError(t, r.Login(t.Context(), oauthProvider, strings.NewReader("2\n"+syntheticToken+"\n"), &out))
+	ui := script(string(ai.CredentialAPIKey), syntheticToken)
+	_, err := r.Login(t.Context(), oauthProvider, ui.ui())
+	require.NoError(t, err)
 
-	assert.Contains(t, out.String(), "1) Kopi test sign-in")
-	assert.Contains(t, out.String(), "2) API key")
+	assert.Equal(t, []LoginOption{
+		{ID: string(ai.CredentialOAuth), Label: "Kopi test sign-in"},
+		{ID: string(ai.CredentialAPIKey), Label: "API key"},
+	}, ui.prompts[0].Options)
 	assert.Empty(t, calls, "the sign-in never ran")
 	content, err := os.ReadFile(filepath.Join(sb.agentDir, "auth.json"))
 	require.NoError(t, err)
 	assert.Contains(t, string(content), `"api_key"`)
 }
 
-func TestLoginPrintsAnthropicBillingNoticeAfterSignInOnly(t *testing.T) {
+func TestLoginReturnsAnthropicBillingNoticeAfterSignInOnly(t *testing.T) {
 	for _, tc := range []struct {
-		name, input string
-		notice      bool
+		name    string
+		answers []string
+		notice  bool
 	}{
-		{name: "sign-in", input: "1\n", notice: true},
-		{name: "api key", input: "2\n" + syntheticToken + "\n", notice: false},
+		{name: "sign-in", answers: []string{string(ai.CredentialOAuth)}, notice: true},
+		{name: "api key", answers: []string{string(ai.CredentialAPIKey), syntheticToken}, notice: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sb := newSandbox(t)
@@ -339,13 +401,13 @@ func TestLoginPrintsAnthropicBillingNoticeAfterSignInOnly(t *testing.T) {
 			calls := make(chan loginCall, 1)
 			require.NoError(t, r.RegisterProvider(loginTestProvider("anthropic", ai.ProviderAuth{OAuth: recordingSignIn(calls, false), APIKey: storedKeyAuth()})))
 
-			var out strings.Builder
-			require.NoError(t, r.Login(t.Context(), "anthropic", strings.NewReader(tc.input), &out))
+			notice, err := r.Login(t.Context(), "anthropic", script(tc.answers...).ui())
+			require.NoError(t, err)
 
 			if tc.notice {
-				assert.Contains(t, out.String(), signInNotices["anthropic"])
+				assert.Equal(t, signInNotices["anthropic"], notice)
 			} else {
-				assert.NotContains(t, out.String(), signInNotices["anthropic"])
+				assert.Empty(t, notice)
 			}
 		})
 	}
@@ -368,7 +430,8 @@ func TestProvidersReportLoginsAndStatus(t *testing.T) {
 	}
 
 	assert.Equal(t, Provider{ID: oauthProvider, SignIn: "Kopi test OAuth"}, find())
-	require.NoError(t, r.Login(t.Context(), oauthProvider, strings.NewReader("code-123\n2\n"), io.Discard))
+	_, err := r.Login(t.Context(), oauthProvider, script("code-123", "blue").ui())
+	require.NoError(t, err)
 	assert.True(t, find().LoggedIn)
 }
 
@@ -376,7 +439,8 @@ func TestLogout(t *testing.T) {
 	sb := newSandbox(t)
 	r, _ := newTestRuntime(t, sb)
 	require.NoError(t, r.RegisterProvider(oauthTestProvider(t)))
-	require.NoError(t, r.Login(t.Context(), oauthProvider, strings.NewReader("code-123\n2\n"), io.Discard))
+	_, err := r.Login(t.Context(), oauthProvider, script("code-123", "blue").ui())
+	require.NoError(t, err)
 
 	require.NoError(t, r.Logout(t.Context(), oauthProvider))
 
@@ -398,47 +462,149 @@ func TestLoginRejectsProvider(t *testing.T) {
 		{name: "without login", provider: fauxProvider, want: ErrNoLogin},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := r.Login(t.Context(), tc.provider, strings.NewReader(""), io.Discard)
+			_, err := r.Login(t.Context(), tc.provider, script().ui())
 			assert.ErrorIs(t, err, tc.want)
 		})
 	}
 }
 
-func TestLoginPromptReturnsWhenContextEnds(t *testing.T) {
-	in, w := io.Pipe()
-	t.Cleanup(func() { _ = w.Close() })
-	l := &loginIO{in: in, lines: bufio.NewReader(in), out: io.Discard}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
+func TestLoginRejectsOptionThatWasNotOffered(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	require.NoError(t, r.RegisterProvider(oauthTestProvider(t)))
 
-	_, err := l.prompt(ctx, ai.AuthManualCodePrompt{Message: "Code:"})
-	assert.ErrorIs(t, err, context.Canceled)
+	_, err := r.Login(t.Context(), oauthProvider, script("code-123", "green").ui())
+
+	require.ErrorContains(t, err, `invalid choice "green"`)
+	ok, err := r.hasCredential(t.Context(), oauthProvider)
+	require.NoError(t, err)
+	assert.False(t, ok)
 }
 
-func TestLoginPromptCancelledHandsPendingReadToNextPrompt(t *testing.T) {
-	in, w := io.Pipe()
-	t.Cleanup(func() { _ = w.Close() })
-	l := &loginIO{in: in, lines: bufio.NewReader(in), out: io.Discard}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-
-	_, err := l.prompt(ctx, ai.AuthManualCodePrompt{Message: "Code:"})
-	require.ErrorIs(t, err, context.Canceled)
-	require.NotNil(t, l.pending, "the cancelled prompt leaves its read in flight")
-
-	type result struct {
-		text string
-		err  error
+// promptingSignIn is a sign-in that returns at once while a goroutine of its
+// own prompts under a ctx nothing cancels, as PiG's flows do after a callback
+// server wins.
+func promptingSignIn(prompt func(ai.AuthInteraction)) *ai.OAuthAuth {
+	signIn := recordingSignIn(make(chan loginCall, 1), false)
+	signIn.Login = func(_ context.Context, in ai.AuthInteraction, _ ai.LoginOptions) (ai.Credential, error) {
+		prompt(in)
+		return ai.Credential{Type: ai.CredentialOAuth, Access: syntheticToken, Refresh: "r", Expires: time.Now().Add(time.Hour).UnixMilli()}, nil
 	}
-	done := make(chan result, 1)
-	go func() {
-		text, err := l.prompt(t.Context(), ai.AuthManualCodePrompt{Message: "Code:"})
-		done <- result{text, err}
-	}()
-	_, err = io.WriteString(w, "code-123\n")
+	return signIn
+}
+
+func TestLoginCancelsAndJoinsAskInFlight(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	asking := make(chan struct{})
+	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{OAuth: promptingSignIn(func(in ai.AuthInteraction) {
+		go func() { _, _ = in.Prompt(context.Background(), ai.AuthTextPrompt{Message: "Code:"}) }()
+		<-asking
+	})})))
+	returned := make(chan struct{})
+	ui := LoginUI{
+		Ask: func(ctx context.Context, _ LoginPrompt) (string, error) {
+			close(asking)
+			<-ctx.Done()
+			close(returned)
+			return "", context.Cause(ctx)
+		},
+		Show: func(string) {},
+	}
+
+	_, err := r.Login(t.Context(), oauthProvider, ui)
+
 	require.NoError(t, err)
-	res := <-done
-	require.NoError(t, res.err)
-	assert.Equal(t, "code-123", res.text)
-	assert.Nil(t, l.pending)
+	select {
+	case <-returned:
+	default:
+		t.Fatal("Login returned before the Ask in flight did")
+	}
+}
+
+func TestLoginCancelledContextJoinsAskInFlight(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	signIn := recordingSignIn(make(chan loginCall, 1), false)
+	signIn.Login = func(ctx context.Context, in ai.AuthInteraction, _ ai.LoginOptions) (ai.Credential, error) {
+		go func() { _, _ = in.Prompt(context.Background(), ai.AuthTextPrompt{Message: "Code:"}) }()
+		<-ctx.Done()
+		return ai.Credential{}, ctx.Err()
+	}
+	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{OAuth: signIn})))
+	ctx, cancel := context.WithCancel(t.Context())
+	asking, returned := make(chan struct{}), make(chan struct{})
+	ui := LoginUI{
+		Ask: func(ctx context.Context, _ LoginPrompt) (string, error) {
+			close(asking)
+			<-ctx.Done()
+			close(returned)
+			return "", context.Cause(ctx)
+		},
+		Show: func(string) {},
+	}
+	go func() {
+		<-asking
+		cancel()
+	}()
+
+	_, err := r.Login(ctx, oauthProvider, ui)
+
+	require.ErrorIs(t, err, context.Canceled)
+	select {
+	case <-returned:
+	default:
+		t.Fatal("Login returned before the Ask in flight did")
+	}
+}
+
+func TestLoginRefusesAskAfterReturn(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	release := make(chan struct{})
+	late := make(chan error, 1)
+	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{OAuth: promptingSignIn(func(in ai.AuthInteraction) {
+		go func() {
+			<-release
+			_, err := in.Prompt(context.Background(), ai.AuthTextPrompt{Message: "Code:"})
+			late <- err
+		}()
+	})})))
+	ui := script()
+
+	_, err := r.Login(t.Context(), oauthProvider, ui.ui())
+	require.NoError(t, err)
+	close(release)
+
+	require.ErrorIs(t, <-late, context.Canceled)
+	assert.Empty(t, ui.prompts, "the late prompt never reached the UI")
+}
+
+func TestLoginDropsNotifyAfterReturn(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	opened := make(chan string, 1)
+	r.openURL = func(u string) error {
+		opened <- u
+		return nil
+	}
+	release := make(chan struct{})
+	notified := make(chan struct{})
+	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{OAuth: promptingSignIn(func(in ai.AuthInteraction) {
+		go func() {
+			<-release
+			in.Notify(ai.AuthURLEvent{URL: loginURL})
+			in.Notify(ai.AuthProgressEvent{Message: "late progress"})
+			close(notified)
+		}()
+	})})))
+	ui := script()
+
+	_, err := r.Login(t.Context(), oauthProvider, ui.ui())
+	require.NoError(t, err)
+	close(release)
+	<-notified
+
+	assert.Empty(t, ui.shownText(), "a late event is never shown")
+	assert.Empty(t, opened, "a late URL is never opened")
 }

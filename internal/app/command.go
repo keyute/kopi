@@ -34,6 +34,8 @@ func commandTable() []command {
 			return c.switchTo(ctx, OpenRequest{})
 		}},
 		{Command: Command{Name: "resume", Summary: "resume a session"}, run: (*Controller).resumeCommand, args: (*Controller).sessionCandidates},
+		{Command: Command{Name: "login", Summary: "log in to a model provider"}, run: (*Controller).loginCommand, args: (*Controller).loginCandidates},
+		{Command: Command{Name: "logout", Summary: "remove a model provider's stored credential"}, run: (*Controller).logoutCommand, args: (*Controller).logoutCandidates},
 		{Command: Command{Name: "tasks", Summary: "list and stop background tasks"}, run: func(*Controller, context.Context, string) error {
 			return ErrShowTasks
 		}},

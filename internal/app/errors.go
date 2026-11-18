@@ -11,4 +11,5 @@ var (
 	ErrNoSession        = errors.New("no open session")
 	ErrWorkStillRunning = errors.New("work is still running")
 	ErrMissingArgument  = errors.New("missing argument")
+	ErrLoggingIn        = errors.New("a login is under way")
 )

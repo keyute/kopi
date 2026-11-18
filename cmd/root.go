@@ -385,7 +385,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		}
 	}()
 	if resolved.Config.SmallModel != "" {
-		if err := rt.Check(startCtx, pigruntime.OpenOptions{Model: smallModel}); err != nil {
+		if err := rt.Check(startCtx, pigruntime.OpenOptions{Model: smallModel}); err != nil && (!fullscreen || !sameProviderNoCredential(err, model, smallModel)) {
 			if errors.Is(err, pigruntime.ErrNoCredential) {
 				providers, listErr := rt.Providers(ctx)
 				if listErr != nil {
@@ -714,6 +714,15 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 func planPolicy(p sandbox.Policy, cwd string) sandbox.Policy {
 	p.DenyWrite = slices.Concat(p.DenyWrite, []string{cwd})
 	return p
+}
+
+// sameProviderNoCredential reports whether err is the missing credential of
+// the provider smallModel shares with model; in fullscreen the first-run login
+// of model supplies it.
+func sameProviderNoCredential(err error, model, smallModel string) bool {
+	provider, _, _ := strings.Cut(model, "/")
+	smallProvider, _, _ := strings.Cut(smallModel, "/")
+	return errors.Is(err, pigruntime.ErrNoCredential) && provider == smallProvider
 }
 
 // diagnose turns the open failures a user can fix into Kopi's own advice.

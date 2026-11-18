@@ -343,6 +343,40 @@ func TestRootSmallModelWithoutCredentialFailsAtStart(t *testing.T) {
 	assert.Empty(t, server.requests)
 }
 
+func TestRootHeadlessSameProviderSmallModelWithoutCredentialFailsAtStart(t *testing.T) {
+	e := newTestEnv(t)
+	t.Setenv("MISTRAL_API_KEY", "")
+	model := builtinModel(t, "mistral")
+	configFile := filepath.Join(e.kopiHome, "config.json")
+	e.writeFile(t, configFile, fmt.Sprintf(`{"smallModel":%q}`, model))
+
+	_, _, err := execute(t, "", "--model", model, "-p", "hi")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"smallModel" in `+configFile)
+	assert.Contains(t, err.Error(), `no credential for provider "mistral"`)
+	assert.Contains(t, err.Error(), `run "kopi login mistral"`)
+	assert.NotContains(t, err.Error(), "failed to open session")
+}
+
+func TestSameProviderNoCredential(t *testing.T) {
+	noCredential := fmt.Errorf("provider: %w", pigruntime.ErrNoCredential)
+	for _, tc := range []struct {
+		name       string
+		err        error
+		model, sub string
+		want       bool
+	}{
+		{name: "same provider", err: noCredential, model: "a/m1", sub: "a/m2", want: true},
+		{name: "other provider", err: noCredential, model: "a/m1", sub: "b/m2"},
+		{name: "other error", err: pigruntime.ErrUnknownModel, model: "a/m1", sub: "a/m2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, sameProviderNoCredential(tc.err, tc.model, tc.sub))
+		})
+	}
+}
+
 // builtinModel names one of PiG's builtin models for provider.
 func builtinModel(t *testing.T, provider string) string {
 	t.Helper()
