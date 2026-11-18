@@ -14,7 +14,7 @@ const secretMark = "•"
 
 // newLoginDialog is the prompt for ev: its message as the title and its
 // provider as the note. Options become one numbered choice each; otherwise
-// the one option is a text field, masked when ev asks for a secret.
+// the one option is an unlabelled text field, masked when ev asks for a secret.
 func newLoginDialog(ev event.LoginRequested, km *keyMap, th theme) *dialog {
 	d := &dialog{title: ev.Message, note: ev.Provider}
 	if len(ev.Options) > 0 {
@@ -30,7 +30,7 @@ func newLoginDialog(ev event.LoginRequested, km *keyMap, th theme) *dialog {
 	f := newField(th, km.newline, ev.Placeholder)
 	f.secret = ev.Secret
 	f.ta.Focus()
-	d.options = []option{{label: "Answer", field: &f}}
+	d.options = []option{{field: &f}}
 	return d
 }
 

@@ -39,18 +39,29 @@ func TestLoginRowsListOptionsWithDescriptions(t *testing.T) {
 
 func TestLoginRowsShowATextFieldWithItsPlaceholder(t *testing.T) {
 	ev := event.LoginRequested{Message: "Paste the code", Placeholder: "code"}
-	assert.Equal(t, []string{rule40, "  Paste the code", "", "❭ 1. Answer  code", rule40}, plainLoginRows(ev, 0))
+	assert.Equal(t, []string{rule40, "  Paste the code", "", "❭ code", rule40}, plainLoginRows(ev, 0))
 }
 
 func TestLoginRowsMaskASecret(t *testing.T) {
 	km := newKeyMap(config.DefaultKeys())
 	d := newLoginDialog(event.LoginRequested{Message: "API key", Placeholder: "key", Secret: true}, &km, mocha())
-	assert.Equal(t, "❭ 1. Answer  key", plainRows(loginRows(d, 40, 3, 100, mocha()))[3])
+	assert.Equal(t, "❭ key", plainRows(loginRows(d, 40, 3, 100, mocha()))[3])
 
 	d.paste("sk-secret")
 	rows := plainRows(loginRows(d, 40, 3, 100, mocha()))
-	assert.Equal(t, "❭ 1. Answer  •••••••••", rows[3])
+	assert.Equal(t, "❭ •••••••••", rows[3])
 	assert.NotContains(t, strings.Join(rows, "\n"), "secret")
+}
+
+func TestLoginRowsIndentLaterRowsOfAMultiLineDraft(t *testing.T) {
+	km := newKeyMap(config.DefaultKeys())
+	d := newLoginDialog(event.LoginRequested{Message: "Code"}, &km, mocha())
+	d.paste("first\nsecond")
+	rows := plainRows(loginRows(d, 40, 3, 100, mocha()))
+	assert.Equal(t, []string{"❭ first", "  second"}, rows[3:5])
+	require.Len(t, d.areas, 1)
+	assert.Equal(t, 2, d.areas[0].x)
+	assert.Equal(t, 3, d.areas[0].y)
 }
 
 func TestLoginRowsKeepTheSelectionBetweenRules(t *testing.T) {
@@ -99,7 +110,7 @@ func TestLoginResizeKeepsRulesAboveFooterAndFieldGeometry(t *testing.T) {
 				require.Len(t, rows, height)
 				assert.Equal(t, rule40, rows[height-2], "bottom rule immediately above footer")
 				assert.Equal(t, rule40, plainRows(m.prompt)[0])
-				assert.Contains(t, strings.Join(rows, "\n"), "❭ 1. Answer")
+				assert.Contains(t, strings.Join(rows, "\n"), "❭ ", "field row visible")
 				if secret {
 					assert.NotContains(t, strings.Join(rows, "\n"), "private")
 					assert.Contains(t, strings.Join(rows, "\n"), strings.Repeat(secretMark, len("privateanswer")))
@@ -110,7 +121,7 @@ func TestLoginResizeKeepsRulesAboveFooterAndFieldGeometry(t *testing.T) {
 					assert.Equal(t, 2, fa.x)
 					assert.Greater(t, fa.h, 0)
 					assert.LessOrEqual(t, fa.y+fa.h, height-2)
-					assert.Contains(t, []string{"  private", "  answer"}, rows[fa.y])
+					assert.Contains(t, []string{"❭ private", "❭ answer", "  answer"}, rows[fa.y])
 				}
 			}
 		})
