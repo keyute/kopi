@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -9,7 +10,6 @@ import (
 	"path"
 	"slices"
 	"strings"
-	"syscall"
 
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 )
@@ -164,9 +164,11 @@ func (w *Workspace) gitignore(dir string, domain []string) []gitignore.Pattern {
 // be the directory vetted was taken from, so a swap after vetting (say for a
 // symlink into a store) is not followed.
 func (w *Workspace) readDir(dir string, vetted fs.FileInfo) ([]fs.DirEntry, error) {
-	// O_NONBLOCK: dir may have been swapped for a FIFO since it was vetted.
-	f, err := w.root.OpenFile(dir, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	f, err := w.openCanonical(dir)
 	if err != nil {
+		if errors.Is(err, ErrTargetChanged) {
+			return nil, fmt.Errorf("%w: %s", ErrOutsideWorkspace, dir)
+		}
 		return nil, err
 	}
 	defer f.Close()
@@ -178,6 +180,9 @@ func (w *Workspace) readDir(dir string, vetted fs.FileInfo) ([]fs.DirEntry, erro
 		if !os.SameFile(info, vetted) {
 			return nil, fmt.Errorf("%w: %s", ErrOutsideWorkspace, dir)
 		}
+	}
+	if err := w.check(f, dir, dir); err != nil {
+		return nil, err
 	}
 	entries, err := f.ReadDir(-1)
 	if err != nil {

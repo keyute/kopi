@@ -190,3 +190,108 @@ func TestOpenWalkedRefusesFileMovedIntoProtection(t *testing.T) {
 	require.ErrorIs(t, err, ErrProtected)
 	assert.Nil(t, f)
 }
+
+func TestOpenWalkedRefusesSameInodeSymlinkSwap(t *testing.T) {
+	for _, parent := range []bool{false, true} {
+		for _, protected := range []bool{false, true} {
+			t.Run(fmt.Sprintf("parent=%t/protected=%t", parent, protected), func(t *testing.T) {
+				dir := t.TempDir()
+				name, moved := "allowed.txt", "denied.txt"
+				if parent {
+					name, moved = "allowed", "denied"
+				}
+				var stores []string
+				if protected {
+					stores = []string{filepath.Join(dir, "kopi-home")}
+					require.NoError(t, os.Mkdir(stores[0], 0o755))
+					moved = filepath.Join("kopi-home", moved)
+				}
+				p := name
+				if parent {
+					p = filepath.Join(name, "file.txt")
+				}
+				writeFile(t, filepath.Join(dir, p), "needle secret")
+				ws := newWorkspace(t, dir, stores)
+				info, err := ws.root.Lstat(p)
+				require.NoError(t, err)
+				require.NoError(t, os.Rename(filepath.Join(dir, name), filepath.Join(dir, moved)))
+				require.NoError(t, os.Symlink(moved, filepath.Join(dir, name)))
+				f, err := ws.openWalked(filepath.ToSlash(p), info)
+				if protected {
+					require.ErrorIs(t, err, ErrProtected)
+				} else {
+					require.ErrorIs(t, err, ErrTargetChanged)
+				}
+				assert.Nil(t, f)
+			})
+		}
+	}
+}
+
+func TestSearchToolsRefuseSameInodeDirectorySwapDuringAdmission(t *testing.T) {
+	for _, name := range []string{"Glob", "Grep", "LS"} {
+		for _, parent := range []bool{false, true} {
+			for _, protected := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/parent=%t/protected=%t", name, parent, protected), func(t *testing.T) {
+					dir := t.TempDir()
+					p := "allowed"
+					if parent {
+						p = "allowed/sub"
+					}
+					writeFile(t, filepath.Join(dir, p, "secret.txt"), "needle secret")
+					moved := "denied"
+					var stores []string
+					if protected {
+						stores = []string{filepath.Join(dir, "kopi-home")}
+						require.NoError(t, os.Mkdir(stores[0], 0o755))
+						moved = "kopi-home/denied"
+					}
+					ws := newWorkspace(t, dir, stores)
+					var tool Tool
+					args := fmt.Sprintf(`{"path":%q}`, p)
+					switch name {
+					case "Glob":
+						tool = NewGlob(ws, nil)
+						args = fmt.Sprintf(`{"path":%q,"pattern":"*"}`, p)
+					case "Grep":
+						tool = NewGrep(ws, nil)
+						args = fmt.Sprintf(`{"path":%q,"pattern":"needle","output_mode":"content"}`, p)
+					case "LS":
+						tool = NewLS(ws, nil)
+					}
+					res, err := tool.Run(t.Context(), json.RawMessage(args), func(policy.Target) (policy.Mode, error) {
+						require.NoError(t, os.Rename(filepath.Join(dir, "allowed"), filepath.Join(dir, moved)))
+						require.NoError(t, os.Symlink(moved, filepath.Join(dir, "allowed")))
+						return policy.Execute, nil
+					})
+					require.Error(t, err)
+					assert.Empty(t, res.Text)
+				})
+			}
+		}
+	}
+}
+
+func TestSearchToolsOpenResolvedSymlinkRoot(t *testing.T) {
+	for _, name := range []string{"Glob", "Grep", "LS"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, filepath.Join(dir, "real", "file.txt"), "needle")
+			require.NoError(t, os.Symlink("real", filepath.Join(dir, "link")))
+			ws := newWorkspace(t, dir, nil)
+			var tool Tool
+			args := `{"path":"link"}`
+			switch name {
+			case "Glob":
+				tool, args = NewGlob(ws, nil), `{"path":"link","pattern":"*"}`
+			case "Grep":
+				tool, args = NewGrep(ws, nil), `{"path":"link","pattern":"needle"}`
+			case "LS":
+				tool = NewLS(ws, nil)
+			}
+			res, err := tool.Run(t.Context(), json.RawMessage(args), allowTarget)
+			require.NoError(t, err)
+			assert.Contains(t, res.Text, "file.txt")
+		})
+	}
+}

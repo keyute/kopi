@@ -602,3 +602,31 @@ func TestReadGrepLineModesPreserveLogicalLines(t *testing.T) {
 		})
 	}
 }
+
+func TestGrepRefusesSameInodeSwapDuringHiddenCheck(t *testing.T) {
+	for _, parent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("parent=%t", parent), func(t *testing.T) {
+			dir := t.TempDir()
+			name, moved, p := "allowed.txt", "denied.txt", "allowed.txt"
+			if parent {
+				name, moved, p = "allowed", "denied", "allowed/file.txt"
+			}
+			writeFile(t, filepath.Join(dir, p), "needle secret")
+			ws := newWorkspace(t, dir, nil)
+			swapped := false
+			tool := NewGrep(ws, func(_ string, _, target policy.Target) bool {
+				if !swapped && target.Real == filepath.Join(ws.realDir, p) {
+					swapped = true
+					require.NoError(t, os.Rename(filepath.Join(dir, name), filepath.Join(dir, moved)))
+					require.NoError(t, os.Symlink(moved, filepath.Join(dir, name)))
+				}
+				rel, err := filepath.Rel(filepath.Join(ws.realDir, moved), target.Real)
+				return err == nil && filepath.IsLocal(rel)
+			})
+			out, err := runGrep(t, tool, `{"pattern":"needle","output_mode":"content"}`)
+			require.NoError(t, err)
+			assert.True(t, swapped)
+			assert.Equal(t, "No matches found", out)
+		})
+	}
+}

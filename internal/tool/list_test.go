@@ -264,3 +264,29 @@ func TestWalkSkipsQueuedDirectoryThatBecameStore(t *testing.T) {
 	}))
 	assert.Equal(t, []string{".env", "a"}, got)
 }
+
+func TestReadDirRefusesSameInodeSymlinkSwap(t *testing.T) {
+	for _, parent := range []bool{false, true} {
+		name := "leaf"
+		if parent {
+			name = "parent"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			p := "allowed"
+			if parent {
+				p = "allowed/sub"
+			}
+			writeFile(t, filepath.Join(dir, p, "secret.txt"), "secret")
+			ws := newWorkspace(t, dir, nil)
+			info, err := ws.root.Lstat(p)
+			require.NoError(t, err)
+			require.NoError(t, os.Rename(filepath.Join(dir, "allowed"), filepath.Join(dir, "denied")))
+			require.NoError(t, os.Symlink("denied", filepath.Join(dir, "allowed")))
+
+			entries, err := ws.readDir(p, info)
+			require.Error(t, err)
+			assert.Empty(t, entries)
+		})
+	}
+}

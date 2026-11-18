@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -67,10 +66,18 @@ func (w *Workspace) searchRoot(path string) (t policy.Target, rel string, info f
 // openWalked opens the regular file walk visited at p with info. A file
 // swapped since, say for a symlink or a FIFO, is refused rather than read.
 func (w *Workspace) openWalked(p string, info fs.FileInfo) (*os.File, error) {
-	// O_NONBLOCK: p may have been swapped for a FIFO since it was walked.
-	f, err := w.root.OpenFile(p, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	f, err := w.openCanonical(p)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open %s: %w", p, err)
+		// Protection takes precedence even when a newly installed symlink
+		// prevents opening the canonical path.
+		_, protected, rerr := w.resolve(filepath.FromSlash(p))
+		if rerr != nil {
+			return nil, rerr
+		}
+		if protected {
+			return nil, fmt.Errorf("%w: %s", ErrProtected, p)
+		}
+		return nil, err
 	}
 	opened, err := f.Stat()
 	if err != nil || !os.SameFile(opened, info) || !opened.Mode().IsRegular() {
@@ -82,6 +89,17 @@ func (w *Workspace) openWalked(p string, info fs.FileInfo) (*os.File, error) {
 		return nil, err
 	}
 	return f, nil
+}
+
+// openCanonical pins each parent and the leaf without accepting symlinks
+// installed since searchRoot or walk resolved the traversal path.
+func (w *Workspace) openCanonical(p string) (*os.File, error) {
+	dest, err := w.prepareWrite(filepath.FromSlash(p), p)
+	if err != nil {
+		return nil, err
+	}
+	defer dest.parent.Close()
+	return dest.open()
 }
 
 // under returns walked path p relative to the search start rel, and the target
