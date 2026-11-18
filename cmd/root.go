@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/keyute/kopi/internal/app"
+	"github.com/keyute/kopi/internal/classifier"
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/headless"
@@ -346,7 +348,18 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		smallModel = model
 	}
 	answer := func(ctx context.Context, system, prompt string) (string, error) {
-		return rt.Answer(ctx, smallModel, system, prompt)
+		return rt.Answer(ctx, smallModel, pigruntime.DefaultEffort, system, prompt)
+	}
+	classifierOn := resolved.Config.Classifier.Enabled
+	classifierModel := cmp.Or(resolved.Config.Classifier.Model, model)
+	var review *classifier.Classifier
+	if classifierOn {
+		stage := func(effort pigruntime.Effort) classifier.Answer {
+			return func(ctx context.Context, system, prompt string) (string, error) {
+				return rt.Answer(ctx, classifierModel, effort, system, prompt)
+			}
+		}
+		review = classifier.New(stage(pigruntime.LowestEffort), stage(pigruntime.MediumEffort), resolved.Config.Classifier.Instructions)
 	}
 	// rules is set below; the search tools consult it only when they run.
 	var rules *policy.Rules
@@ -385,17 +398,29 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			rt.Close()
 		}
 	}()
-	if resolved.Config.SmallModel != "" {
-		if err := rt.Check(startCtx, pigruntime.OpenOptions{Model: smallModel}); err != nil && (!fullscreen || !sameProviderNoCredential(err, model, smallModel)) {
-			if errors.Is(err, pigruntime.ErrNoCredential) {
-				providers, listErr := rt.Providers(ctx)
-				if listErr != nil {
-					err = errors.Join(err, listErr)
-				} else {
-					err = diagnose(err, smallModel, resolved.Origins["smallModel"], paths, app.OpenRequest{}, providers)
-				}
+	checkModel := func(key, ref string) error {
+		err := rt.Check(startCtx, pigruntime.OpenOptions{Model: ref})
+		if err == nil || fullscreen && sameProviderNoCredential(err, model, ref) {
+			return nil
+		}
+		if errors.Is(err, pigruntime.ErrNoCredential) {
+			providers, listErr := rt.Providers(ctx)
+			if listErr != nil {
+				err = errors.Join(err, listErr)
+			} else {
+				err = diagnose(err, ref, resolved.Origins[key], paths, app.OpenRequest{}, providers)
 			}
-			return fmt.Errorf("failed to use \"smallModel\" in %s: %w", paths.ConfigFile, err)
+		}
+		return fmt.Errorf("failed to use %q in %s: %w", key, paths.ConfigFile, err)
+	}
+	if resolved.Config.SmallModel != "" {
+		if err := checkModel("smallModel", smallModel); err != nil {
+			return err
+		}
+	}
+	if classifierOn && resolved.Config.Classifier.Model != "" {
+		if err := checkModel("classifier.model", classifierModel); err != nil {
+			return err
 		}
 	}
 	if rt.CanSearch(smallModel) {
@@ -406,7 +431,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// Only the fullscreen interface has a human to answer approvals.
 	cfg := app.Config{
 		Model: model, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
-		Errors: slices.Concat(set.errs, instructionErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen,
+		Errors: slices.Concat(set.errs, instructionErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review,
 	}
 	if len(set.servers) > 0 {
 		cfg.Servers = func(ctx context.Context) ([]pigruntime.ServerStatus, error) { return waitServers(ctx, servers) }
@@ -731,12 +756,12 @@ func planPolicy(p sandbox.Policy, cwd string) sandbox.Policy {
 }
 
 // sameProviderNoCredential reports whether err is the missing credential of
-// the provider smallModel shares with model; in fullscreen the first-run login
-// of model supplies it.
-func sameProviderNoCredential(err error, model, smallModel string) bool {
+// the provider a configured model shares with model; in fullscreen the
+// first-run login of model supplies it.
+func sameProviderNoCredential(err error, model, sub string) bool {
 	provider, _, _ := strings.Cut(model, "/")
-	smallProvider, _, _ := strings.Cut(smallModel, "/")
-	return errors.Is(err, pigruntime.ErrNoCredential) && provider == smallProvider
+	subProvider, _, _ := strings.Cut(sub, "/")
+	return errors.Is(err, pigruntime.ErrNoCredential) && provider == subProvider
 }
 
 // diagnose turns the open failures a user can fix into Kopi's own advice.

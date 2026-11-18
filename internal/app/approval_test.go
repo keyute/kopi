@@ -2,17 +2,21 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/MichaelKinsy/PiG/ai"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/keyute/kopi/internal/classifier"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
@@ -635,4 +639,258 @@ func TestUnattendedDeniesAskWithHint(t *testing.T) {
 	assert.Empty(t, ofType[event.ApprovalRequested](evs))
 	assert.Empty(t, ofType[event.ApprovalEnded](evs))
 	assert.Equal(t, "alpha\n", fileText(t, sb, "a.txt"))
+}
+
+const (
+	replyAllow = `{"decision":"allow","reason":"fine"}`
+	replyDeny  = `{"decision":"deny","reason":"too risky"}`
+	replyAsk   = `{"decision":"ask","reason":"unclear intent"}`
+)
+
+// reviewing returns a Classifier whose stages both reply and send every prompt
+// they get on prompts.
+func reviewing(reply string, prompts chan<- string) *classifier.Classifier {
+	answer := func(_ context.Context, _, prompt string) (string, error) {
+		prompts <- prompt
+		return reply, nil
+	}
+	return classifier.New(answer, answer, nil)
+}
+
+// probeTool is a Read tool that asks by default, counting its runs.
+func probeTool(ran *atomic.Int32) tool.Tool {
+	t := testTool("Probe", policy.Read, func(context.Context, json.RawMessage) (string, error) {
+		ran.Add(1)
+		return "probed", nil
+	})
+	t.Ask = true
+	return t
+}
+
+func probeCall(id string, n int) pigruntimetest.Call {
+	return pigruntimetest.Call{Name: "Probe", ID: id, Args: map[string]any{"n": n}}
+}
+
+// reviewInput is the JSON message a review receives.
+type reviewInput struct {
+	Task    string
+	History []struct{ Tool, Args string }
+	Action  struct{ Tool string }
+}
+
+func parseReview(t *testing.T, prompt string) reviewInput {
+	t.Helper()
+	var in reviewInput
+	require.NoError(t, json.Unmarshal([]byte(prompt), &in))
+	return in
+}
+
+func receivePrompt(t *testing.T, prompts <-chan string) string {
+	t.Helper()
+	select {
+	case p := <-prompts:
+		return p
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for a classifier prompt")
+		return ""
+	}
+}
+
+func TestClassifierAllowRunsCallWithoutAsking(t *testing.T) {
+	var ran atomic.Int32
+	prompts := make(chan string, 8)
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{probeTool(&ran)}, Classifier: reviewing(replyAllow, prompts)})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("call-1", 1)), pigruntimetest.Text("done")})
+
+	h.turn(t, "probe it")
+
+	assert.Equal(t, int32(1), ran.Load())
+	assert.Empty(t, ofType[event.ApprovalRequested](h.rec.all()))
+	assert.Equal(t, "Probe", parseReview(t, receivePrompt(t, prompts)).Action.Tool)
+}
+
+func TestClassifierDenyFailsCallAndTurnContinues(t *testing.T) {
+	var ran atomic.Int32
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{probeTool(&ran)}, Classifier: reviewing(replyDeny, make(chan string, 8))})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("call-1", 1)), pigruntimetest.Capture(t, requests, "done")})
+
+	w := h.turn(t, "probe it")
+
+	assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
+	assert.Zero(t, ran.Load())
+	assert.Empty(t, ofType[event.ApprovalRequested](h.rec.all()))
+	results := receive(t, requests).ToolResults
+	require.Len(t, results, 1)
+	assert.Contains(t, results[0], "too risky")
+}
+
+func TestClassifierAskSendsCallToHumanWithReview(t *testing.T) {
+	var ran atomic.Int32
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{probeTool(&ran)}, Classifier: reviewing(replyAsk, make(chan string, 8))})
+	approvals := subscribeTo[event.ApprovalRequested](h.c)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("call-1", 1)), pigruntimetest.Text("done")})
+
+	w, err := h.c.Submit(t.Context(), "probe it")
+	require.NoError(t, err)
+	req := receiveEvent(t, approvals)
+	assert.Equal(t, &policy.Review{Verdict: policy.VerdictAsk, Reason: "unclear intent"}, req.Review)
+	assert.Empty(t, req.Rule)
+	assert.True(t, h.c.Answer(req.Token, policy.Decision{Answer: policy.Allow}))
+	wait(t, w.Done())
+
+	assert.Equal(t, int32(1), ran.Load())
+}
+
+func TestClassifierThirdDenialGoesToHuman(t *testing.T) {
+	var ran atomic.Int32
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{probeTool(&ran)}, Classifier: reviewing(replyDeny, make(chan string, 16))})
+	approvals := subscribeTo[event.ApprovalRequested](h.c)
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(probeCall("call-1", 1), probeCall("call-2", 2), probeCall("call-3", 3)),
+		pigruntimetest.Text("done"),
+	})
+
+	w, err := h.c.Submit(t.Context(), "probe it")
+	require.NoError(t, err)
+	req := receiveEvent(t, approvals)
+	assert.Equal(t, "call-3", req.CallID)
+	assert.Equal(t, &policy.Review{Verdict: policy.VerdictDeny, Reason: "too risky"}, req.Review)
+	assert.True(t, h.c.Answer(req.Token, policy.Decision{Answer: policy.Reject, Reason: "no"}))
+	wait(t, w.Done())
+
+	assert.Zero(t, ran.Load())
+	assert.Len(t, ofType[event.ApprovalRequested](h.rec.all()), 1)
+}
+
+func TestClassifierSeesPromptAndEarlierCallsButNotTheCallUnderReview(t *testing.T) {
+	var ran atomic.Int32
+	prompts := make(chan string, 8)
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{probeTool(&ran)}, Classifier: reviewing(replyAllow, prompts)})
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(probeCall("call-1", 1)),
+		pigruntimetest.ToolCalls(probeCall("call-2", 2)),
+		pigruntimetest.Text("done"),
+	})
+
+	h.turn(t, "probe twice")
+
+	first, second := parseReview(t, receivePrompt(t, prompts)), parseReview(t, receivePrompt(t, prompts))
+	assert.Empty(t, first.History)
+	assert.Equal(t, "probe twice", second.Task)
+	require.Len(t, second.History, 1)
+	assert.Equal(t, "Probe", second.History[0].Tool)
+	assert.JSONEq(t, `{"n":1}`, second.History[0].Args)
+}
+
+func TestClassifierTaskIncludesPromptQueuedBehindRunningTurn(t *testing.T) {
+	var ran atomic.Int32
+	started, release := make(chan struct{}), make(chan struct{})
+	prompts := make(chan string, 8)
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release), probeTool(&ran)}, Classifier: reviewing(replyAllow, prompts)})
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(call("Hold", "call-1")),
+		pigruntimetest.ToolCalls(probeCall("call-2", 2)),
+		pigruntimetest.Text("done"),
+	})
+
+	w, err := h.c.Submit(t.Context(), "first")
+	require.NoError(t, err)
+	wait(t, started)
+	queued, err := h.c.Submit(t.Context(), "queued")
+	require.NoError(t, err)
+	assert.Nil(t, queued)
+	close(release)
+	wait(t, w.Done())
+
+	assert.Equal(t, "first\n\nqueued", parseReview(t, receivePrompt(t, prompts)).Task)
+}
+
+func TestClassifierRecordFollowsTheSession(t *testing.T) {
+	var ran atomic.Int32
+	prompts := make(chan string, 8)
+	cfg := Config{Tools: []tool.Tool{probeTool(&ran)}, Classifier: reviewing(replyAllow, prompts)}
+	h, sb := openHarness(t, cfg)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("call-1", 1)), pigruntimetest.Text("done")})
+	h.turn(t, "earlier")
+	receivePrompt(t, prompts)
+	id := h.c.Status().SessionID
+
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("call-2", 2)), pigruntimetest.Text("done")})
+	require.NoError(t, h.c.NewSession(t.Context()))
+	h.turn(t, "fresh")
+	fresh := parseReview(t, receivePrompt(t, prompts))
+	assert.Equal(t, "fresh", fresh.Task)
+	assert.Empty(t, fresh.History)
+	require.NoError(t, h.c.Close(t.Context()))
+
+	resumed := newHarness(t, sb, cfg)
+	require.NoError(t, resumed.c.Open(t.Context(), OpenRequest{ResumeID: id}))
+	resumed.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("call-3", 3)), pigruntimetest.Text("done")})
+	resumed.turn(t, "later")
+	in := parseReview(t, receivePrompt(t, prompts))
+	assert.Equal(t, "earlier\n\nlater", in.Task)
+	require.Len(t, in.History, 1)
+	assert.JSONEq(t, `{"n":1}`, in.History[0].Args)
+}
+
+func TestClassifierUnattended(t *testing.T) {
+	t.Run("allow runs the call", func(t *testing.T) {
+		var ran atomic.Int32
+		h, _ := openHarness(t, Config{Unattended: true, Tools: []tool.Tool{probeTool(&ran)}, Classifier: reviewing(replyAllow, make(chan string, 8))})
+		h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("call-1", 1)), pigruntimetest.Text("done")})
+
+		h.turn(t, "probe it")
+
+		assert.Equal(t, int32(1), ran.Load())
+	})
+	t.Run("ask denies the call", func(t *testing.T) {
+		var ran atomic.Int32
+		h, _ := openHarness(t, Config{Unattended: true, Tools: []tool.Tool{probeTool(&ran)}, Classifier: reviewing(replyAsk, make(chan string, 8))})
+		requests := make(chan pigruntimetest.Request, 1)
+		h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("call-1", 1)), pigruntimetest.Capture(t, requests, "done")})
+
+		h.turn(t, "probe it")
+
+		assert.Zero(t, ran.Load())
+		results := receive(t, requests).ToolResults
+		require.Len(t, results, 1)
+		assert.Contains(t, results[0], "the approval classifier could not decide")
+	})
+}
+
+func TestClassifierInterruptWhileReviewingEndsTurnWithoutApproval(t *testing.T) {
+	var ran atomic.Int32
+	started := make(chan struct{})
+	block := func(ctx context.Context, _, _ string) (string, error) {
+		close(started)
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{probeTool(&ran)}, Classifier: classifier.New(block, block, nil)})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("call-1", 1)), pigruntimetest.Text("unreached")})
+
+	w, err := h.c.Submit(t.Context(), "probe it")
+	require.NoError(t, err)
+	wait(t, started)
+	assert.True(t, h.c.Interrupt())
+	wait(t, w.Done())
+
+	assert.Equal(t, event.Outcome{Status: event.Interrupted}, w.Outcome())
+	assert.Zero(t, ran.Load())
+	assert.Empty(t, ofType[event.ApprovalRequested](h.rec.all()))
+}
+
+func TestClassifierDoesNotReviewUnruledEdits(t *testing.T) {
+	prompts := make(chan string, 8)
+	h, sb := editHarness(t, Config{Classifier: reviewing(replyDeny, prompts)})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(editCall("call-1", "a.txt")), pigruntimetest.Capture(t, requests, "done")})
+
+	h.turn(t, "edit a.txt")
+
+	assert.Equal(t, "beta\n", fileText(t, sb, "a.txt"))
+	assert.Empty(t, ofType[event.ApprovalRequested](h.rec.all()))
+	assert.Empty(t, prompts)
+	assert.Contains(t, receive(t, requests).SystemPrompt, "and that no permission rule decides are first reviewed by a classifier model")
 }
