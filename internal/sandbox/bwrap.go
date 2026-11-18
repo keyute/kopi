@@ -80,9 +80,10 @@ func bwrapFlags(network bool) []string {
 	return flags
 }
 
-// bwrapTail ends every argument list, after the mounts it must not bury.
+var bwrapSpecials = []string{"--dev", "/dev", "--proc", "/proc"}
+
 // The seccomp filter is read from fd 3, the command's ExtraFiles[0].
-var bwrapTail = []string{"--dev", "/dev", "--proc", "/proc", "--seccomp", "3", "--"}
+var bwrapTail = []string{"--seccomp", "3", "--"}
 
 // emptyDir mounts an empty read-only directory at path, which bwrap creates
 // on the host when it is absent. A tmpfs needs no source directory, which
@@ -103,7 +104,7 @@ func probeBwrap(ctx context.Context, path string, seccomp []byte) error {
 		return err
 	}
 	defer filter.Close()
-	args := slices.Concat(bwrapFlags(false), []string{"--ro-bind", "/", "/"}, emptyDir("/sys"), bwrapTail, []string{"true"})
+	args := slices.Concat(bwrapFlags(false), []string{"--ro-bind", "/", "/"}, emptyDir("/sys"), bwrapSpecials, bwrapTail, []string{"true"})
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.ExtraFiles = []*os.File{filter}
@@ -118,8 +119,9 @@ func probeBwrap(ctx context.Context, path string, seccomp []byte) error {
 // placeholders bwrap will make on the host for denied paths found absent.
 //
 // Later mounts cover earlier ones, so the order is: the read-only root; the
-// pins; the write roots; then the denies, so that a write root inside a
-// denied path ends up read-only. Write denies come before read denies: a bind
+// pins; the write roots; the device and proc mounts; then the denies, so that
+// a write root inside a denied path ends up read-only. Write denies come
+// before read denies: a bind
 // of a denied directory would uncover a read mask inside it, while a mask
 // over a directory hides any bind inside it.
 func bwrapArgs(p Policy) (args, made []string, err error) {
@@ -133,6 +135,14 @@ func bwrapArgs(p Policy) (args, made []string, err error) {
 	slices.SortStableFunc(roots, byDepth)
 	inRoot := func(path string) bool {
 		return slices.ContainsFunc(roots, func(r string) bool { return within(path, r) })
+	}
+
+	// Check each link before resolving it, including links reached through
+	// safe parents or through another link's target.
+	for _, d := range slices.Concat(p.DenyRead, p.DenyWrite) {
+		if err := checkDeniedSymlinks(d, inRoot); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	// A path denied both ways is denied reading.
@@ -245,8 +255,48 @@ func bwrapArgs(p Policy) (args, made []string, err error) {
 	for _, r := range roots {
 		args = append(args, "--bind", r, r)
 	}
-	args = slices.Concat(args, denyWrite, denyRead, bwrapTail)
+	args = slices.Concat(args, bwrapSpecials, denyWrite, denyRead, bwrapTail)
 	return args, made, nil
+}
+
+// checkDeniedSymlinks walks in filesystem order: cleaning first would erase
+// a link before "..", and resolving the whole path would erase its entry.
+func checkDeniedSymlinks(path string, inRoot func(string) bool) error {
+	parts := strings.Split(path, string(filepath.Separator))
+	current := string(filepath.Separator)
+	links := 0
+	for len(parts) > 0 {
+		part := parts[0]
+		parts = parts[1:]
+		if part == "" || part == "." {
+			continue
+		}
+		next := filepath.Join(current, part)
+		info, err := os.Lstat(next)
+		if err != nil {
+			return nil // inspect handles missing or inaccessible components.
+		}
+		if info.Mode()&fs.ModeSymlink == 0 {
+			current = next
+			continue
+		}
+		if inRoot(next) {
+			return fmt.Errorf("%w: %s", ErrDeniedSymlink, next)
+		}
+		links++
+		if links > 255 {
+			return nil // Like EvalSymlinks, stop at a link cycle.
+		}
+		target, err := os.Readlink(next)
+		if err != nil {
+			return nil
+		}
+		if filepath.IsAbs(target) {
+			current = string(filepath.Separator)
+		}
+		parts = append(strings.Split(target, string(filepath.Separator)), parts...)
+	}
+	return nil
 }
 
 // pathState is what walking a path from the root without following symlinks

@@ -61,6 +61,11 @@ func TestSeccompFilter(t *testing.T) {
 	}{
 		{"unix socket", call(nr("socket"), uint32(info.ID), afUnix, 1), eperm},
 		{"unix socket with high bits", call(nr("socket"), uint32(info.ID), 1<<32|afUnix), eperm},
+		{"unix datagram socketpair", call(nr("socketpair"), uint32(info.ID), afUnix, 2), eperm},
+		{"unix stream socketpair", call(nr("socketpair"), uint32(info.ID), afUnix, 1), eperm},
+		{"unix socketpair with high bits", call(nr("socketpair"), uint32(info.ID), 1<<40|afUnix, 2), eperm},
+		{"inet socketpair", call(nr("socketpair"), uint32(info.ID), afInet, 2), allow},
+		{"other socketpair family with bit 0", call(nr("socketpair"), uint32(info.ID), 3, 2), allow},
 		{"inet socket", call(nr("socket"), uint32(info.ID), afInet, 1), allow},
 		{"other family with bit 0", call(nr("socket"), uint32(info.ID), 3), allow},
 		{"io_uring_setup", call(nr("io_uring_setup"), uint32(info.ID)), eperm},

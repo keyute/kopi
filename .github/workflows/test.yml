@@ -41,6 +41,8 @@ jobs:
         if: runner.os == 'Linux'
         run: bwrap --die-with-parent --unshare-user --unshare-pid --cap-drop ALL --unshare-net --ro-bind / / --perms 555 --tmpfs /sys --remount-ro /sys --dev /dev --proc /proc -- true
       - name: Run Go tests
+        env:
+          KOPI_TEST_REQUIRE_LINUX_SANDBOX: ${{ runner.os == 'Linux' && '1' || '' }}
         uses: robherley/go-test-action@2f859e0c8769d755d3174eecb9af8f64660827f3 # v1.1.0
         with:
           testArguments: ${{ matrix.race && './... -race' || './...' }}

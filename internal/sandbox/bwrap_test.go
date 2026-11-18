@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,15 +33,18 @@ func mkdirs(t *testing.T, dirs ...string) {
 	}
 }
 
-// mounts returns the mount section of args: between the root bind and the
-// device and proc mounts.
+// mounts returns policy mounts, excluding the root and special mounts.
 func mounts(t *testing.T, args []string) []string {
 	t.Helper()
 	i := slices.Index(args, "/")
 	require.Positive(t, i)
 	require.Equal(t, []string{"--ro-bind", "/", "/"}, args[i-1:i+2])
 	require.Equal(t, bwrapTail, args[len(args)-len(bwrapTail):])
-	return args[i+2 : len(args)-len(bwrapTail)]
+	policyMounts := args[i+2 : len(args)-len(bwrapTail)]
+	j := slices.Index(policyMounts, "--dev")
+	require.GreaterOrEqual(t, j, 0)
+	require.Equal(t, bwrapSpecials, policyMounts[j:j+len(bwrapSpecials)])
+	return concat(policyMounts[:j], policyMounts[j+len(bwrapSpecials):])
 }
 
 func ro(path string) []string           { return []string{"--ro-bind", path, path} }
@@ -64,10 +68,11 @@ func TestBwrapArgsOrder(t *testing.T) {
 		ro("/"),
 		ro(filepath.Join(root, ".git")),
 		rw(root),
+		bwrapSpecials,
 		ro(filepath.Join(root, ".git", "hooks")),
 		null(filepath.Join(root, ".mcp.json")),
 		emptyDir(filepath.Join(root, "secret")),
-		[]string{"--dev", "/dev", "--proc", "/proc", "--seccomp", "3", "--"},
+		bwrapTail,
 	), args)
 	assert.Equal(t, []string{filepath.Join(root, ".mcp.json")}, made)
 }
@@ -209,6 +214,71 @@ func TestBwrapArgsRefusesSymlinkInWriteRoot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, rw(root), mounts(t, args))
 	assert.Empty(t, made)
+}
+
+func TestBwrapArgsSymlinkComponents(t *testing.T) {
+	for _, broken := range []bool{false, true} {
+		for _, name := range []string{".mcp.json", ".git", ".git/hooks", ".git/config"} {
+			for _, read := range []bool{false, true} {
+				base := resolvedTemp(t)
+				root := filepath.Join(base, "root")
+				entry := filepath.Join(root, name)
+				mkdirs(t, filepath.Dir(entry))
+				target := filepath.Join(base, "target")
+				if !broken {
+					if name == ".mcp.json" || name == ".git/config" {
+						writeFile(t, target)
+					} else {
+						mkdirs(t, target)
+					}
+				}
+				require.NoError(t, os.Symlink(target, entry))
+				alias := filepath.Join(base, "alias")
+				require.NoError(t, os.Symlink(root, alias))
+				for _, prefix := range []string{root, alias} {
+					denied := filepath.Join(prefix, name)
+					if name == ".git" {
+						denied += "/hooks"
+					}
+					p := Policy{Write: []string{root}, DenyWrite: []string{denied}}
+					if read {
+						p.DenyRead, p.DenyWrite = p.DenyWrite, nil
+					}
+					_, _, err := bwrapArgs(p)
+					require.ErrorIs(t, err, ErrDeniedSymlink, "broken=%v read=%v path=%s", broken, read, denied)
+					assert.Contains(t, err.Error(), entry)
+				}
+			}
+		}
+	}
+}
+
+func TestBwrapArgsSafeSymlinkParents(t *testing.T) {
+	base := resolvedTemp(t)
+	real := filepath.Join(base, "real")
+	root := filepath.Join(real, "ws")
+	mkdirs(t, filepath.Join(root, ".git", "hooks"), filepath.Join(real, "child"))
+	link := filepath.Join(base, "link")
+	require.NoError(t, os.Symlink(filepath.Join(real, "child"), link))
+	ws := link + "/../ws"
+	args, _, err := bwrapArgs(Policy{Write: []string{ws}, DenyWrite: []string{ws + "/.git/hooks"}})
+	require.NoError(t, err)
+	assert.Equal(t, concat(ro(filepath.Join(root, ".git")), rw(root), ro(filepath.Join(root, ".git", "hooks"))), mounts(t, args))
+
+	// A safe alias can also hide an unsafe link in its target path.
+	unsafe := filepath.Join(root, "redirect")
+	require.NoError(t, os.Symlink(filepath.Join(real, "child"), unsafe))
+	alias := filepath.Join(base, "alias")
+	require.NoError(t, os.Symlink(unsafe, alias))
+	_, _, err = bwrapArgs(Policy{Write: []string{root}, DenyWrite: []string{alias + "/../ws/.mcp.json"}})
+	require.ErrorIs(t, err, ErrDeniedSymlink)
+	assert.Contains(t, err.Error(), unsafe)
+}
+
+func TestBwrapArgsSpecialMountsBeforeMasks(t *testing.T) {
+	args, _, err := bwrapArgs(Policy{DenyRead: []string{"/dev"}})
+	require.NoError(t, err)
+	assert.Equal(t, concat(bwrapFlags(false), ro("/"), bwrapSpecials, emptyDir("/dev"), bwrapTail), args)
 }
 
 func TestBwrapArgsUnreadableDirectory(t *testing.T) {
@@ -476,6 +546,54 @@ func TestBwrapBackgroundProcessEndsWithCommand(t *testing.T) {
 	case <-dead:
 	case <-time.After(30 * time.Second):
 		t.Fatal("the background process outlived its command")
+	}
+}
+
+func TestBwrapSpecialDirectoryDenies(t *testing.T) {
+	for _, path := range []string{"/proc", "/dev"} {
+		t.Run(path, func(t *testing.T) {
+			secret := filepath.Join(resolvedTemp(t), "secret")
+			writeFile(t, secret)
+			sb := newBwrap(t, Policy{DenyRead: []string{path, secret}})[0]
+			require.NoError(t, bash(t, sb, `test -d "$DENIED" && test -z "$(ls -A "$DENIED")"`, "DENIED="+path))
+			require.Error(t, bash(t, sb, `cat "$SECRET"`, "SECRET="+secret))
+		})
+	}
+}
+
+func TestBwrapUnixDatagramSocketpairRefused(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bubblewrap is the Linux sandbox")
+	}
+	for _, network := range []bool{false, true} {
+		sb := newBwrap(t, Policy{Network: network})[0]
+		dir := t.TempDir()
+		path := filepath.Join(dir, "s")
+		ln, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: path, Net: "unixgram"})
+		require.NoError(t, err)
+		defer ln.Close()
+		script := `import socket, sys; a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM); a.sendto(b"probe", sys.argv[1])`
+		control := exec.CommandContext(t.Context(), "python3", "-c", script, path)
+		out, err := control.CombinedOutput()
+		require.NoError(t, err, string(out))
+		buf := make([]byte, 16)
+		n, _, err := ln.ReadFromUnix(buf)
+		require.NoError(t, err)
+		require.Equal(t, "probe", string(buf[:n]))
+
+		probe := `import errno, socket, sys
+try:
+    a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+except OSError as e:
+    assert e.errno == errno.EPERM, e
+else:
+    a.sendto(b"escaped", sys.argv[1])
+    sys.exit("Unix datagram socketpair was allowed")`
+		cmd, done, err := sb.Command([]string{"python3", "-c", probe, path})
+		require.NoError(t, err)
+		out, err = cmd.CombinedOutput()
+		done()
+		require.NoError(t, err, "network=%v: %s", network, out)
 	}
 }
 

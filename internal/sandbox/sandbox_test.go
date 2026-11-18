@@ -14,6 +14,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestLinuxSandboxSmoke(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bubblewrap is the Linux sandbox")
+	}
+	sbs, err := New(t.Context(), Policy{})
+	if errors.Is(err, ErrUnavailable) && os.Getenv("KOPI_TEST_REQUIRE_LINUX_SANDBOX") != "1" {
+		t.Skip(err)
+	}
+	require.NoError(t, err)
+	require.NoError(t, bash(t, sbs[0], `echo ready >/dev/null; test -r /proc/self/status`))
+}
+
 func TestNewRejectsRelativePath(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("only darwin and linux build a sandbox from the paths")
@@ -151,6 +163,11 @@ func TestDenyWriteSymlinkProtectsTarget(t *testing.T) {
 	writeFile(t, filepath.Join(root, "other"))
 	require.NoError(t, os.Symlink("servers.json", filepath.Join(root, "link")))
 	sb := newSandbox(t, Policy{Write: []string{root}, DenyWrite: []string{filepath.Join(root, "link")}})
+	if runtime.GOOS == "linux" {
+		_, _, err := sb.Command([]string{"true"})
+		require.ErrorIs(t, err, ErrDeniedSymlink)
+		return
+	}
 	env := []string{"ROOT=" + root}
 
 	scripts := []string{

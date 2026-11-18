@@ -20,7 +20,8 @@ const (
 
 // seccompFilter returns the program bwrap's --seccomp installs, as
 // little-endian sock_filter records. These fail with EPERM: creating a Unix
-// or VM socket, which the network namespace does not fence; using io_uring,
+// or VM socket or a Unix socketpair, which the network namespace does not
+// fence; using io_uring,
 // whose operations create sockets without socket(2); and creating a user
 // namespace, in which a command could detach the mounts that deny it paths.
 // clone3 fails with ENOSYS, as its flags lie in memory a filter cannot read,
@@ -40,6 +41,7 @@ func seccompFilter() ([]byte, error) {
 			{
 				NamesWithCondtions: []seccomp.NameWithConditions{
 					{Name: "socket", Conditions: lowWordEquals(0, afUnix)},
+					{Name: "socketpair", Conditions: lowWordEquals(0, afUnix)},
 					{Name: "socket", Conditions: lowWordEquals(0, afVsock)},
 					// The flags are the first argument of both on amd64 and
 					// arm64.
