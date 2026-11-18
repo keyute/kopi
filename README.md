@@ -28,6 +28,8 @@ Commands in the fullscreen interface:
 | `/execute` | Switch to execute mode |
 | `/new` | Start a new session |
 | `/resume <id>` | Resume a session |
+| `/login <provider>` | Log in to a provider |
+| `/logout <provider>` | Remove a provider's stored credential |
 | `/tasks` | List background tasks, show one's output and stop it |
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
@@ -152,6 +154,8 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `kopi login` lists the providers that offer a login, with their methods and the ones Kopi holds a credential for; `kopi login <provider>` runs one.
 - A provider offers an account sign-in, a stored API key or both; with both, Kopi asks which. An API key is read hidden on a terminal, or as a line from piped stdin.
 - A sign-in prints its URL and opens it in the browser; when the browser does not open, use the printed URL.
+- In the fullscreen interface, `/login <provider>` runs the same login without leaving the session. URLs, device codes and progress appear in the transcript, the browser opens, an API key is entered in a masked field, and Esc cancels. `/logout <provider>` removes a credential. `kopi login` and `kopi logout` remain for headless and scripted use.
+- In the fullscreen interface, when the configured model has no credential, Kopi opens a login for its provider before the session opens; headless use exits with the `kopi login` hint.
 - `kopi logout <provider>` removes the provider's credential from `agent/auth.json`.
 - A credential in the environment works without a login; `kopi login` marks only stored credentials as logged in.
 - After an `anthropic` account sign-in Kopi notes that Anthropic bills third-party tools per token as extra usage, not from Claude plan limits.

@@ -2320,15 +2320,18 @@ func TestOpenErrorsPassThrough(t *testing.T) {
 		model string
 		req   OpenRequest
 		want  error
+		// unattended skips the first-run login that Start would run.
+		unattended bool
 	}{
 		{name: "continue without sessions", req: OpenRequest{Continue: true}, want: pigruntime.ErrSessionNotFound},
 		{name: "resume a missing session", req: OpenRequest{ResumeID: "no-such-session"}, want: pigruntime.ErrSessionNotFound},
 		{name: "unknown model", model: fauxProvider + "/missing", want: pigruntime.ErrUnknownModel},
-		{name: "missing credential", model: "openai-codex/" + codex[0].ID, want: pigruntime.ErrNoCredential},
+		{name: "missing credential", model: "openai-codex/" + codex[0].ID, want: pigruntime.ErrNoCredential, unattended: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, pigruntimetest.NewSandbox(t), Config{
-				Model: tc.model,
+				Model:      tc.model,
+				Unattended: tc.unattended,
 				Servers: func(context.Context) ([]pigruntime.ServerStatus, error) {
 					t.Error("the servers were waited for before the check")
 					return nil, nil

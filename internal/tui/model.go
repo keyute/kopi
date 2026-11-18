@@ -109,10 +109,12 @@ type model struct {
 	// prompt. tasks is the /tasks dialog, nil when closed; an approval closes
 	// it. prompt is the shown dialog's rows, drawn in place of the composer.
 	approval *event.ApprovalRequested
-	dialog   *dialog
-	tasks    *taskDialog
-	prompt   []string
-	menu     menu
+	// login is the pending login question, whose prompt is dialog too.
+	login  *event.LoginRequested
+	dialog *dialog
+	tasks  *taskDialog
+	prompt []string
+	menu   menu
 	// seen is the draft and cursor syncInput last reconciled.
 	seen struct {
 		value     string
@@ -245,6 +247,9 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	if m.approval != nil {
 		return m.approvalKey(msg)
 	}
+	if m.login != nil {
+		return m.loginKey(msg)
+	}
 	if m.tasks != nil {
 		return m.tasksKey(msg)
 	}
@@ -313,7 +318,42 @@ func (m *model) approvalKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 // endApproval drops the pending call and its prompt.
-func (m *model) endApproval() { m.approval, m.dialog = nil, nil }
+func (m *model) endApproval() {
+	if m.approval != nil {
+		m.approval, m.dialog = nil, nil
+	}
+}
+
+// loginKey goes to the login prompt like approvalKey: a pick answers with the
+// chosen option's ID or the typed text, and interrupt cancels the login. The
+// prompt stays until its LoginEnded arrives.
+func (m *model) loginKey(msg tea.KeyPressMsg) tea.Cmd {
+	switch {
+	case key.Matches(msg, m.keys.interrupt):
+		m.c.Interrupt()
+		return nil
+	case key.Matches(msg, m.keys.paste) && m.dialog.field() != nil:
+		return readClipboardText(m.clip, m.dialog.field())
+	}
+	picked, cmd := m.dialog.key(msg, &m.keys)
+	if picked {
+		answer := m.dialog.text()
+		if len(m.login.Options) > 0 {
+			answer = m.login.Options[m.dialog.sel].ID
+		}
+		m.c.AnswerLogin(m.login.Token, answer)
+		m.dialog.clear()
+	}
+	return cmd
+}
+
+// endLogin drops the pending question and its prompt.
+func (m *model) endLogin() {
+	if m.login != nil {
+		m.dialog.clear()
+		m.login, m.dialog = nil, nil
+	}
+}
 
 // cancel is the cancel key and SIGINT: it interrupts a running turn, else
 // clears the draft, else takes two in a row to quit.
@@ -373,6 +413,8 @@ func (m *model) submitted(err error) tea.Cmd {
 		m.composer.reset()
 	case errors.Is(err, app.ErrBusy):
 		return m.flash("busy opening a session")
+	case errors.Is(err, app.ErrLoggingIn):
+		return m.flash("a login is under way")
 	default:
 		m.tr.Apply(event.Error{Err: err})
 		m.relayout()
@@ -442,6 +484,14 @@ func (m *model) apply(ev event.Event) {
 		return
 	case event.ApprovalRequested:
 		m.approval, m.dialog, m.tasks = &ev, newApprovalDialog(&ev, &m.keys, m.th), nil
+		return
+	case event.LoginRequested:
+		m.login, m.dialog, m.tasks = &ev, newLoginDialog(ev, &m.keys, m.th), nil
+		return
+	case event.LoginEnded:
+		if m.login != nil && m.login.Token == ev.Token {
+			m.endLogin()
+		}
 		return
 	case event.ApprovalEnded:
 		if m.approval != nil && m.approval.Token == ev.Token {
@@ -553,6 +603,9 @@ func (m *model) place() {
 		// The prompt takes the composer's frame rows too.
 		m.prompt = approvalRows(m.dialog, m.approval, m.width, max(2, m.height/3), free+2, m.th)
 		input = len(m.prompt) - 2
+	case m.login != nil:
+		m.prompt = loginRows(m.dialog, m.width, max(2, m.height/3), free+2, m.th)
+		input = len(m.prompt) - 2
 	case m.tasks != nil:
 		m.prompt = m.tasks.rows(m.width, max(2, m.height/3), free+2, m.th)
 		input = len(m.prompt) - 2
@@ -579,6 +632,17 @@ func (m *model) place() {
 			for _, fa := range m.dialog.areas {
 				fa.y += m.geo.composerTop - 1
 				m.geo.fields = append(m.geo.fields, fa)
+			}
+		}
+	case m.login != nil:
+		rows = append(rows, m.prompt...)
+		if len(m.prompt) > 0 {
+			for _, fa := range m.dialog.areas {
+				// A secret is never selectable, so it has no area.
+				if !fa.c.secret {
+					fa.y += m.geo.composerTop - 1
+					m.geo.fields = append(m.geo.fields, fa)
+				}
 			}
 		}
 	case m.tasks != nil:

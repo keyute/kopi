@@ -1,15 +1,21 @@
 package cmd
 
 import (
+	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
+	"github.com/muesli/cancelreader"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/pigruntime"
@@ -46,8 +52,16 @@ func loginCmd() *cobra.Command {
 				return listLogins(out, providers)
 			}
 			provider := args[0]
-			if err := rt.Login(ctx, provider, cmd.InOrStdin(), out); err != nil {
+			in := cmd.InOrStdin()
+			t := &terminalLogin{in: in, lines: bufio.NewReader(in), out: out}
+			notice, err := rt.Login(ctx, provider, pigruntime.LoginUI{Ask: t.ask, Show: t.show})
+			if err != nil {
 				return err
+			}
+			if notice != "" {
+				if _, err := fmt.Fprintln(out, notice); err != nil {
+					return fmt.Errorf("failed to print login notice: %w", err)
+				}
 			}
 			_, err = fmt.Fprintf(out, "Logged in to %s. The credential is stored in %s.\n", provider, filepath.Join(paths.AgentDir, "auth.json"))
 			return err
@@ -82,4 +96,147 @@ func listLogins(out io.Writer, providers []pigruntime.Provider) error {
 		return fmt.Errorf("failed to print providers: %w", err)
 	}
 	return nil
+}
+
+// terminalLogin answers a login's prompts on the terminal, or from piped input.
+type terminalLogin struct {
+	in    io.Reader
+	lines *bufio.Reader
+	out   io.Writer
+	// pending is the read still in flight after its prompt's ctx ended; the
+	// next prompt takes its answer instead of starting a concurrent read.
+	// Prompts never overlap.
+	pending chan readResult
+}
+
+type readResult struct {
+	text string
+	err  error
+}
+
+func (t *terminalLogin) show(text string) {
+	fmt.Fprintln(t.out, text)
+}
+
+func (t *terminalLogin) ask(ctx context.Context, p pigruntime.LoginPrompt) (string, error) {
+	switch {
+	case len(p.Options) > 0:
+		return t.selectOption(ctx, p)
+	case p.Secret:
+		return t.readSecret(ctx, p)
+	}
+	t.prompt(p)
+	return t.read(ctx)
+}
+
+func (t *terminalLogin) prompt(p pigruntime.LoginPrompt) {
+	if p.Placeholder != "" {
+		fmt.Fprintf(t.out, "%s [%s] ", p.Message, p.Placeholder)
+		return
+	}
+	fmt.Fprintf(t.out, "%s ", p.Message)
+}
+
+// selectOption maps a number or an exact ID to the option's ID; any other
+// answer is returned for the login to refuse.
+func (t *terminalLogin) selectOption(ctx context.Context, p pigruntime.LoginPrompt) (string, error) {
+	fmt.Fprintln(t.out, p.Message)
+	for i, o := range p.Options {
+		if o.Description != "" {
+			fmt.Fprintf(t.out, "  %d) %s - %s\n", i+1, o.Label, o.Description)
+			continue
+		}
+		fmt.Fprintf(t.out, "  %d) %s\n", i+1, o.Label)
+	}
+	fmt.Fprint(t.out, "Choice: ")
+	answer, err := t.read(ctx)
+	if err != nil {
+		return "", err
+	}
+	if n, err := strconv.Atoi(answer); err == nil && n >= 1 && n <= len(p.Options) {
+		return p.Options[n-1].ID, nil
+	}
+	return answer, nil
+}
+
+// read runs readLine off the prompt's goroutine so a cancelled ctx (the OAuth
+// callback server winning against a pasted code) returns at once.
+func (t *terminalLogin) read(ctx context.Context) (string, error) {
+	if t.pending == nil {
+		ch := make(chan readResult, 1)
+		t.pending = ch
+		go func() {
+			text, err := t.readLine()
+			ch <- readResult{text: text, err: err}
+		}()
+	}
+	select {
+	case res := <-t.pending:
+		t.pending = nil
+		return res.text, res.err
+	case <-ctx.Done():
+		return "", context.Cause(ctx)
+	}
+}
+
+func (t *terminalLogin) readLine() (string, error) {
+	line, err := t.lines.ReadString('\n')
+	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
+		return "", fmt.Errorf("failed to read login input: %w", err)
+	}
+	return strings.TrimSpace(line), nil
+}
+
+// readSecret reads without echo on a terminal, and returns before ctx's end
+// only once the terminal is restored. Piped input is read as a plain line.
+func (t *terminalLogin) readSecret(ctx context.Context, p pigruntime.LoginPrompt) (string, error) {
+	f, ok := t.in.(*os.File)
+	if !ok || !term.IsTerminal(int(f.Fd())) {
+		t.prompt(p)
+		return t.read(ctx)
+	}
+	if err := context.Cause(ctx); err != nil {
+		return "", err
+	}
+	reader, err := cancelreader.NewReader(f)
+	if err != nil {
+		return "", fmt.Errorf("failed to create login input reader: %w", err)
+	}
+	defer func() { _ = reader.Close() }()
+	state, err := term.MakeRaw(int(f.Fd()))
+	if err != nil {
+		return "", fmt.Errorf("failed to set terminal state: %w", err)
+	}
+	defer func() { _ = term.Restore(int(f.Fd()), state) }()
+	terminal := term.NewTerminal(struct {
+		io.Reader
+		io.Writer
+	}{reader, t.out}, "")
+	prompt := p.Message
+	if p.Placeholder != "" {
+		prompt += " [" + p.Placeholder + "]"
+	}
+	done := make(chan readResult, 1)
+	go func() {
+		text, err := terminal.ReadPassword(prompt + " ")
+		done <- readResult{text: text, err: err}
+	}()
+	select {
+	case res := <-done:
+		// In raw mode the editor reports Ctrl-C, and Ctrl-D on an empty line, as EOF.
+		if errors.Is(res.err, io.EOF) {
+			// The terminal is still raw, so end the prompt line explicitly.
+			fmt.Fprint(t.out, "\r\n")
+			return "", context.Canceled
+		}
+		if res.err != nil {
+			return "", fmt.Errorf("failed to read login input: %w", res.err)
+		}
+		return res.text, nil
+	case <-ctx.Done():
+		// The editor must stop writing before the caller regains the terminal.
+		reader.Cancel()
+		<-done
+		return "", context.Cause(ctx)
+	}
 }

@@ -109,6 +109,13 @@ func (s fieldSlot) rows(width, fieldMax int, th theme) []string {
 	s.f.fieldStyle(th)
 	s.f.ta.MaxHeight = fieldMax
 	s.f.ta.SetWidth(width - s.indent)
+	if s.f.secret {
+		row := secretRow(s.f, width-s.indent, th)
+		if s.head != "" {
+			return []string{s.head + row}
+		}
+		return []string{strings.Repeat(" ", s.indent) + row}
+	}
 	rows := strings.Split(s.f.ta.View(), "\n")
 	for i := range rows {
 		if i == 0 && s.head != "" {

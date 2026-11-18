@@ -286,6 +286,24 @@ func TestRootSmallModelWithoutCredentialFailsAtStart(t *testing.T) {
 	assert.Empty(t, server.requests)
 }
 
+func TestSameProviderNoCredential(t *testing.T) {
+	noCredential := fmt.Errorf("provider: %w", pigruntime.ErrNoCredential)
+	for _, tc := range []struct {
+		name       string
+		err        error
+		model, sub string
+		want       bool
+	}{
+		{name: "same provider", err: noCredential, model: "a/m1", sub: "a/m2", want: true},
+		{name: "other provider", err: noCredential, model: "a/m1", sub: "b/m2"},
+		{name: "other error", err: pigruntime.ErrUnknownModel, model: "a/m1", sub: "a/m2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, sameProviderNoCredential(tc.err, tc.model, tc.sub))
+		})
+	}
+}
+
 // builtinModel names one of PiG's builtin models for provider.
 func builtinModel(t *testing.T, provider string) string {
 	t.Helper()
