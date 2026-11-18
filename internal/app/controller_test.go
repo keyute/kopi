@@ -143,11 +143,12 @@ func testTool(name string, c policy.Capability, run func(context.Context, json.R
 		Description: "Test-only tool.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 		Capability:  c,
-		Run: func(ctx context.Context, args json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+		Run: func(ctx context.Context, args json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (tool.Result, error) {
 			if _, err := admit(policy.Target{}); err != nil {
-				return "", err
+				return tool.Result{}, err
 			}
-			return run(ctx, args)
+			out, err := run(ctx, args)
+			return tool.Result{Text: out}, err
 		},
 	}
 }
@@ -1751,7 +1752,7 @@ func TestBareDenyRemovesTool(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read"}, req.ToolNames)
-	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, []tool.Tool{read}, nil, nil)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, []tool.Tool{read}, nil, nil, false)), req.SystemPrompt)
 	assert.NotContains(t, req.SystemPrompt, "Exec")
 }
 
@@ -1827,7 +1828,7 @@ func TestOpenWaitsForServersAndAddsTheirTools(t *testing.T) {
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read", "ToolSearch"}, req.ToolNames)
 	search := tool.NewToolSearch(nil, nil, nil)
-	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, []tool.Tool{read, search, mcp}, nil, []mcpServer{{name: "s", instructions: "use t wisely", tools: []string{mcp.Name}}})), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, []tool.Tool{read, search, mcp}, nil, []mcpServer{{name: "s", instructions: "use t wisely", tools: []string{mcp.Name}}}, false)), req.SystemPrompt)
 	assert.Contains(t, req.SystemPrompt, "use t wisely")
 	assert.Contains(t, req.SystemPrompt, "MCP server s tools: mcp__s__t.")
 
@@ -2321,15 +2322,18 @@ func TestOpenErrorsPassThrough(t *testing.T) {
 		model string
 		req   OpenRequest
 		want  error
+		// unattended skips the first-run login that Start would run.
+		unattended bool
 	}{
 		{name: "continue without sessions", req: OpenRequest{Continue: true}, want: pigruntime.ErrSessionNotFound},
 		{name: "resume a missing session", req: OpenRequest{ResumeID: "no-such-session"}, want: pigruntime.ErrSessionNotFound},
 		{name: "unknown model", model: fauxProvider + "/missing", want: pigruntime.ErrUnknownModel},
-		{name: "missing credential", model: "openai-codex/" + codex[0].ID, want: pigruntime.ErrNoCredential},
+		{name: "missing credential", model: "openai-codex/" + codex[0].ID, want: pigruntime.ErrNoCredential, unattended: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, pigruntimetest.NewSandbox(t), Config{
-				Model: tc.model,
+				Model:      tc.model,
+				Unattended: tc.unattended,
 				Servers: func(context.Context) ([]pigruntime.ServerStatus, error) {
 					t.Error("the servers were waited for before the check")
 					return nil, nil
@@ -2392,7 +2396,7 @@ func TestTurnUsesNoAmbientState(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read"}, req.ToolNames)
-	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, tools, nil, nil)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, tools, nil, nil, false)), req.SystemPrompt)
 	for _, marker := range pigruntimetest.DecoyMarkers {
 		assert.NotContains(t, req.Raw, marker)
 	}
@@ -2411,7 +2415,7 @@ func TestTurnSendsConfiguredInstructions(t *testing.T) {
 	h.turn(t, "hello")
 
 	req := receive(t, requests)
-	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, nil, []instruction.Group{global, project}, nil)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, nil, []instruction.Group{global, project}, nil, false)), req.SystemPrompt)
 	g, p := strings.Index(req.SystemPrompt, "GLOBAL_RULE"), strings.Index(req.SystemPrompt, "PROJECT_RULE")
 	require.GreaterOrEqual(t, g, 0)
 	assert.Greater(t, p, g, "the global group comes before the project's")

@@ -157,6 +157,17 @@ func TestDialogRowsRecordFieldAreas(t *testing.T) {
 	assert.Equal(t, []fieldArea{{c: f, x: 2, y: 5, h: 2}}, d.areas, "below its label")
 }
 
+func TestDialogRowsRecordOptionBoundaries(t *testing.T) {
+	d := fieldDialog("Later")
+	d.rows(30, 100, 5, mocha())
+	assert.Equal(t, []int{3, 4, 5, 6}, d.optionStarts)
+
+	d.move(1)
+	d.paste("a\nb")
+	d.rows(30, 100, 5, mocha())
+	assert.Equal(t, []int{3, 4, 7, 8}, d.optionStarts)
+}
+
 func TestDialogFieldNarrowStacks(t *testing.T) {
 	d := fieldDialog()
 	d.move(1)

@@ -61,7 +61,7 @@ func (d *display) title(name string, args json.RawMessage) string {
 }
 
 func (d *display) approval(r policy.Request) event.ApprovalRequested {
-	ev := event.ApprovalRequested{CallID: r.CallID, Title: d.title(r.Tool, r.Args), Rule: r.Rule, Edits: r.Edits}
+	ev := event.ApprovalRequested{CallID: r.CallID, Title: d.title(r.Tool, r.Args), Rule: r.Rule, Review: r.Review, Edits: r.Edits}
 	if preview := d.tools[r.Tool].Display.Preview; preview != nil {
 		ev.Preview = preview(r.Args)
 	}

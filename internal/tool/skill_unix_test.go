@@ -35,7 +35,7 @@ func TestSkillRefusesFilesAfterDirectoryBecomesSymlink(t *testing.T) {
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"name":"deploy","file":"ref.md"}`), admitAll)
 
 	assert.ErrorIs(t, err, ErrSkillChanged)
-	assert.NotContains(t, out, "secret")
+	assert.NotContains(t, out.Text, "secret")
 }
 
 func TestSkillRefusesSymlinkedDirectoryIntoHome(t *testing.T) {
@@ -61,7 +61,7 @@ func TestSkillRefusesWhenHomeIsUnreadable(t *testing.T) {
 	out, err := NewSkill([]skill.Skill{sk}, home).Run(t.Context(), json.RawMessage(`{"name":"deploy","file":"ref.md"}`), admitAll)
 
 	require.Error(t, err)
-	assert.NotContains(t, out, "one")
+	assert.NotContains(t, out.Text, "one")
 }
 
 func TestSkillSymlinkToHomeFileIsRefused(t *testing.T) {

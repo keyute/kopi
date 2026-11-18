@@ -41,7 +41,7 @@ const (
 // AskTrust asks whether to trust req's folder, before the main UI starts. The
 // cancel and interrupt keys and ctx's end return TrustCancelled.
 func AskTrust(ctx context.Context, in io.Reader, out io.Writer, opts Options, req TrustRequest) (TrustChoice, error) {
-	m := newTrustModel(req, opts.Keys)
+	m := newTrustModel(req, opts.Keys, opts.Themes)
 	p := tea.NewProgram(m, tea.WithInput(in), tea.WithOutput(out), tea.WithoutSignalHandler())
 	// Discard already queued input, not establish a render/readiness boundary.
 	// Keys arriving during Bubble Tea startup can still be accepted before the
@@ -71,6 +71,7 @@ type trustModel struct {
 	req           TrustRequest
 	keys          keyMap
 	th            theme
+	themes        Themes
 	width, height int
 	dialog        *dialog
 	// choices[i] is what option i picks.
@@ -78,8 +79,8 @@ type trustModel struct {
 	choice  TrustChoice
 }
 
-func newTrustModel(req TrustRequest, keys map[string][]string) *trustModel {
-	m := &trustModel{req: req, keys: newKeyMap(keys), th: mocha(), dialog: &dialog{title: "Do you trust this folder?"}}
+func newTrustModel(req TrustRequest, keys map[string][]string, themes Themes) *trustModel {
+	m := &trustModel{req: req, keys: newKeyMap(keys), themes: themes, th: themes.dark, dialog: &dialog{title: "Do you trust this folder?"}}
 	add := func(label string, c TrustChoice) {
 		m.dialog.options = append(m.dialog.options, option{label: label})
 		m.choices = append(m.choices, c)
@@ -100,7 +101,7 @@ func (m *trustModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 	case tea.BackgroundColorMsg:
 		if !msg.IsDark() {
-			m.th = latte()
+			m.th = m.themes.light
 		}
 	case tea.KeyPressMsg:
 		if key.Matches(msg, m.keys.cancel, m.keys.interrupt) {

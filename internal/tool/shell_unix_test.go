@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -18,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	childprocess "github.com/keyute/kopi/internal/process"
 	"github.com/keyute/kopi/internal/sandbox"
 )
 
@@ -72,7 +74,7 @@ func lifecycleShell(t *testing.T, dir string, sandboxed bool) *Shell {
 	t.Helper()
 	var sb *sandbox.Sandbox
 	if sandboxed {
-		sbs, err := sandbox.New(t.Context(), sandbox.Policy{Write: []string{dir}})
+		sbs, err := sandbox.New(t.Context(), t.TempDir(), sandbox.Policy{Write: []string{dir}})
 		if errors.Is(err, sandbox.ErrUnavailable) {
 			t.Skip(err)
 		}
@@ -167,6 +169,9 @@ func orphan(t *testing.T, dir string) (command string, exited <-chan int, dead <
 func TestShellCancelAfterShellExitKillsProcessGroup(t *testing.T) {
 	for _, name := range []string{"unsandboxed", "sandboxed"} {
 		t.Run(name, func(t *testing.T) {
+			if name == "sandboxed" && runtime.GOOS == "linux" {
+				t.Skip("in bubblewrap's PID namespace the child dies with the shell, and $$ is not a host PID")
+			}
 			dir := t.TempDir()
 			sh := lifecycleShell(t, dir, name == "sandboxed")
 			command, exited, dead := orphan(t, dir)
@@ -176,7 +181,7 @@ func TestShellCancelAfterShellExitKillsProcessGroup(t *testing.T) {
 				// EOF on fd 4 can come before the exit is observable, so wait for
 				// it the way Run does, without reaping.
 				if pid := <-exited; pid > 0 {
-					if err := awaitExit(pid); err != nil {
+					if err := childprocess.AwaitExit(pid); err != nil {
 						t.Errorf("failed to await shell exit: %v", err)
 					}
 				} else {
@@ -279,4 +284,94 @@ func TestShellWaitsForExitAfterOutputCloses(t *testing.T) {
 	waitFor(t, done, "the command to finish")
 	require.ErrorIs(t, err, ErrExitStatus)
 	assert.True(t, strings.HasSuffix(err.Error(), "exit code 3"))
+}
+
+func TestShellCleansPlaceholdersAfterStartFailure(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("placeholders are made by the Linux sandbox")
+	}
+	for _, name := range []string{"canceled context", "missing working directory"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			placeholder := filepath.Join(dir, "absent")
+			sbs, err := sandbox.New(t.Context(), t.TempDir(), sandbox.Policy{Write: []string{dir}, DenyWrite: []string{placeholder}})
+			if errors.Is(err, sandbox.ErrUnavailable) && os.Getenv("KOPI_TEST_REQUIRE_LINUX_SANDBOX") != "1" {
+				t.Skip(err)
+			}
+			require.NoError(t, err)
+			sh := NewShell(dir, sbs[0])
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if name == "canceled context" {
+				cancel()
+			} else {
+				sh.dir = filepath.Join(dir, "missing")
+			}
+
+			p, err := sh.start(ctx, "true")
+
+			require.Error(t, err)
+			if name == "canceled context" {
+				require.ErrorIs(t, err, context.Canceled)
+			} else {
+				require.NotErrorIs(t, err, context.Canceled)
+				require.ErrorContains(t, err, "failed to run command")
+			}
+			require.Nil(t, p)
+			assert.NoFileExists(t, placeholder)
+
+			sh.dir = dir
+			p, err = sh.start(t.Context(), "test -e '"+placeholder+"'")
+			require.NoError(t, err)
+			defer p.stop(context.Canceled)
+			waitFor(t, p.done, "the next command to end")
+			_, err = p.result()
+			require.NoError(t, err)
+			assert.NoFileExists(t, placeholder)
+		})
+	}
+}
+
+func TestShellHoldsPlaceholdersUntilCommandEnds(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("placeholders are made by the Linux sandbox")
+	}
+	dir := t.TempDir()
+	placeholder := filepath.Join(dir, "absent")
+	sbs, err := sandbox.New(t.Context(), t.TempDir(), sandbox.Policy{Write: []string{dir}, DenyWrite: []string{placeholder}})
+	if errors.Is(err, sandbox.ErrUnavailable) && os.Getenv("KOPI_TEST_REQUIRE_LINUX_SANDBOX") != "1" {
+		t.Skip(err)
+	}
+	require.NoError(t, err)
+	sh := NewShell(dir, sbs[0])
+	gate := mkfifo(t, dir, "gate")
+
+	p, err := sh.start(t.Context(), "read x <'"+gate+"'")
+	require.NoError(t, err)
+	defer p.stop(context.Canceled)
+
+	// Opening blocks until the command is running and reads; the writer stays
+	// open so the command keeps waiting.
+	type opened struct {
+		f   *os.File
+		err error
+	}
+	openCh := make(chan opened, 1)
+	go func() {
+		f, err := os.OpenFile(gate, os.O_WRONLY, 0)
+		openCh <- opened{f, err}
+	}()
+	select {
+	case o := <-openCh:
+		require.NoError(t, o.err)
+		defer o.f.Close()
+	case <-p.done:
+		out, err := p.result()
+		t.Fatalf("the command ended before the gate opened: output %q, error %v", out, err)
+	}
+	assert.FileExists(t, placeholder)
+
+	p.stop(errors.New("stopped"))
+	waitFor(t, p.done, "the command to end")
+	assert.NoFileExists(t, placeholder)
 }

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -20,6 +22,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/keyute/kopi/internal/app"
+	"github.com/keyute/kopi/internal/classifier"
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/headless"
@@ -123,9 +126,8 @@ func permissionRules(cwd, home string, tools []tool.Tool, perms config.Permissio
 		{Name: origins["permissions.ask"], Ask: perms.Ask},
 		{Name: origins["permissions.deny"], Deny: perms.Deny},
 	}
-	// ToolSearch and Skill are known to rules even when the session has none of
-	// their tools.
-	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil), tool.NewSkill(nil, "")}))
+	// ToolSearch, Skill and WebSearch are known to rules even when the session lacks them.
+	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil), tool.NewSkill(nil, ""), tool.NewWebSearch(nil)}))
 	rules, err := policy.NewRules(cwd, home, specs, append(sources, flagRules...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load permission rules: %w", err)
@@ -274,12 +276,16 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM)
 	defer stop()
 
+	themes, err := tui.LoadThemes(paths.ThemeDir, resolved.Config.Theme.Dark, resolved.Config.Theme.Light)
+	if err != nil {
+		return fmt.Errorf("failed to use \"theme\" in %s: %w", paths.ConfigFile, err)
+	}
 	var ask askTrust
 	if fullscreen {
 		ask = func(req tui.TrustRequest) (tui.TrustChoice, error) {
 			askCtx, stopAsk := signal.NotifyContext(ctx, os.Interrupt)
 			defer stopAsk()
-			return tui.AskTrust(askCtx, cmd.InOrStdin(), cmd.OutOrStdout(), tui.Options{Keys: resolved.Config.Keys}, req)
+			return tui.AskTrust(askCtx, cmd.InOrStdin(), cmd.OutOrStdout(), tui.Options{Keys: resolved.Config.Keys, Themes: themes}, req)
 		}
 	}
 	// The instruction walk runs on the path trust is decided on.
@@ -356,14 +362,29 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		smallModel = model
 	}
 	answer := func(ctx context.Context, system, prompt string) (string, error) {
-		return rt.Answer(ctx, smallModel, system, prompt)
+		return rt.Answer(ctx, smallModel, pigruntime.DefaultEffort, system, prompt)
 	}
+	classifierOn := resolved.Config.Classifier.Enabled
+	classifierModel := cmp.Or(resolved.Config.Classifier.Model, model)
+	var review *classifier.Classifier
+	if classifierOn {
+		stage := func(effort pigruntime.Effort) classifier.Answer {
+			return func(ctx context.Context, system, prompt string) (string, error) {
+				return rt.Answer(ctx, classifierModel, effort, system, prompt)
+			}
+		}
+		review = classifier.New(stage(pigruntime.LowestEffort), stage(pigruntime.MediumEffort), resolved.Config.Classifier.Instructions)
+	}
+	// rules is set below; the search tools consult it only when they run.
+	var rules *policy.Rules
+	hidden := func(name string, root, t policy.Target) bool { return rules.Hides(name, root, t) }
 	tools := []tool.Tool{
-		tool.NewRead(ws), tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb), tool.NewShell(cwd, planSB), tasks),
+		tool.NewRead(ws), tool.NewGlob(ws, hidden), tool.NewGrep(ws, hidden), tool.NewLS(ws, hidden),
+		tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(tool.NewShell(cwd, sb), tool.NewShell(cwd, planSB), tasks),
 		tool.NewTaskOutput(tasks), tool.NewTaskStop(tasks),
 		tool.NewWebFetch("Kopi/"+kopiVersion(), answer),
 	}
-	rules, err := permissionRules(cwd, userHome, tools, resolved.Config.Permissions, resolved.Origins, flagRules)
+	rules, err = permissionRules(cwd, userHome, tools, resolved.Config.Permissions, resolved.Origins, flagRules)
 	if err != nil {
 		return err
 	}
@@ -391,18 +412,35 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			rt.Close()
 		}
 	}()
-	if resolved.Config.SmallModel != "" {
-		if err := rt.Check(startCtx, pigruntime.OpenOptions{Model: smallModel}); err != nil {
-			if errors.Is(err, pigruntime.ErrNoCredential) {
-				providers, listErr := rt.Providers(ctx)
-				if listErr != nil {
-					err = errors.Join(err, listErr)
-				} else {
-					err = diagnose(err, smallModel, resolved.Origins["smallModel"], paths, app.OpenRequest{}, providers)
-				}
-			}
-			return fmt.Errorf("failed to use \"smallModel\" in %s: %w", paths.ConfigFile, err)
+	checkModel := func(key, ref string) error {
+		err := rt.Check(startCtx, pigruntime.OpenOptions{Model: ref})
+		if err == nil || fullscreen && sameProviderNoCredential(err, model, ref) {
+			return nil
 		}
+		if errors.Is(err, pigruntime.ErrNoCredential) {
+			providers, listErr := rt.Providers(ctx)
+			if listErr != nil {
+				err = errors.Join(err, listErr)
+			} else {
+				err = diagnose(err, ref, resolved.Origins[key], paths, app.OpenRequest{}, providers)
+			}
+		}
+		return fmt.Errorf("failed to use %q in %s: %w", key, paths.ConfigFile, err)
+	}
+	if resolved.Config.SmallModel != "" {
+		if err := checkModel("smallModel", smallModel); err != nil {
+			return err
+		}
+	}
+	if classifierOn && resolved.Config.Classifier.Model != "" {
+		if err := checkModel("classifier.model", classifierModel); err != nil {
+			return err
+		}
+	}
+	if rt.CanSearch(smallModel) {
+		tools = append(tools, tool.NewWebSearch(func(ctx context.Context, system, query string) (tool.SearchResult, error) {
+			return rt.Search(ctx, smallModel, system, query)
+		}))
 	}
 	var skillDirs []string
 	if set.trusted {
@@ -416,7 +454,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// Only the fullscreen interface has a human to answer approvals.
 	cfg := app.Config{
 		Model: model, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
-		Errors: slices.Concat(set.errs, instructionErrs, skillErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen,
+		Errors: slices.Concat(set.errs, instructionErrs, skillErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review,
 		Skills: skills, SkillPrefix: resolved.Config.Skills.Prefix,
 	}
 	if len(set.servers) > 0 {
@@ -435,11 +473,11 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	if fullscreen {
 		// Created before Start so the TUI shows the events Start emits.
 		f = tui.New(c, cmd.InOrStdin(), cmd.OutOrStdout(), tui.Options{
-			Version:     kopiVersion(),
-			Keys:        resolved.Config.Keys,
-			StatusLeft:  resolved.Config.StatusLine.Left,
-			StatusRight: resolved.Config.StatusLine.Right,
-			ImageDir:    paths.ImageDir,
+			Version:    kopiVersion(),
+			Keys:       resolved.Config.Keys,
+			StatusLine: resolved.Config.StatusLine,
+			ImageDir:   paths.ImageDir,
+			Themes:     themes,
 		})
 	} else {
 		f = headless.New(c, prompt, cmd.OutOrStdout())
@@ -672,7 +710,7 @@ func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHom
 		return nil, nil, nil, nil
 	}
 	p := sandboxPolicy(cfg, cwd, userHome, kopiHome)
-	sandboxes, err := sandbox.New(ctx, p, planPolicy(p, cwd))
+	sandboxes, err := sandbox.New(ctx, filepath.Join(kopiHome, "sandbox"), p, planPolicy(p, cwd))
 	switch {
 	case cfg.Enabled == nil && errors.Is(err, sandbox.ErrUnavailable):
 		return nil, nil, err, nil
@@ -684,7 +722,8 @@ func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHom
 
 // sandboxPolicy lets commands write only the workspace, temporary
 // directories and the paths the user allowed, never read Kopi's home, and
-// never write the git files that decide which config and hooks git runs, nor
+// never write the git files that decide which config and hooks git runs (on
+// Linux, nothing in the start directory's .git), nor
 // any .mcp.json or what the start directory's .mcp.json resolves to, either of
 // which would run code outside the sandbox.
 func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.Policy {
@@ -705,15 +744,27 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 		return out
 	}
 	gitDir := filepath.Join(cwd, ".git")
+	// The names stay listed on Linux, though gitDir covers them: with paths
+	// listed beneath it, a missing .git gets a directory placeholder rather than
+	// an empty file, so git in a subdirectory of another repository still walks
+	// up. The whole directory is denied there because bubblewrap can block
+	// creating a path only by mounting a placeholder on it, and git refuses an
+	// empty commondir and, in a reftable repository, any commondir.
 	var denyWrite []string
 	for _, name := range []string{"hooks", "config", "commondir", "config.worktree", "worktrees", "modules"} {
 		denyWrite = append(denyWrite, filepath.Join(gitDir, name))
 	}
-	if _, err := os.Lstat(gitDir); errors.Is(err, os.ErrNotExist) {
-		// With no .git, git takes a directory holding HEAD, objects and refs
-		// for a git directory and runs its config.
+	_, err := os.Lstat(gitDir)
+	missing := errors.Is(err, os.ErrNotExist)
+	if missing || runtime.GOOS == "linux" {
+		// Git takes a directory holding HEAD, objects and refs for a git
+		// directory and runs its config. On Linux another command's .git
+		// placeholder can hide that .git was missing.
 		denyWrite = append(denyWrite, filepath.Join(cwd, "HEAD"))
-	} else if info, err := os.Stat(gitDir); err != nil || !info.IsDir() {
+	}
+	if runtime.GOOS == "linux" {
+		denyWrite = append(denyWrite, gitDir)
+	} else if info, err := os.Stat(gitDir); !missing && (err != nil || !info.IsDir()) {
 		// A .git file, as in a linked worktree or submodule, names the git directory.
 		denyWrite = append(denyWrite, gitDir)
 	}
@@ -736,6 +787,15 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 func planPolicy(p sandbox.Policy, cwd string) sandbox.Policy {
 	p.DenyWrite = slices.Concat(p.DenyWrite, []string{cwd})
 	return p
+}
+
+// sameProviderNoCredential reports whether err is the missing credential of
+// the provider a configured model shares with model; in fullscreen the
+// first-run login of model supplies it.
+func sameProviderNoCredential(err error, model, sub string) bool {
+	provider, _, _ := strings.Cut(model, "/")
+	subProvider, _, _ := strings.Cut(sub, "/")
+	return errors.Is(err, pigruntime.ErrNoCredential) && provider == subProvider
 }
 
 // diagnose turns the open failures a user can fix into Kopi's own advice.

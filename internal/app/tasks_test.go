@@ -919,3 +919,27 @@ func TestFailedSwitchKeepsNotices(t *testing.T) {
 	h.turn(t, "next")
 	assert.Equal(t, []string{"next", stopText, endText("t2")}, receive(t, requests).UserTexts)
 }
+
+func TestTaskEndDuringLoginWakesAfterLogin(t *testing.T) {
+	h := openLoginHarness(t, Config{Wake: true})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "noted")})
+	ends := turnEnds(h.c)
+	run, _ := h.startLogin(t)
+
+	h.tasks.end(endedTask("t1"))
+
+	assert.True(t, h.idle(), "no turn starts during a login")
+	assert.Len(t, h.queuedNotices(), 1)
+	assert.Empty(t, ofType[event.TurnStart](h.rec.all()))
+
+	require.True(t, h.c.Interrupt())
+	<-run.done
+
+	end := receiveEnd(t, ends)
+	assert.Equal(t, event.Completed, end.Outcome.Status)
+	texts := receive(t, requests).UserTexts
+	require.NotEmpty(t, texts)
+	assert.Equal(t, endText("t1"), texts[len(texts)-1])
+	assert.Empty(t, h.queuedNotices())
+}

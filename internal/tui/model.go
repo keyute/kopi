@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -59,11 +60,15 @@ type model struct {
 	version string
 
 	th            theme
+	themes        Themes
 	width, height int
 	keys          keyMap
 	composer      composer
 	spinner       spinner.Model
 	layout        statusLayout
+	home          string
+	commands      statusCommands
+	commandOut    map[string]string
 	geo           geometry
 	clip          clipboard
 	imageDir      string
@@ -109,10 +114,12 @@ type model struct {
 	// prompt. tasks is the /tasks dialog, nil when closed; an approval closes
 	// it. prompt is the shown dialog's rows, drawn in place of the composer.
 	approval *event.ApprovalRequested
-	dialog   *dialog
-	tasks    *taskDialog
-	prompt   []string
-	menu     menu
+	// login is the pending login question, whose prompt is dialog too.
+	login  *event.LoginRequested
+	dialog *dialog
+	tasks  *taskDialog
+	prompt []string
+	menu   menu
 	// seen is the draft and cursor syncInput last reconciled.
 	seen struct {
 		value     string
@@ -121,26 +128,35 @@ type model struct {
 }
 
 func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model {
-	th, km := mocha(), newKeyMap(opts.Keys)
+	th, km := opts.Themes.dark, newKeyMap(opts.Keys)
 	m := &model{
 		ctx: ctx, c: c, bridge: b, version: opts.Version,
-		th: th, keys: km, composer: newComposer(th, km.newline), spinner: newSpinner(th),
-		layout:   statusLayout{left: opts.StatusLeft, right: opts.StatusRight},
-		clip:     systemClipboard{},
-		imageDir: opts.ImageDir,
-		folds:    newFolds(),
-		follow:   true,
-		geo:      geometry{working: -1},
-		status:   c.Status(),
-		pickVerb: randomVerb,
-		verb:     fallbackVerb,
+		th: th, themes: opts.Themes, keys: km, composer: newComposer(th, km.newline), spinner: newSpinner(th),
+		layout: statusLayout{
+			left: opts.StatusLine.Left, right: opts.StatusLine.Right,
+			separator: opts.StatusLine.Separator, segments: opts.StatusLine.Segments,
+		},
+		commandOut: map[string]string{},
+		clip:       systemClipboard{},
+		imageDir:   opts.ImageDir,
+		folds:      newFolds(),
+		follow:     true,
+		geo:        geometry{working: -1},
+		status:     c.Status(),
+		pickVerb:   randomVerb,
+		verb:       fallbackVerb,
 	}
 	m.composer.setHistory(c.History())
+	m.home, _ = os.UserHomeDir()
 	return m
 }
 
 func (m *model) Init() tea.Cmd {
 	return tea.Batch(m.bridge.wait(), tea.RequestBackgroundColor)
+}
+
+func (m *model) statusInput() statusInput {
+	return statusInput{Status: m.status, notice: m.flashText, home: m.home, commands: m.commandOut}
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -161,7 +177,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.relayout()
 	case tea.BackgroundColorMsg:
 		if !msg.IsDark() {
-			m.th = latte()
+			m.th = m.themes.light
 			m.clearSelection()
 			m.composer.style(m.th)
 			m.spinner.Style = fg(m.th.accent)
@@ -245,6 +261,9 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	if m.approval != nil {
 		return m.approvalKey(msg)
 	}
+	if m.login != nil {
+		return m.loginKey(msg)
+	}
 	if m.tasks != nil {
 		return m.tasksKey(msg)
 	}
@@ -313,7 +332,45 @@ func (m *model) approvalKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 // endApproval drops the pending call and its prompt.
-func (m *model) endApproval() { m.approval, m.dialog = nil, nil }
+func (m *model) endApproval() {
+	if m.approval != nil {
+		m.approval, m.dialog = nil, nil
+	}
+}
+
+// loginKey goes to the login prompt like approvalKey: a pick answers with the
+// chosen option's ID or the typed text, and interrupt cancels the login. The
+// prompt stays until its LoginEnded arrives.
+func (m *model) loginKey(msg tea.KeyPressMsg) tea.Cmd {
+	switch {
+	case key.Matches(msg, m.keys.interrupt):
+		m.c.Interrupt()
+		return nil
+	case key.Matches(msg, m.keys.paste) && m.dialog.field() != nil:
+		return readClipboardText(m.clip, m.dialog.field())
+	}
+	picked, cmd := m.dialog.key(msg, &m.keys)
+	if picked {
+		answer := m.dialog.text()
+		if f := m.dialog.field(); f != nil && f.secret {
+			answer = strings.NewReplacer("\r", "", "\n", "").Replace(answer)
+		}
+		if len(m.login.Options) > 0 {
+			answer = m.login.Options[m.dialog.sel].ID
+		}
+		m.c.AnswerLogin(m.login.Token, answer)
+		m.dialog.clear()
+	}
+	return cmd
+}
+
+// endLogin drops the pending question and its prompt.
+func (m *model) endLogin() {
+	if m.login != nil {
+		m.dialog.clear()
+		m.login, m.dialog = nil, nil
+	}
+}
 
 // cancel is the cancel key and SIGINT: it interrupts a running turn, else
 // clears the draft, else takes two in a row to quit.
@@ -373,6 +430,8 @@ func (m *model) submitted(err error) tea.Cmd {
 		m.composer.reset()
 	case errors.Is(err, app.ErrBusy):
 		return m.flash("busy opening a session")
+	case errors.Is(err, app.ErrLoggingIn):
+		return m.flash("a login is under way")
 	default:
 		m.tr.Apply(event.Error{Err: err})
 		m.relayout()
@@ -401,6 +460,9 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 		case event.SessionChanged, event.ModeChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged:
 			refresh = true
 		}
+		if m.commands != nil {
+			m.commands.Observe(ev)
+		}
 		m.apply(ev)
 	}
 	if refresh {
@@ -418,6 +480,13 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 
 func (m *model) apply(ev event.Event) {
 	switch ev := ev.(type) {
+	case event.StatusCommandResult:
+		if ev.Err != nil {
+			delete(m.commandOut, ev.Name)
+		} else {
+			m.commandOut[ev.Name] = cleanStatusOutput(ev.Output)
+		}
+		return
 	case event.SessionChanged:
 		m.tr = transcript.Transcript{}
 		if len(ev.History) > 0 {
@@ -442,6 +511,14 @@ func (m *model) apply(ev event.Event) {
 		return
 	case event.ApprovalRequested:
 		m.approval, m.dialog, m.tasks = &ev, newApprovalDialog(&ev, &m.keys, m.th), nil
+		return
+	case event.LoginRequested:
+		m.login, m.dialog, m.tasks = &ev, newLoginDialog(ev, &m.keys, m.th), nil
+		return
+	case event.LoginEnded:
+		if m.login != nil && m.login.Token == ev.Token {
+			m.endLogin()
+		}
 		return
 	case event.ApprovalEnded:
 		if m.approval != nil && m.approval.Token == ev.Token {
@@ -553,6 +630,9 @@ func (m *model) place() {
 		// The prompt takes the composer's frame rows too.
 		m.prompt = approvalRows(m.dialog, m.approval, m.width, max(2, m.height/3), free+2, m.th)
 		input = len(m.prompt) - 2
+	case m.login != nil:
+		m.prompt = loginRows(m.dialog, m.width, max(2, m.height/3), free+2, m.th)
+		input = len(m.prompt) - 2
 	case m.tasks != nil:
 		m.prompt = m.tasks.rows(m.width, max(2, m.height/3), free+2, m.th)
 		input = len(m.prompt) - 2
@@ -571,14 +651,17 @@ func (m *model) place() {
 	// The +1 is the shaded top row that the composer and the prompt both draw.
 	m.geo.composerTop = m.geo.transcript + len(rows) + 1
 	switch {
-	case m.approval != nil:
+	case m.approval != nil || m.login != nil:
 		rows = append(rows, m.prompt...)
 		if len(m.prompt) > 0 {
 			// The prompt's first row is the composer's top shaded row; with
 			// no rows, the areas are an earlier render's.
 			for _, fa := range m.dialog.areas {
-				fa.y += m.geo.composerTop - 1
-				m.geo.fields = append(m.geo.fields, fa)
+				// A secret is never selectable, so it has no area.
+				if !fa.c.secret {
+					fa.y += m.geo.composerTop - 1
+					m.geo.fields = append(m.geo.fields, fa)
+				}
 			}
 		}
 	case m.tasks != nil:
@@ -588,7 +671,7 @@ func (m *model) place() {
 		rows = append(rows, m.menuRows()...)
 		m.geo.fields = []fieldArea{{c: &m.composer, y: m.geo.composerTop, h: m.composer.height()}}
 	}
-	rows = append(rows, statusLine(m.status, m.layout, m.flashText, m.width, m.th))
+	rows = append(rows, statusLine(m.statusInput(), m.layout, m.width, m.th))
 	m.below = make([]line, len(rows))
 	for i, r := range rows {
 		m.below[i] = line{text: r}

@@ -57,7 +57,8 @@ func echoTool(name string) map[string]any {
 
 func call(t *testing.T, tl tool.Tool, args string) (string, error) {
 	t.Helper()
-	return tl.Run(t.Context(), json.RawMessage(args), func(policy.Target) (policy.Mode, error) { return policy.Execute, nil })
+	res, err := tl.Run(t.Context(), json.RawMessage(args), func(policy.Target) (policy.Mode, error) { return policy.Execute, nil })
+	return res.Text, err
 }
 
 func findTool(t *testing.T, st ServerStatus, name string) tool.Tool {

@@ -43,9 +43,11 @@ type Config struct {
 	// Keys maps an action from KeyActions to the keys bound to it.
 	Keys        map[string][]string  `koanf:"keys"`
 	StatusLine  StatusLine           `koanf:"statusline"`
+	Theme       Theme                `koanf:"theme"`
 	Permissions Permissions          `koanf:"permissions"`
 	Sandbox     Sandbox              `koanf:"sandbox"`
 	Skills      Skills               `koanf:"skills"`
+	Classifier  Classifier           `koanf:"classifier"`
 	MCPServers  map[string]MCPServer `koanf:"mcpServers"`
 }
 
@@ -68,6 +70,14 @@ type Sandbox struct {
 	AllowWrite []string `koanf:"allowWrite"`
 	DenyRead   []string `koanf:"denyRead"`
 	Network    bool     `koanf:"network"`
+}
+
+// Classifier configures the model that reviews calls that would otherwise ask;
+// a later layer's Instructions replace an earlier one's whole.
+type Classifier struct {
+	Enabled      bool     `koanf:"enabled"`
+	Model        string   `koanf:"model"` // "provider/id"; empty means model
+	Instructions []string `koanf:"instructions"`
 }
 
 // MCPServer is one entry of the standard mcpServers object.
@@ -114,6 +124,7 @@ func Defaults() Layer {
 	values["permissions"] = map[string]any{"allow": []string{}, "ask": []string{}, "deny": []string{}}
 	values["sandbox"] = map[string]any{"allowWrite": []string{}, "denyRead": []string{}, "network": false}
 	values["skills"] = map[string]any{"prefix": "skill"}
+	values["classifier"] = map[string]any{"enabled": false, "instructions": []string{}}
 	values["mcpServers"] = map[string]any{}
 	return Map("default", values)
 }
@@ -158,7 +169,7 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 		if err := decode(k, &c); err != nil {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
-		for _, ref := range []string{c.Model, c.SmallModel} {
+		for _, ref := range []string{c.Model, c.SmallModel, c.Classifier.Model} {
 			if ref == "" {
 				continue
 			}
@@ -177,6 +188,13 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 		if err := validateUI(c); err != nil {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
+		for _, name := range []struct{ key, value string }{{"theme.dark", c.Theme.Dark}, {"theme.light", c.Theme.Light}} {
+			if k.Exists(name.key) {
+				if err := validateThemeName(name.key, name.value); err != nil {
+					return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
+				}
+			}
+		}
 		if err := validatePermissions(c.Permissions); err != nil {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
@@ -184,6 +202,9 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
 		if err := validateSkills(c.Skills); err != nil {
+			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
+		}
+		if err := validateClassifier(c.Classifier); err != nil {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
 		if err := validateMCPServers(c.MCPServers); err != nil {
@@ -203,6 +224,9 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 	}
 	if c.Version != Version {
 		return nil, fmt.Errorf("%w: %d (from %s), want %d", ErrUnsupportedVersion, c.Version, originOf(origins, "version"), Version)
+	}
+	if err := validateSegmentRefs(c.StatusLine, origins); err != nil {
+		return nil, err
 	}
 	return &Resolved{Config: c, Origins: origins}, nil
 }
@@ -343,6 +367,15 @@ func validateSkills(s Skills) error {
 	return nil
 }
 
+func validateClassifier(c Classifier) error {
+	for i, ins := range c.Instructions {
+		if strings.TrimSpace(ins) == "" {
+			return fmt.Errorf("%w: classifier.instructions[%d]: blank instruction", ErrInvalidValue, i)
+		}
+	}
+	return nil
+}
+
 func validateMCPServers(servers map[string]MCPServer) error {
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		if err := tool.ValidateMCPServerName(name); err != nil {
@@ -366,25 +399,31 @@ type Entry struct{ Key, Value, Origin string }
 
 // Entries returns every schema key sorted by key, including unset ones (empty
 // Value, Origin "unset"), plus one entry per MCP server showing only its
-// transport and command or URL. Lists are shown as compact JSON.
+// transport and command or URL, and one per user status line segment. Lists are shown as compact JSON.
 func (r *Resolved) Entries() []Entry {
 	c := r.Config
 	values := map[string]any{
-		"model":                c.Model,
-		"smallModel":           c.SmallModel,
-		"mode":                 c.Mode,
-		"instructionFallbacks": c.InstructionFallbacks,
-		"version":              c.Version,
-		"statusline.left":      c.StatusLine.Left,
-		"statusline.right":     c.StatusLine.Right,
-		"permissions.allow":    c.Permissions.Allow,
-		"permissions.ask":      c.Permissions.Ask,
-		"permissions.deny":     c.Permissions.Deny,
-		"sandbox.enabled":      c.Sandbox.Enabled,
-		"sandbox.allowWrite":   c.Sandbox.AllowWrite,
-		"sandbox.denyRead":     c.Sandbox.DenyRead,
-		"sandbox.network":      c.Sandbox.Network,
-		"skills.prefix":        c.Skills.Prefix,
+		"model":                   c.Model,
+		"smallModel":              c.SmallModel,
+		"mode":                    c.Mode,
+		"instructionFallbacks":    c.InstructionFallbacks,
+		"version":                 c.Version,
+		"statusline.left":         c.StatusLine.Left,
+		"statusline.right":        c.StatusLine.Right,
+		"statusline.separator":    c.StatusLine.Separator,
+		"theme.dark":              c.Theme.Dark,
+		"theme.light":             c.Theme.Light,
+		"permissions.allow":       c.Permissions.Allow,
+		"permissions.ask":         c.Permissions.Ask,
+		"permissions.deny":        c.Permissions.Deny,
+		"sandbox.enabled":         c.Sandbox.Enabled,
+		"sandbox.allowWrite":      c.Sandbox.AllowWrite,
+		"sandbox.denyRead":        c.Sandbox.DenyRead,
+		"sandbox.network":         c.Sandbox.Network,
+		"skills.prefix":           c.Skills.Prefix,
+		"classifier.enabled":      c.Classifier.Enabled,
+		"classifier.model":        c.Classifier.Model,
+		"classifier.instructions": c.Classifier.Instructions,
 	}
 	for _, action := range KeyActions {
 		values["keys."+action] = c.Keys[action]
@@ -403,6 +442,18 @@ func (r *Resolved) Entries() []Entry {
 		if s.Command != "" {
 			e.Value = "stdio: " + strings.Join(append([]string{s.Command}, s.Args...), " ")
 			e.Origin = originOf(r.Origins, prefix+"command")
+		}
+		entries = append(entries, e)
+	}
+	for name, s := range c.StatusLine.Segments {
+		prefix := "statusline.segments." + name + "."
+		e := Entry{Key: "statusline.segments." + name, Value: "text: " + s.Text, Origin: originOf(r.Origins, prefix+"text")}
+		if s.Command != "" {
+			e.Value = "command: " + s.Command
+			e.Origin = originOf(r.Origins, prefix+"command")
+			if s.Interval != "" {
+				e.Value += " every " + s.Interval
+			}
 		}
 		entries = append(entries, e)
 	}

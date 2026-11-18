@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
         race: [true, false]
     permissions:
       contents: read
@@ -31,7 +31,18 @@ jobs:
       - name: Verify Seatbelt availability
         if: runner.os == 'macOS'
         run: /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true
+      - name: Install bubblewrap
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Verify bubblewrap availability
+        if: runner.os == 'Linux'
+        run: bwrap --die-with-parent --unshare-user --unshare-pid --cap-drop ALL --unshare-net --ro-bind / / --perms 555 --tmpfs /sys --remount-ro /sys --dev /dev --proc /proc -- true
       - name: Run Go tests
+        env:
+          KOPI_TEST_REQUIRE_LINUX_SANDBOX: ${{ runner.os == 'Linux' && '1' || '' }}
         uses: robherley/go-test-action@2f859e0c8769d755d3174eecb9af8f64660827f3 # v1.1.0
         with:
           testArguments: ${{ matrix.race && './... -race' || './...' }}

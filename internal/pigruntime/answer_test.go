@@ -14,7 +14,7 @@ func TestAnswerSendsSystemAndPromptAndReturnsTrimmedText(t *testing.T) {
 	requests := make(chan []ai.Message, 1)
 	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "  the answer\n")})
 
-	got, err := r.Answer(t.Context(), fauxModel, "answer from the page", "what is it?")
+	got, err := r.Answer(t.Context(), fauxModel, DefaultEffort, "answer from the page", "what is it?")
 	require.NoError(t, err)
 	assert.Equal(t, "the answer", got)
 	req := <-requests
@@ -34,7 +34,7 @@ func TestAnswerReportsProviderError(t *testing.T) {
 		ai.FauxAssistantMessage(ai.FauxContentString(""), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonError), ErrorMessage: "invalid request: bad thing"}),
 	})
 
-	_, err := r.Answer(t.Context(), fauxModel, "system", "prompt")
+	_, err := r.Answer(t.Context(), fauxModel, DefaultEffort, "system", "prompt")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid request: bad thing")
 }
@@ -43,7 +43,7 @@ func TestAnswerEmptyReplyFails(t *testing.T) {
 	r, faux := newTestRuntime(t, newSandbox(t))
 	faux.SetResponses([]ai.FauxResponseStep{reply(" \n")})
 
-	_, err := r.Answer(t.Context(), fauxModel, "system", "prompt")
+	_, err := r.Answer(t.Context(), fauxModel, DefaultEffort, "system", "prompt")
 	assert.ErrorIs(t, err, ErrNoAnswer)
 }
 
@@ -57,7 +57,7 @@ func TestAnswerCancelledReturnsContextError(t *testing.T) {
 		}),
 	})
 
-	_, err := r.Answer(ctx, fauxModel, "system", "prompt")
+	_, err := r.Answer(ctx, fauxModel, DefaultEffort, "system", "prompt")
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
@@ -76,9 +76,39 @@ func TestAnswerUnusableModelFails(t *testing.T) {
 		{name: "missing credential", model: "openai-codex/" + codex.ID, sentinel: ErrNoCredential},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := r.Answer(t.Context(), tc.model, "system", "prompt")
+			_, err := r.Answer(t.Context(), tc.model, DefaultEffort, "system", "prompt")
 			require.ErrorIs(t, err, tc.sentinel)
 			assert.Contains(t, err.Error(), tc.model)
+		})
+	}
+}
+
+func TestAnswerEffortSetsThinkingLevel(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "faux-thinker", Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, r.RegisterProvider(thinker.Provider()))
+
+	for _, tc := range []struct {
+		name   string
+		effort Effort
+		want   ai.ThinkingLevel
+	}{
+		{"default", DefaultEffort, ""},
+		{"lowest", LowestEffort, ai.ThinkingLevelMinimal},
+		{"medium", MediumEffort, ai.ThinkingLevelMedium},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			levels := make(chan ai.ThinkingLevel, 1)
+			thinker.SetResponses([]ai.FauxResponseStep{
+				ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+					levels <- o.Thinking
+					return ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{}), nil
+				}),
+			})
+
+			_, err := r.Answer(t.Context(), "faux-thinker/thinker", tc.effort, "system", "prompt")
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, <-levels)
 		})
 	}
 }

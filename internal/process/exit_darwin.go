@@ -1,4 +1,4 @@
-package tool
+package process
 
 import (
 	"errors"
@@ -7,7 +7,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func awaitExit(pid int) error {
+// AwaitExit observes an owned child without reaping it. The caller must keep
+// the child unreaped until all PID-based signals have finished.
+func AwaitExit(pid int) error {
 	kq, err := unix.Kqueue()
 	if err != nil {
 		return fmt.Errorf("failed to create kqueue: %w", err)

@@ -74,6 +74,8 @@ type composer struct {
 	clicks int
 	unit   selection
 	spans  []app.Span
+	// secret draws the draft as one bullet per character; only fields set it.
+	secret bool
 }
 
 // baseComposer keeps the textarea's stock editing keys except newline, which

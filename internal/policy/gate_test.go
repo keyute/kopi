@@ -39,7 +39,7 @@ func (f *approver) approve(_ context.Context, r Request) (Decision, error) {
 
 func newTestGate(rules *Rules, approve Approver) (*Authority, *Gate) {
 	a := NewAuthority()
-	return a, NewGate(a, testSpecs, rules, approve)
+	return a, NewGate(a, testSpecs, rules, approve, nil)
 }
 
 func pathArgs(p string) json.RawMessage {
@@ -148,7 +148,7 @@ func sandboxedGate(t *testing.T, spec ToolSpec, approve Approver, src Source) (*
 	rules, err := NewRules(d.ws, d.home, specs, src)
 	require.NoError(t, err)
 	a := NewAuthority()
-	return a, NewGate(a, specs, rules, approve)
+	return a, NewGate(a, specs, rules, approve, nil)
 }
 
 var (
@@ -266,7 +266,7 @@ func TestAdmitReturnsTheAdmittedMode(t *testing.T) {
 	} {
 		specs := map[string]ToolSpec{"Shell": planSandboxed, "Read": {Capability: Read}}
 		a := NewAuthority()
-		g := NewGate(a, specs, nil, nil)
+		g := NewGate(a, specs, nil, nil, nil)
 		if tc.execute {
 			a.EnterExecute()
 		}
@@ -382,7 +382,7 @@ func TestBuiltInGitAskSurvivesAllEditsInsideGitWorkspace(t *testing.T) {
 			g := NewGate(a, map[string]ToolSpec{
 				"Edit":  {Capability: Write, Target: pathTarget},
 				"Write": {Capability: Write, Target: pathTarget},
-			}, d.rules(t), f.approve)
+			}, d.rules(t), f.approve, nil)
 			a.EnterExecute()
 			require.NoError(t, g.Before(t.Context(), "initial", "Edit", pathArgs(ordinary)))
 			require.NoError(t, admitApproved(g, "initial", "Edit"))
@@ -410,7 +410,7 @@ func TestBuiltInMCPFileAskSurvivesAllEdits(t *testing.T) {
 	g := NewGate(a, map[string]ToolSpec{
 		"Edit":  {Capability: Write, Target: pathTarget},
 		"Write": {Capability: Write, Target: pathTarget},
-	}, d.rules(t), f.approve)
+	}, d.rules(t), f.approve, nil)
 	a.EnterExecute()
 	require.NoError(t, g.Before(t.Context(), "initial", "Edit", pathArgs(filepath.Join(d.ws, "a.go"))))
 	require.NoError(t, admitApproved(g, "initial", "Edit"))
@@ -527,7 +527,7 @@ func TestGrantForOneToolIsNotAdmittedForAnother(t *testing.T) {
 
 func TestNewGateCopiesTools(t *testing.T) {
 	tools := map[string]ToolSpec{"Read": {Capability: Read}}
-	g := NewGate(NewAuthority(), tools, nil, nil)
+	g := NewGate(NewAuthority(), tools, nil, nil, nil)
 	tools["Read"] = ToolSpec{Capability: Exec}
 	tools["Bash"] = ToolSpec{Capability: Read}
 	assert.NoError(t, g.Before(t.Context(), "c1", "Read", nil))
@@ -574,7 +574,7 @@ func TestPendingApprovalBindsOriginalTarget(t *testing.T) {
 			close(waiting)
 			<-answer
 			return Decision{Answer: Allow}, nil
-		})
+		}, nil)
 	args := pathArgs("/link")
 	done := make(chan error, 1)
 	go func() { done <- g.Before(t.Context(), "call", "Edit", args) }()
@@ -612,7 +612,7 @@ func mcpGate(t *testing.T, approve Approver, src Source) (*Authority, *Gate) {
 	rules, err := NewRules(d.ws, d.home, specs, src)
 	require.NoError(t, err)
 	a := NewAuthority()
-	return a, NewGate(a, specs, rules, approve)
+	return a, NewGate(a, specs, rules, approve, nil)
 }
 
 func TestAskToolAsksWithNoRuleEvenForRead(t *testing.T) {

@@ -54,6 +54,9 @@ type ApprovalRequested struct {
 	Preview       []tool.PreviewLine
 	// Rule is the ask rule and its source; "" when no rule asked.
 	Rule string
+	// Review is the classifier's verdict when it sent the call to the human;
+	// nil when it did not review.
+	Review *policy.Review
 	// Edits reports that "allow all edits this session" may be offered.
 	Edits bool
 }
@@ -62,8 +65,27 @@ type ApprovalRequested struct {
 // cancelled.
 type ApprovalEnded struct{ Token uint64 }
 
-// Notice reports retry and compaction progress, and the MCP server tools the
-// first session skipped.
+// LoginRequested asks the human one question of a running login; answer with
+// Controller.AnswerLogin. There may be no session yet.
+type LoginRequested struct {
+	// Token identifies this question for the controller's lifetime.
+	Token             uint64
+	Provider, Message string
+	Placeholder       string
+	// Secret asks for input that must not be echoed or kept.
+	Secret bool
+	// Options, when set, are the only valid answers; the answer is an option ID.
+	Options []LoginOption
+}
+
+type LoginOption struct{ ID, Label, Description string }
+
+// LoginEnded follows every LoginRequested, whether it was answered or
+// cancelled.
+type LoginEnded struct{ Token uint64 }
+
+// Notice reports retry and compaction progress, the MCP server tools the
+// first session skipped, and a login's progress and result.
 type Notice struct{ Text string }
 
 // Activity is what the Controller is doing outside a turn, such as waiting
@@ -101,25 +123,34 @@ type SessionChanged struct {
 	History []Event
 }
 
+// StatusCommandResult is ephemeral footer output, not session history.
+type StatusCommandResult struct {
+	Name, Output string
+	Err          error
+}
+
 type Error struct{ Err error }
 
-func (TurnStart) isEvent()         {}
-func (QueueChanged) isEvent()      {}
-func (UserMessage) isEvent()       {}
-func (TextDelta) isEvent()         {}
-func (ThinkingDelta) isEvent()     {}
-func (ToolStart) isEvent()         {}
-func (ToolEnd) isEvent()           {}
-func (ApprovalRequested) isEvent() {}
-func (ApprovalEnded) isEvent()     {}
-func (Notice) isEvent()            {}
-func (Activity) isEvent()          {}
-func (TurnEnd) isEvent()           {}
-func (TaskEnded) isEvent()         {}
-func (TasksChanged) isEvent()      {}
-func (ModeChanged) isEvent()       {}
-func (SessionChanged) isEvent()    {}
-func (Error) isEvent()             {}
+func (TurnStart) isEvent()           {}
+func (QueueChanged) isEvent()        {}
+func (UserMessage) isEvent()         {}
+func (TextDelta) isEvent()           {}
+func (ThinkingDelta) isEvent()       {}
+func (ToolStart) isEvent()           {}
+func (ToolEnd) isEvent()             {}
+func (ApprovalRequested) isEvent()   {}
+func (ApprovalEnded) isEvent()       {}
+func (LoginRequested) isEvent()      {}
+func (LoginEnded) isEvent()          {}
+func (Notice) isEvent()              {}
+func (Activity) isEvent()            {}
+func (TurnEnd) isEvent()             {}
+func (TaskEnded) isEvent()           {}
+func (TasksChanged) isEvent()        {}
+func (ModeChanged) isEvent()         {}
+func (SessionChanged) isEvent()      {}
+func (StatusCommandResult) isEvent() {}
+func (Error) isEvent()               {}
 
 type Status int
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -240,4 +241,25 @@ func TestApprovalRowsNameTheRuleOnlyWhenSet(t *testing.T) {
 
 	a.Rule = ""
 	assert.NotContains(t, strings.Join(plainApprovalRows(a, 0, 10), "\n"), "asked by")
+}
+
+func TestApprovalRowsNoteTheClassifierReview(t *testing.T) {
+	for name, tt := range map[string]struct {
+		review policy.Review
+		note   string
+	}{
+		"deny with reason":      {policy.Review{Verdict: policy.VerdictDeny, Reason: "reads a credential"}, "  the classifier would deny this: reads a credential"},
+		"deny without reason":   {policy.Review{Verdict: policy.VerdictDeny}, "  the classifier would deny this"},
+		"undecided with reason": {policy.Review{Reason: "unclear intent"}, "  the classifier could not decide: unclear intent"},
+		"undecided":             {policy.Review{}, "  the classifier could not decide"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := event.ApprovalRequested{Title: "Bash", Review: &tt.review}
+
+			// The note wraps at the dialog's width and ends at the blank row.
+			rows := plainApprovalRows(a, 0, 10)[2:]
+			note := strings.Join(rows[:slices.Index(rows, "")], " ")
+			assert.Equal(t, tt.note, strings.ReplaceAll(note, "   ", " "))
+		})
+	}
 }

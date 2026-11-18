@@ -94,8 +94,8 @@ func TestToolSearchLoadsRankedMatches(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"mcp__gh__get_issue", "mcp__docs__fetch"}, loaded)
-	assert.Equal(t, "Loaded 2 tools; call them in your next response:\n- mcp__gh__get_issue: Gets an issue.\n- mcp__docs__fetch", out)
-	assert.Equal(t, "loaded 2 tools", tool.Display.Summary(out))
+	assert.Equal(t, "Loaded 2 tools; call them in your next response:\n- mcp__gh__get_issue: Gets an issue.\n- mcp__docs__fetch", out.Text)
+	assert.Equal(t, "loaded 2 tools", tool.Display.Summary(out.Text))
 
 	failed := errors.New("failed")
 	failing := NewToolSearch(searchable, func(string, []Tool, int) []string { return []string{"mcp__docs__fetch"} },
@@ -121,12 +121,12 @@ func TestToolSearchExactNamesLoadOnlyThose(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"mcp__gh__list_issues", "mcp__docs__fetch"}, loaded)
-	assert.Equal(t, "Loaded 2 tools; call them in your next response:\n- mcp__gh__list_issues: Lists issues.\n- mcp__docs__fetch", out)
+	assert.Equal(t, "Loaded 2 tools; call them in your next response:\n- mcp__gh__list_issues: Lists issues.\n- mcp__docs__fetch", out.Text)
 
 	out, err = tool.Run(t.Context(), json.RawMessage(`{"query":"mcp__gh__get_issue"}`), allowTarget)
 	require.NoError(t, err)
-	assert.Equal(t, "Loaded 1 tool; call it in your next response:\n- mcp__gh__get_issue: Gets an issue.", out)
-	assert.Equal(t, "loaded 1 tool", tool.Display.Summary(out))
+	assert.Equal(t, "Loaded 1 tool; call it in your next response:\n- mcp__gh__get_issue: Gets an issue.", out.Text)
+	assert.Equal(t, "loaded 1 tool", tool.Display.Summary(out.Text))
 }
 
 func TestToolSearchReportsNoMatch(t *testing.T) {
@@ -139,8 +139,8 @@ func TestToolSearchReportsNoMatch(t *testing.T) {
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"query":"mcp__gh__get_issue weather"}`), allowTarget)
 
 	require.NoError(t, err)
-	assert.Equal(t, `No deferred tool matches "mcp__gh__get_issue weather". Try other keywords, or exact names from the system prompt.`, out)
-	assert.Equal(t, "no match", tool.Display.Summary(out))
+	assert.Equal(t, `No deferred tool matches "mcp__gh__get_issue weather". Try other keywords, or exact names from the system prompt.`, out.Text)
+	assert.Equal(t, "no match", tool.Display.Summary(out.Text))
 	assert.False(t, loaded)
 }
 

@@ -49,8 +49,8 @@ func TestWriteCreatesFileAndReports(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			out, err := tool.Run(context.Background(), json.RawMessage(tc.args), allowTarget)
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, out)
-			assert.Equal(t, tc.summary, tool.Display.Summary(out))
+			assert.Equal(t, tc.want, out.Text)
+			assert.Equal(t, tc.summary, tool.Display.Summary(out.Text))
 			got, err := os.ReadFile(filepath.Join(dir, tc.path))
 			require.NoError(t, err)
 			assert.Equal(t, tc.content, string(got))
@@ -137,7 +137,7 @@ func TestWriteRevokedBeforeRunLeavesWorkspaceUnchanged(t *testing.T) {
 		tool.Name: {Capability: tool.Capability, Target: tool.Target},
 	}, nil, func(context.Context, policy.Request) (policy.Decision, error) {
 		return policy.Decision{Answer: policy.Allow}, nil
-	})
+	}, nil)
 	args := json.RawMessage(`{"file_path":"missing/deep/file","content":"x"}`)
 	require.Empty(t, listDir(t, dir))
 	require.NoError(t, gate.Before(t.Context(), "call-1", tool.Name, args))

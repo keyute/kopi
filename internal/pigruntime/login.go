@@ -1,22 +1,16 @@
 package pigruntime
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/url"
-	"os"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/MichaelKinsy/PiG/ai"
-	"github.com/muesli/cancelreader"
-	"golang.org/x/term"
 )
 
 // signInNames are the names Kopi introduces itself with during a provider's
@@ -27,7 +21,7 @@ var signInNames = map[string]string{"openai": "Kopi"}
 
 const defaultSignInName = "kopi"
 
-// signInNotices are printed after a sign-in to the provider's account, not
+// signInNotices are shown after a sign-in to the provider's account, not
 // after storing an API key.
 var signInNotices = map[string]string{
 	"anthropic": "Anthropic bills third-party tools per token as extra usage, not from your Claude plan limits.",
@@ -78,30 +72,54 @@ func (r *Runtime) storedCredential(ctx context.Context, provider string) (bool, 
 	return slices.ContainsFunc(creds, func(c ai.CredentialInfo) bool { return c.ProviderID == provider }), nil
 }
 
+// LoginPrompt is a question a login flow puts to the user.
+type LoginPrompt struct {
+	Message     string
+	Placeholder string
+	// Secret asks for input that must not be echoed or kept.
+	Secret bool
+	// Options, when set, are the only valid answers; the answer is an option ID.
+	Options []LoginOption
+}
+
+type LoginOption struct {
+	ID, Label, Description string
+}
+
+// LoginUI is how a frontend takes part in a login.
+type LoginUI struct {
+	// Ask answers a prompt. Its ctx ends when the user cancels the login, the
+	// flow no longer wants the answer, or Login returns; no Ask is running or
+	// starts after Login returns.
+	Ask func(ctx context.Context, p LoginPrompt) (string, error)
+	// Show presents an instruction, such as a sign-in URL; it may span lines.
+	Show func(text string)
+}
+
 // Login signs in to the provider's account or stores an API key for it,
-// asking which when it offers both, answering the flow's prompts from in and
-// printing its instructions to out. A sign-in URL is also opened in the
+// asking which when it offers both. A sign-in URL is also opened in the
 // browser. PiG persists the credential in the agent dir's auth.json; Kopi
-// never sees it written or printed.
-func (r *Runtime) Login(ctx context.Context, provider string, in io.Reader, out io.Writer) error {
+// never sees it written or printed. The notice is text to present after a
+// successful sign-in to the provider's account.
+func (r *Runtime) Login(ctx context.Context, provider string, ui LoginUI) (notice string, err error) {
 	p := r.svcs.ModelRuntime().GetProvider(provider)
 	if p == nil {
-		return fmt.Errorf("failed to log in to %q: %w", provider, ErrUnknownProvider)
+		return "", fmt.Errorf("failed to log in to %q: %w", provider, ErrUnknownProvider)
 	}
 	signIn, apiKey := p.Auth.OAuth != nil, storesAPIKey(p)
 	if !signIn && !apiKey {
-		return fmt.Errorf("failed to log in to %q: %w", provider, ErrNoLogin)
+		return "", fmt.Errorf("failed to log in to %q: %w", provider, ErrNoLogin)
 	}
-	l := &loginIO{in: in, lines: bufio.NewReader(in), out: out, openURL: r.openURL}
+	l := newLoginAdapter(ui, r.openURL)
 	kind := ai.CredentialOAuth
 	switch {
 	case signIn && apiKey:
-		choice, err := l.selectOption(ctx, ai.AuthSelectPrompt{Message: fmt.Sprintf("Log in to %s with:", provider), Options: []ai.AuthSelectOption{
+		choice, err := l.ask(ctx, LoginPrompt{Message: fmt.Sprintf("Log in to %s with:", provider), Options: []LoginOption{
 			{ID: string(ai.CredentialOAuth), Label: p.Auth.OAuth.Name},
 			{ID: string(ai.CredentialAPIKey), Label: "API key"},
 		}})
 		if err != nil {
-			return fmt.Errorf("failed to log in to %q: %w", provider, err)
+			return "", fmt.Errorf("failed to log in to %q: %w", provider, err)
 		}
 		kind = ai.CredentialType(choice)
 	case apiKey:
@@ -124,28 +142,24 @@ func (r *Runtime) Login(ctx context.Context, provider string, in io.Reader, out 
 		}
 		return id
 	}}
-	_, err := r.svcs.ModelRuntime().Login(ctx, provider, kind, ai.AuthInteraction{Prompt: l.prompt, Notify: l.notify}, opts)
-	// PiG returns on a cancelled ctx without joining the flow's goroutine; a
-	// hidden read still in flight must restore the terminal before Login
-	// returns, and none may start after.
-	l.rawMu.Lock()
-	l.closed = true
-	l.rawMu.Unlock()
+	_, err = r.svcs.ModelRuntime().Login(ctx, provider, kind, ai.AuthInteraction{Prompt: l.prompt, Notify: l.notify}, opts)
+	// PiG returns on a cancelled ctx without joining the flow's goroutines; a
+	// prompt still in flight must end before Login returns, and none may start
+	// after.
+	l.close()
 	idMu.Lock()
 	deviceErr := idErr
 	idMu.Unlock()
 	if deviceErr != nil {
-		return fmt.Errorf("failed to log in to %q: %w", provider, deviceErr)
+		return "", fmt.Errorf("failed to log in to %q: %w", provider, deviceErr)
 	}
 	if err != nil {
-		return fmt.Errorf("failed to log in to %q: %w", provider, reword(err))
+		return "", fmt.Errorf("failed to log in to %q: %w", provider, reword(err))
 	}
-	if notice, ok := signInNotices[provider]; ok && kind == ai.CredentialOAuth {
-		if _, err := fmt.Fprintln(out, notice); err != nil {
-			return fmt.Errorf("failed to print login notice: %w", err)
-		}
+	if kind == ai.CredentialOAuth {
+		notice = signInNotices[provider]
 	}
-	return nil
+	return notice, nil
 }
 
 // Logout deletes the provider's credential from Kopi's store. PiG's logout
@@ -167,191 +181,116 @@ func (r *Runtime) Logout(ctx context.Context, provider string) error {
 	return nil
 }
 
-type loginIO struct {
-	in      io.Reader
-	lines   *bufio.Reader
-	out     io.Writer
+// loginAdapter gives PiG's prompts and events to a LoginUI.
+type loginAdapter struct {
+	ui      LoginUI
 	openURL func(string) error
-	// pending is the read still in flight after its prompt's ctx ended; the
-	// next prompt takes its answer instead of starting a concurrent read.
-	// PiG joins a cancelled prompt before issuing the next, so prompts never
-	// overlap.
-	pending chan readResult
-	// rawMu is held while a hidden read has the terminal raw; closed, which it
-	// guards, refuses hidden reads once Login has returned.
-	rawMu  sync.Mutex
+	// ctx ends when the flow is over; every ui.Ask runs under it.
+	ctx    context.Context
+	cancel context.CancelFunc
+	// mu guards closed, which refuses prompts once the flow is over; asks joins
+	// the ui.Ask calls in flight.
+	mu     sync.Mutex
 	closed bool
+	asks   sync.WaitGroup
 }
 
-type readResult struct {
-	text string
-	err  error
+func newLoginAdapter(ui LoginUI, openURL func(string) error) *loginAdapter {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &loginAdapter{ui: ui, openURL: openURL, ctx: ctx, cancel: cancel}
 }
 
-func (l *loginIO) prompt(ctx context.Context, p ai.AuthPrompt) (string, error) {
+// close ends the flow's prompts and waits for the ones in flight.
+func (l *loginAdapter) close() {
+	l.mu.Lock()
+	l.closed = true
+	l.mu.Unlock()
+	l.cancel()
+	l.asks.Wait()
+}
+
+func (l *loginAdapter) prompt(ctx context.Context, p ai.AuthPrompt) (string, error) {
 	switch p := p.(type) {
 	case ai.AuthTextPrompt:
-		l.ask(p.Message, p.Placeholder)
-		return l.read(ctx)
+		return l.ask(ctx, LoginPrompt{Message: p.Message, Placeholder: p.Placeholder})
 	case ai.AuthManualCodePrompt:
-		l.ask(p.Message, p.Placeholder)
-		return l.read(ctx)
+		return l.ask(ctx, LoginPrompt{Message: p.Message, Placeholder: p.Placeholder})
 	case ai.AuthSecretPrompt:
-		secret, err := l.readSecret(ctx, p)
-		if err == nil && secret == "" {
-			return "", errors.New("failed to read login input: empty answer")
-		}
-		return secret, err
+		return l.ask(ctx, LoginPrompt{Message: p.Message, Placeholder: p.Placeholder, Secret: true})
 	case ai.AuthSelectPrompt:
-		return l.selectOption(ctx, p)
+		options := make([]LoginOption, len(p.Options))
+		for i, o := range p.Options {
+			options[i] = LoginOption{ID: o.ID, Label: o.Label, Description: o.Description}
+		}
+		return l.ask(ctx, LoginPrompt{Message: p.Message, Options: options})
 	}
 	return "", fmt.Errorf("unsupported login prompt %q", p.Type())
 }
 
-func (l *loginIO) notify(e ai.AuthEvent) {
+func (l *loginAdapter) ask(ctx context.Context, p LoginPrompt) (string, error) {
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return "", context.Canceled
+	}
+	l.asks.Add(1)
+	l.mu.Unlock()
+	defer l.asks.Done()
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer context.AfterFunc(l.ctx, cancel)()
+	answer, err := l.ui.Ask(ctx, p)
+	if err != nil {
+		return "", err
+	}
+	answer = strings.TrimSpace(answer)
+	if p.Secret && answer == "" {
+		return "", errors.New("failed to read login input: empty answer")
+	}
+	if len(p.Options) > 0 && !slices.ContainsFunc(p.Options, func(o LoginOption) bool { return o.ID == answer }) {
+		return "", fmt.Errorf("invalid choice %q", answer)
+	}
+	return answer, nil
+}
+
+// notify drops events once the flow is over: PiG may notify after Login
+// returns.
+func (l *loginAdapter) notify(e ai.AuthEvent) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return
+	}
 	switch e := e.(type) {
 	case ai.AuthURLEvent:
-		fmt.Fprintf(l.out, "Open this URL in a browser to log in:\n  %s\n", e.URL)
+		text := "Open this URL in a browser to log in:\n  " + e.URL
 		if e.Instructions != "" {
-			fmt.Fprintln(l.out, e.Instructions)
+			text += "\n" + e.Instructions
 		}
+		l.ui.Show(text)
 		// The opener waits for the browser's launcher; do not block the login flow.
 		go l.open(e.URL)
 	case ai.AuthDeviceCodeEvent:
-		fmt.Fprintf(l.out, "Visit %s and enter the code %s\n", e.VerificationURI, e.UserCode)
+		l.ui.Show(fmt.Sprintf("Visit %s and enter the code %s", e.VerificationURI, e.UserCode))
 		go l.open(e.VerificationURI)
 	case ai.AuthProgressEvent:
-		fmt.Fprintln(l.out, e.Message)
+		l.ui.Show(e.Message)
 	case ai.AuthInfoEvent:
-		fmt.Fprintln(l.out, e.Message)
+		text := e.Message
 		for _, link := range e.Links {
-			fmt.Fprintf(l.out, "  %s\n", link.URL)
+			text += "\n  " + link.URL
 		}
+		l.ui.Show(text)
 	}
 }
 
-func (l *loginIO) open(rawURL string) {
+func (l *loginAdapter) open(rawURL string) {
 	u, err := url.Parse(rawURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return
 	}
 	if err := l.openURL(rawURL); err != nil {
 		slog.Debug("failed to open browser", "error", err)
-	}
-}
-
-func (l *loginIO) ask(message, placeholder string) {
-	if placeholder != "" {
-		fmt.Fprintf(l.out, "%s [%s] ", message, placeholder)
-		return
-	}
-	fmt.Fprintf(l.out, "%s ", message)
-}
-
-func (l *loginIO) selectOption(ctx context.Context, p ai.AuthSelectPrompt) (string, error) {
-	fmt.Fprintln(l.out, p.Message)
-	for i, o := range p.Options {
-		if o.Description != "" {
-			fmt.Fprintf(l.out, "  %d) %s - %s\n", i+1, o.Label, o.Description)
-			continue
-		}
-		fmt.Fprintf(l.out, "  %d) %s\n", i+1, o.Label)
-	}
-	fmt.Fprint(l.out, "Choice: ")
-	answer, err := l.read(ctx)
-	if err != nil {
-		return "", err
-	}
-	if n, err := strconv.Atoi(answer); err == nil && n >= 1 && n <= len(p.Options) {
-		return p.Options[n-1].ID, nil
-	}
-	if slices.ContainsFunc(p.Options, func(o ai.AuthSelectOption) bool { return o.ID == answer }) {
-		return answer, nil
-	}
-	return "", fmt.Errorf("invalid choice %q", answer)
-}
-
-// read runs readLine off the prompt's goroutine so a cancelled ctx (the OAuth
-// callback server winning against a pasted code) returns at once.
-func (l *loginIO) read(ctx context.Context) (string, error) {
-	if l.pending == nil {
-		ch := make(chan readResult, 1)
-		l.pending = ch
-		go func() {
-			text, err := l.readLine()
-			ch <- readResult{text: text, err: err}
-		}()
-	}
-	select {
-	case res := <-l.pending:
-		l.pending = nil
-		return res.text, res.err
-	case <-ctx.Done():
-		return "", context.Cause(ctx)
-	}
-}
-
-func (l *loginIO) readLine() (string, error) {
-	line, err := l.lines.ReadString('\n')
-	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
-		return "", fmt.Errorf("failed to read login input: %w", err)
-	}
-	return strings.TrimSpace(line), nil
-}
-
-func (l *loginIO) readSecret(ctx context.Context, p ai.AuthSecretPrompt) (string, error) {
-	f, ok := l.in.(*os.File)
-	if !ok || !term.IsTerminal(int(f.Fd())) {
-		l.ask(p.Message, p.Placeholder)
-		return l.read(ctx)
-	}
-	l.rawMu.Lock()
-	defer l.rawMu.Unlock()
-	if l.closed {
-		return "", context.Canceled
-	}
-	if err := context.Cause(ctx); err != nil {
-		return "", err
-	}
-	reader, err := cancelreader.NewReader(f)
-	if err != nil {
-		return "", fmt.Errorf("failed to create login input reader: %w", err)
-	}
-	defer func() { _ = reader.Close() }()
-	state, err := term.MakeRaw(int(f.Fd()))
-	if err != nil {
-		return "", fmt.Errorf("failed to set terminal state: %w", err)
-	}
-	defer func() { _ = term.Restore(int(f.Fd()), state) }()
-	terminal := term.NewTerminal(struct {
-		io.Reader
-		io.Writer
-	}{reader, l.out}, "")
-	prompt := p.Message
-	if p.Placeholder != "" {
-		prompt += " [" + p.Placeholder + "]"
-	}
-	done := make(chan readResult, 1)
-	go func() {
-		text, err := terminal.ReadPassword(prompt + " ")
-		done <- readResult{text: text, err: err}
-	}()
-	select {
-	case res := <-done:
-		// In raw mode the editor reports Ctrl-C, and Ctrl-D on an empty line, as EOF.
-		if errors.Is(res.err, io.EOF) {
-			// The terminal is still raw, so end the prompt line explicitly.
-			fmt.Fprint(l.out, "\r\n")
-			return "", context.Canceled
-		}
-		if res.err != nil {
-			return "", fmt.Errorf("failed to read login input: %w", res.err)
-		}
-		return res.text, nil
-	case <-ctx.Done():
-		// The editor must stop writing before the caller regains the terminal.
-		reader.Cancel()
-		<-done
-		return "", context.Cause(ctx)
 	}
 }

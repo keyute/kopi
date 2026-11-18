@@ -40,7 +40,8 @@ func NewBash(sh, plan *Shell, tasks *Tasks) Tool {
 	if sh.Sandboxed() {
 		description += " Commands run in an OS sandbox that allows writing only in temporary directories, paths the user allowed " +
 			"and, in execute mode, the workspace; it may block reading some paths and the network. " +
-			"A blocked operation fails with \"Operation not permitted\"."
+			"A blocked operation fails, typically with \"Operation not permitted\" or \"Read-only file system\". " +
+			"A directory it blocks reading may instead appear empty."
 	}
 	planSandboxed := plan.Sandboxed()
 	return Tool{
@@ -71,33 +72,33 @@ func NewBash(sh, plan *Shell, tasks *Tasks) Tool {
 		Capability:    policy.Exec,
 		Sandboxed:     sh.Sandboxed(),
 		PlanSandboxed: planSandboxed,
-		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (Result, error) {
 			args, err := decodeBashArgs(raw)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
 			if err := ctx.Err(); err != nil {
-				return "", err
+				return Result{}, err
 			}
 			mode, err := admit(policy.Target{})
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
 			// The shell is chosen from the admitted mode only: a later read of
 			// the mode could run a plan-admitted call with a writable workspace.
 			run := sh
 			if mode != policy.Execute {
 				if !planSandboxed {
-					return "", fmt.Errorf("failed to run command: plan mode runs commands only in the OS sandbox, which is off or unavailable: %w", policy.ErrDenied)
+					return Result{}, fmt.Errorf("failed to run command: plan mode runs commands only in the OS sandbox, which is off or unavailable: %w", policy.ErrDenied)
 				}
 				run = plan
 			}
 			if args.RunInBackground {
 				info, err := tasks.Start(ctx, run, args.Command)
 				if err != nil {
-					return "", err
+					return Result{}, err
 				}
-				return fmt.Sprintf("Background task %s started.", info.ID), nil
+				return Result{Text: fmt.Sprintf("Background task %s started.", info.ID)}, nil
 			}
 			timeout := defaultBashTimeoutMS
 			if args.Timeout != nil {
@@ -107,11 +108,11 @@ func NewBash(sh, plan *Shell, tasks *Tasks) Tool {
 			out, moved, err := tasks.Run(ctx, run, args.Command, d)
 			switch {
 			case moved.ID == "":
-				return out, err
+				return Result{Text: out}, err
 			case moved.TimedOut:
-				return fmt.Sprintf("Background task %s: this command did not finish within its %v timeout and keeps running in the background.", moved.ID, d), nil
+				return Result{Text: fmt.Sprintf("Background task %s: this command did not finish within its %v timeout and keeps running in the background.", moved.ID, d)}, nil
 			default:
-				return fmt.Sprintf("Background task %s: the user moved this command to the background, where it keeps running.", moved.ID), nil
+				return Result{Text: fmt.Sprintf("Background task %s: the user moved this command to the background, where it keeps running.", moved.ID)}, nil
 			}
 		},
 		Display: Display{

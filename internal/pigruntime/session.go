@@ -17,6 +17,7 @@ import (
 	"github.com/MichaelKinsy/PiG/coding/extension/host/subprocess"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/tool"
 )
 
 // Session wraps a PiG session. PiG's Session.Events and Session.ListSessions
@@ -404,8 +405,6 @@ func (s *Session) notify(e event.Event) {
 	}
 }
 
-const omittedImageNote = "[Image omitted: it could not be processed.]"
-
 // steerContent does the image work PiG's prompt path does before images enter
 // history and QueueSteer does not: it resizes p's images to the model's limits
 // and, as that path does, omits an image that cannot be processed and notes
@@ -416,7 +415,7 @@ func (s *Session) steerContent(p Prompt) (string, []ai.ImageContent) {
 	var notes []string
 	for _, img := range s.resize(toAI(p.Images)) {
 		if img == nil {
-			notes = append(notes, omittedImageNote)
+			notes = append(notes, tool.OmittedImageNote)
 			continue
 		}
 		images = append(images, *img)

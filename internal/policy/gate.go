@@ -47,6 +47,9 @@ type Request struct {
 	Rule string
 	// Edits reports that AllowEdits may be offered.
 	Edits bool
+	// Review is the reviewer's answer when it sent the call to the human; nil
+	// otherwise.
+	Review *Review
 }
 
 // Decision is a human's answer to a Request.
@@ -74,18 +77,23 @@ type Gate struct {
 	tools     map[string]ToolSpec
 	rules     *Rules
 	approve   Approver
+	review    Reviewer
 	mu        sync.Mutex
 	grants    map[string]grant
 	edits     bool
+	// consecutiveDenials and totalDenials count the reviewer's denials.
+	consecutiveDenials, totalDenials int
 }
 
 // NewGate takes nil rules as no rules and a nil approve as nobody being able
-// to answer, so every call that needs approval is denied.
-func NewGate(a *Authority, tools map[string]ToolSpec, rules *Rules, approve Approver) *Gate {
+// to answer, so every call that needs approval is denied. A non-nil review
+// decides those calls first, and only what it sends back reaches approve;
+// a Write call no rule asks about is then allowed without either.
+func NewGate(a *Authority, tools map[string]ToolSpec, rules *Rules, approve Approver, review Reviewer) *Gate {
 	if rules == nil {
 		rules = &Rules{}
 	}
-	return &Gate{authority: a, tools: maps.Clone(tools), rules: rules, approve: approve, grants: map[string]grant{}}
+	return &Gate{authority: a, tools: maps.Clone(tools), rules: rules, approve: approve, review: review, grants: map[string]grant{}}
 }
 
 func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMessage) error {
@@ -126,8 +134,16 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 			if target != nil {
 				allow += "(" + escape(filepath.ToSlash(target.Path)) + ")"
 			}
-			if err := g.ask(ctx, req, allow); err != nil {
-				return err
+			switch {
+			case g.review == nil:
+				if err := g.ask(ctx, req, allow); err != nil {
+					return err
+				}
+			case spec.Capability == Write && !spec.Ask:
+			default:
+				if err := g.reviewed(ctx, req, allow); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -160,15 +176,60 @@ func (g *Gate) ask(ctx context.Context, r Request, allow string) error {
 	case d.Answer == AllowEdits && r.Edits:
 		g.mu.Lock()
 		g.edits = true
+		g.consecutiveDenials = 0
 		g.mu.Unlock()
 		return nil
 	case d.Answer == Allow || d.Answer == AllowEdits:
+		g.mu.Lock()
+		g.consecutiveDenials = 0
+		g.mu.Unlock()
 		return nil
 	case d.Reason != "":
 		return fmt.Errorf("tool %q: %w, with this feedback:\n%s", r.Tool, ErrRejected, d.Reason)
 	default:
 		return fmt.Errorf("tool %q: the user rejected this call; stop and wait for their instructions: %w", r.Tool, ErrRejected)
 	}
+}
+
+// reviewed has the reviewer decide r, and asks the human only when it cannot
+// decide or has denied too often. allow is as for ask.
+func (g *Gate) reviewed(ctx context.Context, r Request, allow string) error {
+	rev, err := g.review(ctx, r)
+	if ctx.Err() != nil {
+		return fmt.Errorf("failed to review tool %q: %w", r.Tool, ctx.Err())
+	}
+	if err != nil {
+		rev = Review{Verdict: VerdictAsk}
+	}
+	switch rev.Verdict {
+	case VerdictAllow:
+		g.mu.Lock()
+		g.consecutiveDenials = 0
+		g.mu.Unlock()
+		return nil
+	case VerdictDeny:
+		g.mu.Lock()
+		g.consecutiveDenials++
+		g.totalDenials++
+		escalate := g.consecutiveDenials >= maxConsecutiveDenials || g.totalDenials >= maxTotalDenials
+		if g.totalDenials >= maxTotalDenials {
+			g.totalDenials = 0
+		}
+		g.mu.Unlock()
+		if g.approve == nil || !escalate {
+			reason := ""
+			if rev.Reason != "" {
+				reason = ": " + rev.Reason
+			}
+			return fmt.Errorf("tool %q was denied by the approval classifier%s: %w", r.Tool, reason, ErrDenied)
+		}
+	default:
+		if g.approve == nil {
+			return fmt.Errorf("tool %q needs approval, the approval classifier could not decide and this run cannot ask for it; add an allow rule to permissions.allow in config.json or pass --allowed-tools, such as %s: %w", r.Tool, allow, ErrDenied)
+		}
+	}
+	r.Review = &rev
+	return g.ask(ctx, r, allow)
 }
 
 // Admit consumes the grant and compares the execution arguments and the

@@ -27,7 +27,8 @@ func skillDir(t *testing.T) skill.Skill {
 
 func runSkill(t *testing.T, sk skill.Skill, args string) (string, error) {
 	t.Helper()
-	return NewSkill([]skill.Skill{sk}, "").Run(t.Context(), json.RawMessage(args), admitAll)
+	res, err := NewSkill([]skill.Skill{sk}, "").Run(t.Context(), json.RawMessage(args), admitAll)
+	return res.Text, err
 }
 
 func TestSkillReturnsInstructions(t *testing.T) {
@@ -87,11 +88,11 @@ func TestSkillRefusesFilesAfterDirectoryIsReplaced(t *testing.T) {
 
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"name":"deploy","file":"ref.md"}`), admitAll)
 	assert.ErrorIs(t, err, ErrSkillChanged)
-	assert.NotContains(t, out, "secret")
+	assert.NotContains(t, out.Text, "secret")
 
 	out, err = tool.Run(t.Context(), json.RawMessage(`{"name":"deploy"}`), admitAll)
 	require.NoError(t, err)
-	assert.Equal(t, skill.Text(sk), out)
+	assert.Equal(t, skill.Text(sk), out.Text)
 }
 
 func TestSkillRefusesFilesOfADirectoryMissingAtStart(t *testing.T) {
@@ -103,7 +104,7 @@ func TestSkillRefusesFilesOfADirectoryMissingAtStart(t *testing.T) {
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"name":"late","file":"ref.md"}`), admitAll)
 
 	assert.ErrorIs(t, err, ErrSkillChanged)
-	assert.NotContains(t, out, "secret")
+	assert.NotContains(t, out.Text, "secret")
 }
 
 func TestSkillRejectsBadArguments(t *testing.T) {
@@ -235,7 +236,7 @@ func TestSkillRefusesSymlinkRetargetedAfterAdmission(t *testing.T) {
 
 			assert.True(t, admitted)
 			assert.ErrorIs(t, err, ErrSkillChanged)
-			assert.NotContains(t, out, "replacement content")
+			assert.NotContains(t, out.Text, "replacement content")
 		})
 	}
 }
@@ -361,7 +362,8 @@ func runSkillAt(t *testing.T, home, dir, file string) (string, error) {
 	t.Helper()
 	raw, err := json.Marshal(map[string]string{"name": "s", "file": file})
 	require.NoError(t, err)
-	return NewSkill([]skill.Skill{{Name: "s", Dir: dir}}, home).Run(t.Context(), raw, admitAll)
+	res, err := NewSkill([]skill.Skill{{Name: "s", Dir: dir}}, home).Run(t.Context(), raw, admitAll)
+	return res.Text, err
 }
 
 func TestSkillReadsFileOfSkillInsideHome(t *testing.T) {
@@ -409,7 +411,7 @@ func TestSkillReadsWhenHomeDoesNotExist(t *testing.T) {
 	out, err := NewSkill([]skill.Skill{sk}, filepath.Join(t.TempDir(), "missing")).Run(t.Context(), json.RawMessage(`{"name":"deploy","file":"ref.md"}`), admitAll)
 
 	require.NoError(t, err)
-	assert.Contains(t, out, "one")
+	assert.Contains(t, out.Text, "one")
 }
 
 func TestSkillMissingFileInOrdinaryDirectoryIsNotFound(t *testing.T) {
@@ -431,6 +433,6 @@ func TestSkillRefusesMissingAndExistingHomeFilesAlike(t *testing.T) {
 		out, err := tl.Run(t.Context(), raw, admitAll)
 
 		assert.ErrorIs(t, err, ErrProtected, file)
-		assert.NotContains(t, out, "secret")
+		assert.NotContains(t, out.Text, "secret")
 	}
 }

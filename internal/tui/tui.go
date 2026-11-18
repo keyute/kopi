@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/keyute/kopi/internal/app"
+	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
@@ -27,6 +28,9 @@ type Controller interface {
 	Interrupt() bool
 	// Answer answers the pending approval for token; false when it is stale.
 	Answer(token uint64, d policy.Decision) bool
+	// AnswerLogin answers the pending login question for token; false when it
+	// is stale.
+	AnswerLogin(token uint64, answer string) bool
 	ToggleMode()
 	History() []string
 	Status() app.Status
@@ -44,13 +48,21 @@ type Controller interface {
 }
 
 // Options are the frontend's settings. Keys maps action names to key
-// strings; an action without keys is disabled. StatusLeft and StatusRight
-// name status line segments. ImageDir holds saved clipboard images.
+// strings; an action without keys is disabled. StatusLine is the config's
+// status line. ImageDir holds saved clipboard images. Themes
+// come from LoadThemes.
 type Options struct {
-	Version                 string
-	Keys                    map[string][]string
-	StatusLeft, StatusRight []string
-	ImageDir                string
+	Version    string
+	Keys       map[string][]string
+	StatusLine config.StatusLine
+	ImageDir   string
+	Themes     Themes
+}
+
+type statusCommands interface {
+	Start(context.Context, func(event.Event))
+	Observe(event.Event)
+	Close()
 }
 
 type Frontend struct {
@@ -59,6 +71,7 @@ type Frontend struct {
 	out         io.Writer
 	opts        Options
 	bridge      *bridge
+	commands    statusCommands
 	unsubscribe func()
 }
 
@@ -73,11 +86,20 @@ func New(c Controller, in io.Reader, out io.Writer, opts Options) *Frontend {
 // draft, or two cancels (the cancel key or SIGINT) in a row at idle with an
 // empty draft. interrupts delivers SIGINT.
 func (f *Frontend) Run(ctx context.Context, interrupts <-chan os.Signal) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if f.commands == nil {
+		f.commands = app.NewStatusCommands(f.c.Status().Workspace, f.opts.StatusLine)
+	}
+	f.commands.Start(ctx, f.bridge.push)
+	defer f.commands.Close()
 	defer f.unsubscribe()
 	defer f.bridge.close()
 	pruneImages(f.opts.ImageDir, time.Now())
 
-	p := tea.NewProgram(newModel(ctx, f.c, f.bridge, f.opts),
+	m := newModel(ctx, f.c, f.bridge, f.opts)
+	m.commands = f.commands
+	p := tea.NewProgram(m,
 		tea.WithInput(f.in), tea.WithOutput(f.out), tea.WithoutSignalHandler())
 	stopped := make(chan struct{})
 	defer close(stopped)

@@ -73,20 +73,20 @@ func NewSkill(skills []skill.Skill, home string) Tool {
 			_, target, err := skillTarget(skills, args)
 			return target, err
 		},
-		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (Result, error) {
 			args, err := decodeSkillArgs(raw)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
 			i, target, err := skillTarget(skills, args)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
 			if _, err := admit(target); err != nil {
-				return "", err
+				return Result{}, err
 			}
 			if args.File == "" {
-				return skill.Text(skills[i]), nil
+				return Result{Text: skill.Text(skills[i])}, nil
 			}
 			return readSkillFile(ctx, skills[i], loaded[i], home, args, target)
 		},
@@ -116,7 +116,8 @@ func NewSkill(skills []skill.Skill, home string) Tool {
 // skillDescription lists the skills the model may invoke, sorted by name.
 func skillDescription(skills []skill.Skill) string {
 	desc := "A skill is a set of instructions for a kind of task. " +
-		"Called with a skill's name, returns its instructions; paths in them are relative to the skill's directory, and file reads one of its files. " +
+		"Called with a skill's name, returns its instructions; paths in them are relative to the skill's directory, and file reads one of its files, a text file or an image (PNG, JPEG, GIF or WebP). " +
+		"An image is returned whole; offset and limit do not apply. " +
 		"The user can also load a skill by naming it."
 	var listed []skill.Skill
 	for _, s := range skills {
@@ -188,23 +189,23 @@ func decodeSkillArgs(raw json.RawMessage) (skillArgs, error) {
 	return args, nil
 }
 
-func readSkillFile(ctx context.Context, s skill.Skill, loaded os.FileInfo, home string, args skillArgs, target policy.Target) (string, error) {
+func readSkillFile(ctx context.Context, s skill.Skill, loaded os.FileInfo, home string, args skillArgs, target policy.Target) (Result, error) {
 	if loaded == nil {
-		return "", fmt.Errorf("%w: %s", ErrSkillChanged, s.Name)
+		return Result{}, fmt.Errorf("%w: %s", ErrSkillChanged, s.Name)
 	}
 	root, err := os.OpenRoot(s.Dir)
 	if err != nil {
-		return "", fmt.Errorf("failed to open skill %s: %w", s.Name, err)
+		return Result{}, fmt.Errorf("failed to open skill %s: %w", s.Name, err)
 	}
 	defer root.Close()
 	// The path was resolved again by OpenRoot; only the opened root's identity
 	// shows it is still the directory the skill was loaded from.
 	now, err := root.Stat(".")
 	if err != nil {
-		return "", fmt.Errorf("failed to stat skill %s: %w", s.Name, err)
+		return Result{}, fmt.Errorf("failed to stat skill %s: %w", s.Name, err)
 	}
 	if !os.SameFile(loaded, now) {
-		return "", fmt.Errorf("%w: %s", ErrSkillChanged, s.Name)
+		return Result{}, fmt.Errorf("%w: %s", ErrSkillChanged, s.Name)
 	}
 	// O_NONBLOCK stops a FIFO open from waiting for a writer, which nothing
 	// could interrupt.
@@ -215,23 +216,23 @@ func readSkillFile(ctx context.Context, s skill.Skill, loaded os.FileInfo, home 
 		// home is refused alike whether or not it exists.
 		_, protected, perr := walkSkillHome(path, home)
 		if perr != nil {
-			return "", perr
+			return Result{}, perr
 		}
 		if protected {
-			return "", fmt.Errorf("%w: %s", ErrProtected, args.File)
+			return Result{}, fmt.Errorf("%w: %s", ErrProtected, args.File)
 		}
-		return "", fmt.Errorf("failed to open %s: %w", args.File, err)
+		return Result{}, fmt.Errorf("failed to open %s: %w", args.File, err)
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return "", fmt.Errorf("failed to stat %s: %w", args.File, err)
+		return Result{}, fmt.Errorf("failed to stat %s: %w", args.File, err)
 	}
 	if err := checkSkillHome(s, args.File, info, home, target); err != nil {
-		return "", err
+		return Result{}, err
 	}
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("%w: %s", ErrNotRegular, args.File)
+		return Result{}, fmt.Errorf("%w: %s", ErrNotRegular, args.File)
 	}
 	return read(ctx, f, readArgs{FilePath: args.File, Offset: args.Offset, Limit: args.Limit})
 }

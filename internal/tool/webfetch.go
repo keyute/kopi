@@ -59,36 +59,36 @@ func newWebFetch(f *fetcher, answer func(ctx context.Context, system, prompt str
 		},
 		Capability: policy.Read,
 		Ask:        true,
-		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (Result, error) {
 			args, err := decodeWebFetchArgs(raw)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
 			u, err := checkURL(args.URL)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
 			if _, err := admit(policy.Target{}); err != nil {
-				return "", err
+				return Result{}, err
 			}
 			page, err := f.fetch(ctx, u)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
 			if page.redirect != nil {
 				target := page.redirect.String()
-				return fmt.Sprintf("%s redirects (HTTP %d) to %s, which was not followed. To read it, call WebFetch again with url %q.",
-					page.url, page.status, target, target), nil
+				return Result{Text: fmt.Sprintf("%s redirects (HTTP %d) to %s, which was not followed. To read it, call WebFetch again with url %q.",
+					page.url, page.status, target, target)}, nil
 			}
 			text, err := pageText(page.contentType, page.body, page.url)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
 			reply, err := answer(ctx, webFetchSystemPrompt, answerPrompt(page.url.String(), text, args.Prompt))
 			if err != nil {
-				return "", fmt.Errorf("failed to answer from the page: %w", err)
+				return Result{}, fmt.Errorf("failed to answer from the page: %w", err)
 			}
-			return reply + webFetchSource + page.url.String(), nil
+			return Result{Text: reply + webFetchSource + page.url.String()}, nil
 		},
 		Display: Display{
 			Title: func(raw json.RawMessage) string {
