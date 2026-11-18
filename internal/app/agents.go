@@ -357,7 +357,7 @@ func (c *Controller) runChild(ch *child, ctx context.Context, prompt string) {
 		}
 
 		c.queue.Lock()
-		if ctx.Err() == nil {
+		if ctx.Err() == nil && res.Outcome.Status == event.Completed {
 			var texts []string
 			for _, p := range res.Undelivered {
 				texts = append(texts, p.Text)

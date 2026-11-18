@@ -349,6 +349,38 @@ func TestMessageToRunningChildArrivesAtItsNextTurnBoundary(t *testing.T) {
 	assert.Contains(t, a.info(t, id).Output, "› also check b\n")
 }
 
+func TestFailedTurnDropsAMessageQueuedMeanwhile(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
+	started, gate := make(chan struct{}), make(chan struct{})
+	childRequests := make(chan pigruntimetest.Request, 1)
+	a.child.SetResponses([]ai.FauxResponseStep{
+		ai.FauxFactoryStep(func(ai.TranscriptContext, ai.StreamOptions, *ai.FauxProviderState, *ai.Model) (ai.AssistantMessage, error) {
+			close(started)
+			<-gate
+			return ai.FauxAssistantMessage(ai.FauxContentString(""), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonError), ErrorMessage: "boom"}), nil
+		}),
+		pigruntimetest.Capture(t, childRequests, "unexpected"),
+	})
+	rootRequests := make(chan pigruntimetest.Request, 2)
+	a.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, rootRequests, "ack"), pigruntimetest.Capture(t, rootRequests, "ack")})
+	ends := turnEnds(a.c)
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, started)
+
+	resumed, err := a.c.message(t.Context(), id, "also check b")
+	require.NoError(t, err)
+	assert.False(t, resumed)
+	close(gate)
+	a.untilStatus(t, id, tool.TaskFailed)
+	a.until(t, func() bool { return a.live() == 0 })
+	receiveEnd(t, ends)
+
+	assert.Equal(t, "boom", a.info(t, id).Reason)
+	assert.Equal(t, []string{fmt.Sprintf("Agent %s (explorer) failed (boom): find it", id)}, receive(t, rootRequests).UserTexts)
+	assert.Empty(t, childRequests, "a failed turn is not continued with the queued message")
+	assert.Empty(t, rootRequests, "one end notice")
+}
+
 func TestMessageToFinishedChildContinuesItsContextUnderTheSameID(t *testing.T) {
 	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
 	childRequests := make(chan pigruntimetest.Request, 1)
@@ -647,8 +679,8 @@ func TestParallelAgentCallsInOneMessageLaunchAndNotifyEach(t *testing.T) {
 
 	assert.Len(t, a.tasks.List(), 2)
 	var seen strings.Builder
-	for len(rootRequests) > 0 {
-		seen.WriteString(strings.Join((<-rootRequests).UserTexts, "\n"))
+	for !strings.Contains(seen.String(), "completed: one\nthe result") || !strings.Contains(seen.String(), "completed: two\nthe result") {
+		seen.WriteString(strings.Join(receive(t, rootRequests).UserTexts, "\n"))
 	}
 	assert.Contains(t, seen.String(), "completed: one\nthe result")
 	assert.Contains(t, seen.String(), "completed: two\nthe result")
