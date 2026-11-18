@@ -4,7 +4,8 @@
 // Copyright 2025 Anthropic
 // Licensed under the Apache License, Version 2.0; see srt/LICENSE in this directory.
 // Modified by the Kopi authors: ported to Go; kept the placeholders for absent
-// denied paths, their deferred removal, the ancestor pins and the symlink
+// denied paths, their removal once no command runs in any Kopi sharing a
+// directory, coordinated with a lock and a record of Kopi's own, the ancestor pins and the symlink
 // refusal; dropped the / write root cover, 9p and WSL handling, the ripgrep
 // scan, the network proxy, the argument file and read carve-outs; the seccomp
 // filter goes to bwrap's --seccomp rather than through a helper binary; empty
@@ -18,6 +19,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -28,8 +30,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/gofrs/flock"
 
 	"github.com/keyute/kopi/internal/policy"
 )
@@ -45,25 +48,30 @@ type bwrap struct {
 // command builds the arguments from the filesystem as it is now: what exists
 // decides what can be mounted.
 func (b *bwrap) command(argv []string) (*exec.Cmd, func(), error) {
-	// Counted before looking, so that no placeholder seen here is removed
+	// Locked before looking, so that no placeholder seen here is removed
 	// before this command's bwrap has mounted it.
-	b.shared.start()
-	args, made, err := bwrapArgs(b.policy)
+	lock, err := b.shared.start()
 	if err != nil {
-		b.shared.finish()
 		return nil, nil, err
 	}
-	b.shared.add(made)
+	args, made, err := bwrapArgs(b.policy)
+	if err == nil {
+		err = b.shared.record(made)
+	}
+	if err != nil {
+		b.shared.finish(lock)
+		return nil, nil, err
+	}
 	filter, err := seccompPipe(b.seccomp)
 	if err != nil {
-		b.shared.finish()
+		b.shared.finish(lock)
 		return nil, nil, err
 	}
 	cmd := exec.Command(b.path, slices.Concat(args, argv)...)
 	cmd.ExtraFiles = []*os.File{filter}
 	return cmd, func() {
 		_ = filter.Close()
-		b.shared.finish()
+		b.shared.finish(lock)
 	}, nil
 }
 
@@ -346,42 +354,96 @@ func byDepth(a, b string) int {
 	return cmp.Compare(strings.Count(a, string(filepath.Separator)), strings.Count(b, string(filepath.Separator)))
 }
 
-// placeholders records the mount points bwrap made on the host for denied
-// paths that were absent, to remove once no sandboxed command runs: removing
-// one under a running command would detach that command's mount there.
+// placeholders tracks the mount points bwrap made on the host for denied
+// paths that were absent, so that they are removed once no sandboxed command
+// runs in any Kopi process sharing its directory: removing one under a running
+// command would detach that command's mount there. Each command holds a shared
+// lock for its lifetime; whoever ends last takes the lock exclusively and
+// removes what the record lists. The record is one JSON array of paths per line,
+// appended before the command starts so that a killed Kopi leaves none unlisted.
 type placeholders struct {
-	mu      sync.Mutex
-	running int
-	made    []string
+	lockPath   string
+	recordPath string
 }
 
-func (pl *placeholders) start() {
-	pl.mu.Lock()
-	defer pl.mu.Unlock()
-	pl.running++
+func newPlaceholders(dir string) *placeholders {
+	return &placeholders{lockPath: filepath.Join(dir, "lock"), recordPath: filepath.Join(dir, "placeholders")}
 }
 
-func (pl *placeholders) add(paths []string) {
-	pl.mu.Lock()
-	defer pl.mu.Unlock()
-	pl.made = appendNew(pl.made, paths...)
+// start takes a shared lock of its own: flock locks belong to the open file,
+// so commands of one process must not share one.
+func (pl *placeholders) start() (*flock.Flock, error) {
+	lock := flock.New(pl.lockPath)
+	if err := lock.RLock(); err != nil {
+		return nil, fmt.Errorf("failed to lock sandbox placeholders: %w", err)
+	}
+	return lock, nil
 }
 
-// finish ends one command. The last one to end removes the placeholders,
-// holding the lock so that no command starts meanwhile.
-func (pl *placeholders) finish() {
-	pl.mu.Lock()
-	defer pl.mu.Unlock()
-	pl.running--
-	if pl.running > 0 {
+func (pl *placeholders) record(made []string) error {
+	if len(made) == 0 {
+		return nil
+	}
+	line, err := json.Marshal(made)
+	if err != nil {
+		return fmt.Errorf("failed to record sandbox placeholders: %w", err)
+	}
+	f, err := os.OpenFile(pl.recordPath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		return fmt.Errorf("failed to record sandbox placeholders: %w", err)
+	}
+	_, err = f.Write(append(line, '\n'))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return fmt.Errorf("failed to record sandbox placeholders: %w", err)
+	}
+	return nil
+}
+
+// finish ends one command, holding lock. If no other command runs anywhere, it
+// removes the recorded placeholders while no command can start meanwhile.
+func (pl *placeholders) finish(lock *flock.Flock) {
+	if err := lock.Unlock(); err != nil {
+		slog.Warn("failed to unlock sandbox placeholders", "err", err)
+	}
+	sweep := flock.New(pl.lockPath)
+	ok, err := sweep.TryLock()
+	if err != nil {
+		slog.Warn("failed to lock sandbox placeholders", "err", err)
 		return
 	}
+	if !ok {
+		return
+	}
+	defer func() {
+		if err := sweep.Unlock(); err != nil {
+			slog.Warn("failed to unlock sandbox placeholders", "err", err)
+		}
+	}()
+	data, err := os.ReadFile(pl.recordPath)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			slog.Warn("failed to read the sandbox placeholder record", "err", err)
+		}
+		return
+	}
+	var paths []string
+	for line := range bytes.Lines(data) {
+		var made []string
+		if json.Unmarshal(line, &made) == nil {
+			paths = appendNew(paths, made...)
+		}
+	}
 	// Deepest first: a directory goes only once empty.
-	slices.SortFunc(pl.made, func(a, b string) int { return cmp.Compare(len(b), len(a)) })
-	for _, p := range pl.made {
+	slices.SortFunc(paths, func(a, b string) int { return cmp.Compare(len(b), len(a)) })
+	for _, p := range paths {
 		removePlaceholder(p)
 	}
-	pl.made = nil
+	if err := os.Truncate(pl.recordPath, 0); err != nil {
+		slog.Warn("failed to clear the sandbox placeholder record", "err", err)
+	}
 }
 
 // removePlaceholder removes path only while it is still an empty file or an

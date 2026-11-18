@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -352,35 +354,70 @@ func TestPlaceholdersRemovedAfterLastCommand(t *testing.T) {
 	require.NoError(t, os.WriteFile(empty, nil, 0o600))
 	writeFile(t, full)
 	writeFile(t, filepath.Join(kept, "f"))
-	pl := &placeholders{}
+	pl := newPlaceholders(resolvedTemp(t))
 
-	pl.start()
-	pl.start()
-	pl.add([]string{empty, full, parent, kept})
-	pl.add([]string{child})
-	pl.finish()
+	first, err := pl.start()
+	require.NoError(t, err)
+	second, err := pl.start()
+	require.NoError(t, err)
+	require.NoError(t, pl.record([]string{empty, full, parent, kept}))
+	require.NoError(t, pl.record([]string{child}))
+	require.NoError(t, pl.record(nil))
+	pl.finish(first)
 	for _, p := range []string{empty, full, child, kept} {
 		_, err := os.Lstat(p)
 		assert.NoError(t, err, p)
 	}
 
-	pl.finish()
+	pl.finish(second)
 	for _, p := range []string{empty, child, parent} {
 		_, err := os.Lstat(p)
 		assert.ErrorIs(t, err, os.ErrNotExist, p)
 	}
 	assert.FileExists(t, full)
 	assert.DirExists(t, kept)
-	assert.Empty(t, pl.made)
+	assert.NoFileExists(t, empty)
+	info, err := os.Stat(pl.recordPath)
+	require.NoError(t, err)
+	assert.Zero(t, info.Size())
+}
+
+func TestPlaceholdersLeftByKilledKopiSwept(t *testing.T) {
+	dir := resolvedTemp(t)
+	stale, nested := filepath.Join(dir, "stale"), filepath.Join(dir, "a", "b")
+	mkdirs(t, nested)
+	require.NoError(t, os.WriteFile(stale, nil, 0o600))
+	pl := newPlaceholders(resolvedTemp(t))
+	// The last line is cut short, as a Kopi killed in mid-write leaves it.
+	record := fmt.Sprintf("[%q]\n[%q,%q]\n[%q", stale, filepath.Dir(nested), nested, dir)
+	require.NoError(t, os.WriteFile(pl.recordPath, []byte(record), 0o600))
+
+	lock, err := pl.start()
+	require.NoError(t, err)
+	pl.finish(lock)
+
+	assert.NoFileExists(t, stale)
+	assert.NoDirExists(t, filepath.Dir(nested))
+	assert.DirExists(t, dir)
+	info, err := os.Stat(pl.recordPath)
+	require.NoError(t, err)
+	assert.Zero(t, info.Size())
 }
 
 // newBwrap skips off Linux and where bubblewrap cannot run.
 func newBwrap(t *testing.T, policies ...Policy) []*Sandbox {
 	t.Helper()
+	return newBwrapIn(t, t.TempDir(), policies...)
+}
+
+// newBwrapIn is newBwrap with the shared directory named, as for Kopi
+// processes using one home.
+func newBwrapIn(t *testing.T, dir string, policies ...Policy) []*Sandbox {
+	t.Helper()
 	if runtime.GOOS != "linux" {
 		t.Skip("bubblewrap is the Linux sandbox")
 	}
-	sbs, err := New(t.Context(), policies...)
+	sbs, err := New(t.Context(), dir, policies...)
 	if err != nil {
 		require.ErrorIs(t, err, ErrUnavailable)
 		t.Skip(err)
@@ -520,6 +557,84 @@ func TestBwrapPlaceholderOutlivesConcurrentCommand(t *testing.T) {
 	second.release(t)
 	_, err := os.Lstat(protected)
 	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestBwrapPlaceholderOutlivesAnotherKopi(t *testing.T) {
+	root := filepath.Join(resolvedTemp(t), "root")
+	mkdirs(t, root)
+	protected := filepath.Join(root, "protected")
+	p := Policy{Write: []string{root}, DenyWrite: []string{protected}}
+	home := t.TempDir()
+	for _, firstEnds := range []int{0, 1} {
+		a, b := newBwrapIn(t, home, p)[0], newBwrapIn(t, home, p)[0]
+		held := []*held{hold(t, a), hold(t, b)}
+
+		held[firstEnds].release(t)
+		assert.FileExists(t, protected)
+		held[1-firstEnds].release(t)
+		_, err := os.Lstat(protected)
+		assert.ErrorIs(t, err, os.ErrNotExist)
+	}
+}
+
+func TestBwrapReadOnlyGit(t *testing.T) {
+	root := filepath.Join(resolvedTemp(t), "root")
+	git := filepath.Join(root, ".git")
+	env := append(os.Environ(), gitEnv()...)
+	host := func(args ...string) string {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", root}, args...)...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+		return strings.TrimSpace(string(out))
+	}
+	mkdirs(t, root)
+	host("init", "-q")
+	writeFile(t, filepath.Join(root, "a"))
+	host("add", "a")
+	host("commit", "-q", "-m", "first")
+	head := host("rev-parse", "HEAD")
+	writeFile(t, filepath.Join(root, "f"))
+	var deny []string
+	for _, name := range []string{"hooks", "config", "commondir", "config.worktree", "worktrees", "modules"} {
+		deny = append(deny, filepath.Join(git, name))
+	}
+	sb := newBwrap(t, Policy{Write: []string{root}, DenyWrite: append(deny, git, filepath.Join(root, ".mcp.json"))})[0]
+	sandboxEnv := append(gitEnv(), "ROOT="+root)
+
+	for _, script := range []string{
+		`printf '../evil\n' >"$ROOT/.git/commondir"`,
+		`mv "$ROOT/f" "$ROOT/.git/commondir"`,
+		`ln -s ../evil "$ROOT/.git/commondir"`,
+		`mv "$ROOT/.git" "$ROOT/g"`,
+		`rm "$ROOT/.git/config"`,
+		`rm -r "$ROOT/.git/hooks"`,
+		`git -C "$ROOT" add f`,
+		`git -C "$ROOT" commit --allow-empty -m m`,
+	} {
+		assert.Error(t, bash(t, sb, script, sandboxEnv...), script)
+	}
+	for _, script := range []string{
+		`git -C "$ROOT" status`,
+		`git -C "$ROOT" log --oneline`,
+		`git -C "$ROOT" diff`,
+	} {
+		assert.NoError(t, bash(t, sb, script, sandboxEnv...), script)
+	}
+
+	h := hold(t, sb)
+	for _, name := range []string{"commondir", "config.worktree", "worktrees", "modules"} {
+		_, err := os.Lstat(filepath.Join(git, name))
+		assert.ErrorIs(t, err, os.ErrNotExist, name)
+	}
+	host("status")
+	h.release(t)
+
+	assert.NoFileExists(t, filepath.Join(git, "commondir"))
+	assert.FileExists(t, filepath.Join(git, "config"))
+	assert.DirExists(t, filepath.Join(git, "hooks"))
+	assert.Equal(t, head, host("rev-parse", "HEAD"))
 }
 
 func TestBwrapBackgroundProcessEndsWithCommand(t *testing.T) {

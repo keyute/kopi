@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -797,7 +798,12 @@ const (
 // run under Seatbelt.
 func sandboxAvailable(t *testing.T) bool {
 	t.Helper()
-	_, err := sandbox.New(t.Context(), sandbox.Policy{})
+	// Not t.TempDir(): its first call fixes the test's temp parent under the
+	// TMPDIR of that moment, before a test may set its own.
+	dir, err := os.MkdirTemp("", "kopi-sandbox")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	_, err = sandbox.New(t.Context(), dir, sandbox.Policy{})
 	if err != nil {
 		require.ErrorIs(t, err, sandbox.ErrUnavailable)
 	}
@@ -983,17 +989,22 @@ func TestRootSandboxedBashProtectsGitMetadata(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, path, command string
-		exists              bool
+		exists, gitDir      bool
 		linux               string
 	}{
-		{"no git cannot create HEAD", "HEAD", "printf changed > HEAD", false, permissionDenied},
-		{"git file cannot be overwritten", ".git", "printf changed > .git", true, readOnly},
-		{"git file cannot be replaced", ".git", "/bin/mv -f replacement .git", true, busy},
+		{"no git cannot create HEAD", "HEAD", "printf changed > HEAD", false, false, permissionDenied},
+		{"git file cannot be overwritten", ".git", "printf changed > .git", true, false, readOnly},
+		{"git file cannot be replaced", ".git", "/bin/mv -f replacement .git", true, false, busy},
+		{"commondir cannot be created", ".git/commondir", "printf '../evil\\n' > .git/commondir", false, true, readOnly},
+		{"commondir cannot be moved in", ".git/commondir", "/bin/mv -f replacement .git/commondir", false, true, readOnly},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newSandboxedEnv(t)
 			const original = "gitdir: synthetic-git-dir\n"
 			path := filepath.Join(e.workspace, tc.path)
+			if tc.gitDir {
+				require.NoError(t, os.MkdirAll(filepath.Join(e.workspace, ".git"), 0o755))
+			}
 			if tc.exists {
 				e.writeFile(t, path, original)
 			}
@@ -1173,12 +1184,16 @@ func TestSandboxPolicy(t *testing.T) {
 	gitFiles := func(cwd string) []string {
 		var out []string
 		for _, name := range []string{"hooks", "config", "commondir", "config.worktree", "worktrees", "modules"} {
-			if name == "commondir" && runtime.GOOS == "linux" {
-				continue
-			}
 			out = append(out, filepath.Join(cwd, ".git", name))
 		}
 		return out
+	}
+	// Linux denies the whole .git, after the names and any HEAD.
+	linuxGit := func(cwd string) []string {
+		if runtime.GOOS != "linux" {
+			return nil
+		}
+		return []string{filepath.Join(cwd, ".git")}
 	}
 
 	t.Run("git directory", func(t *testing.T) {
@@ -1194,20 +1209,9 @@ func TestSandboxPolicy(t *testing.T) {
 			assert.True(t, filepath.IsAbs(path), path)
 		}
 		assert.Equal(t, append([]string{kopiHome}, expanded...), p.DenyRead)
-		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".mcp.json")), p.DenyWrite)
+		assert.Equal(t, slices.Concat(gitFiles(cwd), linuxGit(cwd), []string{filepath.Join(cwd, ".mcp.json")}), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 		assert.True(t, p.Network)
-	})
-
-	t.Run("existing commondir", func(t *testing.T) {
-		cwd := t.TempDir()
-		require.NoError(t, os.Mkdir(filepath.Join(cwd, ".git"), 0o755))
-		commondir := filepath.Join(cwd, ".git", "commondir")
-		require.NoError(t, os.WriteFile(commondir, []byte("../..\n"), 0o600))
-
-		p := sandboxPolicy(cfg, cwd, home, kopiHome)
-
-		assert.Contains(t, p.DenyWrite, commondir)
 	})
 
 	t.Run("git file", func(t *testing.T) {
@@ -1216,7 +1220,7 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".git"), filepath.Join(cwd, ".mcp.json")), p.DenyWrite)
+		assert.Equal(t, slices.Concat(gitFiles(cwd), []string{filepath.Join(cwd, ".git"), filepath.Join(cwd, ".mcp.json")}), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 	})
 
@@ -1225,7 +1229,7 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, "HEAD"), filepath.Join(cwd, ".mcp.json")), p.DenyWrite)
+		assert.Equal(t, slices.Concat(gitFiles(cwd), []string{filepath.Join(cwd, "HEAD")}, linuxGit(cwd), []string{filepath.Join(cwd, ".mcp.json")}), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 	})
 
@@ -1235,7 +1239,7 @@ func TestSandboxPolicy(t *testing.T) {
 
 		p := sandboxPolicy(cfg, cwd, home, kopiHome)
 
-		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".mcp.json")), p.DenyWrite)
+		assert.Equal(t, slices.Concat(gitFiles(cwd), linuxGit(cwd), []string{filepath.Join(cwd, ".mcp.json")}), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
 	})
 
@@ -1246,18 +1250,19 @@ func TestSandboxPolicy(t *testing.T) {
 
 		plan := planPolicy(p, cwd)
 
-		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".mcp.json"), cwd), plan.DenyWrite)
+		assert.Equal(t, slices.Concat(gitFiles(cwd), linuxGit(cwd), []string{filepath.Join(cwd, ".mcp.json"), cwd}), plan.DenyWrite)
 		assert.Equal(t, p.DenyWriteNames, plan.DenyWriteNames)
 		assert.Equal(t, p.Write, plan.Write)
 		assert.Equal(t, p.DenyRead, plan.DenyRead)
 		assert.Equal(t, p.Network, plan.Network)
 		plan.DenyWrite[0] = "changed"
-		assert.Equal(t, append(gitFiles(cwd), filepath.Join(cwd, ".mcp.json")), p.DenyWrite)
+		assert.Equal(t, slices.Concat(gitFiles(cwd), linuxGit(cwd), []string{filepath.Join(cwd, ".mcp.json")}), p.DenyWrite)
 	})
 }
 
-// TestEmptyCommondirBreaksGit is why Linux leaves out a missing commondir: a
-// placeholder there would be empty.
+// TestEmptyCommondirBreaksGit is one reason Linux makes the whole .git
+// read-only rather than placing a placeholder on commondir: an empty one would
+// break git.
 func TestEmptyCommondirBreaksGit(t *testing.T) {
 	dir := t.TempDir()
 	env := append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")

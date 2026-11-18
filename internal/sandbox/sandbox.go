@@ -4,6 +4,7 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -31,7 +32,11 @@ type Sandbox struct {
 // New checks once that the platform sandbox works and builds one Sandbox per
 // policy, in argument order. It returns ErrUnavailable when this platform has
 // no sandbox or it cannot be applied.
-func New(ctx context.Context, policies ...Policy) ([]*Sandbox, error) {
+//
+// dir is where the sandbox keeps what Kopi processes sharing it must agree on,
+// such as when the placeholders a command mounts on the host may be removed.
+// Commands must not be able to write it. Only Linux uses it.
+func New(ctx context.Context, dir string, policies ...Policy) ([]*Sandbox, error) {
 	switch runtime.GOOS {
 	case "darwin":
 		if err := checkAbsolute(policies); err != nil {
@@ -66,9 +71,12 @@ func New(ctx context.Context, policies ...Policy) ([]*Sandbox, error) {
 		if err := probeBwrap(ctx, path, filter); err != nil {
 			return nil, err
 		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("failed to create the sandbox directory %s: %w", dir, err)
+		}
 		// One record for all: the policies mount under the same directories,
 		// and their commands run side by side.
-		shared := &placeholders{}
+		shared := newPlaceholders(dir)
 		sandboxes := make([]*Sandbox, len(policies))
 		for i, p := range policies {
 			sandboxes[i] = &Sandbox{bwrap: &bwrap{path: path, policy: p, shared: shared, seccomp: filter}}

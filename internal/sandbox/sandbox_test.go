@@ -18,7 +18,7 @@ func TestLinuxSandboxSmoke(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("bubblewrap is the Linux sandbox")
 	}
-	sbs, err := New(t.Context(), Policy{})
+	sbs, err := New(t.Context(), t.TempDir(), Policy{})
 	if errors.Is(err, ErrUnavailable) && os.Getenv("KOPI_TEST_REQUIRE_LINUX_SANDBOX") != "1" {
 		t.Skip(err)
 	}
@@ -31,7 +31,7 @@ func TestNewRejectsRelativePath(t *testing.T) {
 		t.Skip("only darwin and linux build a sandbox from the paths")
 	}
 	for _, p := range []Policy{{Write: []string{"rel"}}, {DenyRead: []string{"a/b"}}, {DenyWrite: []string{""}}} {
-		_, err := New(t.Context(), p)
+		_, err := New(t.Context(), t.TempDir(), p)
 		require.Error(t, err)
 		assert.NotErrorIs(t, err, ErrUnavailable)
 		assert.Contains(t, err.Error(), "is not absolute")
@@ -42,7 +42,7 @@ func TestNewUnavailableElsewhere(t *testing.T) {
 	if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
 		t.Skip("darwin and linux have a sandbox")
 	}
-	_, err := New(t.Context(), Policy{Write: []string{t.TempDir()}})
+	_, err := New(t.Context(), t.TempDir(), Policy{Write: []string{t.TempDir()}})
 	require.ErrorIs(t, err, ErrUnavailable)
 	assert.Contains(t, err.Error(), runtime.GOOS)
 }
@@ -74,7 +74,7 @@ func TestCommandDoesNotAliasPrefix(t *testing.T) {
 // where bubblewrap is missing or cannot make its namespaces.
 func newSandbox(t *testing.T, p Policy) *Sandbox {
 	t.Helper()
-	sbs, err := New(t.Context(), p)
+	sbs, err := New(t.Context(), t.TempDir(), p)
 	if errors.Is(err, ErrUnavailable) {
 		t.Skip(err)
 	}

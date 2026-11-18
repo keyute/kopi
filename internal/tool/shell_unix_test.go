@@ -73,7 +73,7 @@ func lifecycleShell(t *testing.T, dir string, sandboxed bool) *Shell {
 	t.Helper()
 	var sb *sandbox.Sandbox
 	if sandboxed {
-		sbs, err := sandbox.New(t.Context(), sandbox.Policy{Write: []string{dir}})
+		sbs, err := sandbox.New(t.Context(), t.TempDir(), sandbox.Policy{Write: []string{dir}})
 		if errors.Is(err, sandbox.ErrUnavailable) {
 			t.Skip(err)
 		}
