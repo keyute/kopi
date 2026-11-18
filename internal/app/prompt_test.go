@@ -98,15 +98,25 @@ func TestPromptListsDeferredServerToolsByServer(t *testing.T) {
 	assert.NotContains(t, plain[0].Text, "ToolSearch")
 }
 
+func TestPromptInstructionNamesAreScopedAndStable(t *testing.T) {
+	global := instruction.Group{Dir: "/w", Global: true, Files: []instruction.File{{Path: "/w/AGENTS.md", Text: "Global."}}}
+	project := instruction.Group{Dir: "/w", Files: []instruction.File{{Path: "/AGENTS.md", Text: "Project."}}}
+	parts := systemPrompt("/w", nil, []instruction.Group{global, project}, nil)
+
+	assert.Equal(t, []string{"preamble", "instructions global /w", "instructions project /w"}, partNames(parts))
+	withoutGlobal := systemPrompt("/w", nil, []instruction.Group{project}, nil)
+	assert.Equal(t, parts[2], withoutGlobal[1], "project identity does not depend on the global group's presence")
+}
+
 func TestPromptPlacesInstructionGroupsBetweenPreambleAndServers(t *testing.T) {
-	global := instruction.Group{Dir: "/home/.kopi", Files: []instruction.File{{Path: "/home/.kopi/AGENTS.md", Text: "Global rule."}}}
+	global := instruction.Group{Dir: "/home/.kopi", Global: true, Files: []instruction.File{{Path: "/home/.kopi/AGENTS.md", Text: "Global rule."}}}
 	project := instruction.Group{Dir: "/w", Files: []instruction.File{
 		{Path: "/w/AGENTS.md", Text: "Outer rule."},
 		{Path: "/w/sub/CLAUDE.md", Text: "Inner rule.\nSecond line."},
 	}}
 	parts := systemPrompt("/w", nil, []instruction.Group{global, project}, []mcpServer{{name: "s", instructions: "Use s."}})
 
-	assert.Equal(t, []string{"preamble", "instructions /home/.kopi", "instructions /w", "mcp-servers"}, partNames(parts))
+	assert.Equal(t, []string{"preamble", "instructions global /home/.kopi", "instructions project /w", "mcp-servers"}, partNames(parts))
 	assert.Equal(t, systemPrompt("/w", nil, nil, nil), parts[:1])
 	assert.Equal(t, "Instructions from /home/.kopi/AGENTS.md:\nGlobal rule.", parts[1].Text)
 	assert.Equal(t, "Instructions from /w/AGENTS.md:\nOuter rule.\n\nInstructions from /w/sub/CLAUDE.md:\nInner rule.\nSecond line.", parts[2].Text)

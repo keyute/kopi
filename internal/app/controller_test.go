@@ -2392,7 +2392,7 @@ func TestTurnUsesNoAmbientState(t *testing.T) {
 
 func TestTurnSendsConfiguredInstructions(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
-	global := instruction.Group{Dir: sb.KopiHome, Files: []instruction.File{{Path: filepath.Join(sb.KopiHome, "AGENTS.md"), Text: "GLOBAL_RULE"}}}
+	global := instruction.Group{Dir: sb.KopiHome, Global: true, Files: []instruction.File{{Path: filepath.Join(sb.KopiHome, "AGENTS.md"), Text: "GLOBAL_RULE"}}}
 	project := instruction.Group{Dir: sb.Workspace, Files: []instruction.File{{Path: filepath.Join(sb.Workspace, "AGENTS.md"), Text: "PROJECT_RULE"}}}
 	h := newHarness(t, sb, Config{Instructions: []instruction.Group{global, project}})
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
@@ -2406,6 +2406,40 @@ func TestTurnSendsConfiguredInstructions(t *testing.T) {
 	g, p := strings.Index(req.SystemPrompt, "GLOBAL_RULE"), strings.Index(req.SystemPrompt, "PROJECT_RULE")
 	require.GreaterOrEqual(t, g, 0)
 	assert.Greater(t, p, g, "the global group comes before the project's")
+}
+
+func TestTurnRetainsGlobalAndProjectSharingDirectoryAcrossResume(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	repo := filepath.Dir(sb.KopiHome)
+	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "AGENTS.md"), []byte("PROJECT_SHARED_DIR"), 0o600))
+	global := filepath.Join(sb.KopiHome, "AGENTS.md")
+	require.NoError(t, os.WriteFile(global, []byte("GLOBAL_SHARED_DIR"), 0o600))
+	sb.Workspace = sb.KopiHome
+	groups, errs := instruction.Load(global, []instruction.Root{{Dir: sb.Workspace, Trusted: true}}, nil)
+	require.Empty(t, errs)
+	require.Len(t, groups, 2)
+	cfg := Config{Instructions: groups}
+	h := newHarness(t, sb, cfg)
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "done")})
+	h.turn(t, "hello")
+	first := receive(t, requests).SystemPrompt
+	id := h.c.Status().SessionID
+	require.NoError(t, h.c.Close(t.Context()))
+
+	fresh := newHarness(t, sb, cfg)
+	require.NoError(t, fresh.c.Open(t.Context(), OpenRequest{ResumeID: id}))
+	fresh.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "resumed")})
+	fresh.turn(t, "again")
+	resumed := receive(t, requests).SystemPrompt
+	for _, prompt := range []string{first, resumed} {
+		assert.Equal(t, 1, strings.Count(prompt, "GLOBAL_SHARED_DIR"))
+		assert.Equal(t, 1, strings.Count(prompt, "PROJECT_SHARED_DIR"))
+		assert.Less(t, strings.Index(prompt, "GLOBAL_SHARED_DIR"), strings.Index(prompt, "PROJECT_SHARED_DIR"))
+	}
+	assert.Equal(t, first, resumed)
 }
 
 func TestCloseJoinsRunningTurn(t *testing.T) {

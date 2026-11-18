@@ -23,8 +23,9 @@ type File struct{ Path, Text string }
 // Group holds the files found from one directory: Kopi's home (the global
 // file's directory) or a root's Dir.
 type Group struct {
-	Dir   string
-	Files []File
+	Dir    string
+	Global bool
+	Files  []File
 }
 
 // Find lists dir's project files, outermost first; it reads none of them. The
@@ -65,8 +66,8 @@ func Load(globalFile string, roots []Root, fallbacks []string) ([]Group, []error
 	var groups []Group
 	var errs []error
 	loaded := map[string]bool{}
-	add := func(dir string, paths []string) {
-		g := Group{Dir: dir}
+	add := func(dir string, global bool, paths []string) {
+		g := Group{Dir: dir, Global: global}
 		for _, path := range paths {
 			if loaded[path] {
 				continue
@@ -89,10 +90,10 @@ func Load(globalFile string, roots []Root, fallbacks []string) ([]Group, []error
 	if isRegular(globalFile) {
 		global = []string{globalFile}
 	}
-	add(filepath.Dir(globalFile), global)
+	add(filepath.Dir(globalFile), true, global)
 	for _, r := range roots {
 		if r.Trusted {
-			add(r.Dir, Find(r.Dir, fallbacks))
+			add(r.Dir, false, Find(r.Dir, fallbacks))
 		}
 	}
 	return groups, errs

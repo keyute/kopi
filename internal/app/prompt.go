@@ -62,7 +62,11 @@ func systemPrompt(workspace string, tools []tool.Tool, groups []instruction.Grou
 		for _, f := range g.Files {
 			texts = append(texts, "Instructions from "+f.Path+":\n"+f.Text)
 		}
-		parts = append(parts, pigruntime.PromptPart{Name: "instructions " + g.Dir, Text: strings.Join(texts, "\n\n")})
+		scope := "project"
+		if g.Global {
+			scope = "global"
+		}
+		parts = append(parts, pigruntime.PromptPart{Name: "instructions " + scope + " " + g.Dir, Text: strings.Join(texts, "\n\n")})
 	}
 	var serverLines []string
 	servers = slices.SortedFunc(slices.Values(servers), func(a, b mcpServer) int { return strings.Compare(a.name, b.name) })

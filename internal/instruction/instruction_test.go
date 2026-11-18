@@ -98,7 +98,7 @@ func TestLoadGlobalFirstThenTrustedRoots(t *testing.T) {
 	groups, errs := Load(global, []Root{{Dir: untrusted}, {Dir: project, Trusted: true}}, nil)
 	assert.Empty(t, errs)
 	assert.Equal(t, []Group{
-		{Dir: home, Files: []File{{Path: global, Text: "global"}}},
+		{Dir: home, Global: true, Files: []File{{Path: global, Text: "global"}}},
 		{Dir: project, Files: []File{{Path: projectFile, Text: "project"}}},
 	}, groups)
 }
@@ -109,7 +109,7 @@ func TestLoadReadsEachFileOnce(t *testing.T) {
 
 	groups, errs := Load(global, []Root{{Dir: home, Trusted: true}}, nil)
 	assert.Empty(t, errs)
-	assert.Equal(t, []Group{{Dir: home, Files: []File{{Path: global, Text: "global"}}}}, groups)
+	assert.Equal(t, []Group{{Dir: home, Global: true, Files: []File{{Path: global, Text: "global"}}}}, groups)
 
 	repo := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o700))
@@ -124,6 +124,21 @@ func TestLoadReadsEachFileOnce(t *testing.T) {
 	assert.Equal(t, []Group{
 		{Dir: a, Files: []File{{Path: top, Text: "top"}, {Path: aFile, Text: "a"}}},
 		{Dir: b, Files: []File{{Path: bFile, Text: "b"}}},
+	}, groups)
+}
+
+func TestLoadGlobalAndProjectShareDirectory(t *testing.T) {
+	repo := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o700))
+	project := write(t, filepath.Join(repo, "AGENTS.md"), "project")
+	home := filepath.Join(repo, "home")
+	global := write(t, filepath.Join(home, "AGENTS.md"), "global")
+
+	groups, errs := Load(global, []Root{{Dir: home, Trusted: true}}, nil)
+	assert.Empty(t, errs)
+	assert.Equal(t, []Group{
+		{Dir: home, Global: true, Files: []File{{Path: global, Text: "global"}}},
+		{Dir: home, Files: []File{{Path: project, Text: "project"}}},
 	}, groups)
 }
 
@@ -145,7 +160,7 @@ func TestLoadTrimsTextAndDropsBlankFiles(t *testing.T) {
 
 	groups, errs := Load(global, []Root{{Dir: project, Trusted: true}}, []string{"CLAUDE.md"})
 	assert.Empty(t, errs)
-	assert.Equal(t, []Group{{Dir: home, Files: []File{{Path: global, Text: "global"}}}}, groups)
+	assert.Equal(t, []Group{{Dir: home, Global: true, Files: []File{{Path: global, Text: "global"}}}}, groups)
 }
 
 func TestLoadReportsUnreadableFile(t *testing.T) {
