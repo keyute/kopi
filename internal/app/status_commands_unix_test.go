@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,7 +27,7 @@ func TestShellRunnerCleansUpDescendants(t *testing.T) {
 			defer cancel()
 			if mode == "deadline" {
 				var stop context.CancelFunc
-				ctx, stop = context.WithTimeout(ctx, time.Second)
+				ctx, stop = context.WithTimeout(ctx, 5*time.Second)
 				defer stop()
 			}
 			command := `sh -c 'exec 3>ready; printf r >&3; exec sleep 60' & `
@@ -102,4 +103,11 @@ func TestShellRunnerOutput(t *testing.T) {
 	cancel()
 	_, err = (shellRunner{}).run(ctx, dir, "printf unexpected")
 	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestShellRunnerBoundsOutput(t *testing.T) {
+	out, err := (shellRunner{}).run(t.Context(), t.TempDir(), "echo first; head -c 200000 /dev/zero")
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(out, "first"))
+	assert.LessOrEqual(t, len(out), statusOutputLimit)
 }

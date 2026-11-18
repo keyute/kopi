@@ -163,7 +163,7 @@ func TestCleanStatusOutput(t *testing.T) {
 		{"control characters dropped", "a\x00\x07\tb\x7f", "ab"},
 		{"empty", "\n", ""},
 		{"only sgr", "\x1b[31m\x1b[0m", ""},
-		{"trailing space before reset", "\x1b[31mred \x1b[0m", "\x1b[31mred \x1b[0m\x1b[m"[:0] + "\x1b[31mred\x1b[m"},
+		{"trailing space before reset", "\x1b[31mred \x1b[0m", "\x1b[31mred\x1b[m"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, cleanStatusOutput(tc.in))

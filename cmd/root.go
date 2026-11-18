@@ -272,11 +272,9 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM)
 	defer stop()
 
-	var themes tui.Themes
-	if fullscreen {
-		if themes, err = tui.LoadThemes(paths.ThemeDir, resolved.Config.Theme.Dark, resolved.Config.Theme.Light); err != nil {
-			return fmt.Errorf("failed to use \"theme\" in %s: %w", paths.ConfigFile, err)
-		}
+	themes, err := tui.LoadThemes(paths.ThemeDir, resolved.Config.Theme.Dark, resolved.Config.Theme.Light)
+	if err != nil {
+		return fmt.Errorf("failed to use \"theme\" in %s: %w", paths.ConfigFile, err)
 	}
 	var ask askTrust
 	if fullscreen {

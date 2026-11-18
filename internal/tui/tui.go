@@ -46,7 +46,7 @@ type Controller interface {
 // Options are the frontend's settings. Keys maps action names to key
 // strings; an action without keys is disabled. StatusLine is the config's
 // status line. ImageDir holds saved clipboard images. Themes
-// come from LoadThemes; the zero value has no colours.
+// come from LoadThemes.
 type Options struct {
 	Version    string
 	Keys       map[string][]string

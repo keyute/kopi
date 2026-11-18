@@ -135,7 +135,11 @@ func tildePath(path, home string) string {
 	if path == home {
 		return "~"
 	}
-	if rest, ok := strings.CutPrefix(path, strings.TrimRight(home, "/\\")); ok && rest != "" && (rest[0] == '/' || rest[0] == '\\') {
+	trimmed := strings.TrimRight(home, "/\\")
+	if trimmed == "" {
+		return path
+	}
+	if rest, ok := strings.CutPrefix(path, trimmed); ok && rest != "" && (rest[0] == '/' || rest[0] == '\\') {
 		return "~" + rest
 	}
 	return path

@@ -11,7 +11,11 @@ import (
 	"github.com/keyute/kopi/internal/event"
 )
 
-const statusCommandTimeout = 5 * time.Second
+const (
+	statusCommandTimeout = 5 * time.Second
+	// statusOutputLimit bounds the stdout kept per run; the rest is drained and dropped.
+	statusOutputLimit = 64 << 10
+)
 
 type statusRunner interface {
 	run(context.Context, string, string) (string, error)
@@ -109,7 +113,7 @@ func (s *StatusCommands) launch(command *statusCommand) {
 		defer cancel()
 		out, err := s.runner.run(ctx, s.workspace, command.command)
 		s.mu.Lock()
-		if err != nil && !command.failing {
+		if err != nil && !command.failing && s.ctx.Err() == nil {
 			slog.Warn("status line command failed", "segment", command.name, "error", err)
 		}
 		command.failing = err != nil

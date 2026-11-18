@@ -139,6 +139,16 @@ func TestRootRejectsInvalidMode(t *testing.T) {
 	assert.NoDirExists(t, e.agentDir)
 }
 
+func TestRootRejectsUnknownTheme(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"theme":{"dark":"missing"}}`)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.ErrorContains(t, err, `failed to use "theme"`)
+	assert.NoDirExists(t, e.agentDir)
+}
+
 func TestSplitRules(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

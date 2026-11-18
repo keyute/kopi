@@ -36,7 +36,11 @@ func (shellRunner) run(ctx context.Context, dir, command string) (string, error)
 	}
 	var out bytes.Buffer
 	drained := make(chan struct{})
-	go func() { _, _ = io.Copy(&out, r); close(drained) }()
+	go func() {
+		_, _ = io.Copy(&out, io.LimitReader(r, statusOutputLimit))
+		_, _ = io.Copy(io.Discard, r)
+		close(drained)
+	}()
 	exited := make(chan error, 1)
 	go func() { exited <- process.AwaitExit(cmd.Process.Pid) }()
 	// Keep the leader unreaped until every group kill is finished: its PID

@@ -66,8 +66,7 @@ func latte() theme {
 	}
 }
 
-// hexTheme builds a hex theme from its roles in config.ThemeRoles order, then
-// heading, link, code and frame.
+// hexTheme builds a hex theme from its Chroma style and its colours in config.ThemeRoles order.
 func hexTheme(codeTheme, accent, success, errc, warning, muted, dim, text, userBg, heading, link, code, frame string) theme {
 	return theme{
 		accent: lipgloss.Color(accent), success: lipgloss.Color(success), error: lipgloss.Color(errc),
