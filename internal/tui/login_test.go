@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -50,6 +51,70 @@ func TestLoginRowsMaskASecret(t *testing.T) {
 	rows := plainRows(loginRows(d, 40, 3, 100, mocha()))
 	assert.Equal(t, "❭ 1. Answer  •••••••••", rows[3])
 	assert.NotContains(t, strings.Join(rows, "\n"), "secret")
+}
+
+func TestLoginRowsKeepTheSelectionBetweenRules(t *testing.T) {
+	km := newKeyMap(config.DefaultKeys())
+	ev := event.LoginRequested{Message: strings.Repeat("Long title ", 20), Provider: strings.Repeat("provider ", 20)}
+	for i := range 7 {
+		ev.Options = append(ev.Options, event.LoginOption{Label: fmt.Sprintf("Method %d", i+1), Description: strings.Repeat("wrapped description ", 8)})
+	}
+	d := newLoginDialog(ev, &km, mocha())
+	for _, sel := range []int{0, 3, 6} {
+		d.move(sel)
+		for _, height := range []int{3, 5, 9, 4, 100} {
+			rows := plainRows(loginRows(d, 40, 3, height, mocha()))
+			require.LessOrEqual(t, len(rows), height)
+			assert.Equal(t, rule40, rows[0])
+			assert.Equal(t, rule40, rows[len(rows)-1])
+			assert.Contains(t, strings.Join(rows, "\n"), fmt.Sprintf("❭ %d. Method %d", sel+1, sel+1))
+		}
+	}
+	for _, key := range []tea.KeyPressMsg{up, up, up, down, down} {
+		d.key(key, &km)
+		rows := plainRows(loginRows(d, 40, 3, 5, mocha()))
+		assert.Contains(t, strings.Join(rows, "\n"), fmt.Sprintf("❭ %d. Method %d", d.sel+1, d.sel+1))
+	}
+}
+
+func TestLoginRowsTwoRowsKeepBothRulesWithoutFieldAreas(t *testing.T) {
+	km := newKeyMap(config.DefaultKeys())
+	d := newLoginDialog(event.LoginRequested{Message: "Code"}, &km, mocha())
+	loginRows(d, 40, 3, 100, mocha())
+	require.NotEmpty(t, d.areas)
+
+	rows := plainRows(loginRows(d, 40, 3, 2, mocha()))
+	assert.Equal(t, []string{rule40, rule40}, rows)
+	assert.Empty(t, d.areas)
+}
+
+func TestLoginResizeKeepsRulesAboveFooterAndFieldGeometry(t *testing.T) {
+	for _, secret := range []bool{false, true} {
+		t.Run(fmt.Sprintf("secret=%t", secret), func(t *testing.T) {
+			m, _ := openLogin(t, event.LoginRequested{Message: strings.Repeat("Long title ", 40), Provider: strings.Repeat("provider ", 20), Secret: secret})
+			pasteText(m, "private\nanswer")
+			for _, height := range []int{10, 6, 20, 8} {
+				m.Update(tea.WindowSizeMsg{Width: 40, Height: height})
+				rows := screen(m)
+				require.Len(t, rows, height)
+				assert.Equal(t, rule40, rows[height-2], "bottom rule immediately above footer")
+				assert.Equal(t, rule40, plainRows(m.prompt)[0])
+				assert.Contains(t, strings.Join(rows, "\n"), "❭ 1. Answer")
+				if secret {
+					assert.NotContains(t, strings.Join(rows, "\n"), "private")
+					assert.Contains(t, strings.Join(rows, "\n"), strings.Repeat(secretMark, len("privateanswer")))
+					assert.Empty(t, m.geo.fields)
+				} else {
+					require.Len(t, m.geo.fields, 1)
+					fa := m.geo.fields[0]
+					assert.Equal(t, 2, fa.x)
+					assert.Greater(t, fa.h, 0)
+					assert.LessOrEqual(t, fa.y+fa.h, height-2)
+					assert.Contains(t, []string{"  private", "  answer"}, rows[fa.y])
+				}
+			}
+		})
+	}
 }
 
 func openLogin(t *testing.T, ev event.LoginRequested) (*model, *fakeController) {

@@ -34,24 +34,36 @@ func newLoginDialog(ev event.LoginRequested, km *keyMap, th theme) *dialog {
 	return d
 }
 
-// loginRows draws d in place of the composer, within maxRows. Past that the
-// top is cut so the options stay visible, along with any field area the cut
-// reaches.
+// loginRows draws d in place of the composer, within maxRows. On overflow,
+// both rules surround a window of the interior containing the selected label.
 func loginRows(d *dialog, width, maxFieldRows, maxRows int, th theme) []string {
 	if maxRows <= 0 {
 		return nil
 	}
 	rows := d.rows(width, maxRows, max(1, maxFieldRows), th)
-	cut := max(0, len(rows)-maxRows)
+	if len(rows) <= maxRows {
+		return rows
+	}
+	if maxRows < 3 {
+		d.areas = nil
+		if maxRows == 2 {
+			return []string{rows[0], rows[len(rows)-1]}
+		}
+		return rows[:maxRows]
+	}
+	room := maxRows - 2
+	start := min(d.optionStarts[d.sel], len(rows)-1-room)
+	end := start + room
 	var areas []fieldArea
 	for _, fa := range d.areas {
-		if fa.y >= cut {
-			fa.y -= cut
+		top, bottom := max(fa.y, start), min(fa.y+fa.h, end)
+		if top < bottom {
+			fa.y, fa.h = top-start+1, bottom-top
 			areas = append(areas, fa)
 		}
 	}
 	d.areas = areas
-	return rows[cut:]
+	return append(append([]string{rows[0]}, rows[start:end]...), rows[len(rows)-1])
 }
 
 // clear empties every field, so an answered or ended prompt keeps no text.
