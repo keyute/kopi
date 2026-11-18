@@ -440,7 +440,7 @@ func TestRootFullscreenSameProviderModelWithoutCredentialReachesLogin(t *testing
 					n, err := master.Read(buf)
 					output.Write(buf[:n])
 					plain := ansi.Strip(output.String())
-					if !sawAsk && strings.Contains(plain, "mistral") && strings.Contains(strings.ToLower(plain), "api key") && strings.Contains(plain, "Answer") {
+					if !sawAsk && strings.Contains(plain, "mistral") && strings.Contains(strings.ToLower(plain), "api key") && strings.Contains(plain, "❭") {
 						sawAsk = true
 						close(asked)
 					}
