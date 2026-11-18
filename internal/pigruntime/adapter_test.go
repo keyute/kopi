@@ -452,7 +452,7 @@ func TestInterruptTurnRejectsBeforeCancellationForwarding(t *testing.T) {
 }
 
 func TestRealToolsRejectApprovalRetarget(t *testing.T) {
-	for _, name := range []string{"Read", "Write", "Edit"} {
+	for _, name := range []string{"Read", "Write", "Edit", "Glob", "Grep", "LS"} {
 		for _, phase := range []string{"pending approval", "before execution"} {
 			t.Run(name+"/"+phase, func(t *testing.T) {
 				dir := t.TempDir()
@@ -460,12 +460,16 @@ func TestRealToolsRejectApprovalRetarget(t *testing.T) {
 					require.NoError(t, os.Mkdir(filepath.Join(dir, sub), 0o755))
 					require.NoError(t, os.WriteFile(filepath.Join(dir, sub, "file"), []byte(sub+"-secret"), 0o600))
 				}
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "denied", "denied-filename"), []byte("denied-secret"), 0o600))
 				link := filepath.Join(dir, "link")
 				require.NoError(t, os.Symlink("allowed", link))
 				ws, err := tool.NewWorkspace(dir, nil)
 				require.NoError(t, err)
 				defer ws.Close()
-				tools := map[string]tool.Tool{"Read": tool.NewRead(ws), "Write": tool.NewWrite(ws), "Edit": tool.NewEdit(ws)}
+				tools := map[string]tool.Tool{
+					"Read": tool.NewRead(ws), "Write": tool.NewWrite(ws), "Edit": tool.NewEdit(ws),
+					"Glob": tool.NewGlob(ws, nil), "Grep": tool.NewGrep(ws, nil), "LS": tool.NewLS(ws, nil),
+				}
 				realTool := tools[name]
 				args := map[string]any{"file_path": "link/file"}
 				switch name {
@@ -473,11 +477,17 @@ func TestRealToolsRejectApprovalRetarget(t *testing.T) {
 					args["content"] = "new"
 				case "Edit":
 					args["old_string"], args["new_string"] = "allowed", "updated"
+				case "Glob":
+					args = map[string]any{"path": "link", "pattern": "*"}
+				case "Grep":
+					args = map[string]any{"path": "link", "pattern": "secret", "output_mode": "content"}
+				case "LS":
+					args = map[string]any{"path": "link"}
 				}
 				raw, err := json.Marshal(args)
 				require.NoError(t, err)
 				specs := map[string]policy.ToolSpec{name: {Capability: realTool.Capability, Target: realTool.Target}}
-				rules, err := policy.NewRules(dir, t.TempDir(), specs, policy.Source{Name: "test", Ask: []string{name}, Deny: []string{name + "(denied/**)"}})
+				rules, err := policy.NewRules(dir, t.TempDir(), specs, policy.Source{Name: "test", Ask: []string{name}, Deny: []string{name + "(denied)", name + "(denied/**)"}})
 				require.NoError(t, err)
 				authority := policy.NewAuthority()
 				authority.EnterExecute()
@@ -509,6 +519,7 @@ func TestRealToolsRejectApprovalRetarget(t *testing.T) {
 				text := toolResultContentText(result.Content)
 				assert.Contains(t, text, policy.ErrChangedCall.Error())
 				assert.NotContains(t, text, "denied-secret")
+				assert.NotContains(t, text, "denied-filename")
 				for _, sub := range []string{"allowed", "denied"} {
 					data, err := os.ReadFile(filepath.Join(dir, sub, "file"))
 					require.NoError(t, err)

@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/keyute/kopi/internal/policy"
 )
@@ -155,9 +156,78 @@ func compileGrep(args grepArgs) (*regexp.Regexp, func(string) bool, error) {
 }
 
 type grepLine struct {
-	n    int
-	text string
-	cut  bool
+	n       int
+	text    string
+	cut     bool
+	matched bool
+}
+
+// grepLineReader exposes one logical line to regexp, retaining only its display
+// prefix. LF ends the line; CR remains part of both the pattern input and text.
+type grepLineReader struct {
+	ctx   context.Context
+	r     *bufio.Reader
+	text  strings.Builder
+	chars int
+	cut   bool
+	got   bool
+	done  bool
+	err   error
+}
+
+func (l *grepLineReader) ReadRune() (rune, int, error) {
+	if l.done {
+		return 0, 0, io.EOF
+	}
+	if err := l.ctx.Err(); err != nil {
+		l.done, l.err = true, err
+		return 0, 0, err
+	}
+	var first byte
+	if l.chars < maxLineChars {
+		if head, _ := l.r.Peek(1); len(head) > 0 {
+			first = head[0]
+		}
+	}
+	r, size, err := l.r.ReadRune()
+	if err != nil {
+		l.done, l.err = true, err
+		return 0, 0, err
+	}
+	l.got = true
+	if r == '\n' {
+		l.done = true
+		return 0, 0, io.EOF
+	}
+	if l.chars < maxLineChars {
+		if r == utf8.RuneError && size == 1 {
+			// Matching decodes invalid UTF-8, but displayed text keeps its bytes.
+			l.text.WriteByte(first)
+		} else {
+			l.text.WriteRune(r)
+		}
+		l.chars++
+	} else {
+		l.cut = true
+	}
+	return r, size, nil
+}
+
+func readGrepLine(ctx context.Context, r *bufio.Reader, re *regexp.Regexp) (grepLine, error) {
+	l := grepLineReader{ctx: ctx, r: r}
+	matched := re.MatchReader(&l)
+	// MatchReader can stop early; finish the display prefix and consume the
+	// remainder so the next match starts at the next logical line.
+	for !l.done {
+		_, _, _ = l.ReadRune()
+	}
+	if l.err != nil && !errors.Is(l.err, io.EOF) {
+		return grepLine{}, l.err
+	}
+	if !l.got {
+		return grepLine{}, io.EOF
+	}
+	return grepLine{text: l.text.String(), cut: l.cut, matched: matched}, nil
 }
 
 func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *regexp.Regexp, match func(string) bool, root policy.Target, rel string, info fs.FileInfo) (Result, error) {
@@ -184,8 +254,9 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 			return
 		}
 		for n := 1; ctx.Err() == nil; n++ {
-			text, cut, err := readLine(ctx, r)
-			if err != nil || !onLine(grepLine{n, text, cut}) {
+			line, err := readGrepLine(ctx, r, re)
+			line.n = n
+			if err != nil || !onLine(line) {
 				return
 			}
 		}
@@ -204,7 +275,7 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 		case grepFiles:
 			hit := false
 			scan(f, func(l grepLine) bool {
-				hit = re.MatchString(l.text)
+				hit = l.matched
 				return !hit
 			})
 			if hit {
@@ -214,7 +285,7 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 		case grepCount:
 			n := 0
 			scan(f, func(l grepLine) bool {
-				if re.MatchString(l.text) {
+				if l.matched {
 					n++
 				}
 				return true
@@ -245,7 +316,7 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 				return true
 			}
 			scan(f, func(l grepLine) bool {
-				if re.MatchString(l.text) {
+				if l.matched {
 					if matches == limit {
 						more, limited = true, true
 						return false

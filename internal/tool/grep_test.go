@@ -1,11 +1,14 @@
 package tool
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +95,148 @@ func TestGrepContentMarksCutLines(t *testing.T) {
 	require.NoError(t, err)
 	want := "Found 1 match in 1 file\na.txt:1:match" + strings.Repeat("x", maxLineChars-len("match")) + lineCutMarker + "\n"
 	assert.Equal(t, want, out)
+}
+
+func TestGrepMatchesFullLines(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, pattern string
+		matched             bool
+	}{
+		{"suffix beyond display", strings.Repeat("x", maxLineChars) + "needle\n", "needle$", true},
+		{"no end at display boundary", strings.Repeat("x", maxLineChars) + "tail\n", "x$", false},
+		{"beyond reader chunk", strings.Repeat("x", 2*(64<<10)) + "needle\n", "needle$", true},
+		{"across reader chunk", strings.Repeat("x", (64<<10)-3) + "needle\n", "needle$", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tool, dir := newGrepTool(t)
+			writeFile(t, filepath.Join(dir, "a.txt"), tc.text)
+			for _, mode := range []string{grepFiles, grepContent, grepCount} {
+				t.Run(mode, func(t *testing.T) {
+					out, err := runGrep(t, tool, fmt.Sprintf(`{"pattern":%q,"output_mode":%q}`, tc.pattern, mode))
+					require.NoError(t, err)
+					want := "No matches found"
+					if tc.matched {
+						switch mode {
+						case grepFiles:
+							want = "Found 1 file\na.txt\n"
+						case grepCount:
+							want = "Found 1 match in 1 file\na.txt:1\n"
+						case grepContent:
+							want = "Found 1 match in 1 file\na.txt:1:" + strings.Repeat("x", maxLineChars) + lineCutMarker + "\n"
+						}
+					}
+					assert.Equal(t, want, out)
+				})
+			}
+		})
+	}
+}
+
+func TestGrepDisplayPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		name, prefix, suffix string
+		cut                  bool
+	}{
+		{"UTF8 exact", strings.Repeat("界", maxLineChars), "", false},
+		{"UTF8 truncated", strings.Repeat("界", maxLineChars), "語", true},
+		{"invalid UTF8", "\xff" + strings.Repeat("界", maxLineChars-1), "語", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tool, dir := newGrepTool(t)
+			writeFile(t, filepath.Join(dir, "a.txt"), tc.prefix+tc.suffix+"\n")
+			out, err := runGrep(t, tool, `{"pattern":"^","output_mode":"content"}`)
+			require.NoError(t, err)
+			want := "Found 1 match in 1 file\na.txt:1:" + tc.prefix
+			if tc.cut {
+				want += lineCutMarker
+			}
+			assert.Equal(t, want+"\n", out)
+		})
+	}
+}
+
+func TestGrepLogicalLineBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, pattern, want string
+	}{
+		{"LF", "hit\nhit\n", "hit$", "Found 2 matches in 1 file\na.txt:1:hit\na.txt:2:hit\n"},
+		{"CRLF retains CR", "hit\r\nhit\r\n", `hit\r$`, "Found 2 matches in 1 file\na.txt:1:hit\r\na.txt:2:hit\r\n"},
+		{"CR not stripped for matching", "hit\r\n", "hit$", "No matches found"},
+		{"unterminated final line", "miss\nhit", "hit$", "Found 1 match in 1 file\na.txt:2:hit\n"},
+		{"no extra final line", "hit\n", "^$", "No matches found"},
+		{"empty line", "\n", "^$", "Found 1 match in 1 file\na.txt:1:\n"},
+		{"empty file", "", "^$", "No matches found"},
+		{"cannot cross LF", "hit\nnext", `hit\snext`, "No matches found"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tool, dir := newGrepTool(t)
+			writeFile(t, filepath.Join(dir, "a.txt"), tc.text)
+			args, err := json.Marshal(grepArgs{Pattern: tc.pattern, OutputMode: grepContent})
+			require.NoError(t, err)
+			out, err := runGrep(t, tool, string(args))
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, out)
+		})
+	}
+}
+
+func TestGrepDrainsAfterEarlyMatch(t *testing.T) {
+	tool, dir := newGrepTool(t)
+	prefix := "hit" + strings.Repeat("x", maxLineChars-3)
+	writeFile(t, filepath.Join(dir, "a.txt"), prefix+strings.Repeat("x", 2*(64<<10))+"\nmiss\nhit final")
+
+	out, err := runGrep(t, tool, `{"pattern":"^hit","output_mode":"content","context":1}`)
+	require.NoError(t, err)
+	assert.Equal(t, "Found 2 matches in 1 file\na.txt:1:"+prefix+lineCutMarker+"\na.txt-2-miss\na.txt:3:hit final\n", out)
+
+	out, err = runGrep(t, tool, `{"pattern":"^hit","output_mode":"count"}`)
+	require.NoError(t, err)
+	assert.Equal(t, "Found 2 matches in 1 file\na.txt:2\n", out)
+}
+
+type grepPausedReader struct {
+	prefix  string
+	waiting chan struct{}
+	resume  chan struct{}
+}
+
+func (r *grepPausedReader) Read(p []byte) (int, error) {
+	if len(r.prefix) > 0 {
+		n := copy(p, r.prefix)
+		r.prefix = r.prefix[n:]
+		return n, nil
+	}
+	close(r.waiting)
+	<-r.resume
+	return copy(p, "x"), io.EOF
+}
+
+func TestGrepCancelsDuringLine(t *testing.T) {
+	for _, tc := range []struct {
+		name, pattern string
+	}{
+		{"matching", "^hit.*never$"},
+		{"draining after early match", "^hit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			r := &grepPausedReader{
+				prefix:  "hit" + strings.Repeat("x", (64<<10)-3),
+				waiting: make(chan struct{}),
+				resume:  make(chan struct{}),
+			}
+			done := make(chan error, 1)
+			go func() {
+				_, err := readGrepLine(ctx, bufio.NewReaderSize(r, 64<<10), regexp.MustCompile(tc.pattern))
+				done <- err
+			}()
+			<-r.waiting
+			cancel()
+			close(r.resume)
+			require.ErrorIs(t, <-done, context.Canceled)
+		})
+	}
 }
 
 func TestGrepCount(t *testing.T) {
