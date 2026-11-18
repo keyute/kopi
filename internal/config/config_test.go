@@ -150,6 +150,20 @@ func TestResolveRejectsInvalidModelNamingLayer(t *testing.T) {
 	assert.Contains(t, err.Error(), "flags")
 }
 
+func TestResolveRejectsInvalidSmallModelNamingLayer(t *testing.T) {
+	_, err := Resolve(Defaults(), Map("flags", map[string]any{"smallModel": "noslash"}))
+	require.ErrorIs(t, err, ErrInvalidModel)
+	assert.Contains(t, err.Error(), "flags")
+}
+
+func TestResolveSmallModel(t *testing.T) {
+	global := globalLayer(t, `{"smallModel": "anthropic/claude-haiku"}`)
+	r, err := Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Equal(t, "anthropic/claude-haiku", r.Config.SmallModel)
+	assert.Equal(t, global.Name, r.Origins["smallModel"])
+}
+
 func TestResolveOverridesOneActionKeepingOthers(t *testing.T) {
 	global := globalLayer(t, `{"keys": {"submit": ["ctrl+s"]}}`)
 	r, err := Resolve(Defaults(), global)
@@ -420,9 +434,10 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	r, err := Resolve(Defaults())
 	require.NoError(t, err)
 	entries := r.Entries()
-	assert.Len(t, entries, 12+len(KeyActions))
+	assert.Len(t, entries, 13+len(KeyActions))
 	assert.IsIncreasing(t, entryKeys(entries))
 	assert.Contains(t, entries, Entry{Key: "model", Value: "", Origin: "unset"})
+	assert.Contains(t, entries, Entry{Key: "smallModel", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "version", Value: "1", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "mode", Value: "plan", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "keys.submit", Value: `["enter"]`, Origin: "default"})
@@ -439,6 +454,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 
 	r, err = Resolve(Defaults(), Map("flags", map[string]any{
 		"model":       "a/b",
+		"smallModel":  "c/d",
 		"mode":        "execute",
 		"statusline":  map[string]any{"right": []any{}},
 		"permissions": map[string]any{"deny": []any{"Read(.env)", "*(~/.ssh)"}},
@@ -447,6 +463,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	require.NoError(t, err)
 	entries = r.Entries()
 	assert.Contains(t, entries, Entry{Key: "model", Value: "a/b", Origin: "flags"})
+	assert.Contains(t, entries, Entry{Key: "smallModel", Value: "c/d", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "mode", Value: "execute", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "statusline.right", Value: "[]", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "permissions.deny", Value: `["Read(.env)","*(~/.ssh)"]`, Origin: "flags"})
