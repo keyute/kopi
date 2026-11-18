@@ -282,6 +282,14 @@ func gatedText(gate <-chan struct{}, text string) ai.FauxResponseStep {
 	})
 }
 
+// gatedError fails with message once gate is closed.
+func gatedError(gate <-chan struct{}, message string) ai.FauxResponseStep {
+	return ai.FauxFactoryStep(func(ai.TranscriptContext, ai.StreamOptions, *ai.FauxProviderState, *ai.Model) (ai.AssistantMessage, error) {
+		<-gate
+		return ai.FauxAssistantMessage(ai.FauxContentString(""), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonError), ErrorMessage: message}), nil
+	})
+}
+
 // untilIdleWaiting waits until the run has only running subagents to wait for.
 func untilIdleWaiting(t *testing.T, c *app.Controller) {
 	t.Helper()
@@ -382,7 +390,11 @@ func TestFailedChildStillLetsTheRunFinish(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	steps := []ai.FauxResponseStep{pigruntimetest.ToolCalls(launchCall("c1", "look")), pigruntimetest.Text("launched"), pigruntimetest.Text("it failed")}
 
-	h := startWith(t, sb, agentConfig(), policy.Plan, "delegate", steps, []ai.FauxResponseStep{pigruntimetest.ProviderError("boom")})
+	gate := make(chan struct{})
+
+	h := startWith(t, sb, agentConfig(), policy.Plan, "delegate", steps, []ai.FauxResponseStep{gatedError(gate, "boom")})
+	untilIdleWaiting(t, h.c)
+	close(gate)
 
 	require.NoError(t, h.wait(t))
 	assert.Equal(t, "it failed\n", h.out.String())
