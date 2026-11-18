@@ -48,6 +48,16 @@ type Image struct {
 type Prompt struct {
 	Text   string
 	Images []Image
+	// Skills holds the texts of the skills the prompt loads. The model reads
+	// them as messages right after Text; the transcript does not draw them.
+	Skills []string
+}
+
+// skillType is the PiG custom type of a skill text, stored in session history.
+const skillType = "kopi.skill"
+
+func skillMessage(text string) extension.CustomMessageRef {
+	return extension.CustomMessageRef{CustomType: skillType, Content: text, Display: false}
 }
 
 // Notice is input Kopi gives the model on its own behalf, not the human's. The
@@ -198,16 +208,17 @@ func InterruptTurn(ctx context.Context) bool {
 // errors: they surface as a Failed outcome carrying the provider's error text.
 // An overlapping call returns ErrSendInProgress unless ctx is already done.
 //
-// The model reads notices after p; when p is empty, the notices alone start
-// the run.
+// The model reads p's skills, then the notices, after p; when p is empty, the
+// notices alone start the run.
 //
 // At the end of each turn that did not fail and was not aborted, while ctx is
 // not cancelled, Send calls more, if not nil, for prompts and notices to hand
-// over; the model reads them, prompts first, at the next boundary of the same
-// run. more is called on PiG's event executor, with no Session lock held. Each
-// handed-over prompt becomes a UserMessage when it is delivered; p does not, as
-// the caller draws it. Every notice, given or handed over, becomes its Shown
-// when it is delivered.
+// over; the model reads them, prompts first, each followed by its skills, at
+// the next boundary of the same run. more is called on PiG's event executor,
+// with no Session lock held. Each handed-over prompt becomes a UserMessage when
+// it is delivered; p does not, as the caller draws it. Skills never become
+// events. Every notice, given or handed over, becomes its Shown when it is
+// delivered.
 func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more func() ([]Prompt, []Notice)) (SendResult, error) {
 	if ctx.Err() != nil {
 		return SendResult{Outcome: event.Outcome{Status: event.Interrupted}, UndeliveredNotices: notices}, nil
@@ -282,6 +293,12 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 				text, images := s.steerContent(q)
 				handed = append(handed, q)
 				s.inner.QueueSteer(text, images)
+				for _, sk := range q.Skills {
+					if err := s.inner.SendCustomMessage(pigCtx, skillMessage(sk), &extension.SendMessageOptions{DeliverAs: extension.DeliverAsSteer}); err != nil {
+						slog.Warn("failed to hand over skill", "error", err)
+						break
+					}
+				}
 			}
 			// Prompts and notices share PiG's steering queue. TriggerTurn stays
 			// nil, so on an idle session a notice is only appended and never
@@ -352,6 +369,13 @@ func (s *Session) deliver(ctx context.Context, p Prompt, notices []Notice) error
 	queued := notices
 	if wake {
 		queued = notices[1:]
+	}
+	if !wake {
+		for _, sk := range p.Skills {
+			if err := s.inner.SendCustomMessage(ctx, skillMessage(sk), &extension.SendMessageOptions{DeliverAs: extension.DeliverAsNextTurn}); err != nil {
+				return fmt.Errorf("failed to send skill: %w", reword(err))
+			}
+		}
 	}
 	for _, n := range queued {
 		if err := s.inner.SendCustomMessage(ctx, n.message(), &extension.SendMessageOptions{DeliverAs: extension.DeliverAsNextTurn}); err != nil {

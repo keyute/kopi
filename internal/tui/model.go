@@ -224,7 +224,7 @@ func (m *model) syncInput(wasHeld bool) tea.Cmd {
 	value, line, col := m.composer.value(), m.composer.ta.Line(), m.composer.ta.Column()
 	changed := value != m.seen.value || line != m.seen.line || col != m.seen.col
 	if value != m.seen.value {
-		m.composer.spans = app.Spans(value)
+		m.composer.spans = m.c.Spans(value)
 	}
 	m.seen.value, m.seen.line, m.seen.col = value, line, col
 	if m.holding() || (!changed && !wasHeld) {

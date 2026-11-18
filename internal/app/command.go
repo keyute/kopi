@@ -12,6 +12,9 @@ type Command struct {
 	Name, Summary string
 	// Argument reports that the command's argument is chosen from Arguments.
 	Argument bool
+	// Skill reports that the command is a skill, which loads with the prompt it
+	// is typed in.
+	Skill bool
 }
 
 type command struct {
@@ -52,6 +55,16 @@ func parse(line string) (name, args string, isCommand bool) {
 	}
 	name, args, _ = strings.Cut(line[1:], " ")
 	return name, strings.TrimSpace(args), true
+}
+
+// leadingWord is the input's first whitespace-delimited word without its "/".
+func leadingWord(text string) string {
+	word, _, _ := strings.Cut(strings.Join(strings.Fields(text), " "), " ")
+	return strings.TrimPrefix(word, "/")
+}
+
+func isControl(name string) bool {
+	return slices.ContainsFunc(commandTable(), func(c command) bool { return c.Name == name })
 }
 
 func (c *Controller) resumeCommand(ctx context.Context, id string) error {

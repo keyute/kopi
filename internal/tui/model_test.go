@@ -21,6 +21,7 @@ import (
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/skill"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -45,9 +46,11 @@ type fakeController struct {
 	subscriber func(event.Event)
 	answers    []answer
 	commands   []app.Command
-	args       map[string][]app.Candidate
-	files      []app.Candidate
-	filesErr   error
+	// skills is what Spans highlights as skill commands; nil means none.
+	skills   *skill.Set
+	args     map[string][]app.Candidate
+	files    []app.Candidate
+	filesErr error
 	// foreground is what Background returns; backgrounds counts the calls.
 	foreground  bool
 	backgrounds int
@@ -110,6 +113,8 @@ func (f *fakeController) Interrupt() bool {
 func (f *fakeController) Status() app.Status { return f.status }
 
 func (f *fakeController) Commands() []app.Command { return f.commands }
+
+func (f *fakeController) Spans(text string) []app.Span { return app.Spans(text, f.skills) }
 
 func (f *fakeController) Arguments(name string) ([]app.Candidate, error) { return f.args[name], nil }
 

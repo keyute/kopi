@@ -5,7 +5,14 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/keyute/kopi/internal/skill"
 )
+
+func testSkills() *skill.Set {
+	set, _ := skill.NewSet("skill", []skill.Skill{{Name: "a"}, {Name: "b"}}, nil)
+	return set
+}
 
 func TestQueryAt(t *testing.T) {
 	for _, tc := range []struct {
@@ -36,6 +43,11 @@ func TestQueryAt(t *testing.T) {
 		{name: "reference on second line", text: "hi\nsee @a", line: 1, col: 6, want: Query{Kind: KindReference, Line: 1, Start: 4, End: 6, Text: "a"}, ok: true},
 		{name: "line after command", text: "/plan\n@a", line: 1, col: 2},
 		{name: "prose", text: "hello", col: 3},
+		{name: "reference after skill", text: "/skill:a @x", col: 11, want: Query{Kind: KindReference, Start: 9, End: 11, Text: "x"}, ok: true},
+		{name: "reference on line after skill", text: "/skill:a\n@x", line: 1, col: 2, want: Query{Kind: KindReference, Line: 1, End: 2, Text: "x"}, ok: true},
+		{name: "reference after unknown command", text: "/nope @x", col: 8, want: Query{Kind: KindReference, Start: 6, End: 8, Text: "x"}, ok: true},
+		{name: "inside skill", text: "/skill:a x", col: 4, want: Query{Kind: KindCommand, End: 8, Text: "ski"}, ok: true},
+		{name: "past skill", text: "/skill:a x", col: 10},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			q, ok := QueryAt(tc.text, tc.line, tc.col)
@@ -64,7 +76,30 @@ func TestSpans(t *testing.T) {
 		{text: "a @ b"},
 	} {
 		t.Run(tc.text, func(t *testing.T) {
-			assert.Equal(t, tc.want, Spans(tc.text))
+			assert.Equal(t, tc.want, Spans(tc.text, nil))
+		})
+	}
+}
+
+func TestSpansWithSkills(t *testing.T) {
+	cmd := func(line, start, end int) Span { return Span{Line: line, Start: start, End: end, Kind: KindCommand} }
+	ref := func(line, start, end int) Span { return Span{Line: line, Start: start, End: end, Kind: KindReference} }
+	for _, tc := range []struct {
+		text string
+		want []Span
+	}{
+		{text: "/skill:a @x /skill:b", want: []Span{cmd(0, 0, 8), ref(0, 9, 11), cmd(0, 12, 20)}},
+		{text: "x /skill:a", want: []Span{cmd(0, 2, 10)}},
+		{text: "//skill:a"},
+		{text: "//skill:a /skill:b", want: []Span{cmd(0, 10, 18)}},
+		{text: "/skill:a\nx /skill:b", want: []Span{cmd(0, 0, 8), cmd(1, 2, 10)}},
+		{text: "/nope x /skill:a"},
+		{text: "/plan /skill:a", want: []Span{cmd(0, 0, 5)}},
+		{text: `@a\ /skill:a`, want: []Span{ref(0, 0, 12)}},
+		{text: "/skill:c"},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			assert.Equal(t, tc.want, Spans(tc.text, testSkills()))
 		})
 	}
 }
@@ -78,7 +113,7 @@ func TestSpansManyReferences(t *testing.T) {
 			want = append(want, Span{Line: line, Start: start, End: start + 2, Kind: KindReference})
 		}
 	}
-	assert.Equal(t, want, Spans(text))
+	assert.Equal(t, want, Spans(text, nil))
 }
 
 func TestMatch(t *testing.T) {

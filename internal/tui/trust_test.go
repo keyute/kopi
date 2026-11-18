@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -202,6 +203,55 @@ func TestTrustRowsReserveServerSummaryBeforeInstructionFiles(t *testing.T) {
 		"  They run with your permissions.",
 		"    … 2 more servers",
 	}, rows[6:13])
+}
+
+func TestTrustRowsListSkillFolders(t *testing.T) {
+	rule := strings.Repeat("─", 60)
+	skillsOnly := TrustRequest{Folder: "/w/proj", Parent: "/w", Skills: []string{"/w/.agents/skills", "/w/proj/.agents/skills"}}
+	assert.Equal(t, append(make([]string, 17),
+		rule,
+		"  Do you trust this folder?",
+		"  /w/proj",
+		"",
+		"  Kopi would load the skills in these folders:",
+		"    /w/.agents/skills",
+		"    /w/proj/.agents/skills",
+		"",
+		"❭ 1. Yes, trust this folder",
+		"  2. Yes, trust the parent folder (/w)",
+		"  3. No, don't trust",
+		rule,
+		"  enter to choose · esc to decide later",
+	), trustScreen(newTrustTestModel(skillsOnly)))
+
+	all := trustReq
+	all.Instructions = []string{"/w/AGENTS.md"}
+	all.Skills = []string{"/w/proj/.agents/skills"}
+	rows := trustScreen(newTrustTestModel(all))
+	assert.Equal(t, []string{
+		"  Do you trust this folder?",
+		"  /w/proj",
+		"",
+		"  Kopi would add these instruction files to the model's",
+		"  instructions:",
+		"    /w/AGENTS.md",
+		"",
+		"  Kopi would load the skills in these folders:",
+		"    /w/proj/.agents/skills",
+		"",
+		"  Its .mcp.json declares MCP servers that Kopi would start.",
+	}, rows[slices.Index(rows, "  Do you trust this folder?"):][:11])
+}
+
+func TestTrustRowsCountSkillFoldersLeftOut(t *testing.T) {
+	req := TrustRequest{Folder: "/w/proj", Skills: []string{"/a/.agents/skills", "/b/.agents/skills", "/c/.agents/skills"}}
+	m := newTrustTestModel(req)
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 12})
+	rows := trustScreen(m)
+	assert.Len(t, rows, 12)
+	assert.Contains(t, rows, "    /a/.agents/skills")
+	assert.Contains(t, rows, "    … 2 more skill folders")
+	assert.NotContains(t, rows, "    /c/.agents/skills")
 }
 
 func TestTrustChoices(t *testing.T) {

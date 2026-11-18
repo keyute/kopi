@@ -835,3 +835,37 @@ func TestReply(t *testing.T) {
 		})
 	}
 }
+
+func TestSendQueuesSkillsAfterPromptBeforeNotices(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "done")})
+	sess := openTestSession(t, r)
+	evs := recordDelivered(t, sess)
+	n := testNotice("t1")
+
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt", Skills: []string{"S1", "S2"}}, []Notice{n}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, event.Completed, res.Outcome.Status)
+	assert.Empty(t, res.UndeliveredNotices)
+	assert.Equal(t, []string{"prompt", "S1", "S2", n.Text}, userTexts(<-requests))
+	assert.Equal(t, []event.Event{n.Shown}, drain(evs))
+}
+
+func TestSendHandsOverSkillsWithPrompt(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done")})
+	sess := openTestSession(t, r, probeTool(okProbe))
+	evs := recordDelivered(t, sess)
+	more, _ := moreOnce(Prompt{Text: "x", Skills: []string{"S"}})
+
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
+	require.NoError(t, err)
+	assert.Equal(t, event.Completed, res.Outcome.Status)
+	assert.Empty(t, res.Undelivered)
+	assert.Equal(t, []string{"prompt", "x", "S"}, userTexts(<-requests))
+	assert.Equal(t, []event.Event{event.UserMessage{Text: "x"}}, drain(evs))
+}

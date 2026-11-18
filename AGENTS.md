@@ -18,12 +18,14 @@
 - `internal/pigruntime` may use PiG's `mcp` client packages; never PiG's MCP extension `coding/mcpext`.
 - Never import PiG `internal/` packages, never use `coding/cli`, never add a `replace` for PiG, and never copy upstream code.
 - Create every PiG session with every input explicit: agent dir, in-memory settings, `coding.NoResources`, the system prompt as sections, `SkipBuiltinTools`, and explicit tool names for both `AllowedTools` and `InitialActiveToolNames`. A nil there turns on ambient discovery, PiG's stock prompt or stock tools. Never name a prompt part `tools` or `rules`; PiG rewrites those.
+- Skills are loaded by a PiG resource loader that is never attached to a session and is created with every input explicit and the project untrusted; sessions keep `coding.NoResources`.
 - Never call PiG's `Session.ListSessions` or `Session.Events`.
 - `internal/pigruntime`'s exported API is stated in Kopi's terms; nothing exported may exist only because of how PiG works internally.
 
 ## Authority
 
 - Every model-facing tool goes through `internal/policy`: `Gate.Before` in the pre-dispatch hook and `Gate.Admit` inside execution.
+- Skills load only from `$KOPI_HOME/skills`, `~/.agents/skills` and a trusted folder's `.agents/skills`; the `Skill` tool reads only a loaded skill's text and files inside the directory that skill was loaded from, and on every read refuses a file in Kopi's home outside `skills/`.
 - Only human control input changes mode. Sessions start and resume in the configured `mode` (default plan); `--mode` overrides the config file.
 - MCP servers start only from `mcpServers` in `config.json` and from a trusted folder's `.mcp.json`. Every MCP tool call asks unless a rule allows it; a tool is Read only when its server marks it read-only.
 - `$KOPI_HOME/AGENTS.md` always loads. Project instruction files (`AGENTS.md`, else the first name in `instructionFallbacks`, one per directory from the git root down to the start directory) load only from a trusted folder.
@@ -31,14 +33,14 @@
 
 ## State
 
-- Kopi reads and writes only under its home (`$KOPI_HOME`, default `~/.kopi`). Never read or write `~/.pi`, `~/.pig`, `~/.claude` or any other tool's store, in code or in tests.
+- Kopi reads and writes only under its home (`$KOPI_HOME`, default `~/.kopi`). Never read or write `~/.pi`, `~/.pig`, `~/.claude` or any other tool's store, in code or in tests. The one exception is `~/.agents/skills`, the directory agents share for skills, which Kopi only reads.
 - `trust.json` under Kopi's home holds trust decisions; the binary never writes `config.json`.
 - Tests use `t.TempDir()`, synthetic credentials and no network, and synchronise on channels, never sleeps.
 
 ## Built in or configured
 
 - The binary owns how Kopi works: mechanics, tool contracts and their limits, model-facing text about Kopi's own tools, the default look, and protection of Kopi's home and of the gate itself. These are constants, not config keys.
-- The binary assumes nothing that differs from one user's machine to the next: no built-in list of paths outside Kopi's home, other tools' stores, credential locations, providers, models or personal rules. The user states those in `config.json`.
+- The binary assumes nothing that differs from one user's machine to the next: no built-in list of paths outside Kopi's home, other tools' stores, credential locations, providers, models or personal rules. The user states those in `config.json`. The one exception is `~/.agents/skills`, which Kopi only reads.
 - A behaviour users reasonably set differently is a `config.json` key with its default in `config.Defaults()`. A flag that overrides a key is a config layer over the file, never a separate code path.
 - Add a key only for a setting someone needs to change, never to move mechanics out of the binary.
 - When it is unclear which side something is on, check what peer agents build in and follow the majority.
@@ -50,6 +52,7 @@
 - Never rewrite text the model has been sent: a mid-session change replaces or removes one named part through `internal/pigruntime`, or arrives as a message. Mode is enforced by the gate, not by prompt text.
 - Whatever is listed for the model (tools, servers, files) is in a fixed order: sorted, or the order discovery defines; never map order.
 - Instruction files are read once at startup. `internal/instruction` finds them; PiG places them.
+- Skills are read once at startup; `internal/skill` finds the project folders and PiG loads them. The `Skill` tool's description lists them, and a skill a user names arrives as a message with that prompt.
 - Always-loaded text is what every session needs. Guidance for one tool goes in its description; what is needed only sometimes loads on demand, as deferred MCP tools do.
 - Text is injected on an event, once; no per-turn reminders.
 - Kopi sets no size budget on instruction files; text from an MCP server is capped.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -24,6 +25,8 @@ type TrustRequest struct {
 	Servers []string
 	// Instructions are the paths of the folder's instruction files.
 	Instructions []string
+	// Skills are the paths of the folder's skill folders.
+	Skills []string
 }
 
 type TrustChoice int
@@ -145,38 +148,42 @@ func (m *trustModel) hint() string {
 
 func (m *trustModel) rows() []string {
 	none, width := lipgloss.NewStyle(), m.width-2
-	body := hang("", none, oneLine(m.req.Folder), none.Bold(true), width)
+	folder := hang("", none, oneLine(m.req.Folder), none.Bold(true), width)
+	header := func(text string) []string { return append([]string{""}, hang("", none, text, none, width)...) }
+	var instructionHead, skillHead, servers []string
 	if len(m.req.Instructions) > 0 {
-		body = append(body, "")
-		body = append(body, hang("", none, "Kopi would add these instruction files to the model's instructions:", none, width)...)
+		instructionHead = header("Kopi would add these instruction files to the model's instructions:")
 	}
-	var servers []string
+	if len(m.req.Skills) > 0 {
+		skillHead = header("Kopi would load the skills in these folders:")
+	}
 	if len(m.req.Servers) > 0 {
-		servers = append(servers, "")
-		servers = append(servers, hang("", none, "Its .mcp.json declares MCP servers that Kopi would start. They run with your permissions.", none, width)...)
+		servers = header("Its .mcp.json declares MCP servers that Kopi would start. They run with your permissions.")
 	}
-	m.dialog.body = body
-	m.dialog.body = append(m.dialog.body, servers...)
+	m.dialog.body = slices.Concat(folder, instructionHead, skillHead, servers)
 	// The footer row is the one below the dialog.
 	fixed := len(m.dialog.rows(m.width, m.height, 1, m.th)) + 1
-	limit := m.height - fixed
+	// Each list keeps at least its summary row below the ones before it.
+	serverReserve, skillReserve := 0, 0
 	if len(m.req.Servers) > 0 {
-		limit-- // Keep at least the server summary below the instructions.
+		serverReserve = 1
 	}
-	instructions := m.instructionRows(limit, width)
-	body = append(body, instructions...)
-	body = append(body, servers...)
-	body = append(body, m.serverRows(m.height-fixed-len(instructions), width)...)
-	m.dialog.body = body
+	if len(m.req.Skills) > 0 {
+		skillReserve = 1
+	}
+	instructions := m.pathRows(m.req.Instructions, "instruction file", m.height-fixed-skillReserve-serverReserve, width)
+	skills := m.pathRows(m.req.Skills, "skill folder", m.height-fixed-len(instructions)-serverReserve, width)
+	m.dialog.body = slices.Concat(folder, instructionHead, instructions, skillHead, skills, servers,
+		m.serverRows(m.height-fixed-len(instructions)-len(skills), width))
 	return m.dialog.rows(m.width, m.height, 1, m.th)
 }
 
-// instructionRows keeps wrapped paths whole and counts paths left out, even
-// when the fixed rows leave no room for the count.
-func (m *trustModel) instructionRows(limit, width int) []string {
+// pathRows keeps wrapped paths whole and counts paths left out, even when the
+// fixed rows leave no room for the count. noun names one path in the count.
+func (m *trustModel) pathRows(paths []string, noun string, limit, width int) []string {
 	var rows []string
 	var ends []int
-	for _, path := range m.req.Instructions {
+	for _, path := range paths {
 		ends = append(ends, len(rows))
 		rows = append(rows, hang("  ", lipgloss.NewStyle(), oneLine(path), fg(m.th.muted), width)...)
 	}
@@ -185,9 +192,9 @@ func (m *trustModel) instructionRows(limit, width int) []string {
 	}
 	for i := len(ends) - 1; i >= 0; i-- {
 		rows = rows[:ends[i]]
-		more := fmt.Sprintf("… %d more instruction files", len(ends)-i)
+		more := fmt.Sprintf("… %d more %ss", len(ends)-i, noun)
 		if len(ends)-i == 1 {
-			more = "… 1 more instruction file"
+			more = "… 1 more " + noun
 		}
 		marker := hang("  ", fg(m.th.dim), more, fg(m.th.dim), width)
 		if len(rows)+len(marker) <= limit || i == 0 {

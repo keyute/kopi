@@ -518,3 +518,23 @@ func TestMenuRowDragCopiesWithoutChangingMenu(t *testing.T) {
 	assert.Equal(t, "/", m.composer.value())
 	assert.False(t, m.holding())
 }
+
+func TestSkillListsAfterCommandsAndIsOnlyFilledIn(t *testing.T) {
+	for name, key := range map[string]tea.KeyPressMsg{"enter": enter, "tab": tab} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				m, c := newMenuModel(t, 60, 30)
+				c.commands = append(c.commands, app.Command{Name: "skill:a", Summary: "does a", Skill: true})
+				keys(m, "/")
+				press(m, up)
+				assert.Equal(t, "❭ /skill:a    does a", menuText(m)[len(menuText(m))-2])
+
+				keys(m, "skill")
+				settle(m, press(m, key))
+
+				assert.Empty(t, c.submitted)
+				assert.Equal(t, "/skill:a ", m.composer.value())
+			})
+		})
+	}
+}

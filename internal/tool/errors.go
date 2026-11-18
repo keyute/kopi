@@ -18,6 +18,8 @@ var (
 	ErrExitStatus           = errors.New("command failed")
 	ErrStopped              = errors.New("command stopped")
 	ErrUnknownTask          = errors.New("unknown task")
+	ErrUnknownSkill         = errors.New("unknown skill")
+	ErrSkillChanged         = errors.New("skill directory changed since Kopi started")
 	ErrURLNotAllowed        = errors.New("URL is not allowed")
 	ErrHTTPStatus           = errors.New("server returned an error status")
 	ErrUnsupportedContent   = errors.New("unsupported content type")
