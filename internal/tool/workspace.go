@@ -490,9 +490,7 @@ func (w *Workspace) resolve(rel string) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	isProtected := func(info os.FileInfo) bool {
-		return slices.ContainsFunc(stores, func(s os.FileInfo) bool { return os.SameFile(info, s) })
-	}
+	isProtected := func(info os.FileInfo) bool { return isStore(stores, info) }
 	// The workspace may itself lie inside a store. Every ancestor of a later
 	// step is one of these or an earlier step, so steps need no ancestor walk.
 	for p := w.realDir; ; p = filepath.Dir(p) {
@@ -577,6 +575,11 @@ func walk(dir, path string, stop func(os.FileInfo) bool) (string, bool, error) {
 		}
 	}
 	return dest, false, nil
+}
+
+// isStore reports whether info is one of stores.
+func isStore(stores []os.FileInfo, info os.FileInfo) bool {
+	return slices.ContainsFunc(stores, func(s os.FileInfo) bool { return os.SameFile(info, s) })
 }
 
 // statProtected returns the current identities of the protected paths that

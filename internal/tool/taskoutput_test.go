@@ -38,8 +38,8 @@ func TestTaskOutputReportsRunningTask(t *testing.T) {
 	out, err := NewTaskOutput(tasks).Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 
 	require.NoError(t, err)
-	assert.True(t, strings.HasPrefix(out, "Task t1 running for "), out)
-	assert.True(t, strings.HasSuffix(out, "\n(no output)"), out)
+	assert.True(t, strings.HasPrefix(out.Text, "Task t1 running for "), out.Text)
+	assert.True(t, strings.HasSuffix(out.Text, "\n(no output)"), out.Text)
 }
 
 func TestTaskOutputReportsEndedTask(t *testing.T) {
@@ -52,7 +52,7 @@ func TestTaskOutputReportsEndedTask(t *testing.T) {
 	out, err := NewTaskOutput(tasks).Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 
 	require.NoError(t, err)
-	assert.Equal(t, "Task t1 failed (exit code 3).\nhi\n", out)
+	assert.Equal(t, "Task t1 failed (exit code 3).\nhi\n", out.Text)
 }
 
 func TestTaskOutputRefusesUnknownTask(t *testing.T) {
@@ -75,7 +75,7 @@ func TestTaskOutputDoesNotReadWithoutAdmission(t *testing.T) {
 	})
 
 	require.ErrorIs(t, err, refused)
-	assert.Empty(t, out)
+	assert.Empty(t, out.Text)
 }
 
 func TestTaskOutputRejectsInvalidArgs(t *testing.T) {

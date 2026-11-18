@@ -25,7 +25,7 @@ func runBashAsync(ctx context.Context, tool Tool, args string) <-chan bashResult
 	ch := make(chan bashResult, 1)
 	go func() {
 		out, err := tool.Run(ctx, json.RawMessage(args), allowTarget)
-		ch <- bashResult{out, err}
+		ch <- bashResult{out.Text, err}
 	}()
 	return ch
 }
@@ -76,7 +76,7 @@ func TestBashRunInBackgroundStartsTask(t *testing.T) {
 	out, err := tool.Run(t.Context(), args, allowTarget)
 
 	require.NoError(t, err)
-	assert.Equal(t, "Background task t1 started.", out)
+	assert.Equal(t, "Background task t1 started.", out.Text)
 	waitFor(t, started, "the command to start")
 	list := tasks.List()
 	require.Len(t, list, 1)
@@ -96,7 +96,7 @@ func TestBashRunInBackgroundUsesTheShellOfTheAdmittedMode(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, "Background task t1 started.", out)
+	assert.Equal(t, "Background task t1 started.", out.Text)
 	assert.Equal(t, TaskRunning, waitChange(t, changes).Status)
 	assert.Equal(t, TaskCompleted, waitChange(t, changes).Status)
 	assert.Equal(t, []string{"plan"}, listDir(t, planDir))
@@ -114,7 +114,7 @@ func TestBashTimeoutMovesCommandToBackground(t *testing.T) {
 	out, err := tool.Run(t.Context(), args, allowTarget)
 
 	require.NoError(t, err)
-	assert.Equal(t, "Background task t1: this command did not finish within its 1ms timeout and keeps running in the background.", out)
+	assert.Equal(t, "Background task t1: this command did not finish within its 1ms timeout and keeps running in the background.", out.Text)
 	running := waitChange(t, changes)
 	assert.Equal(t, "t1", running.ID)
 	assert.Equal(t, TaskRunning, running.Status)
