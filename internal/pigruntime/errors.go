@@ -13,6 +13,7 @@ var (
 	ErrSendInProgress  = errors.New("session send already in progress")
 	ErrNoTurn          = errors.New("no turn in progress")
 	ErrNoAnswer        = errors.New("model returned no text")
+	ErrNoSearch        = errors.New("model has no web search")
 
 	ErrServerStartTimeout = errors.New("MCP server did not start in time")
 	ErrServerNameClash    = errors.New("MCP server names give the same tool names")

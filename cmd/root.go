@@ -122,8 +122,8 @@ func permissionRules(cwd, home string, tools []tool.Tool, perms config.Permissio
 		{Name: origins["permissions.ask"], Ask: perms.Ask},
 		{Name: origins["permissions.deny"], Deny: perms.Deny},
 	}
-	// ToolSearch is known to rules even when no server tools need it in the session.
-	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil)}))
+	// ToolSearch and WebSearch are known to rules even when the session lacks them.
+	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil), tool.NewWebSearch(nil)}))
 	rules, err := policy.NewRules(cwd, home, specs, append(sources, flagRules...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load permission rules: %w", err)
@@ -396,6 +396,11 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			}
 			return fmt.Errorf("failed to use \"smallModel\" in %s: %w", paths.ConfigFile, err)
 		}
+	}
+	if rt.CanSearch(smallModel) {
+		tools = append(tools, tool.NewWebSearch(func(ctx context.Context, system, query string) (tool.SearchResult, error) {
+			return rt.Search(ctx, smallModel, system, query)
+		}))
 	}
 	// Only the fullscreen interface has a human to answer approvals.
 	cfg := app.Config{

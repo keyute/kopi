@@ -254,6 +254,63 @@ func TestRootRejectsPathRuleForWebFetch(t *testing.T) {
 	assert.NoDirExists(t, e.agentDir)
 }
 
+func TestRootRejectsPathRuleForWebSearch(t *testing.T) {
+	e := newTestEnv(t)
+
+	_, _, err := execute(t, "", "--model", mockModel, "--allowed-tools", "WebSearch(x)", "-p", "hi")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `tool "WebSearch" takes no path`)
+	assert.NoDirExists(t, e.agentDir)
+}
+
+func TestRootAcceptsWebSearchRuleWithoutHostedSearch(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+
+	stdout, _, err := execute(t, "", "--model", mockModel, "--allowed-tools", "WebSearch", "-p", "hi")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok\n", stdout)
+	assert.NotContains(t, toolNames(server.next(t)), "WebSearch")
+}
+
+func TestRootOffersWebSearchForSearchingSmallModel(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	models := map[string]any{"providers": map[string]any{
+		"kopi-mock": map[string]any{
+			"baseUrl": server.URL + "/v1", "api": "openai-completions", "apiKey": syntheticKey,
+			"models": []any{map[string]any{"id": "mock-1"}},
+		},
+		"kopi-search": map[string]any{
+			"baseUrl": server.URL + "/v1", "api": "openai-responses", "apiKey": syntheticKey,
+			"models": []any{map[string]any{"id": "search-1"}},
+		},
+	}}
+	b, err := json.Marshal(models)
+	require.NoError(t, err)
+	e.writeFile(t, filepath.Join(e.agentDir, "models.json"), string(b))
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"smallModel":"kopi-search/search-1"}`)
+
+	_, _, err = execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	tools := toolNames(server.next(t))
+	require.GreaterOrEqual(t, len(tools), 2)
+	assert.Equal(t, []string{"WebFetch", "WebSearch"}, tools[len(tools)-2:])
+}
+
+// toolNames lists the function tools of a chat-completions request.
+func toolNames(req mockRequest) []string {
+	var names []string
+	for _, tl := range req.body["tools"].([]any) {
+		names = append(names, tl.(map[string]any)["function"].(map[string]any)["name"].(string))
+	}
+	return names
+}
+
 func TestRootUnknownSmallModelFailsAtStart(t *testing.T) {
 	e := newTestEnv(t)
 	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
