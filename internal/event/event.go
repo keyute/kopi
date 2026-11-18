@@ -80,6 +80,16 @@ type TurnEnd struct {
 	Unsent []Input
 }
 
+// TaskEnded is a background task's end, at the point the model reads about it.
+type TaskEnded struct {
+	ID, Command, Status string
+	Elapsed             time.Duration
+}
+
+// TasksChanged reports that the set or state of background tasks changed;
+// frontends re-read their status.
+type TasksChanged struct{}
+
 type ModeChanged struct{ Mode policy.Mode }
 
 type SessionChanged struct {
@@ -105,6 +115,8 @@ func (ApprovalEnded) isEvent()     {}
 func (Notice) isEvent()            {}
 func (Activity) isEvent()          {}
 func (TurnEnd) isEvent()           {}
+func (TaskEnded) isEvent()         {}
+func (TasksChanged) isEvent()      {}
 func (ModeChanged) isEvent()       {}
 func (SessionChanged) isEvent()    {}
 func (Error) isEvent()             {}

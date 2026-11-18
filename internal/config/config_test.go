@@ -221,6 +221,21 @@ func TestResolveAcceptsNoticeOnEitherSide(t *testing.T) {
 	assert.Equal(t, StatusLine{Left: []string{"notice", "model"}, Right: []string{"mode", "notice"}}, r.Config.StatusLine)
 }
 
+func TestBackgroundActionAndTasksSegment(t *testing.T) {
+	assert.Contains(t, KeyActions, "background")
+	assert.Equal(t, []string{"ctrl+b"}, DefaultKeys()["background"])
+	assert.Equal(t, []string{"notice", "sandbox", "tasks", "mode"}, DefaultStatusLine().Right)
+
+	global := globalLayer(t, `{"keys": {"background": ["ctrl+g"]}, "statusline": {"left": ["tasks"]}}`)
+	r, err := Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ctrl+g"}, r.Config.Keys["background"])
+	assert.Equal(t, []string{"tasks"}, r.Config.StatusLine.Left)
+
+	_, err = Resolve(Defaults(), globalLayer(t, `{"keys": {"background": []}}`))
+	require.ErrorIs(t, err, ErrInvalidValue)
+}
+
 func TestResolveRejectsUnknownActionNamingLayer(t *testing.T) {
 	global := globalLayer(t, `{"keys": {"sumbit": ["enter"]}}`)
 	_, err := Resolve(Defaults(), global)
@@ -476,7 +491,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "keys.submit", Value: `["enter"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "keys.newline", Value: `["shift+enter","alt+enter","ctrl+j"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "statusline.left", Value: `["model","context","branch"]`, Origin: "default"})
-	assert.Contains(t, entries, Entry{Key: "statusline.right", Value: `["notice","sandbox","mode"]`, Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "statusline.right", Value: `["notice","sandbox","tasks","mode"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "permissions.allow", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "permissions.ask", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "permissions.deny", Value: "[]", Origin: "default"})

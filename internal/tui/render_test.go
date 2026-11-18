@@ -5,9 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/tool"
 	"github.com/keyute/kopi/internal/transcript"
 )
@@ -71,4 +73,30 @@ func TestRenderStripsUntrustedTerminalControls(t *testing.T) {
 func TestWrapPreservesPlainText(t *testing.T) {
 	assert.Equal(t, []string{"café 世界", "    tab", "ordinary", "words wrap"}, wrap("café 世界\n\ttab\nordinary words wrap", 10))
 	assert.Equal(t, "a\nb", strings.Join(wrap("a\nb", 10), "\n"))
+}
+
+func TestTaskRow(t *testing.T) {
+	th := mocha()
+	for _, tc := range []struct {
+		status, want string
+		bullet, text lipgloss.Style
+	}{
+		{"completed", "• task t1 finished · make build · 12s", fg(th.success), lipgloss.NewStyle()},
+		{"failed", "• task t1 failed · make build · 12s", fg(th.error), fg(th.error)},
+		{"stopped", "• task t1 stopped · make build · 12s", fg(th.error), fg(th.error)},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			m, _ := newTestModel(t, 60, 20)
+			send(m, event.TaskEnded{ID: "t1", Command: "make build\nmake test", Status: tc.status, Elapsed: 12 * time.Second})
+			assert.Equal(t, []string{"", tc.want}, body(m))
+			got := m.lines[len(m.lines)-1].text
+			assert.Equal(t, tc.bullet.Render("• ")+tc.text.Render(strings.TrimPrefix(tc.want, "• ")), got)
+		})
+	}
+}
+
+func TestTaskRowCutsALongCommand(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	send(m, event.TaskEnded{ID: "t1", Command: strings.Repeat("x", 100), Status: "completed", Elapsed: time.Minute})
+	assert.Equal(t, []string{"", "• task t1 finished · " + strings.Repeat("x", 10) + "… · 1m 0s"}, body(m))
 }

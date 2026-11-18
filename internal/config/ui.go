@@ -16,6 +16,7 @@ var KeyActions = []string{
 	"quit",
 	"send-now",
 	"toggle-mode",
+	"background",
 	"expand-all",
 	"page-up",
 	"page-down",
@@ -30,7 +31,7 @@ var KeyActions = []string{
 }
 
 // StatusSegments lists every segment the status line can show.
-var StatusSegments = []string{"model", "context", "branch", "mode", "notice", "sandbox"}
+var StatusSegments = []string{"model", "context", "branch", "mode", "notice", "sandbox", "tasks"}
 
 type StatusLine struct {
 	Left  []string `koanf:"left"`
@@ -46,6 +47,7 @@ func DefaultKeys() map[string][]string {
 		"quit":         {"ctrl+d"},
 		"send-now":     {"ctrl+enter"},
 		"toggle-mode":  {"shift+tab"},
+		"background":   {"ctrl+b"},
 		"expand-all":   {"ctrl+o"},
 		"page-up":      {"pgup"},
 		"page-down":    {"pgdown"},
@@ -61,7 +63,7 @@ func DefaultKeys() map[string][]string {
 }
 
 func DefaultStatusLine() StatusLine {
-	return StatusLine{Left: []string{"model", "context", "branch"}, Right: []string{"notice", "sandbox", "mode"}}
+	return StatusLine{Left: []string{"model", "context", "branch"}, Right: []string{"notice", "sandbox", "tasks", "mode"}}
 }
 
 // uiDefaults is the default layer's share of the UI blocks. Nested values must

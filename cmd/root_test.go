@@ -469,7 +469,7 @@ func TestRootStreamsTurnFromMockServer(t *testing.T) {
 	for _, tl := range req.body["tools"].([]any) {
 		tools = append(tools, tl.(map[string]any)["function"].(map[string]any)["name"].(string))
 	}
-	assert.Equal(t, []string{"Read", "Write", "Edit", "Bash", "WebFetch"}, tools)
+	assert.Equal(t, []string{"Read", "Write", "Edit", "Bash", "TaskOutput", "TaskStop", "WebFetch"}, tools)
 	messages := req.body["messages"].([]any)
 	first := messages[0].(map[string]any)
 	assert.Contains(t, []string{"system", "developer"}, first["role"])

@@ -72,7 +72,7 @@ func TestHookBlocksToolUnknownToGate(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
 
-	_, err = sess.Send(t.Context(), Prompt{Text: "probe"}, nil)
+	_, err = sess.Send(t.Context(), Prompt{Text: "probe"}, nil, nil)
 	require.NoError(t, err)
 	assert.Contains(t, lastToolResult(t, <-requests), policy.ErrUnknownTool.Error())
 	assert.False(t, ran.Load())
@@ -93,7 +93,7 @@ func TestExecToolRunsOnlyInExecuteMode(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
 
-	_, err = sess.Send(t.Context(), Prompt{Text: "run it"}, nil)
+	_, err = sess.Send(t.Context(), Prompt{Text: "run it"}, nil, nil)
 	require.NoError(t, err)
 	denied := lastToolResult(t, <-requests)
 	assert.Contains(t, denied, policy.ErrDenied.Error())
@@ -101,7 +101,7 @@ func TestExecToolRunsOnlyInExecuteMode(t *testing.T) {
 	assert.Zero(t, ran.Load())
 
 	authority.EnterExecute()
-	_, err = sess.Send(t.Context(), Prompt{Text: "run it now"}, nil)
+	_, err = sess.Send(t.Context(), Prompt{Text: "run it now"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, execOutput, lastToolResult(t, <-requests))
 	assert.Equal(t, int32(1), ran.Load())
@@ -171,7 +171,7 @@ func TestHookPassesArgsToGate(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
 
-	_, err = sess.Send(t.Context(), Prompt{Text: "run it"}, nil)
+	_, err = sess.Send(t.Context(), Prompt{Text: "run it"}, nil, nil)
 	require.NoError(t, err)
 	req := <-asked
 	assert.Equal(t, "call-1", req.CallID)
@@ -229,7 +229,7 @@ func TestRefusalTextReachesModel(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
 
-			_, err = sess.Send(t.Context(), Prompt{Text: "run it"}, nil)
+			_, err = sess.Send(t.Context(), Prompt{Text: "run it"}, nil, nil)
 			require.NoError(t, err)
 			result := lastToolResult(t, <-requests)
 			for _, reason := range tc.reasons {
@@ -265,7 +265,7 @@ func TestCancellingSendUnblocksPendingApproval(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := sess.Send(turnCtx, Prompt{Text: "run it"}, nil)
+		_, err := sess.Send(turnCtx, Prompt{Text: "run it"}, nil, nil)
 		done <- err
 	}()
 	<-waiting
@@ -341,7 +341,7 @@ func TestInterruptTurnRejectsBeforeCancellationForwarding(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		res, err := sess.Send(ctx, Prompt{Text: "run"}, nil)
+		res, err := sess.Send(ctx, Prompt{Text: "run"}, nil, nil)
 		done <- result{res, err}
 	}()
 	hook := <-hooks
@@ -370,7 +370,7 @@ func TestInterruptTurnRejectsBeforeCancellationForwarding(t *testing.T) {
 		}
 	}))
 	go func() {
-		res, err := sess.Send(t.Context(), Prompt{Text: "next"}, nil)
+		res, err := sess.Send(t.Context(), Prompt{Text: "next"}, nil, nil)
 		done <- result{res, err}
 	}()
 	<-started
@@ -514,7 +514,7 @@ func TestSessionMCPAdmission(t *testing.T) {
 			sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, Tools: tools, Authority: policy.NewAuthority(), Approve: tc.approve, Rules: rules})
 			require.NoError(t, err)
 			t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
-			_, err = sess.Send(t.Context(), Prompt{Text: "read"}, nil)
+			_, err = sess.Send(t.Context(), Prompt{Text: "read"}, nil, nil)
 			require.NoError(t, err)
 			msgs := <-requests
 			texts := toolResultTexts(msgs)

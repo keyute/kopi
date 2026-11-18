@@ -28,6 +28,7 @@ Commands in the fullscreen interface:
 | `/execute` | Switch to execute mode |
 | `/new` | Start a new session |
 | `/resume <id>` | Resume a session |
+| `/tasks` | List background tasks, show one's output and stop it |
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
 
@@ -52,6 +53,7 @@ Keys in the fullscreen interface (defaults, see Configuration):
 - After an interrupt, queued messages return to the input; `/new`, `/resume` and exiting discard them.
 - Ctrl+D exits when the input is empty.
 - Shift+Tab switches between plan and execute.
+- Ctrl+B moves the running foreground `Bash` command to the background, where it keeps running as a task; while one runs, the working row shows `ctrl+b to background`. With none running, Ctrl+B keeps its meaning in the input.
 - Ctrl+V pastes text or an image from the clipboard.
 - Mouse wheel or PgUp/PgDn scrolls the transcript.
 - Ctrl+O expands every group and call output until pressed again.
@@ -95,7 +97,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 `instructionFallbacks` lists bare file names a directory's project instruction file is read from when it has no `AGENTS.md`, the first present winning (default `["CLAUDE.md"]`); `[]` turns the fallback off. Project instruction files load only in a trusted folder (see MCP servers).
 
-`keys` maps each fullscreen action to a list of key strings, and `statusline` lists the status line's `left` and `right` segments from `model`, `context`, `branch`, `mode`, `notice`, which shows transient hints such as `Copied`, and `sandbox`, which shows `sandboxed` or `unsandboxed` when Bash is available (default left `model, context, branch`, right `notice, sandbox, mode`):
+`keys` maps each fullscreen action to a list of key strings, and `statusline` lists the status line's `left` and `right` segments from `model`, `context`, `branch`, `mode`, `notice`, which shows transient hints such as `Copied`, and `sandbox`, which shows `sandboxed` or `unsandboxed` when Bash is available, and `tasks`, which shows `1 shell` or `N shells` while background tasks run (default left `model, context, branch`, right `notice, sandbox, tasks, mode`):
 
 ```json
 {
@@ -114,6 +116,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `cancel` | `ctrl+c` |
 | `quit` | `ctrl+d` |
 | `toggle-mode` | `shift+tab` |
+| `background` | `ctrl+b` |
 | `paste` | `ctrl+v` |
 | `history-prev`, `history-next` | `up`, `down` |
 | `queue-edit` | `up` |
@@ -158,13 +161,13 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 ## Modes and tools
 
-- Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab. Plan mode allows `Read`, `ToolSearch`, `WebFetch`, read-only MCP tools, and `Bash` only in the sandbox, where it cannot write the start directory; `Write`, `Edit` and other MCP tools need execute mode.
+- Sessions are in plan or execute mode; only the user switches, with `/plan`, `/execute` or Shift+Tab. Plan mode allows `Read`, `ToolSearch`, `TaskOutput`, `TaskStop`, `WebFetch`, read-only MCP tools, and `Bash` only in the sandbox, where it cannot write the start directory; `Write`, `Edit` and other MCP tools need execute mode.
 - Sessions start and resume in the configured `mode` (default plan), including ones opened with `/new` and `/resume`; `--mode` overrides the config file. A mode switched to while the first session is opening is the mode it starts in.
 - `Read` reads text files inside the start directory: up to 2000 lines, 2000 characters per line and 100 KiB per call; binary files and directories are refused.
 - `Write` creates a file or replaces its whole content; `Edit` replaces a string that must match exactly once unless `replace_all` is set, in a text file of up to 10 MiB. Both work inside the start directory, replace the file atomically and keep its mode.
 - `Read`, `Write` and `Edit` refuse Kopi's home, including paths there that do not exist yet.
 - `Bash` runs a command with `bash -c` (`/bin/sh` when `bash` is not on `PATH`) in the start directory, with Kopi's environment. Every call is a fresh shell with no input; `cd` and variables do not carry over.
-- `Bash`'s `timeout` is in milliseconds, default 120000, at most 600000. On timeout or interrupt the command's whole process group is killed (on Windows, only the shell).
+- `Bash`'s `timeout` is in milliseconds, default 120000, at most 600000. A command still running at its timeout keeps running as a background task, as does one started with `run_in_background` or moved with the `background` key; the result names the task. On interrupt a foreground command's whole process group is killed (on Windows, only the shell).
 - `Bash` returns stdout and stderr combined, keeping the first and last 15,000 bytes. A non-zero exit is an error reporting the exit code.
 - On macOS `Bash` runs inside an OS sandbox (`sandbox-exec`), configured with `sandbox` (see Configuration).
 - In the sandbox a command can write only in the start directory, `/tmp`, the temp directory and the `sandbox.allowWrite` paths, and never the files of the start directory's `.git` that choose git's config and hooks (`hooks`, `config`, `config.worktree`, `commondir`, `worktrees`, `modules`); when the start directory has no `.git`, a command cannot write `HEAD` in it. In plan mode nothing in the start directory is writable, including `sandbox.allowWrite` paths inside it.
@@ -172,6 +175,15 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - In the sandbox a command can read everything except Kopi's home and the `sandbox.denyRead` paths, which it also cannot write, rename or remove.
 - In the sandbox a command has no network unless `sandbox.network` is true, which opens IP networking only; Unix sockets stay blocked.
 - `WebFetch` fetches one http or https page on a public host and has `smallModel` answer the call's prompt from it; the main model gets the answer and the page's final URL, not the page. HTML is converted to markdown from its main content; text, JSON and XML pass through; other content types are refused. Pages are up to 5 MiB, fetched within 30 seconds and without JavaScript, and the small model reads their first 100,000 characters. Redirects on the same host (a leading `www.` and http to https count as the same) are followed, at most 5; any other redirect is returned for the model to fetch in a new call. `localhost`, names without a dot, `.localhost`, `.local` and `.internal` names, and non-public addresses are refused, including ones a name resolves to. Every call asks unless a rule allows it, in both modes.
+
+Background tasks:
+
+- Tasks are numbered `t1`, `t2`, … per run. They have no time limit and keep the sandbox profile of the mode they started in.
+- `TaskOutput` returns a task's status and its output so far, kept like `Bash` output. `TaskStop` kills a task's process group (on Windows, only the shell), whichever mode it started in.
+- When a task completes or fails, the model is told its status and its last 20 non-empty output lines at the next boundary of the running turn, or in a new turn when none runs. After an interrupt such notices wait for the next prompt; they never return to the input.
+- A task stopped from `/tasks` is reported to the model along with the next prompt or the next task notice, without starting a turn; one the model stops is not reported again.
+- A task that completes, fails or is stopped from `/tasks` adds a `• task t1 finished · <command> · 12s` row to the transcript (`failed` or `stopped` in place of `finished`), restored on resume.
+- Tasks are stopped on exit, when `/new` or `/resume` opens another session, and at the end of `kopi -p`. `kopi -p` never starts a turn for a task's end, so a task still running at the final reply is killed.
 
 Permission rules in `config.json` allow, ask about or deny calls:
 
@@ -185,15 +197,14 @@ Permission rules in `config.json` allow, ask about or deny calls:
 }
 ```
 
-- A rule is `Name` or `Name(path)`. The name is a tool name (`Read`, `Write`, `Edit`, `Bash`, `ToolSearch`, `WebFetch`), an MCP tool name (see MCP servers) or `*` for every tool; an unknown name or a malformed rule is rejected at start.
+- A rule is `Name` or `Name(path)`. The name is a tool name (`Read`, `Write`, `Edit`, `Bash`, `TaskOutput`, `TaskStop`, `ToolSearch`, `WebFetch`), an MCP tool name (see MCP servers) or `*` for every tool; an unknown name or a malformed rule is rejected at start.
 - `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory. `*` and `**` glob. A name with no slash (`.env`) matches at any depth, and a directory covers everything in it. Paths match case-insensitively on macOS and Windows.
 - `Name(!path)` exempts the calls it matches from the other rules in its own list, from the same config layer or flag; it never reaches rules from anywhere else.
 - A bare `Name` in `deny` removes the tool from the model.
-- `ToolSearch` takes no path: only a bare `ToolSearch` or `*` rule applies to it; `ToolSearch(path)` is rejected at start.
-- `WebFetch` takes no path: only a bare `WebFetch` or `*` rule applies to it; `WebFetch(path)` is rejected at start.
+- `ToolSearch`, `TaskOutput`, `TaskStop` and `WebFetch` take no path: only a bare rule naming the tool or `*` applies to them; `ToolSearch(path)` and the like are rejected at start.
 - `Bash` takes no path: only a bare `Bash` or `*` rule applies to it, `Bash(path)` is rejected at start, and path rules such as `*(~/.ssh)` never apply to `Bash`. `"ask": ["Bash"]` makes every command ask.
 - Plan mode refuses `Write`, `Edit`, unsandboxed `Bash` and MCP tools not marked read-only before any rule; otherwise rules apply to `Bash` the same in both modes.
-- Deny beats ask, and ask beats allow. With no rule matching, `Read`, `ToolSearch` and sandboxed `Bash` are allowed and any other call asks, including every `WebFetch` call and every `Bash` command without the sandbox.
+- Deny beats ask, and ask beats allow. With no rule matching, `Read`, `ToolSearch`, `TaskOutput`, `TaskStop` and sandboxed `Bash` are allowed and any other call asks, including every `WebFetch` call and every `Bash` command without the sandbox.
 - Built in: `Edit` and `Write` under any `.git` directory, and of any file named `.mcp.json` or the file the start directory's `.mcp.json` resolves to when it is a symlink, always ask unless a deny rule refuses them.
 - `--allowed-tools` and `--disallowed-tools` add allow and deny rules to the config's; each is repeatable and takes comma-separated rules (commas inside `()` or `{}` do not split).
 - A rule's path counts as a match on either the path as written or its resolved target when it denies, asks or exempts from an allow, and only on both when it allows or exempts from a deny or ask.
@@ -246,10 +257,11 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - The files a `.mcp.json` server runs, such as `./server.sh` or `node_modules/.bin/…`, stay writable.
 - A `.mcp.json` changed outside Kopi, such as by `git pull` or an editor, starts its servers without asking again.
 - In execute mode, sandboxed commands can write anything else in the start directory, so starting Kopi in a directory holding files other programs run, such as the home directory, lets commands change them.
-- Plan mode keeps only the start directory read-only: commands can still write `/tmp`, the temp directory and `sandbox.allowWrite` paths outside it, and act over the network when `sandbox.network` is true. In plan mode `kopi -p` runs sandboxed `Bash` without asking. Commands started in execute mode, including background processes they leave running, keep their execute-mode access after a switch to plan mode.
+- Plan mode keeps only the start directory read-only: commands can still write `/tmp`, the temp directory and `sandbox.allowWrite` paths outside it, and act over the network when `sandbox.network` is true. In plan mode `kopi -p` runs sandboxed `Bash` without asking. Commands started in execute mode, including background tasks and processes they leave running, keep their execute-mode access after a switch to plan mode.
 - `ps`, `pgrep` and `top` do not work in the sandbox.
 - Unix sockets (ssh-agent, Docker) are unreachable from the sandbox, even with `sandbox.network` true.
-- A background process a command leaves running (`cmd &`) can outlive the call. A running command keeps running if Kopi is killed.
+- A background process a command leaves running (`cmd &`) can outlive the call, and its background task. A running command or background task keeps running if Kopi is killed.
+- Background tasks and their output live only in memory and do not survive a restart.
 - `sandbox-exec` is deprecated by Apple.
 - Kopi builds for macOS, Linux and Windows only.
 - Symlinks in rule paths, sandbox paths, the start directory and the home directory are resolved once, at start.
@@ -276,11 +288,11 @@ task fmt
 
 Tests are mock-backed (PiG's faux provider and a local HTTP mock server); none use a live provider.
 
-Manual live check: `kopi login openai-codex`, run with a model, ask it to read a file, then try `/execute`, `/plan`, Ctrl+C and `--continue`; then `kopi -p` with an argument and with piped input. For sign-in, with a scratch `KOPI_HOME`: `kopi login` lists `openai` and `openai-codex`; `kopi login openai-codex` opens the browser with `originator=kopi` in the URL; `kopi login openai` has `agent_name_hint=Kopi` and `ext_agent_host_id=urn:uuid:<installation_id>` in the URL and OpenAI's consent screen names Kopi; `kopi logout openai-codex`, then a run suggests `kopi login`.
+Manual live check: `kopi login openai-codex`, run with a model, ask it to read a file, then try `/execute`, `/plan`, Ctrl+C and `--continue`; then `kopi -p` with an argument and with piped input. For sign-in, with a scratch `KOPI_HOME`: `kopi login` lists `openai` and `openai-codex`; `kopi login openai-codex` opens the browser with `originator=kopi` in the URL; `kopi login openai` has `agent_name_hint=Kopi` and `ext_agent_host_id=urn:uuid:<installation_id>` in the URL and OpenAI's consent screen names Kopi; `kopi logout openai-codex`, then a run suggests `kopi login`. For background tasks: ask for `sleep 30; echo done` with Bash, press Ctrl+B while it runs, and see `1 shell` in the status line, the `• task t1 finished` row when it ends and the model's reply without a prompt; `/tasks` lists and stops a task; after quitting, `pgrep sleep` finds nothing.
 
 ## Not implemented
 
-Project-level config, a Linux sandbox, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approval classification, delegation and workflows, background jobs, a Kopi provider identity, domain rules for `WebFetch`, PDF and image pages, and release packaging and self-update.
+Project-level config, a Linux sandbox, running commands from the input, network allowlists by domain, allowing chosen Unix sockets, command-pattern rules for `Bash`, a per-command way out of the sandbox, streaming command output, saved approvals, a `/permissions` command, approval classification, delegation and workflows, a Kopi provider identity, domain rules for `WebFetch`, PDF and image pages, and release packaging and self-update.
 
 MCP: OAuth for remote servers, the SSE transport, resources and prompts, `tools/list_changed`, image results, sandboxing servers or giving them a restricted environment, and a command or flag to set or change a folder's trust.
 

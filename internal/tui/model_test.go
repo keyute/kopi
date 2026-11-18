@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -47,6 +48,14 @@ type fakeController struct {
 	args       map[string][]app.Candidate
 	files      []app.Candidate
 	filesErr   error
+	// foreground is what Background returns; backgrounds counts the calls.
+	foreground  bool
+	backgrounds int
+	// tasks is what Tasks returns; TaskOutput adds the output in outputs.
+	tasks   []tool.TaskInfo
+	outputs map[string]string
+	// stops logs StopTask, which marks the task stopped.
+	stops []string
 }
 
 type answer struct {
@@ -106,6 +115,33 @@ func (f *fakeController) Arguments(name string) ([]app.Candidate, error) { retur
 
 func (f *fakeController) Files() ([]app.Candidate, error) { return f.files, f.filesErr }
 
+func (f *fakeController) Background() bool {
+	f.backgrounds++
+	return f.foreground
+}
+
+func (f *fakeController) Tasks() []tool.TaskInfo { return slices.Clone(f.tasks) }
+
+func (f *fakeController) TaskOutput(id string) (tool.TaskInfo, error) {
+	for _, info := range f.tasks {
+		if info.ID == id {
+			info.Output = f.outputs[id]
+			return info, nil
+		}
+	}
+	return tool.TaskInfo{}, tool.ErrUnknownTask
+}
+
+func (f *fakeController) StopTask(id string) error {
+	f.stops = append(f.stops, id)
+	for i := range f.tasks {
+		if f.tasks[i].ID == id && f.tasks[i].Status == tool.TaskRunning {
+			f.tasks[i].Status, f.tasks[i].Ended = tool.TaskStopped, time.Now()
+		}
+	}
+	return nil
+}
+
 // testOptions are the options config's defaults resolve to.
 func testOptions() Options {
 	s := config.DefaultStatusLine()
@@ -151,6 +187,7 @@ var (
 	enter  = tea.KeyPressMsg{Code: tea.KeyEnter}
 	ctrlC  = tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	ctrlD  = tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl}
+	ctrlB  = tea.KeyPressMsg{Code: 'b', Mod: tea.ModCtrl}
 	escape = tea.KeyPressMsg{Code: tea.KeyEscape}
 	left   = tea.KeyPressMsg{Code: tea.KeyLeft}
 )
@@ -338,6 +375,37 @@ func TestStatusRefreshesOnEventsThatChangeIt(t *testing.T) {
 	c.status.Mode = policy.Execute
 	send(m, event.ModeChanged{Mode: policy.Execute})
 	assert.Equal(t, "  model-1 · main"+strings.Repeat(" ", 15)+"execute", last())
+
+	c.status.Tasks = 2
+	send(m, event.TasksChanged{})
+	assert.Equal(t, "  model-1 · main"+strings.Repeat(" ", 4)+"2 shells · execute", last())
+}
+
+func TestBackgroundKeyIsConsumedOnlyWhenACommandMoves(t *testing.T) {
+	m, c := newTestModel(t, 40, 20)
+	typeText(m, "ab")
+
+	c.foreground = true
+	assert.Nil(t, press(m, ctrlB))
+	assert.Equal(t, 1, c.backgrounds)
+	assert.Equal(t, 2, m.composer.ta.Column(), "a moved command takes the key")
+
+	c.foreground = false
+	press(m, ctrlB)
+	assert.Equal(t, 2, c.backgrounds)
+	assert.Equal(t, 1, m.composer.ta.Column(), "otherwise the composer moves the cursor left")
+	assert.Equal(t, "ab", m.composer.value())
+}
+
+func TestBackgroundKeyWaitsForAnApproval(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	c.foreground = true
+	send(m, editApproval())
+
+	press(m, ctrlB)
+
+	assert.Zero(t, c.backgrounds)
+	assert.Empty(t, c.answers)
 }
 
 func TestLightBackgroundSwitchesTheme(t *testing.T) {
@@ -1278,6 +1346,13 @@ func TestRowsFillTheScreenStatusLast(t *testing.T) {
 			press(m, digit('3'))
 			pasteText(m, "one\ntwo\nthree")
 		}},
+		{"task output on a short screen", 40, 10, func(m *model, c *fakeController) {
+			c.tasks = []tool.TaskInfo{{ID: "t1", Command: "yes", Status: tool.TaskRunning}}
+			c.outputs = map[string]string{"t1": strings.Repeat("y\n", 50)}
+			c.submitErr = app.ErrShowTasks
+			submitText(m, "/tasks")
+			press(m, enter)
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, c := newMenuModel(t, tc.width, tc.height)
@@ -1288,7 +1363,7 @@ func TestRowsFillTheScreenStatusLast(t *testing.T) {
 			assert.Equal(t, m.height, m.transcriptHeight()+len(m.below))
 			status := strings.TrimRight(ansi.Strip(statusLine(m.status, m.layout, m.flashText, m.width, m.th)), " ")
 			assert.Equal(t, status, s[m.height-1])
-			if m.approval == nil {
+			if m.approval == nil && m.tasks == nil {
 				assert.True(t, strings.HasPrefix(s[m.composerTop()], "❯"), "row %d: %q", m.composerTop(), s[m.composerTop()])
 			}
 		})

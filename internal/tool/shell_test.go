@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,36 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var ErrTimedOut = errors.New("command timed out")
+
+// Run returns the command's combined output. The error of a command that
+// failed or timed out carries the output, then the reason on a final line.
+func (s *Shell) Run(ctx context.Context, command string, timeout time.Duration) (string, error) {
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if runCtx.Err() != nil {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("%s\n%w after %v", noOutputNotice, ErrTimedOut, timeout)
+	}
+	p, err := s.start(ctx, command)
+	if err != nil {
+		return "", err
+	}
+	select {
+	case <-p.done:
+	case <-runCtx.Done():
+		reason := ctx.Err()
+		if reason == nil {
+			reason = fmt.Errorf("%w after %v", ErrTimedOut, timeout)
+		}
+		p.stop(reason)
+		<-p.done
+	}
+	return p.result()
+}
 
 const testTimeout = time.Minute
 
@@ -146,4 +177,24 @@ func TestShellReportsNoOutput(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, noOutputNotice, out)
+}
+
+func TestOutputBufferReadsWhileWritten(t *testing.T) {
+	var b outputBuffer
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 1000 {
+			_, _ = b.Write([]byte("x"))
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			assert.Equal(t, strings.Repeat("x", 1000), b.String())
+			return
+		default:
+			_ = b.String()
+		}
+	}
 }

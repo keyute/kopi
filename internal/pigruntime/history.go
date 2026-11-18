@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/MichaelKinsy/PiG/agent"
 	"github.com/MichaelKinsy/PiG/ai"
@@ -29,9 +30,9 @@ func historyEntries(entries []coding.SessionEntry) []event.Event {
 	return out
 }
 
-// branchMessages decodes the messages of entries that no context edit
-// omitted. On a failed message decode it returns those before it; on a failed
-// context edit decode, none.
+// branchMessages decodes the messages and notices of entries that no context
+// edit omitted. On a failed message decode it returns those before it; on a
+// failed context edit decode, none.
 func branchMessages(entries []coding.SessionEntry) ([]agent.AgentMessage, error) {
 	omitted := make(map[string]bool)
 	for _, entry := range entries {
@@ -55,7 +56,30 @@ func branchMessages(entries []coding.SessionEntry) ([]agent.AgentMessage, error)
 
 	var msgs []agent.AgentMessage
 	for _, entry := range entries {
-		if entry.Base().Type != "message" || omitted[entry.Base().ID] {
+		if omitted[entry.Base().ID] {
+			continue
+		}
+		if entry.Base().Type == "custom_message" {
+			var record struct {
+				CustomType string `json:"customType"`
+			}
+			if err := json.Unmarshal(entry.Raw(), &record); err != nil {
+				return msgs, fmt.Errorf("failed to decode history custom message %s: %w", entry.Base().ID, err)
+			}
+			if record.CustomType != noticeType {
+				continue
+			}
+			var notice struct {
+				Details noticeDetails `json:"details"`
+			}
+			if err := json.Unmarshal(entry.Raw(), &notice); err != nil {
+				return msgs, fmt.Errorf("failed to decode history notice %s: %w", entry.Base().ID, err)
+			}
+			// Only history reads the message, so it carries details decoded.
+			msgs = append(msgs, agent.AgentMessage{Custom: map[string]any{"role": agent.RoleCustom, "customType": noticeType, "details": notice.Details}})
+			continue
+		}
+		if entry.Base().Type != "message" {
 			continue
 		}
 		var record struct {
@@ -69,8 +93,8 @@ func branchMessages(entries []coding.SessionEntry) ([]agent.AgentMessage, error)
 	return msgs, nil
 }
 
-// history skips system and custom messages, which include compaction and
-// branch summaries.
+// history skips system messages and custom messages other than notices; the
+// skipped include compaction and branch summaries.
 func history(msgs []agent.AgentMessage) []event.Event {
 	var out []event.Event
 	// afterText reports that the last event emitted was a TextDelta, so the
@@ -114,6 +138,10 @@ func history(msgs []agent.AgentMessage) []event.Event {
 		case m.ToolResult != nil:
 			r := m.ToolResult
 			out = append(out, event.ToolEnd{CallID: r.ToolCallID, Name: r.ToolName, Output: toolResultContentText(r.Content), IsError: r.IsError})
+			afterText = false
+		case isNotice(m):
+			d, _ := m.Custom["details"].(noticeDetails)
+			out = append(out, event.TaskEnded{ID: d.ID, Command: d.Command, Status: d.Status, Elapsed: time.Duration(d.ElapsedMs) * time.Millisecond})
 			afterText = false
 		}
 	}
