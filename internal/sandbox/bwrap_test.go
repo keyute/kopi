@@ -284,6 +284,101 @@ func TestBwrapArgsSpecialMountsBeforeMasks(t *testing.T) {
 	assert.Equal(t, concat(bwrapFlags(false), ro("/"), bwrapSpecials, emptyDir("/dev"), bwrapTail), args)
 }
 
+func TestDenyWriteBindSpecialOverlaps(t *testing.T) {
+	for _, path := range []string{"/", "/proc", "/proc/1", "/dev", "/dev/null"} {
+		t.Run(path, func(t *testing.T) {
+			err := checkDenyWriteBind(path)
+			require.ErrorContains(t, err, "unsupported sandbox policy")
+			assert.Contains(t, err.Error(), path)
+		})
+	}
+	for _, path := range []string{"/process", "/device", "/tmp/proc", "/tmp/dev"} {
+		assert.NoError(t, checkDenyWriteBind(path))
+	}
+}
+
+func TestBwrapArgsRefusesSpecialSelfBinds(t *testing.T) {
+	for _, path := range []string{"/", "/dev", "/dev/null", "/dev/null/child", "/proc", "/proc/version", "/proc/version/child"} {
+		t.Run(path, func(t *testing.T) {
+			if within(path, "/proc") && runtime.GOOS != "linux" {
+				t.Skip("proc mount paths require Linux")
+			}
+			root := resolvedTemp(t)
+			missing := filepath.Join(root, "missing")
+			p := Policy{Write: []string{"/"}, DenyWrite: []string{missing, path}}
+			args, made, err := bwrapArgs(p)
+			require.ErrorContains(t, err, "unsupported sandbox policy")
+			assert.Nil(t, args)
+			assert.Nil(t, made)
+			pl := newPlaceholders(resolvedTemp(t))
+			b := bwrap{policy: p, shared: pl}
+			cmd, done, err := b.command([]string{"true"})
+			require.ErrorContains(t, err, "unsupported sandbox policy")
+			assert.Nil(t, cmd)
+			assert.Nil(t, done)
+			_, err = os.Lstat(missing)
+			assert.ErrorIs(t, err, os.ErrNotExist)
+			assert.NoFileExists(t, pl.recordPath)
+		})
+	}
+	// No self-bind is emitted outside write roots, even for a special path.
+	args, made, err := bwrapArgs(Policy{DenyWrite: []string{"/dev", "/dev/null/child"}})
+	require.NoError(t, err)
+	assert.Empty(t, mounts(t, args))
+	assert.Empty(t, made)
+	args, _, err = bwrapArgs(Policy{Write: []string{"/"}, DenyRead: []string{"/dev", "/dev/null"}})
+	require.NoError(t, err)
+	assert.Equal(t, concat(rw("/"), emptyDir("/dev")), mounts(t, args))
+}
+
+func TestBwrapArgsRefusesUnresolvedSymlinkTargetsInWriteRoot(t *testing.T) {
+	for _, read := range []bool{false, true} {
+		for _, intermediate := range []bool{false, true} {
+			for _, relative := range []bool{false, true} {
+				t.Run(fmt.Sprintf("read=%v/intermediate=%v/relative=%v", read, intermediate, relative), func(t *testing.T) {
+					base := resolvedTemp(t)
+					root, outside := filepath.Join(base, "root"), filepath.Join(base, "outside")
+					mkdirs(t, root, outside, filepath.Join(outside, "child"))
+					missing := filepath.Join(root, "missing")
+					target := missing
+					if relative {
+						target = "child/../../root/missing"
+					}
+					alias := filepath.Join(outside, "alias")
+					require.NoError(t, os.Symlink(target, alias))
+					denied := alias
+					if intermediate {
+						denied += "/leaf"
+					}
+					ordinary := filepath.Join(root, "ordinary")
+					p := Policy{Write: []string{root}, DenyWrite: []string{ordinary, denied}}
+					if read {
+						p.DenyRead, p.DenyWrite = []string{denied}, []string{ordinary}
+					}
+					args, made, err := bwrapArgs(p)
+					require.ErrorIs(t, err, ErrDeniedSymlink)
+					assert.Contains(t, err.Error(), missing)
+					assert.Nil(t, args)
+					assert.Nil(t, made)
+					pl := newPlaceholders(resolvedTemp(t))
+					b := bwrap{policy: p, shared: pl}
+					cmd, done, err := b.command([]string{"true"})
+					require.ErrorIs(t, err, ErrDeniedSymlink)
+					assert.Nil(t, cmd)
+					assert.Nil(t, done)
+					for _, path := range []string{missing, ordinary, pl.recordPath} {
+						_, err := os.Lstat(path)
+						assert.ErrorIs(t, err, os.ErrNotExist)
+					}
+					link, err := os.Readlink(alias)
+					require.NoError(t, err)
+					assert.Equal(t, target, link)
+				})
+			}
+		}
+	}
+}
+
 func TestBwrapArgsUnreadableDirectory(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads any directory")
@@ -446,6 +541,44 @@ func TestPlaceholdersPreserveChangedEntries(t *testing.T) {
 				assert.NoError(t, err)
 			})
 		}
+	}
+}
+
+func TestPlaceholdersRejectSymlinkParents(t *testing.T) {
+	for _, directory := range []bool{false, true} {
+		t.Run(fmt.Sprintf("directory=%v", directory), func(t *testing.T) {
+			base := resolvedTemp(t)
+			parent, relocated := filepath.Join(base, "parent"), filepath.Join(base, "relocated")
+			mkdirs(t, relocated)
+			require.NoError(t, os.Symlink("relocated", parent))
+			path := filepath.Join(parent, "entry")
+			pl := newPlaceholders(resolvedTemp(t))
+			lock, err := pl.start()
+			require.NoError(t, err)
+			err = pl.prepare([]placeholderDestination{{path: path, directory: directory}})
+			require.Error(t, err)
+			_, err = os.Lstat(filepath.Join(relocated, "entry"))
+			assert.ErrorIs(t, err, os.ErrNotExist)
+			pl.finish(lock)
+
+			require.NoError(t, os.Remove(parent))
+			require.NoError(t, os.Remove(relocated))
+			mkdirs(t, parent)
+			lock, err = pl.start()
+			require.NoError(t, err)
+			require.NoError(t, pl.prepare([]placeholderDestination{{path: path, directory: directory}}))
+			original, err := os.Lstat(path)
+			require.NoError(t, err)
+			require.NoError(t, os.Rename(parent, relocated))
+			require.NoError(t, os.Symlink("relocated", parent))
+			pl.finish(lock)
+			kept, err := os.Lstat(filepath.Join(relocated, "entry"))
+			require.NoError(t, err)
+			assert.True(t, os.SameFile(original, kept))
+			link, err := os.Readlink(parent)
+			require.NoError(t, err)
+			assert.Equal(t, "relocated", link)
+		})
 	}
 }
 

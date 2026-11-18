@@ -76,8 +76,8 @@ func (b *bwrap) command(argv []string) (*exec.Cmd, func(), error) {
 	}, nil
 }
 
-// bwrapFlags are the namespaces every command runs in. Without the PID
-// namespace /proc/<pid>/root of a host process is a way out. bwrap drops
+// bwrapFlags are the namespaces every command runs in. The PID namespace
+// keeps host processes out of the command's proc mount. bwrap drops
 // capabilities by itself only for a caller that is not root, and with them a
 // command could unmount its denies. No --new-session: the caller kills the
 // command by its process group, which a new session would leave.
@@ -213,6 +213,9 @@ func bwrapArgs(p Policy) (args []string, made []placeholderDestination, err erro
 			seeds = append(seeds, path)
 		case st.info != nil:
 			if inRoot(path) || slices.ContainsFunc(roots, func(r string) bool { return within(r, path) }) {
+				if err := checkDenyWriteBind(path); err != nil {
+					return nil, nil, err
+				}
 				denyWrite = append(denyWrite, "--ro-bind", path, path)
 				seeds = append(seeds, path)
 			}
@@ -222,6 +225,9 @@ func bwrapArgs(p Policy) (args []string, made []placeholderDestination, err erro
 			// stays there, unless it is denied itself or already read-only.
 			if slices.Contains(paths, st.file) || !writable(filepath.Dir(st.file)) {
 				continue
+			}
+			if err := checkDenyWriteBind(st.file); err != nil {
+				return nil, nil, err
 			}
 			decided = append(decided, st.file)
 			denyWrite = append(denyWrite, "--ro-bind", st.file, st.file)
@@ -267,6 +273,17 @@ func bwrapArgs(p Policy) (args []string, made []placeholderDestination, err erro
 	return args, made, nil
 }
 
+// Deny-write self-binds follow the private mounts and must not expose host
+// devices or host processes by covering either mount, even partially.
+func checkDenyWriteBind(path string) error {
+	for _, special := range []string{"/proc", "/dev"} {
+		if within(path, special) || within(special, path) {
+			return fmt.Errorf("failed to apply unsupported sandbox policy: deny-write bind %s overlaps %s", path, special)
+		}
+	}
+	return nil
+}
+
 // checkDeniedSymlinks walks in filesystem order: cleaning first would erase
 // a link before "..", and resolving the whole path would erase its entry.
 func checkDeniedSymlinks(path string, inRoot func(string) bool) error {
@@ -282,6 +299,9 @@ func checkDeniedSymlinks(path string, inRoot func(string) bool) error {
 		next := filepath.Join(current, part)
 		info, err := os.Lstat(next)
 		if err != nil {
+			if links > 0 && errors.Is(err, fs.ErrNotExist) && inRoot(next) {
+				return fmt.Errorf("%w: unresolved target %s", ErrDeniedSymlink, next)
+			}
 			return nil // inspect handles missing or inaccessible components.
 		}
 		if info.Mode()&fs.ModeSymlink == 0 {

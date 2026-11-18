@@ -4,8 +4,7 @@ import "errors"
 
 var (
 	ErrUnavailable = errors.New("sandbox unavailable")
-	// ErrDeniedSymlink is a denied path that crosses a symlink inside a write
-	// root, where a command could swap it to move the path from under its
-	// mount.
-	ErrDeniedSymlink = errors.New("denied path crosses a symlink inside a write root")
+	// ErrDeniedSymlink is a denied path crossing a mutable symlink or an
+	// unresolved symlink target inside a write root, which cannot be masked safely.
+	ErrDeniedSymlink = errors.New("denied path crosses an unsafe symlink")
 )
