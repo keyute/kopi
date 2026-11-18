@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"os"
 	"path"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/keyute/kopi/internal/policy"
@@ -74,13 +72,13 @@ func NewLS(ws *Workspace, hidden Hidden) Tool {
 				return Result{}, err
 			}
 			// It may have become a store while admit waited for approval.
-			if slices.ContainsFunc(stores, func(s os.FileInfo) bool { return os.SameFile(info, s) }) {
+			if isStore(stores, info) {
 				return Result{}, fmt.Errorf("%w: %s", ErrProtected, args.Path)
 			}
 			var names []string
 			for _, d := range entries {
 				info, err := d.Info()
-				if err != nil || slices.ContainsFunc(stores, func(s os.FileInfo) bool { return os.SameFile(info, s) }) {
+				if err != nil || isStore(stores, info) {
 					continue
 				}
 				p := path.Join(rel, d.Name())

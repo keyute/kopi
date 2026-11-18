@@ -42,17 +42,19 @@ func (a agentTool) Execute(ctx context.Context, toolCallID string, params json.R
 		return errorResult(err), nil
 	}
 	// PiG sends an image it fails to process unchanged, which the provider
-	// rejects, so one that does not survive resizing here is left out.
+	// rejects, so one that does not decode here is left out. The original is
+	// kept so PiG's own resize to the model's limits notes the change.
 	text := res.Text
 	var images []ai.ToolResultMessageContent
 	for _, img := range res.Images {
-		r, err := subprocess.ResizeImage(subprocess.ResizeImageArgs{Data: base64.StdEncoding.EncodeToString(img.Data), MimeType: img.MimeType})
+		data := base64.StdEncoding.EncodeToString(img.Data)
+		r, err := subprocess.ResizeImage(subprocess.ResizeImageArgs{Data: data, MimeType: img.MimeType})
 		if err != nil || r.Image == nil {
 			slog.Warn("failed to resize tool result image; omitting it", "tool", a.tool.Name, "mime", img.MimeType, "error", err)
-			text += "\n" + omittedImageNote
+			text += "\n" + tool.OmittedImageNote
 			continue
 		}
-		images = append(images, ai.ImageContent{Data: r.Image.Data, MimeType: r.Image.MimeType})
+		images = append(images, ai.ImageContent{Data: data, MimeType: img.MimeType})
 	}
 	return agent.AgentToolResult{Content: append([]ai.ToolResultMessageContent{ai.TextContent{Text: text}}, images...)}, nil
 }

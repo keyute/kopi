@@ -819,6 +819,14 @@ func TestHidesSkipsRuleThatMatchedTheRoot(t *testing.T) {
 	assert.True(t, r.Hides("Read", src, *at(filepath.Join(d.ws, "src/.env"))))
 }
 
+func TestHidesAppliesRuleMatchingRootWhenExceptionAdmittedIt(t *testing.T) {
+	d := newDirs(t)
+	pub := *at(filepath.Join(d.ws, "src/pub"))
+	r := d.rules(t, Source{Name: "config", Deny: []string{"Read(src/**)", "Read(!src/pub)"}})
+	link := Target{Path: filepath.Join(d.ws, "src/pub/l"), Real: filepath.Join(d.ws, "src/private")}
+	assert.True(t, r.Hides("Read", pub, link))
+}
+
 func TestHidesAcrossSources(t *testing.T) {
 	d := newDirs(t)
 	src := *at(filepath.Join(d.ws, "src"))

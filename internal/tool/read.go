@@ -29,6 +29,9 @@ const (
 	emptyFileNotice = "(empty file)"
 	pastEndNotice   = "(offset "
 	imageNotice     = "(image/"
+
+	// OmittedImageNote ends the text of a result whose image could not be processed.
+	OmittedImageNote = "[Image omitted: it could not be processed.]"
 )
 
 const MaxImageBytes = 20 << 20
@@ -132,6 +135,9 @@ func readSummary(output string) string {
 	case strings.HasPrefix(output, pastEndNotice):
 		return "past end of file"
 	case strings.HasPrefix(output, imageNotice):
+		if strings.Contains(output, OmittedImageNote) {
+			return "image omitted"
+		}
 		return "image"
 	}
 	n := strings.Count(output, "\n")

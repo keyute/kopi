@@ -205,7 +205,7 @@ Permission rules in `config.json` allow, ask about or deny calls:
 - `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory. `*` and `**` glob. A name with no slash (`.env`) matches at any depth, and a directory covers everything in it. Paths match case-insensitively on macOS and Windows.
 - `Name(!path)` exempts the calls it matches from the other rules in its own list, from the same config layer or flag; it never reaches rules from anywhere else.
 - A bare `Name` in `deny` removes the tool from the model.
-- `Glob`, `Grep` and `LS` leave out entries that a `deny` or `ask` rule with a path for that tool or `*` matches, except that a rule which also matches the searched path itself does not hide what is under it, as it already judged the whole call; `Read(path)` rules do not apply to them, so use `*(path)` to keep a path from every tool.
+- `Glob`, `Grep` and `LS` leave out entries that a `deny` or `ask` rule with a path for that tool or `*` matches, except that a rule which also matches the searched path itself does not hide what is under it, as it already judged the whole call (unless a `!` exception in the same list is what admitted that path); `Read(path)` rules do not apply to them, so use `*(path)` to keep a path from every tool.
 - `ToolSearch`, `TaskOutput`, `TaskStop` and `WebFetch` take no path: only a bare rule naming the tool or `*` applies to them; `ToolSearch(path)` and the like are rejected at start.
 - `Bash` takes no path: only a bare `Bash` or `*` rule applies to it, `Bash(path)` is rejected at start, and path rules such as `*(~/.ssh)` never apply to `Bash`. `"ask": ["Bash"]` makes every command ask.
 - Plan mode refuses `Write`, `Edit`, unsandboxed `Bash` and MCP tools not marked read-only before any rule; otherwise rules apply to `Bash` the same in both modes.
@@ -275,7 +275,7 @@ The fullscreen interface asks before a call that needs approval, showing the cha
 - `Read` and `Grep` protection is by file identity, re-checked on every read and, for the searches, on every directory searched: a hard link into Kopi's home or a credential copied elsewhere is readable, whether Kopi's home exists is observable, and if Kopi's home cannot be inspected all reads are refused.
 - Kopi refuses no credential locations outside its home; deny them with rules, such as `*(~/.ssh)`, and to `Bash` with `sandbox.denyRead`.
 - `Read` and `Grep` tell binary files, and `Read` images, from their first 8 KiB, not their names. `Read` refuses absolute symlinks, even ones pointing inside the start directory.
-- `Grep` matches only the first 2000 characters of a line.
+- `Grep` shows only the first 2000 characters of a line; a match past that shows the line cut to that prefix.
 - PiG's built-in providers still use ambient credentials: API keys in the environment, Google application-default credentials and the AWS profile and credential chain.
 - Importing PiG changes the TLS settings of Go's process-wide default HTTP transport.
 - `agent/models.json` is trusted configuration: PiG reads it, and its `apiKey` can run a shell command.

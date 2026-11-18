@@ -110,10 +110,8 @@ func TestToolResultCarriesImages(t *testing.T) {
 	assert.Equal(t, base64.StdEncoding.EncodeToString(buf.Bytes()), img.Data)
 }
 
-func TestToolResultResizesOversizedImage(t *testing.T) {
+func TestToolResultKeepsOversizedImageForPiGToResize(t *testing.T) {
 	data := widePNG(t)
-	original, _, err := image.Decode(bytes.NewReader(data))
-	require.NoError(t, err)
 	probe := probeTool(nil)
 	probe.Run = func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (tool.Result, error) {
 		if _, err := admit(policy.Target{}); err != nil {
@@ -132,13 +130,8 @@ func TestToolResultResizesOversizedImage(t *testing.T) {
 	assert.Equal(t, ai.TextContent{Text: "wide image"}, res.Content[0])
 	img, ok := res.Content[1].(ai.ImageContent)
 	require.True(t, ok, "%T", res.Content[1])
-	encoded, err := base64.StdEncoding.DecodeString(img.Data)
-	require.NoError(t, err)
-	resized, format, err := image.Decode(bytes.NewReader(encoded))
-	require.NoError(t, err)
-	assert.Less(t, resized.Bounds().Dx(), original.Bounds().Dx())
-	assert.Less(t, resized.Bounds().Dy(), original.Bounds().Dy())
-	assert.Equal(t, "image/"+format, img.MimeType)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(data), img.Data)
+	assert.Equal(t, "image/png", img.MimeType)
 }
 
 func TestToolResultOmitsUnprocessableImage(t *testing.T) {
@@ -159,7 +152,7 @@ func TestToolResultOmitsUnprocessableImage(t *testing.T) {
 
 	_, err := sess.Send(t.Context(), Prompt{Text: "look"}, nil, nil)
 	require.NoError(t, err)
-	assert.Equal(t, []ai.ToolResultMessageContent{ai.TextContent{Text: "(image/png, 20 bytes)\n" + omittedImageNote}}, toolResultContent(<-requests))
+	assert.Equal(t, []ai.ToolResultMessageContent{ai.TextContent{Text: "(image/png, 20 bytes)\n" + tool.OmittedImageNote}}, toolResultContent(<-requests))
 }
 
 // toolResultContent returns the content of the last tool result in msgs.

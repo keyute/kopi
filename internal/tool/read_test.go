@@ -225,6 +225,11 @@ func TestReadDisplaySummary(t *testing.T) {
 	}
 }
 
+func TestReadSummaryOmittedImageIsNotAnImage(t *testing.T) {
+	tool, _ := newReadTool(t)
+	assert.Equal(t, "image omitted", tool.Display.Summary(imageNotice+"20 bytes)\n"+OmittedImageNote))
+}
+
 func TestReadRefusesUnreadableTargets(t *testing.T) {
 	tool, dir := newReadTool(t)
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o755))

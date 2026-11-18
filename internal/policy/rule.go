@@ -327,7 +327,8 @@ func (r *Rules) decide(tool string, t *Target) (eff effect, text, src string) {
 
 // Hides reports whether a search by tool rooted at root leaves t out: a
 // deny or ask rule with a path matches t, no exception in its list does, and
-// that rule does not match root, where the gate already judged the call.
+// that rule does not match root, where the gate already judged the call,
+// unless an exception in its list admitted root.
 func (r *Rules) Hides(tool string, root, t Target) bool {
 	if r == nil {
 		return false
@@ -343,6 +344,7 @@ func (r *Rules) Hides(tool string, root, t Target) bool {
 }
 
 func (r *Rules) listHides(rules []rule, tool string, root, t Target) bool {
+	_, rootJudged := r.listMatches(rules, tool, &root, true)
 	hit := false
 	for _, ru := range rules {
 		if !nameMatches(ru.name, tool) {
@@ -354,7 +356,7 @@ func (r *Rules) listHides(rules []rule, tool string, root, t Target) bool {
 			}
 			continue
 		}
-		if ru.patterns != nil && r.matches(ru, &t, true) && !r.matches(ru, &root, true) {
+		if ru.patterns != nil && r.matches(ru, &t, true) && (!rootJudged || !r.matches(ru, &root, true)) {
 			hit = true
 		}
 	}

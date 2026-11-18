@@ -395,6 +395,49 @@ func TestGrepStopsAtByteCap(t *testing.T) {
 	assert.Equal(t, fmt.Sprintf("[Showing %d matching lines; more match. A narrower path, glob or pattern lists them.]", shown), lines[len(lines)-1])
 }
 
+func TestGrepByteCapNoticeDoesNotClaimMoreMatches(t *testing.T) {
+	tool, dir := newGrepTool(t)
+	filler := strings.Repeat("y", maxLineChars)
+	var b strings.Builder
+	for range 5 {
+		b.WriteString("needle" + filler + "\n")
+		b.WriteString(strings.Repeat(filler+"\n", 10))
+	}
+	writeFile(t, filepath.Join(dir, "a.txt"), b.String())
+
+	out, err := runGrep(t, tool, `{"pattern":"needle","output_mode":"content","context":10}`)
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(out), maxReadBytes)
+	assert.NotContains(t, out, "more match")
+	assert.True(t, strings.HasSuffix(out, "[Showing 5 matching lines; output cut at the size limit. A narrower path, glob or pattern shows the rest.]\n"), out[len(out)-200:])
+}
+
+func TestGrepClampsLimitAndContext(t *testing.T) {
+	tool, dir := newGrepTool(t)
+	for i := range maxGrepResults + 5 {
+		writeFile(t, filepath.Join(dir, fmt.Sprintf("f%04d.txt", i)), "needle\n")
+	}
+	out, err := runGrep(t, tool, `{"pattern":"needle","limit":5000}`)
+	require.NoError(t, err)
+	assert.Contains(t, out, "[Showing 1000 of 1005 files,")
+
+	tool, dir = newGrepTool(t)
+	var b strings.Builder
+	for i := range 61 {
+		if i == 30 {
+			b.WriteString("needle\n")
+		} else {
+			fmt.Fprintf(&b, "l%d\n", i)
+		}
+	}
+	writeFile(t, filepath.Join(dir, "a.txt"), b.String())
+	out, err = runGrep(t, tool, `{"pattern":"needle","output_mode":"content","context":50}`)
+	require.NoError(t, err)
+	assert.Equal(t, maxGrepContext*2+1+1, strings.Count(out, "\n"), out)
+	assert.Contains(t, out, "a.txt-21-l20\n")
+	assert.NotContains(t, out, "a.txt-20-")
+}
+
 func TestGrepNoticeOmitsHigherLimitAtMaximum(t *testing.T) {
 	tool, dir := newGrepTool(t)
 	writeFile(t, filepath.Join(dir, "a.txt"), strings.Repeat("needle\n", 1001))

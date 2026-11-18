@@ -43,7 +43,7 @@ func (w *Workspace) List(limit int) ([]string, error) {
 // as slash-separated workspace paths with their Lstat info; visit returning false
 // ends it. dir has no symlinks; vetted is its identity, nil only for ".". Skips
 // .git, ignored and protected entries and does not follow symlinks. Ancestors'
-// patterns apply unless they ignore dir itself. Only failing to list dir is returned.
+// patterns apply unless they match dir itself. Only failing to list dir is returned.
 func (w *Workspace) walk(ctx context.Context, dir string, vetted fs.FileInfo, visit func(p string, info fs.FileInfo) bool) error {
 	type queued struct {
 		dir      string
@@ -62,10 +62,11 @@ func (w *Workspace) walk(ctx context.Context, dir string, vetted fs.FileInfo, vi
 			ancestors = append(ancestors, w.gitignore(a, split(a))...)
 		}
 		// A search pointed explicitly inside an ignored directory searches it,
-		// as ripgrep does for an explicit path.
-		if gitignore.NewMatcher(ancestors).Match(parts, true) {
-			ancestors = nil
-		}
+		// as ripgrep does for an explicit path, so the patterns that ignore dir
+		// are dropped and the others keep applying.
+		ancestors = slices.DeleteFunc(ancestors, func(p gitignore.Pattern) bool {
+			return p.Match(parts, true) != gitignore.NoMatch
+		})
 	}
 	// Breadth-first, so a limit keeps shallow entries and a directory's
 	// patterns are loaded before its children's. Each pattern is scoped to its
@@ -92,10 +93,7 @@ func (w *Workspace) walk(ctx context.Context, dir string, vetted fs.FileInfo, vi
 		if err != nil {
 			return err
 		}
-		isStore := func(info fs.FileInfo) bool {
-			return slices.ContainsFunc(stores, func(s os.FileInfo) bool { return os.SameFile(info, s) })
-		}
-		if q.vetted != nil && isStore(q.vetted) {
+		if q.vetted != nil && isStore(stores, q.vetted) {
 			continue
 		}
 		// Appending must not overwrite patterns shared by queued siblings.
@@ -108,7 +106,7 @@ func (w *Workspace) walk(ctx context.Context, dir string, vetted fs.FileInfo, vi
 				continue
 			}
 			info, err := d.Info()
-			if err != nil || isStore(info) {
+			if err != nil || isStore(stores, info) {
 				continue
 			}
 			if m.Match(split(p), d.IsDir()) {

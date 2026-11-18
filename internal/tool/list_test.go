@@ -218,6 +218,16 @@ func TestWalkSearchesIgnoredStartDirectory(t *testing.T) {
 	assert.Equal(t, []string{".gitignore"}, walked(t, ws, "."))
 }
 
+func TestWalkKeepsOtherAncestorPatternsInIgnoredStartDirectory(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".gitignore"), "build/\n*.log\n")
+	writeFile(t, filepath.Join(dir, "build", "out", "a.o"), "")
+	writeFile(t, filepath.Join(dir, "build", "out", "x.log"), "")
+	ws := newWorkspace(t, dir, nil)
+
+	assert.Equal(t, []string{"build/out", "build/out/a.o"}, walked(t, ws, "build"))
+}
+
 func TestWalkStopsWhenCancelled(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "a.txt"), "")

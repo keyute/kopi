@@ -69,6 +69,17 @@ func TestLSShowsSymlinksWithoutFollowing(t *testing.T) {
 	assert.Equal(t, "dangling\ndirlink\noutside\nreal/", out)
 }
 
+func TestLSOmitsUnresolvableSymlinks(t *testing.T) {
+	tool, dir := newLSTool(t)
+	writeFile(t, filepath.Join(dir, "f.txt"), "")
+	require.NoError(t, os.Symlink("loop", filepath.Join(dir, "loop")))
+	require.NoError(t, os.Symlink("f.txt/x", filepath.Join(dir, "bad")))
+
+	out, err := runLS(t, tool, `{}`)
+	require.NoError(t, err)
+	assert.Equal(t, "f.txt", out)
+}
+
 func TestLSOmitsProtectedAndHidden(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
 	writeFile(t, filepath.Join(home, "notes.txt"), "")

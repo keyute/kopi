@@ -266,18 +266,31 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 
 	r := bufio.NewReaderSize(nil, 64<<10)
 	// scan feeds each line of a text file to onLine until it returns false.
-	// A binary or unreadable file yields no lines.
+	// A binary or unreadable file yields no lines; a read failure is kept in
+	// readErr for the caller that wants it.
+	var readErr error
 	scan := func(f *os.File, onLine func(l grepLine) bool) {
 		defer f.Close()
+		readErr = nil
 		r.Reset(f)
 		head, err := r.Peek(binarySniffLen)
-		if err != nil && !errors.Is(err, io.EOF) || bytes.IndexByte(head, 0) >= 0 {
+		if err != nil && !errors.Is(err, io.EOF) {
+			readErr = err
+			return
+		}
+		if bytes.IndexByte(head, 0) >= 0 {
 			return
 		}
 		for n := 1; ctx.Err() == nil; n++ {
 			line, err := readGrepLine(ctx, r, re, mode)
 			line.n = n
-			if err != nil || !onLine(line) {
+			if err != nil {
+				if !errors.Is(err, io.EOF) && ctx.Err() == nil {
+					readErr = err
+				}
+				return
+			}
+			if !onLine(line) {
 				return
 			}
 		}
@@ -288,6 +301,7 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 		matches, files int
 		out            strings.Builder
 		more, limited  bool
+		capped         bool
 		printed        bool
 		contextTrimmed bool
 	)
@@ -330,7 +344,10 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 					s = "--\n" + s
 				}
 				if out.Len()+len(s) > maxReadBytes-noticeReserve {
-					more = true
+					// A match that does not fit is a match not shown; a context
+					// line that does not fit says nothing about later matches.
+					capped = true
+					more = more || sep == ":"
 					return false
 				}
 				out.WriteString(s)
@@ -393,7 +410,7 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 				return true
 			})
 		}
-		return !more
+		return !more && !capped
 	}
 
 	if info.Mode().IsRegular() {
@@ -402,6 +419,9 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 			return Result{}, err
 		}
 		searchFile(rel, f, info)
+		if readErr != nil {
+			return Result{}, fmt.Errorf("failed to read %s: %w", rel, readErr)
+		}
 	} else {
 		err := ws.walk(ctx, rel, info, func(p string, entry fs.FileInfo) bool {
 			if !entry.Mode().IsRegular() {
@@ -441,6 +461,8 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 				raise = ", or a higher limit,"
 			}
 			fmt.Fprintf(&res, "[Showing %d matching lines; more match. A narrower path, glob or pattern%s lists them.]\n", matches, raise)
+		} else if capped {
+			fmt.Fprintf(&res, "[Showing %d matching lines; output cut at the size limit. A narrower path, glob or pattern shows the rest.]\n", matches)
 		}
 		return Result{Text: res.String()}, nil
 	}

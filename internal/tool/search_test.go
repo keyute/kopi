@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -57,6 +58,29 @@ func TestSearchRootRefusesProtectedAndOutside(t *testing.T) {
 	require.ErrorIs(t, err, ErrProtected)
 	_, _, _, err = ws.searchRoot("..")
 	require.ErrorIs(t, err, ErrOutsideWorkspace)
+}
+
+func TestSearchToolsRefuseKopiHomeWithoutAdmitting(t *testing.T) {
+	home, kopiHome := syntheticHome(t)
+	ws := newWorkspace(t, home, protectedStores(home, kopiHome))
+	for _, tc := range []struct {
+		tool Tool
+		args string
+	}{
+		{NewGlob(ws, nil), fmt.Sprintf(`{"pattern":"*","path":%q}`, kopiHome)},
+		{NewGrep(ws, nil), fmt.Sprintf(`{"pattern":"x","path":%q}`, kopiHome)},
+		{NewLS(ws, nil), fmt.Sprintf(`{"path":%q}`, kopiHome)},
+	} {
+		t.Run(tc.tool.Name, func(t *testing.T) {
+			admitted := false
+			_, err := tc.tool.Run(context.Background(), json.RawMessage(tc.args), func(policy.Target) (policy.Mode, error) {
+				admitted = true
+				return policy.Plan, nil
+			})
+			require.ErrorIs(t, err, ErrProtected)
+			assert.False(t, admitted)
+		})
+	}
 }
 
 func TestOpenWalkedRefusesSwappedFile(t *testing.T) {
