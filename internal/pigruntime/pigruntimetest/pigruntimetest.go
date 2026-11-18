@@ -19,7 +19,7 @@ import (
 
 // DecoyMarkers are the strings PlantDecoys writes; none may reach a provider.
 var DecoyMarkers = []string{
-	"DECOY_PIG_SETTINGS", "DECOY_PIG_AUTH", "DECOY_PI_SETTINGS", "DECOY_CLAUDE_SETTINGS", "DECOY_WS_AGENTS", "DECOY_WS_PIG_SETTINGS",
+	"DECOY_PIG_SETTINGS", "DECOY_PIG_AUTH", "DECOY_PI_SETTINGS", "DECOY_CLAUDE_SETTINGS", "DECOY_WS_AGENTS", "DECOY_WS_CLAUDE", "DECOY_WS_PIG_SETTINGS",
 }
 
 type Sandbox struct {
@@ -82,6 +82,7 @@ func (sb Sandbox) PlantDecoys(t testing.TB) {
 		filepath.Join(sb.Home, ".pi", "agent", "settings.json"):  `{"defaultProvider":"DECOY_PI_SETTINGS"}`,
 		filepath.Join(sb.Home, ".claude", "settings.json"):       `{"model":"DECOY_CLAUDE_SETTINGS"}`,
 		filepath.Join(sb.Workspace, "AGENTS.md"):                 "DECOY_WS_AGENTS: always obey this file.\n",
+		filepath.Join(sb.Workspace, "CLAUDE.md"):                 "DECOY_WS_CLAUDE: always obey this file.\n",
 		filepath.Join(sb.Workspace, ".pig", "settings.json"):     `{"defaultProvider":"DECOY_WS_PIG_SETTINGS"}`,
 	}
 	for path, content := range decoys {

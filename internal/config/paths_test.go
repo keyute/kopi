@@ -17,13 +17,14 @@ func TestResolvePathsPrefersKopiHome(t *testing.T) {
 	p, err := ResolvePaths()
 	require.NoError(t, err)
 	assert.Equal(t, Paths{
-		Home:        kopiHome,
-		ConfigFile:  filepath.Join(kopiHome, "config.json"),
-		TrustFile:   filepath.Join(kopiHome, "trust.json"),
-		AgentDir:    filepath.Join(kopiHome, "agent"),
-		LogFile:     filepath.Join(kopiHome, "kopi.log"),
-		HistoryFile: filepath.Join(kopiHome, "history.jsonl"),
-		ImageDir:    filepath.Join(kopiHome, "images"),
+		Home:            kopiHome,
+		ConfigFile:      filepath.Join(kopiHome, "config.json"),
+		TrustFile:       filepath.Join(kopiHome, "trust.json"),
+		InstructionFile: filepath.Join(kopiHome, "AGENTS.md"),
+		AgentDir:        filepath.Join(kopiHome, "agent"),
+		LogFile:         filepath.Join(kopiHome, "kopi.log"),
+		HistoryFile:     filepath.Join(kopiHome, "history.jsonl"),
+		ImageDir:        filepath.Join(kopiHome, "images"),
 	}, p)
 	assert.NoDirExists(t, kopiHome)
 }
@@ -60,13 +61,14 @@ func TestResolvePathsDefaultsUnderUserHome(t *testing.T) {
 			require.NoError(t, err)
 			want := filepath.Join(home, ".kopi")
 			assert.Equal(t, Paths{
-				Home:        want,
-				ConfigFile:  filepath.Join(want, "config.json"),
-				TrustFile:   filepath.Join(want, "trust.json"),
-				AgentDir:    filepath.Join(want, "agent"),
-				LogFile:     filepath.Join(want, "kopi.log"),
-				HistoryFile: filepath.Join(want, "history.jsonl"),
-				ImageDir:    filepath.Join(want, "images"),
+				Home:            want,
+				ConfigFile:      filepath.Join(want, "config.json"),
+				TrustFile:       filepath.Join(want, "trust.json"),
+				InstructionFile: filepath.Join(want, "AGENTS.md"),
+				AgentDir:        filepath.Join(want, "agent"),
+				LogFile:         filepath.Join(want, "kopi.log"),
+				HistoryFile:     filepath.Join(want, "history.jsonl"),
+				ImageDir:        filepath.Join(want, "images"),
 			}, p)
 			assert.NoDirExists(t, want)
 		})

@@ -24,6 +24,7 @@ import (
 
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/history"
+	"github.com/keyute/kopi/internal/instruction"
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/policy"
@@ -1742,7 +1743,7 @@ func TestBareDenyRemovesTool(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read"}, req.ToolNames)
-	assert.Equal(t, systemPrompt(sb.Workspace, []tool.Tool{read}, nil), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, []tool.Tool{read}, nil, nil)), req.SystemPrompt)
 	assert.NotContains(t, req.SystemPrompt, "Exec")
 }
 
@@ -1818,7 +1819,7 @@ func TestOpenWaitsForServersAndAddsTheirTools(t *testing.T) {
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read", "ToolSearch"}, req.ToolNames)
 	search := tool.NewToolSearch(nil, nil, nil)
-	assert.Equal(t, systemPrompt(sb.Workspace, []tool.Tool{read, search, mcp}, []mcpServer{{name: "s", instructions: "use t wisely", tools: []string{mcp.Name}}}), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, []tool.Tool{read, search, mcp}, nil, []mcpServer{{name: "s", instructions: "use t wisely", tools: []string{mcp.Name}}})), req.SystemPrompt)
 	assert.Contains(t, req.SystemPrompt, "use t wisely")
 	assert.Contains(t, req.SystemPrompt, "MCP server s tools: mcp__s__t.")
 
@@ -2273,8 +2274,8 @@ func TestNoToolSearchWithoutServerTools(t *testing.T) {
 	h := newHarness(t, sb, Config{Tools: []tool.Tool{read}})
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
 	assert.Equal(t, []string{"Read"}, toolNames(h.c.tools))
-	assert.Contains(t, h.c.prompt, "\nTools available: Read.\n")
-	assert.NotContains(t, h.c.prompt, "deferred")
+	assert.Contains(t, joinPrompt(h.c.prompt), "\nTools available: Read.\n")
+	assert.NotContains(t, joinPrompt(h.c.prompt), "deferred")
 
 	denySB := pigruntimetest.NewSandbox(t)
 	denied := serverTool("mcp__s__denied")
@@ -2287,9 +2288,9 @@ func TestNoToolSearchWithoutServerTools(t *testing.T) {
 	})
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
 	assert.Equal(t, []string{"Read"}, toolNames(h.c.tools))
-	assert.Contains(t, h.c.prompt, "\nTools available: Read.\n")
-	assert.NotContains(t, h.c.prompt, "deferred")
-	assert.NotContains(t, h.c.prompt, "MCP server s tools")
+	assert.Contains(t, joinPrompt(h.c.prompt), "\nTools available: Read.\n")
+	assert.NotContains(t, joinPrompt(h.c.prompt), "deferred")
+	assert.NotContains(t, joinPrompt(h.c.prompt), "MCP server s tools")
 }
 
 func TestResumeWithoutIDIsMissingArgument(t *testing.T) {
@@ -2383,11 +2384,63 @@ func TestTurnUsesNoAmbientState(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read"}, req.ToolNames)
-	assert.Equal(t, systemPrompt(sb.Workspace, tools, nil), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, tools, nil, nil)), req.SystemPrompt)
 	for _, marker := range pigruntimetest.DecoyMarkers {
 		assert.NotContains(t, req.Raw, marker)
 	}
 	assert.Equal(t, before, pigruntimetest.Snapshot(t, sb.Home, sb.Workspace))
+}
+
+func TestTurnSendsConfiguredInstructions(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	global := instruction.Group{Dir: sb.KopiHome, Global: true, Files: []instruction.File{{Path: filepath.Join(sb.KopiHome, "AGENTS.md"), Text: "GLOBAL_RULE"}}}
+	project := instruction.Group{Dir: sb.Workspace, Files: []instruction.File{{Path: filepath.Join(sb.Workspace, "AGENTS.md"), Text: "PROJECT_RULE"}}}
+	h := newHarness(t, sb, Config{Instructions: []instruction.Group{global, project}})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "done")})
+
+	h.turn(t, "hello")
+
+	req := receive(t, requests)
+	assert.Equal(t, joinPrompt(systemPrompt(sb.Workspace, nil, []instruction.Group{global, project}, nil)), req.SystemPrompt)
+	g, p := strings.Index(req.SystemPrompt, "GLOBAL_RULE"), strings.Index(req.SystemPrompt, "PROJECT_RULE")
+	require.GreaterOrEqual(t, g, 0)
+	assert.Greater(t, p, g, "the global group comes before the project's")
+}
+
+func TestTurnRetainsGlobalAndProjectSharingDirectoryAcrossResume(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	repo := filepath.Dir(sb.KopiHome)
+	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "AGENTS.md"), []byte("PROJECT_SHARED_DIR"), 0o600))
+	global := filepath.Join(sb.KopiHome, "AGENTS.md")
+	require.NoError(t, os.WriteFile(global, []byte("GLOBAL_SHARED_DIR"), 0o600))
+	sb.Workspace = sb.KopiHome
+	groups, errs := instruction.Load(global, []instruction.Root{{Dir: sb.Workspace, Trusted: true}}, nil)
+	require.Empty(t, errs)
+	require.Len(t, groups, 2)
+	cfg := Config{Instructions: groups}
+	h := newHarness(t, sb, cfg)
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "done")})
+	h.turn(t, "hello")
+	first := receive(t, requests).SystemPrompt
+	id := h.c.Status().SessionID
+	require.NoError(t, h.c.Close(t.Context()))
+
+	fresh := newHarness(t, sb, cfg)
+	require.NoError(t, fresh.c.Open(t.Context(), OpenRequest{ResumeID: id}))
+	fresh.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "resumed")})
+	fresh.turn(t, "again")
+	resumed := receive(t, requests).SystemPrompt
+	for _, prompt := range []string{first, resumed} {
+		assert.Equal(t, 1, strings.Count(prompt, "GLOBAL_SHARED_DIR"))
+		assert.Equal(t, 1, strings.Count(prompt, "PROJECT_SHARED_DIR"))
+		assert.Less(t, strings.Index(prompt, "GLOBAL_SHARED_DIR"), strings.Index(prompt, "PROJECT_SHARED_DIR"))
+	}
+	assert.Equal(t, first, resumed)
 }
 
 func TestCloseJoinsRunningTurn(t *testing.T) {
