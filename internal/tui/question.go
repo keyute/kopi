@@ -21,7 +21,7 @@ const (
 	// besideWidth is the narrowest screen that shows a preview beside the options.
 	besideWidth = 64
 	// previewGap is the columns between the options and a preview beside them.
-	previewGap = 4
+	previewGap = 6
 	// minPreviewBox is the narrowest a preview box is drawn.
 	minPreviewBox = 12
 	// headerWidth is the widest a header is drawn in the tab strip.
