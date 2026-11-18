@@ -351,9 +351,23 @@ func TestShellHoldsPlaceholdersUntilCommandEnds(t *testing.T) {
 
 	// Opening blocks until the command is running and reads; the writer stays
 	// open so the command keeps waiting.
-	f, err := os.OpenFile(gate, os.O_WRONLY, 0)
-	require.NoError(t, err)
-	defer f.Close()
+	type opened struct {
+		f   *os.File
+		err error
+	}
+	openCh := make(chan opened, 1)
+	go func() {
+		f, err := os.OpenFile(gate, os.O_WRONLY, 0)
+		openCh <- opened{f, err}
+	}()
+	select {
+	case o := <-openCh:
+		require.NoError(t, o.err)
+		defer o.f.Close()
+	case <-p.done:
+		out, err := p.result()
+		t.Fatalf("the command ended before the gate opened: output %q, error %v", out, err)
+	}
 	assert.FileExists(t, placeholder)
 
 	p.stop(errors.New("stopped"))

@@ -68,10 +68,31 @@ func (b *bwrap) command(argv []string) (*exec.Cmd, func(), error) {
 		b.shared.finish(lock)
 		return nil, nil, err
 	}
+	infoR, infoW, err := os.Pipe()
+	if err != nil {
+		_ = filter.Close()
+		b.shared.finish(lock)
+		return nil, nil, fmt.Errorf("failed to create the bwrap info pipe: %w", err)
+	}
+	// bwrap reports the namespace's PID 1 on fd 4, the second extra file.
+	args = slices.Insert(args, len(args)-1, "--info-fd", "4")
 	cmd := exec.Command(b.path, slices.Concat(args, argv)...)
-	cmd.ExtraFiles = []*os.File{filter}
+	cmd.ExtraFiles = []*os.File{filter, infoW}
+	pidfd := make(chan int, 1)
+	go func() {
+		pidfd <- initPidfd(infoR)
+		_ = infoR.Close()
+	}()
 	return cmd, func() {
 		_ = filter.Close()
+		// Ends the read if bwrap never reported.
+		_ = infoW.Close()
+		// Reaping bwrap does not end the namespace: its PID 1 may still be
+		// tearing it down, and a command that left the process group runs
+		// until then. Placeholders must stay mounted until it is gone.
+		if fd := <-pidfd; fd >= 0 {
+			waitInit(fd)
+		}
 		b.shared.finish(lock)
 	}, nil
 }
@@ -380,10 +401,10 @@ type placeholderDestination struct {
 }
 
 type placeholderOwnership struct {
-	Path   string  `json:"path"`
-	Device *uint64 `json:"device"`
-	Inode  *uint64 `json:"inode"`
-	Kind   string  `json:"kind"`
+	Path      string `json:"path"`
+	Device    uint64 `json:"device"`
+	Inode     uint64 `json:"inode"`
+	Directory bool   `json:"directory"`
 }
 
 // placeholders tracks only Kopi's successful creations. Each command holds a
@@ -451,9 +472,7 @@ func createPlaceholder(dest placeholderDestination) (*placeholderOwnership, erro
 	name := filepath.Base(dest.path)
 	var info fs.FileInfo
 	var f *os.File
-	kind := "file"
 	if dest.directory {
-		kind = "directory"
 		err = parent.Mkdir(name, 0o700)
 		if err == nil {
 			f, err = parent.Open(name)
@@ -479,11 +498,11 @@ func createPlaceholder(dest placeholderDestination) (*placeholderOwnership, erro
 	if err != nil {
 		return nil, fmt.Errorf("failed to create sandbox placeholder: %w", err)
 	}
-	device, inode, ok := placeholderIdentity(f, info)
+	device, inode, ok := placeholderIdentity(info)
 	if !ok {
 		return nil, fmt.Errorf("failed to identify sandbox placeholder %s", dest.path)
 	}
-	return &placeholderOwnership{Path: dest.path, Device: &device, Inode: &inode, Kind: kind}, nil
+	return &placeholderOwnership{Path: dest.path, Device: device, Inode: inode, Directory: dest.directory}, nil
 }
 
 func (pl *placeholders) prepare(destinations []placeholderDestination) error {
@@ -493,7 +512,7 @@ func (pl *placeholders) prepare(destinations []placeholderDestination) error {
 			return err
 		}
 		if owned != nil {
-			if err := pl.record([]placeholderOwnership{*owned}); err != nil {
+			if err := pl.record(*owned); err != nil {
 				return err
 			}
 		}
@@ -501,10 +520,7 @@ func (pl *placeholders) prepare(destinations []placeholderDestination) error {
 	return nil
 }
 
-func (pl *placeholders) record(made []placeholderOwnership) error {
-	if len(made) == 0 {
-		return nil
-	}
+func (pl *placeholders) record(made placeholderOwnership) error {
 	line, err := json.Marshal(made)
 	if err != nil {
 		return fmt.Errorf("failed to record sandbox placeholders: %w", err)
@@ -560,9 +576,9 @@ func (pl *placeholders) finish(lock *flock.Flock) {
 		if len(line) == 0 || line[len(line)-1] != '\n' {
 			continue
 		}
-		var made []placeholderOwnership
+		var made placeholderOwnership
 		if json.Unmarshal(line, &made) == nil {
-			paths = append(paths, made...)
+			paths = append(paths, made)
 		}
 	}
 	// Deepest first: a directory goes only once empty.
@@ -577,8 +593,7 @@ func (pl *placeholders) finish(lock *flock.Flock) {
 
 // Identity checks are best-effort: outside writers can race the final removal.
 func removePlaceholder(owned placeholderOwnership) {
-	if !filepath.IsAbs(owned.Path) || owned.Device == nil || owned.Inode == nil ||
-		(owned.Kind != "file" && owned.Kind != "directory") {
+	if !filepath.IsAbs(owned.Path) {
 		return
 	}
 	path := owned.Path
@@ -592,16 +607,16 @@ func removePlaceholder(owned placeholderOwnership) {
 	if err != nil {
 		return
 	}
-	device, inode, ok := placeholderEntryIdentity(parent, name, info)
-	if !ok || device != *owned.Device || inode != *owned.Inode {
+	device, inode, ok := placeholderIdentity(info)
+	if !ok || device != owned.Device || inode != owned.Inode {
 		return
 	}
 	switch {
-	case info.Mode().IsRegular() && owned.Kind == "file":
+	case info.Mode().IsRegular() && !owned.Directory:
 		if info.Size() != 0 {
 			return
 		}
-	case info.IsDir() && owned.Kind == "directory":
+	case info.IsDir() && owned.Directory:
 		if !isEmptyDir(parent, name) {
 			return
 		}

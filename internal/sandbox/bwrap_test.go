@@ -16,8 +16,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 // resolvedTemp is a fresh directory named without symlinks, as the mounts
@@ -297,6 +299,16 @@ func TestDenyWriteBindSpecialOverlaps(t *testing.T) {
 	}
 }
 
+// requireLockFree fails if a command still holds the shared lock.
+func requireLockFree(t *testing.T, pl *placeholders) {
+	t.Helper()
+	l := flock.New(pl.lockPath)
+	ok, err := l.TryLock()
+	require.NoError(t, err)
+	require.True(t, ok, "the shared lock is still held")
+	require.NoError(t, l.Unlock())
+}
+
 func TestBwrapArgsRefusesSpecialSelfBinds(t *testing.T) {
 	for _, path := range []string{"/", "/dev", "/dev/null", "/dev/null/child", "/proc", "/proc/version", "/proc/version/child"} {
 		t.Run(path, func(t *testing.T) {
@@ -316,6 +328,7 @@ func TestBwrapArgsRefusesSpecialSelfBinds(t *testing.T) {
 			require.ErrorContains(t, err, "unsupported sandbox policy")
 			assert.Nil(t, cmd)
 			assert.Nil(t, done)
+			requireLockFree(t, pl)
 			_, err = os.Lstat(missing)
 			assert.ErrorIs(t, err, os.ErrNotExist)
 			assert.NoFileExists(t, pl.recordPath)
@@ -366,6 +379,7 @@ func TestBwrapArgsRefusesUnresolvedSymlinkTargetsInWriteRoot(t *testing.T) {
 					require.ErrorIs(t, err, ErrDeniedSymlink)
 					assert.Nil(t, cmd)
 					assert.Nil(t, done)
+					requireLockFree(t, pl)
 					for _, path := range []string{missing, ordinary, pl.recordPath} {
 						_, err := os.Lstat(path)
 						assert.ErrorIs(t, err, os.ErrNotExist)
@@ -459,7 +473,6 @@ func TestPlaceholdersRemovedAfterLastCommand(t *testing.T) {
 	require.NoError(t, pl.prepare([]placeholderDestination{{path: child, directory: true}}))
 	writeFile(t, full)
 	writeFile(t, filepath.Join(kept, "f"))
-	require.NoError(t, pl.record(nil))
 	pl.finish(first)
 	for _, p := range []string{empty, full, child, kept} {
 		_, err := os.Lstat(p)
@@ -487,7 +500,7 @@ func TestPlaceholdersLeftByKilledKopiSwept(t *testing.T) {
 	// A killed append leaves a truncated tail; a later append stands alone.
 	f, err := os.OpenFile(pl.recordPath, os.O_WRONLY|os.O_APPEND, 0)
 	require.NoError(t, err)
-	_, err = f.WriteString(`[{"path":`)
+	_, err = f.WriteString(`{"path":`)
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 	require.NoError(t, pl.prepare([]placeholderDestination{{path: nested, directory: true}}))
@@ -605,22 +618,19 @@ func TestPlaceholdersDoNotAdoptUnownedEntries(t *testing.T) {
 }
 
 func TestPlaceholdersIgnoreIncompleteAndUnknownRecords(t *testing.T) {
-	for _, record := range []string{"unknown kind", "wrong kind", "missing identity", "malformed", "unterminated"} {
+	for _, record := range []string{"wrong kind", "missing identity", "malformed", "unterminated"} {
 		t.Run(record, func(t *testing.T) {
 			path := filepath.Join(resolvedTemp(t), "entry")
 			owned, err := createPlaceholder(placeholderDestination{path: path})
 			require.NoError(t, err)
 			require.NotNil(t, owned)
-			if record == "unknown kind" {
-				owned.Kind = "unknown"
-			}
 			if record == "wrong kind" {
-				owned.Kind = "directory"
+				owned.Directory = true
 			}
 			if record == "missing identity" {
-				owned.Inode = nil
+				owned.Inode = 0
 			}
-			data, err := json.Marshal([]placeholderOwnership{*owned})
+			data, err := json.Marshal(owned)
 			require.NoError(t, err)
 			if record == "malformed" {
 				data = data[:len(data)-2]
@@ -657,9 +667,9 @@ func TestPlaceholdersConcurrentCreation(t *testing.T) {
 	require.NoError(t, <-done)
 	data, err := os.ReadFile(pl.recordPath)
 	require.NoError(t, err)
-	var records []placeholderOwnership
-	require.NoError(t, json.Unmarshal(bytes.TrimSpace(data), &records))
-	require.Len(t, records, 1)
+	var record placeholderOwnership
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(data), &record))
+	assert.Equal(t, path, record.Path)
 	pl.finish(first)
 	assert.FileExists(t, path)
 	pl.finish(second)
@@ -952,7 +962,7 @@ func TestBwrapBackgroundProcessEndsWithCommand(t *testing.T) {
 	cmd, done, err := sb.Command([]string{"/bin/bash", "-c", `sleep 600 </dev/null >/dev/null 2>&1 &`})
 	require.NoError(t, err)
 	defer done()
-	// Every process the command starts inherits w as fd 4, so r reaches its
+	// Every process the command starts inherits w as fd 5, so r reaches its
 	// end once they have all gone.
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
@@ -974,6 +984,41 @@ func TestBwrapBackgroundProcessEndsWithCommand(t *testing.T) {
 	}
 }
 
+func TestBwrapDoneWaitsForNamespace(t *testing.T) {
+	dir := t.TempDir()
+	sb := newBwrapIn(t, dir, Policy{})[0]
+	// The child leaves the process group, so killing the group would not reach
+	// it; it ends only when the namespace does. It holds w, and reports ready
+	// on stdout once started.
+	cmd, done, err := sb.Command([]string{"/bin/bash", "-c", `setsid sleep 600 </dev/null >/dev/null 2>&1 & echo ready; exec sleep 600`})
+	require.NoError(t, err)
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	defer r.Close()
+	cmd.ExtraFiles = append(cmd.ExtraFiles, w)
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+	require.NoError(t, w.Close())
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "ready\n", line)
+
+	// Only the outer bwrap dies; the namespace's PID 1 goes with it, but not
+	// necessarily before Wait returns.
+	require.NoError(t, cmd.Process.Kill())
+	_ = cmd.Wait()
+	done()
+
+	fds := []unix.PollFd{{Fd: int32(r.Fd()), Events: unix.POLLIN}}
+	n, err := unix.Poll(fds, 0)
+	require.NoError(t, err)
+	require.Equal(t, 1, n, "the namespace still holds the pipe after done")
+	got, err := r.Read(make([]byte, 1))
+	assert.Zero(t, got)
+	assert.ErrorIs(t, err, io.EOF)
+}
+
 func TestBwrapSpecialDirectoryDenies(t *testing.T) {
 	for _, path := range []string{"/proc", "/dev"} {
 		t.Run(path, func(t *testing.T) {
@@ -990,36 +1035,56 @@ func TestBwrapUnixDatagramSocketpairRefused(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("bubblewrap is the Linux sandbox")
 	}
-	for _, network := range []bool{false, true} {
-		sb := newBwrap(t, Policy{Network: network})[0]
-		dir := t.TempDir()
-		path := filepath.Join(dir, "s")
-		ln, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: path, Net: "unixgram"})
-		require.NoError(t, err)
-		defer ln.Close()
-		script := `import socket, sys; a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM); a.sendto(b"probe", sys.argv[1])`
-		control := exec.CommandContext(t.Context(), "python3", "-c", script, path)
-		out, err := control.CombinedOutput()
-		require.NoError(t, err, string(out))
-		buf := make([]byte, 16)
-		n, _, err := ln.ReadFromUnix(buf)
-		require.NoError(t, err)
-		require.Equal(t, "probe", string(buf[:n]))
+	// Linux makes a SOCK_RAW Unix socket a datagram one.
+	for _, kind := range []string{"SOCK_DGRAM", "SOCK_RAW"} {
+		for _, network := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/network=%v", kind, network), func(t *testing.T) {
+				sb := newBwrap(t, Policy{Network: network})[0]
+				dir := t.TempDir()
+				path := filepath.Join(dir, "s")
+				ln, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: path, Net: "unixgram"})
+				require.NoError(t, err)
+				defer ln.Close()
+				script := `import socket, sys; a, b = socket.socketpair(socket.AF_UNIX, socket.` + kind + `); a.sendto(b"probe", sys.argv[1])`
+				control := exec.CommandContext(t.Context(), "python3", "-c", script, path)
+				out, err := control.CombinedOutput()
+				if kind == "SOCK_RAW" && err != nil {
+					t.Skipf("%s socketpair fails outside the sandbox: %v: %s", kind, err, out)
+				}
+				require.NoError(t, err, string(out))
+				buf := make([]byte, 16)
+				n, _, err := ln.ReadFromUnix(buf)
+				require.NoError(t, err)
+				require.Equal(t, "probe", string(buf[:n]))
 
-		probe := `import errno, socket, sys
+				probe := `import errno, socket, sys
 try:
-    a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    a, b = socket.socketpair(socket.AF_UNIX, socket.` + kind + `)
 except OSError as e:
     assert e.errno == errno.EPERM, e
 else:
     a.sendto(b"escaped", sys.argv[1])
     sys.exit("Unix datagram socketpair was allowed")`
-		cmd, done, err := sb.Command([]string{"python3", "-c", probe, path})
-		require.NoError(t, err)
-		out, err = cmd.CombinedOutput()
-		done()
-		require.NoError(t, err, "network=%v: %s", network, out)
+				cmd, done, err := sb.Command([]string{"python3", "-c", probe, path})
+				require.NoError(t, err)
+				out, err = cmd.CombinedOutput()
+				done()
+				require.NoError(t, err, "%s", out)
+			})
+		}
 	}
+}
+
+func TestBwrapUnixStreamSocketpairAllowed(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bubblewrap is the Linux sandbox")
+	}
+	sb := newBwrap(t, Policy{})[0]
+	cmd, done, err := sb.Command([]string{"python3", "-c", "import socket; socket.socketpair()"})
+	require.NoError(t, err)
+	out, err := cmd.CombinedOutput()
+	done()
+	require.NoError(t, err, string(out))
 }
 
 func TestBwrapUserNamespaceRefused(t *testing.T) {

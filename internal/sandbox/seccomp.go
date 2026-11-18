@@ -16,12 +16,14 @@ const (
 	afVsock      = 40
 	cloneNewUser = 0x10000000
 	enosys       = 38
+	sockDgram    = 2   // bit set in SOCK_DGRAM (2) and SOCK_RAW (3)
+	sockNotDgram = 0xc // bits clear in both, within SOCK_TYPE_MASK
 )
 
 // seccompFilter returns the program bwrap's --seccomp installs, as
 // little-endian sock_filter records. These fail with EPERM: creating a Unix
-// or VM socket or a Unix socketpair, which the network namespace does not
-// fence; using io_uring,
+// or VM socket or a Unix datagram socketpair, which the network namespace
+// does not fence; using io_uring,
 // whose operations create sockets without socket(2); and creating a user
 // namespace, in which a command could detach the mounts that deny it paths.
 // clone3 fails with ENOSYS, as its flags lie in memory a filter cannot read,
@@ -41,7 +43,14 @@ func seccompFilter() ([]byte, error) {
 			{
 				NamesWithCondtions: []seccomp.NameWithConditions{
 					{Name: "socket", Conditions: lowWordEquals(0, afUnix)},
-					{Name: "socketpair", Conditions: lowWordEquals(0, afUnix)},
+					// A datagram pair can sendto any path socket; stream and
+					// seqpacket pairs cannot address anything else. Linux makes
+					// SOCK_RAW (3) a datagram too, so the type's low four bits
+					// are 2 or 3, whatever flags ride above.
+					{Name: "socketpair", Conditions: append(lowWordEquals(0, afUnix), seccomp.ArgumentConditions{
+						{Argument: 1, Operation: seccomp.BitsSet, Value: sockDgram},
+						{Argument: 1, Operation: seccomp.BitsNotSet, Value: sockNotDgram},
+					}...)},
 					{Name: "socket", Conditions: lowWordEquals(0, afVsock)},
 					// The flags are the first argument of both on amd64 and
 					// arm64.

@@ -58,9 +58,6 @@ func New(ctx context.Context, dir string, policies ...Policy) ([]*Sandbox, error
 			return nil, fmt.Errorf("%w on %s/%s", ErrUnavailable, runtime.GOOS, runtime.GOARCH)
 		}
 		path, err := exec.LookPath("bwrap")
-		if err == nil {
-			path, err = filepath.Abs(path)
-		}
 		if err != nil {
 			return nil, fmt.Errorf("%w: failed to find bwrap: %w", ErrUnavailable, err)
 		}
@@ -100,9 +97,9 @@ func checkAbsolute(policies []Policy) error {
 	return nil
 }
 
-// Command returns the command that runs argv inside the sandbox. The caller
-// must call done exactly once, after the command has been reaped or when it
-// never started.
+// Command returns the command that runs argv inside the sandbox. When err is
+// nil, the caller must call done exactly once, after the command has been
+// reaped or if it never starts.
 func (s *Sandbox) Command(argv []string) (cmd *exec.Cmd, done func(), err error) {
 	if s.bwrap != nil {
 		return s.bwrap.command(argv)
