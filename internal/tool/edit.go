@@ -54,10 +54,10 @@ func NewEdit(ws *Workspace) Tool {
 		},
 		Capability: policy.Write,
 		Target:     pathTarget(ws),
-		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (Result, error) {
 			args, err := decodeEditArgs(raw)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
 			return edit(ctx, ws, args, admit)
 		},
@@ -102,41 +102,41 @@ func decodeEditArgs(raw json.RawMessage) (editArgs, error) {
 	return args, nil
 }
 
-func edit(ctx context.Context, ws *Workspace, args editArgs, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+func edit(ctx context.Context, ws *Workspace, args editArgs, admit func(policy.Target) (policy.Mode, error)) (Result, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return Result{}, err
 	}
 	dest, err := ws.prepare(args.FilePath)
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 	defer func() { dest.parent.Close() }()
 	f, err := dest.open()
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 	defer f.Close()
 	if err := ws.checkRead(f, args.FilePath); err != nil {
-		return "", err
+		return Result{}, err
 	}
 	if _, err := admit(dest.target); err != nil {
-		return "", err
+		return Result{}, err
 	}
 	content, err := readForEdit(f, args.FilePath)
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 	dest.original, err = f.Stat()
 	if err != nil {
-		return "", fmt.Errorf("failed to stat %s: %w", args.FilePath, err)
+		return Result{}, fmt.Errorf("failed to stat %s: %w", args.FilePath, err)
 	}
 	dest.content = []byte(content)
 	n := strings.Count(content, args.OldString)
 	switch {
 	case n == 0:
-		return "", fmt.Errorf("%w in %s", ErrNoMatch, args.FilePath)
+		return Result{}, fmt.Errorf("%w in %s", ErrNoMatch, args.FilePath)
 	case n > 1 && !args.ReplaceAll:
-		return "", fmt.Errorf("%w in %s (%d matches); add context to old_string or set replace_all", ErrAmbiguousMatch, args.FilePath, n)
+		return Result{}, fmt.Errorf("%w in %s (%d matches); add context to old_string or set replace_all", ErrAmbiguousMatch, args.FilePath, n)
 	}
 	limit := 1
 	if args.ReplaceAll {
@@ -144,15 +144,15 @@ func edit(ctx context.Context, ws *Workspace, args editArgs, admit func(policy.T
 	}
 	updated := strings.Replace(content, args.OldString, *args.NewString, limit)
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return Result{}, err
 	}
 	if err := dest.write(ws, []byte(updated)); err != nil {
-		return "", err
+		return Result{}, err
 	}
 	if n == 1 {
-		return "replaced 1 occurrence in " + args.FilePath, nil
+		return Result{Text: "replaced 1 occurrence in " + args.FilePath}, nil
 	}
-	return fmt.Sprintf("replaced %d occurrences in %s", n, args.FilePath), nil
+	return Result{Text: fmt.Sprintf("replaced %d occurrences in %s", n, args.FilePath)}, nil
 }
 
 func readForEdit(f *os.File, path string) (string, error) {
