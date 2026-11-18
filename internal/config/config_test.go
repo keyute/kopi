@@ -29,6 +29,7 @@ func withDefaults(c Config) Config {
 	c.StatusLine = DefaultStatusLine()
 	c.Permissions = Permissions{Allow: []string{}, Ask: []string{}, Deny: []string{}}
 	c.Sandbox = Sandbox{AllowWrite: []string{}, DenyRead: []string{}}
+	c.Classifier = Classifier{Instructions: []string{}}
 	c.MCPServers = map[string]MCPServer{}
 	return c
 }
@@ -368,6 +369,61 @@ func TestSandboxListsReplaceAcrossLayers(t *testing.T) {
 	assert.Equal(t, global.Name, r.Origins["sandbox.network"])
 }
 
+func TestResolveClassifier(t *testing.T) {
+	global := globalLayer(t, `{"classifier": {"enabled": true, "model": "anthropic/claude-haiku", "instructions": ["deploys are fine", "no force push"]}}`)
+	r, err := Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Equal(t, Classifier{Enabled: true, Model: "anthropic/claude-haiku", Instructions: []string{"deploys are fine", "no force push"}}, r.Config.Classifier)
+	for _, key := range []string{"enabled", "model", "instructions"} {
+		assert.Equal(t, global.Name, r.Origins["classifier."+key])
+	}
+
+	r, err = Resolve(Defaults())
+	require.NoError(t, err)
+	assert.Equal(t, Classifier{Instructions: []string{}}, r.Config.Classifier)
+	assert.NotContains(t, r.Origins, "classifier.model")
+}
+
+func TestResolveRejectsInvalidClassifierModelNamingLayer(t *testing.T) {
+	_, err := Resolve(Defaults(), Map("flags", map[string]any{"classifier": map[string]any{"model": "noslash"}}))
+	require.ErrorIs(t, err, ErrInvalidModel)
+	assert.Contains(t, err.Error(), "flags")
+}
+
+func TestResolveRejectsBlankClassifierInstructionNamingLayerAndIndex(t *testing.T) {
+	for _, blank := range []string{"", "  \t"} {
+		global := globalLayer(t, fmt.Sprintf(`{"classifier": {"instructions": ["ok", %q]}}`, blank))
+		_, err := Resolve(Defaults(), global)
+		require.ErrorIs(t, err, ErrInvalidValue)
+		assert.Contains(t, err.Error(), global.Name)
+		assert.Contains(t, err.Error(), "classifier.instructions[1]")
+	}
+}
+
+func TestResolveRejectsBadClassifierShape(t *testing.T) {
+	global := globalLayer(t, `{"classifier": {"enabled": "true"}}`)
+	_, err := Resolve(Defaults(), global)
+	require.ErrorIs(t, err, ErrInvalidValue)
+	assert.Contains(t, err.Error(), global.Name)
+
+	_, err = Resolve(Defaults(), globalLayer(t, `{"classifier": {"instructions": "be careful"}}`))
+	require.ErrorIs(t, err, ErrInvalidValue)
+
+	global = globalLayer(t, `{"classifier": {"bogus": true}}`)
+	_, err = Resolve(Defaults(), global)
+	require.ErrorIs(t, err, ErrUnknownKey)
+	assert.Contains(t, err.Error(), global.Name)
+}
+
+func TestClassifierInstructionsReplaceAcrossLayers(t *testing.T) {
+	global := globalLayer(t, `{"classifier": {"enabled": true, "instructions": ["a", "b"]}}`)
+	r, err := Resolve(Defaults(), global, Map("flags", map[string]any{"classifier": map[string]any{"instructions": []any{"c"}}}))
+	require.NoError(t, err)
+	assert.Equal(t, Classifier{Enabled: true, Instructions: []string{"c"}}, r.Config.Classifier)
+	assert.Equal(t, "flags", r.Origins["classifier.instructions"])
+	assert.Equal(t, global.Name, r.Origins["classifier.enabled"])
+}
+
 func TestResolveMCPServers(t *testing.T) {
 	global := globalLayer(t, `{"mcpServers": {
 		"local": {"command": "npx", "args": ["-y", "pkg"], "env": {"TOKEN": "${TOKEN}"}},
@@ -481,7 +537,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	r, err := Resolve(Defaults())
 	require.NoError(t, err)
 	entries := r.Entries()
-	assert.Len(t, entries, 14+len(KeyActions))
+	assert.Len(t, entries, 17+len(KeyActions))
 	assert.IsIncreasing(t, entryKeys(entries))
 	assert.Contains(t, entries, Entry{Key: "model", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "smallModel", Value: "", Origin: "unset"})
@@ -499,6 +555,9 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "sandbox.allowWrite", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "sandbox.denyRead", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "sandbox.network", Value: "false", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "classifier.enabled", Value: "false", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "classifier.model", Value: "", Origin: "unset"})
+	assert.Contains(t, entries, Entry{Key: "classifier.instructions", Value: "[]", Origin: "default"})
 
 	r, err = Resolve(Defaults(), Map("flags", map[string]any{
 		"model":                "a/b",
@@ -508,6 +567,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 		"statusline":           map[string]any{"right": []any{}},
 		"permissions":          map[string]any{"deny": []any{"Read(.env)", "*(~/.ssh)"}},
 		"sandbox":              map[string]any{"enabled": false, "denyRead": []any{"~/.aws"}, "network": true},
+		"classifier":           map[string]any{"enabled": true, "model": "e/f"},
 	}))
 	require.NoError(t, err)
 	entries = r.Entries()
@@ -522,6 +582,9 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "sandbox.denyRead", Value: `["~/.aws"]`, Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "sandbox.network", Value: "true", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "sandbox.allowWrite", Value: "[]", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "classifier.enabled", Value: "true", Origin: "flags"})
+	assert.Contains(t, entries, Entry{Key: "classifier.model", Value: "e/f", Origin: "flags"})
+	assert.Contains(t, entries, Entry{Key: "classifier.instructions", Value: "[]", Origin: "default"})
 }
 
 func entryKeys(entries []Entry) []string {

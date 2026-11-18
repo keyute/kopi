@@ -137,7 +137,7 @@ func TestWriteRevokedBeforeRunLeavesWorkspaceUnchanged(t *testing.T) {
 		tool.Name: {Capability: tool.Capability, Target: tool.Target},
 	}, nil, func(context.Context, policy.Request) (policy.Decision, error) {
 		return policy.Decision{Answer: policy.Allow}, nil
-	})
+	}, nil)
 	args := json.RawMessage(`{"file_path":"missing/deep/file","content":"x"}`)
 	require.Empty(t, listDir(t, dir))
 	require.NoError(t, gate.Before(t.Context(), "call-1", tool.Name, args))

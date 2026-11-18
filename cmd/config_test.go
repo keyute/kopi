@@ -32,6 +32,9 @@ func TestConfigShowsOrigins(t *testing.T) {
 	assert.Regexp(t, `sandbox\.allowWrite\s+= \[\]\s+\(default\)`, stdout)
 	assert.Regexp(t, `sandbox\.denyRead\s+= \[\]\s+\(default\)`, stdout)
 	assert.Regexp(t, `sandbox\.network\s+= false\s+\(default\)`, stdout)
+	assert.Regexp(t, `classifier\.enabled\s+= false\s+\(default\)`, stdout)
+	assert.Regexp(t, `classifier\.model\s+=\s+\(unset\)`, stdout)
+	assert.Regexp(t, `classifier\.instructions\s+= \[\]\s+\(default\)`, stdout)
 	assert.Regexp(t, `model\s+= global/model-1\s+`+regexp.QuoteMeta("(global ("+configFile+"))"), stdout)
 
 	stdout, _, err = execute(t, "", "config", "--model", "flag/model-2")

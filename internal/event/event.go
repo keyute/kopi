@@ -54,6 +54,9 @@ type ApprovalRequested struct {
 	Preview       []tool.PreviewLine
 	// Rule is the ask rule and its source; "" when no rule asked.
 	Rule string
+	// Review is the classifier's verdict when it sent the call to the human;
+	// nil when it did not review.
+	Review *policy.Review
 	// Edits reports that "allow all edits this session" may be offered.
 	Edits bool
 }

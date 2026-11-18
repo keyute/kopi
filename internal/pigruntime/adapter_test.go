@@ -68,7 +68,7 @@ func TestHookBlocksToolUnknownToGate(t *testing.T) {
 		return toolOutput, nil
 	})
 	authority := policy.NewAuthority()
-	sess, err := r.open(t.Context(), OpenOptions{Model: fauxModel, Tools: []tool.Tool{probe}, Authority: authority}, policy.NewGate(authority, nil, nil, nil))
+	sess, err := r.open(t.Context(), OpenOptions{Model: fauxModel, Tools: []tool.Tool{probe}, Authority: authority}, policy.NewGate(authority, nil, nil, nil, nil))
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
 
@@ -111,7 +111,7 @@ func TestExecuteRefusesCallRevokedAfterBefore(t *testing.T) {
 	var ran atomic.Int32
 	authority := policy.NewAuthority()
 	authority.EnterExecute()
-	gate := policy.NewGate(authority, map[string]policy.ToolSpec{"Exec": {Capability: policy.Exec}}, nil, allowAll)
+	gate := policy.NewGate(authority, map[string]policy.ToolSpec{"Exec": {Capability: policy.Exec}}, nil, allowAll, nil)
 	require.NoError(t, gate.Before(t.Context(), "call-1", "Exec", json.RawMessage(`{}`)))
 	authority.EnterPlan()
 
@@ -128,7 +128,7 @@ func TestExecutePassesTheAdmittedModeToTheTool(t *testing.T) {
 		if want == policy.Execute {
 			authority.EnterExecute()
 		}
-		gate := policy.NewGate(authority, map[string]policy.ToolSpec{"Exec": {Capability: policy.Exec, Sandboxed: true, PlanSandboxed: true}}, nil, nil)
+		gate := policy.NewGate(authority, map[string]policy.ToolSpec{"Exec": {Capability: policy.Exec, Sandboxed: true, PlanSandboxed: true}}, nil, nil, nil)
 		require.NoError(t, gate.Before(t.Context(), "call-1", "Exec", json.RawMessage(`{}`)))
 		got := make(chan policy.Mode, 1)
 		exec := tool.Tool{Name: "Exec", Capability: policy.Exec, Run: func(_ context.Context, _ json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
@@ -420,7 +420,7 @@ func TestRealToolsRejectApprovalRetarget(t *testing.T) {
 						close(waiting)
 						<-answer
 						return policy.Decision{Answer: policy.Allow}, nil
-					})
+					}, nil)
 				done := make(chan error, 1)
 				go func() { done <- gate.Before(t.Context(), "call", name, raw) }()
 				<-waiting
@@ -463,7 +463,7 @@ func TestFailedPreparationConsumesGrant(t *testing.T) {
 	defer ws.Close()
 	read := tool.NewRead(ws)
 	authority := policy.NewAuthority()
-	gate := policy.NewGate(authority, map[string]policy.ToolSpec{"Read": {Capability: policy.Read, Target: read.Target}}, nil, nil)
+	gate := policy.NewGate(authority, map[string]policy.ToolSpec{"Read": {Capability: policy.Read, Target: read.Target}}, nil, nil, nil)
 	raw := json.RawMessage(`{"file_path":"missing"}`)
 	require.NoError(t, gate.Before(t.Context(), "call", "Read", raw))
 	result, err := (agentTool{tool: read, gate: gate}).Execute(t.Context(), "call", raw, nil)
@@ -530,4 +530,31 @@ func TestSessionMCPAdmission(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReviewDenialBlocksToolAndReportsReason(t *testing.T) {
+	r, faux := newTestRuntime(t, newSandbox(t))
+	requests := make(chan []ai.Message, 1)
+	call := ai.FauxAssistantMessage(
+		ai.FauxContentBlocks{ai.FauxToolCall("Exec", map[string]any{}, &ai.FauxToolCallOptions{ID: "call-1"})},
+		ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)},
+	)
+	faux.SetResponses([]ai.FauxResponseStep{call, captureRequest(requests, "ok")})
+
+	var ran atomic.Int32
+	authority := policy.NewAuthority()
+	authority.EnterExecute()
+	sess, err := r.Open(t.Context(), OpenOptions{
+		Model: fauxModel, Tools: []tool.Tool{execTool(&ran)}, Authority: authority, Approve: allowAll,
+		Review: func(context.Context, policy.Request) (policy.Review, error) {
+			return policy.Review{Verdict: policy.VerdictDeny, Reason: "too risky"}, nil
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+
+	_, err = sess.Send(t.Context(), Prompt{Text: "run it"}, nil, nil)
+	require.NoError(t, err)
+	assert.Contains(t, lastToolResult(t, <-requests), "too risky")
+	assert.Zero(t, ran.Load())
 }

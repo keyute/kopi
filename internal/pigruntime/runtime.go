@@ -118,6 +118,8 @@ type OpenOptions struct {
 	Rules *policy.Rules
 	// Approve nil means nobody can answer, so a call needing approval is denied.
 	Approve policy.Approver
+	// Review nil means a call needing approval goes straight to Approve.
+	Review policy.Reviewer
 }
 
 // PromptPart is one named piece of the system prompt. Parts are sent in
@@ -126,7 +128,7 @@ type OpenOptions struct {
 type PromptPart struct{ Name, Text string }
 
 func (r *Runtime) Open(ctx context.Context, o OpenOptions) (*Session, error) {
-	return r.open(ctx, o, policy.NewGate(o.Authority, tool.Specs(o.Tools), o.Rules, o.Approve))
+	return r.open(ctx, o, policy.NewGate(o.Authority, tool.Specs(o.Tools), o.Rules, o.Approve, o.Review))
 }
 
 // Check reports, without creating a session, the failures Open would report

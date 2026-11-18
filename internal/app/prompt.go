@@ -28,7 +28,7 @@ type mcpServer struct {
 // the model can load and call. The parts run from what changes least to
 // most: Kopi's own text, the instruction groups, then what the MCP servers
 // report.
-func systemPrompt(workspace string, tools []tool.Tool, groups []instruction.Group, servers []mcpServer) []pigruntime.PromptPart {
+func systemPrompt(workspace string, tools []tool.Tool, groups []instruction.Group, servers []mcpServer, reviewed bool) []pigruntime.PromptPart {
 	names := make([]string, 0, len(tools))
 	for _, t := range tools {
 		if !t.Deferred {
@@ -50,6 +50,9 @@ func systemPrompt(workspace string, tools []tool.Tool, groups []instruction.Grou
 			line = "Read-only tools work in both modes, the others only in execute mode, and any tool call may need the user's approval; in plan mode " + tools[i].Name + " runs too, but cannot write the workspace."
 		}
 		lines = append(lines, line)
+		if reviewed {
+			lines = append(lines, "Tool calls that would need the user's approval are first reviewed by a classifier model, which can allow them, deny them with a reason, or leave them to the user.")
+		}
 	}
 	lines = append(lines, "A tool call that is refused or that the user rejects returns an error saying so; when the rejection carries the user's feedback, act on it; never retry a rejected call unchanged.")
 	if slices.ContainsFunc(tools, func(t tool.Tool) bool { return t.Deferred }) {

@@ -101,3 +101,12 @@ func TestDisplayApprovalCarriesTitleAndPreview(t *testing.T) {
 	}, got)
 	assert.Equal(t, event.ApprovalRequested{CallID: "c2", Title: "Plain"}, plain)
 }
+
+func TestDisplayApprovalCopiesReview(t *testing.T) {
+	d := newDisplay([]tool.Tool{testTool("Plain", policy.Exec, nil)})
+	review := &policy.Review{Verdict: policy.VerdictDeny, Reason: "unsafe"}
+
+	got := d.approval(policy.Request{CallID: "c1", Tool: "Plain", Review: review})
+
+	assert.Same(t, review, got.Review)
+}

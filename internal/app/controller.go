@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/keyute/kopi/internal/classifier"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/history"
 	"github.com/keyute/kopi/internal/instruction"
@@ -54,6 +55,9 @@ type Config struct {
 	// Wake lets a task's end start a turn on its own; otherwise its notice
 	// waits for a request a human prompt starts.
 	Wake bool
+	// Classifier reviews the calls that would otherwise ask; nil means none
+	// are reviewed.
+	Classifier *classifier.Classifier
 }
 
 const maxReferenceEntries = 10000
@@ -188,7 +192,7 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	}
 	tools = append(tools, serverTools...)
 	c.tools = tools
-	c.prompt = systemPrompt(c.cfg.Workspace, c.tools, c.cfg.Instructions, servers)
+	c.prompt = systemPrompt(c.cfg.Workspace, c.tools, c.cfg.Instructions, servers, c.cfg.Classifier != nil)
 	return events
 }
 
@@ -926,6 +930,10 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	later := c.attempted
 	c.attempted = true
 	d := newDisplay(c.tools)
+	var rec *classifier.Record
+	if c.cfg.Classifier != nil {
+		rec = &classifier.Record{}
+	}
 	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
 		Model:        c.cfg.Model,
 		ResumeID:     req.ResumeID,
@@ -935,6 +943,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		Authority:    c.authority,
 		Rules:        c.cfg.Rules,
 		Approve:      c.approver(d),
+		Review:       c.reviewer(rec),
 	})
 	if err != nil {
 		return err
@@ -970,7 +979,10 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	}
 
 	bound := c.relay.bind()
-	emit := func(ev event.Event) { bound(d.apply(ev)) }
+	emit := func(ev event.Event) {
+		rec.Observe(ev)
+		bound(d.apply(ev))
+	}
 	unsubscribe := sess.Subscribe(emit)
 	id := sess.ID()
 	c.queue.Lock()
@@ -989,6 +1001,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	}
 	if changed.Resumed {
 		for _, ev := range sess.History() {
+			rec.Observe(ev)
 			changed.History = append(changed.History, d.apply(ev))
 		}
 	}
