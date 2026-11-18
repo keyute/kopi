@@ -40,7 +40,8 @@ func NewBash(sh, plan *Shell, tasks *Tasks) Tool {
 	if sh.Sandboxed() {
 		description += " Commands run in an OS sandbox that allows writing only in temporary directories, paths the user allowed " +
 			"and, in execute mode, the workspace; it may block reading some paths and the network. " +
-			"A blocked operation fails, typically with \"Operation not permitted\" or \"Read-only file system\"."
+			"A blocked operation fails, typically with \"Operation not permitted\" or \"Read-only file system\". " +
+			"A directory it blocks reading may instead appear empty."
 	}
 	planSandboxed := plan.Sandboxed()
 	return Tool{

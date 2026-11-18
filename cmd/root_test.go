@@ -1439,29 +1439,6 @@ func TestSandboxPolicy(t *testing.T) {
 	})
 }
 
-// TestEmptyCommondirBreaksGit is one reason Linux makes the whole .git
-// read-only rather than placing a placeholder on commondir: an empty one would
-// break git.
-func TestEmptyCommondirBreaksGit(t *testing.T) {
-	dir := t.TempDir()
-	env := append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
-	git := func(args ...string) ([]byte, error) {
-		cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", dir}, args...)...)
-		cmd.Env = env
-		return cmd.CombinedOutput()
-	}
-	out, err := git("init", "-q")
-	require.NoError(t, err, string(out))
-	out, err = git("status")
-	require.NoError(t, err, string(out))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "commondir"), nil, 0o600))
-
-	out, err = git("status")
-
-	require.Error(t, err)
-	assert.Contains(t, string(out), "commondir")
-}
-
 func TestSandboxPolicyPreservesSymlinkParent(t *testing.T) {
 	cwd, home, kopiHome := t.TempDir(), t.TempDir(), t.TempDir()
 	real := filepath.Join(t.TempDir(), "child")

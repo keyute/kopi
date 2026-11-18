@@ -5,10 +5,10 @@
 // Licensed under the Apache License, Version 2.0; see srt/LICENSE in this directory.
 // Modified by the Kopi authors: ported to Go; kept the placeholders for absent
 // denied paths, their removal once no command runs in any Kopi sharing a
-// directory, coordinated with a lock and creation-identity records, the ancestor
-// pins and the symlink refusal; dropped the / write root cover, 9p and WSL
-// handling, the ripgrep
-// scan, the network proxy, the argument file and read carve-outs; the seccomp
+// directory, coordinated with a lock and creation-identity records only among
+// Kopi processes sharing one home, the ancestor pins and the symlink refusal;
+// dropped the / write root cover, 9p and WSL handling, the ripgrep scan, the
+// network proxy, the argument file and read carve-outs; the seccomp
 // filter goes to bwrap's --seccomp rather than through a helper binary; empty
 // directories are read-only tmpfs mounts rather than a directory in the
 // temporary directory; and a symlink on a denied path inside a write root
@@ -410,7 +410,9 @@ type placeholderOwnership struct {
 // placeholders tracks only Kopi's successful creations. Each command holds a
 // shared lock for its lifetime; whoever ends last takes the lock exclusively
 // and sweeps committed ownership records, including those of killed processes.
-// A kill between creation and recording can leave an unowned orphan.
+// A kill between creation and recording can leave an unowned orphan. Processes
+// with different Kopi homes do not coordinate and can remove each other's
+// placeholders, unmounting the deny inside the other's running command.
 type placeholders struct {
 	lockPath   string
 	recordPath string
@@ -463,24 +465,35 @@ func placeholderParent(path string) (*os.Root, error) {
 	return parent, nil
 }
 
-func createPlaceholder(dest placeholderDestination) (*placeholderOwnership, error) {
+func createPlaceholder(dest placeholderDestination) (owned *placeholderOwnership, err error) {
 	parent, err := placeholderParent(dest.path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare sandbox placeholder: %w", err)
 	}
 	defer parent.Close()
 	name := filepath.Base(dest.path)
+	// Set once the entry was created by this call; a later failure removes it.
+	created := false
+	defer func() {
+		if err != nil && created {
+			_ = parent.Remove(name)
+		}
+	}()
 	var info fs.FileInfo
 	var f *os.File
 	if dest.directory {
 		err = parent.Mkdir(name, 0o700)
 		if err == nil {
+			// Remove refuses a non-empty directory, so this is safe before the
+			// identity check below.
+			created = true
 			f, err = parent.Open(name)
 			if err == nil {
 				defer f.Close()
 				info, err = f.Stat()
 				entry, lerr := parent.Lstat(name)
 				if err == nil && (lerr != nil || !entry.IsDir() || !os.SameFile(entry, info)) {
+					created = false // The entry may not be ours.
 					return nil, fmt.Errorf("failed to identify sandbox placeholder %s", dest.path)
 				}
 			}
@@ -488,6 +501,7 @@ func createPlaceholder(dest placeholderDestination) (*placeholderOwnership, erro
 	} else {
 		f, err = parent.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err == nil {
+			created = true
 			defer f.Close()
 			info, err = f.Stat()
 		}
@@ -513,6 +527,7 @@ func (pl *placeholders) prepare(destinations []placeholderDestination) error {
 		}
 		if owned != nil {
 			if err := pl.record(*owned); err != nil {
+				removePlaceholder(*owned)
 				return err
 			}
 		}
@@ -530,10 +545,7 @@ func (pl *placeholders) record(made placeholderOwnership) error {
 		return fmt.Errorf("failed to record sandbox placeholders: %w", err)
 	}
 	line = append(append([]byte{'\n'}, line...), '\n')
-	n, err := f.Write(line)
-	if err == nil && n != len(line) {
-		err = io.ErrShortWrite
-	}
+	_, err = f.Write(line)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}

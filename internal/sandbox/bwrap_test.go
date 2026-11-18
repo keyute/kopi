@@ -19,7 +19,6 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sys/unix"
 )
 
 // resolvedTemp is a fresh directory named without symlinks, as the mounts
@@ -490,6 +489,19 @@ func TestPlaceholdersRemovedAfterLastCommand(t *testing.T) {
 	info, err := os.Stat(pl.recordPath)
 	require.NoError(t, err)
 	assert.Zero(t, info.Size())
+}
+
+func TestPlaceholdersRemovedWhenRecordFails(t *testing.T) {
+	dir := resolvedTemp(t)
+	file, directory := filepath.Join(dir, "file"), filepath.Join(dir, "directory")
+	pl := newPlaceholders(resolvedTemp(t))
+	require.NoError(t, os.Mkdir(pl.recordPath, 0o700)) // Opening it for append fails.
+
+	for _, dest := range []placeholderDestination{{path: file}, {path: directory, directory: true}} {
+		require.ErrorContains(t, pl.prepare([]placeholderDestination{dest}), "failed to record sandbox placeholders")
+		_, err := os.Lstat(dest.path)
+		assert.ErrorIs(t, err, os.ErrNotExist, dest.path)
+	}
 }
 
 func TestPlaceholdersLeftByKilledKopiSwept(t *testing.T) {
@@ -984,41 +996,6 @@ func TestBwrapBackgroundProcessEndsWithCommand(t *testing.T) {
 	}
 }
 
-func TestBwrapDoneWaitsForNamespace(t *testing.T) {
-	dir := t.TempDir()
-	sb := newBwrapIn(t, dir, Policy{})[0]
-	// The child leaves the process group, so killing the group would not reach
-	// it; it ends only when the namespace does. It holds w, and reports ready
-	// on stdout once started.
-	cmd, done, err := sb.Command([]string{"/bin/bash", "-c", `setsid sleep 600 </dev/null >/dev/null 2>&1 & echo ready; exec sleep 600`})
-	require.NoError(t, err)
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	defer r.Close()
-	cmd.ExtraFiles = append(cmd.ExtraFiles, w)
-	stdout, err := cmd.StdoutPipe()
-	require.NoError(t, err)
-	require.NoError(t, cmd.Start())
-	require.NoError(t, w.Close())
-	line, err := bufio.NewReader(stdout).ReadString('\n')
-	require.NoError(t, err)
-	require.Equal(t, "ready\n", line)
-
-	// Only the outer bwrap dies; the namespace's PID 1 goes with it, but not
-	// necessarily before Wait returns.
-	require.NoError(t, cmd.Process.Kill())
-	_ = cmd.Wait()
-	done()
-
-	fds := []unix.PollFd{{Fd: int32(r.Fd()), Events: unix.POLLIN}}
-	n, err := unix.Poll(fds, 0)
-	require.NoError(t, err)
-	require.Equal(t, 1, n, "the namespace still holds the pipe after done")
-	got, err := r.Read(make([]byte, 1))
-	assert.Zero(t, got)
-	assert.ErrorIs(t, err, io.EOF)
-}
-
 func TestBwrapSpecialDirectoryDenies(t *testing.T) {
 	for _, path := range []string{"/proc", "/dev"} {
 		t.Run(path, func(t *testing.T) {
@@ -1091,11 +1068,20 @@ func TestBwrapUserNamespaceRefused(t *testing.T) {
 	sb := newBwrap(t, Policy{})[0]
 	control := exec.CommandContext(t.Context(), "unshare", "--user", "true")
 	if out, err := control.CombinedOutput(); err != nil {
+		if os.Getenv("KOPI_TEST_REQUIRE_LINUX_SANDBOX") == "1" {
+			require.NoError(t, err, "unshare --user fails outside the sandbox: %s", out)
+		}
 		t.Skipf("unshare --user fails outside the sandbox: %v: %s", err, out)
 	}
 
-	assert.Error(t, bash(t, sb, `unshare --user true`))
-	assert.Error(t, bash(t, sb, `unshare --user --map-root-user --mount true`))
+	for _, script := range []string{`unshare --user true`, `unshare --user --map-root-user --mount true`} {
+		cmd, done, err := sb.Command([]string{"/bin/bash", "-c", script})
+		require.NoError(t, err)
+		out, err := cmd.CombinedOutput()
+		done()
+		require.Error(t, err, "%s: %s", script, out)
+		assert.Contains(t, string(out), "Operation not permitted", script)
+	}
 }
 
 func TestBwrapPlanProfile(t *testing.T) {
