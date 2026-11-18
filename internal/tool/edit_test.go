@@ -28,7 +28,8 @@ func runEdit(t *testing.T, tool Tool, path, oldString, newString string, replace
 		"file_path": path, "old_string": oldString, "new_string": newString, "replace_all": replaceAll,
 	})
 	require.NoError(t, err)
-	return tool.Run(context.Background(), args, allowTarget)
+	res, err := tool.Run(context.Background(), args, allowTarget)
+	return res.Text, err
 }
 
 func readContent(t *testing.T, path string) string {

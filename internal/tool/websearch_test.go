@@ -81,7 +81,7 @@ func TestWebSearchReturnsAnswerAndSources(t *testing.T) {
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"query":"latest Go release"}`), admitRead)
 
 	require.NoError(t, err)
-	assert.Equal(t, "Go 1.27 is out.\n\nSources:\n- [Go 1.27 notes](https://go.dev/doc/go1.27)\n- https://example.com/news", out)
+	assert.Equal(t, "Go 1.27 is out.\n\nSources:\n- [Go 1.27 notes](https://go.dev/doc/go1.27)\n- https://example.com/news", out.Text)
 	assert.Equal(t, []searchCall{{webSearchSystemPrompt, "latest Go release"}}, *calls)
 }
 
@@ -92,8 +92,8 @@ func TestWebSearchCountsOnlyKopisSources(t *testing.T) {
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"query":"q"}`), admitRead)
 
 	require.NoError(t, err)
-	assert.Equal(t, "No idea.\n\nSources: none", out)
-	assert.Equal(t, "no sources", tool.Display.Summary(out))
+	assert.Equal(t, "No idea.\n\nSources: none", out.Text)
+	assert.Equal(t, "no sources", tool.Display.Summary(out.Text))
 }
 
 func TestWebSearchIgnoresSourcesTheAnswerListsItself(t *testing.T) {
@@ -103,8 +103,8 @@ func TestWebSearchIgnoresSourcesTheAnswerListsItself(t *testing.T) {
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"query":"q"}`), admitRead)
 
 	require.NoError(t, err)
-	assert.Equal(t, "Maybe.\n\nSources:\n- a\n- b\n\nSources: none", out)
-	assert.Equal(t, "no sources", tool.Display.Summary(out))
+	assert.Equal(t, "Maybe.\n\nSources:\n- a\n- b\n\nSources: none", out.Text)
+	assert.Equal(t, "no sources", tool.Display.Summary(out.Text))
 }
 
 func TestWebSearchCutsSourcesToTwenty(t *testing.T) {
@@ -118,9 +118,9 @@ func TestWebSearchCutsSourcesToTwenty(t *testing.T) {
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"query":"q"}`), admitRead)
 
 	require.NoError(t, err)
-	assert.Contains(t, out, "- https://example.com/19")
-	assert.NotContains(t, out, "https://example.com/20")
-	assert.Equal(t, "20 sources", tool.Display.Summary(out))
+	assert.Contains(t, out.Text, "- https://example.com/19")
+	assert.NotContains(t, out.Text, "https://example.com/20")
+	assert.Equal(t, "20 sources", tool.Display.Summary(out.Text))
 }
 
 func TestWebSearchWrapsSearchError(t *testing.T) {

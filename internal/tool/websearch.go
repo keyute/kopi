@@ -51,22 +51,22 @@ func NewWebSearch(search func(ctx context.Context, system, query string) (Search
 		},
 		Capability: policy.Read,
 		Ask:        true,
-		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (string, error) {
+		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (Result, error) {
 			args, err := decodeArgs[webSearchArgs](raw)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
 			if strings.TrimSpace(args.Query) == "" {
-				return "", fmt.Errorf("%w: query is required", ErrInvalidArgs)
+				return Result{}, fmt.Errorf("%w: query is required", ErrInvalidArgs)
 			}
 			if _, err := admit(policy.Target{}); err != nil {
-				return "", err
+				return Result{}, err
 			}
 			res, err := search(ctx, webSearchSystemPrompt, args.Query)
 			if err != nil {
-				return "", fmt.Errorf("failed to search the web: %w", err)
+				return Result{}, fmt.Errorf("failed to search the web: %w", err)
 			}
-			return searchOutput(res), nil
+			return Result{Text: searchOutput(res)}, nil
 		},
 		Display: Display{
 			Title: func(raw json.RawMessage) string {
