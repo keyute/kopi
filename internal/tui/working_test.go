@@ -187,6 +187,12 @@ func TestWorkingRowNamesTheBackgroundKey(t *testing.T) {
 		assert.Contains(t, screen(m), "⠋ Waiting for you…", "not while an approval waits")
 		send(m, event.ApprovalEnded{Token: ask.Token})
 		assert.Equal(t, "⠋ Working… 0s · ctrl+b to background", working())
+
+		send(m, event.PlanRequested{Token: 9, Plan: "# plan"})
+		assert.Contains(t, screen(m), "⠋ Waiting for you…", "not while a plan waits")
+		assert.NotContains(t, screen(m), "to background")
+		send(m, event.PlanEnded{Token: 9})
+		assert.Equal(t, "⠋ Working… 0s · ctrl+b to background", working())
 	})
 }
 

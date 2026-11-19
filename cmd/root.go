@@ -481,20 +481,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	}
 	if len(agents) > 0 {
 		cfg.Agents = agents
-		for _, t := range tools {
-			switch t.Name {
-			case "Bash":
-				cfg.AgentTools = append(cfg.AgentTools, tool.NewBash(shell, planShell, nil))
-			case "Read":
-				cfg.AgentTools = append(cfg.AgentTools, tool.NewRead(ws))
-			case "Write":
-				cfg.AgentTools = append(cfg.AgentTools, tool.NewWrite(ws))
-			case "Edit":
-				cfg.AgentTools = append(cfg.AgentTools, tool.NewEdit(ws))
-			default:
-				cfg.AgentTools = append(cfg.AgentTools, t)
-			}
-		}
+		cfg.AgentTools = agentTools(tools, ws, shell, planShell)
 	}
 	if len(set.servers) > 0 {
 		cfg.Servers = func(ctx context.Context) ([]pigruntime.ServerStatus, error) { return waitServers(ctx, servers) }
@@ -569,6 +556,27 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		closeErr = fmt.Errorf("running work did not stop before exit: %w", closeErr)
 	}
 	return errors.Join(runErr, closeErr)
+}
+
+// agentTools is tools with the file and shell tools rebound for a subagent.
+// ws is the plain workspace: only the root's own file tools reach the plan file.
+func agentTools(tools []tool.Tool, ws *tool.Workspace, shell, planShell *tool.Shell) []tool.Tool {
+	var out []tool.Tool
+	for _, t := range tools {
+		switch t.Name {
+		case "Bash":
+			out = append(out, tool.NewBash(shell, planShell, nil))
+		case "Read":
+			out = append(out, tool.NewRead(ws))
+		case "Write":
+			out = append(out, tool.NewWrite(ws))
+		case "Edit":
+			out = append(out, tool.NewEdit(ws))
+		default:
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // skippedList joins parts as "A are", "A and B are" or "A, B and C are"; each

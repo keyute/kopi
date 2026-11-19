@@ -942,6 +942,9 @@ func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session
 		if !closed {
 			c.requeue(res.UndeliveredNotices)
 		}
+		if res.ModeUndelivered {
+			c.told = ""
+		}
 		next, unsent := settle(w.stopped, cancelled, res.Outcome, res.Sent, parts, res.Undelivered, w.handBack, c.pending)
 		c.untell(next, unsent)
 		if !w.stopped {

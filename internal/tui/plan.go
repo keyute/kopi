@@ -15,7 +15,6 @@ import (
 // itself is a transcript block above it.
 type planDialog struct {
 	token uint64
-	path  string
 	d     *dialog
 }
 
@@ -26,7 +25,7 @@ func newPlanDialog(ev event.PlanRequested, km *keyMap, th theme) *planDialog {
 	}}
 	parts := []string{ev.Path, binding(km.editPlan, "edit"), scrollHint(km), binding(km.interrupt, "dismiss")}
 	d.note = strings.Join(slices.DeleteFunc(parts, isEmpty), " · ")
-	return &planDialog{token: ev.Token, path: ev.Path, d: d}
+	return &planDialog{token: ev.Token, d: d}
 }
 
 // planRows draws d in place of the composer within maxRows, its field growing
@@ -84,7 +83,7 @@ func (m *model) planKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.c.AnswerPlan(p.token, tool.PlanAnswer{})
 		return nil
 	case key.Matches(msg, km.editPlan):
-		return m.openEditor(p.path)
+		return m.openEditor(m.c.PlanFile())
 	case key.Matches(msg, km.paste) && p.d.field() != nil:
 		return readClipboardText(m.clip, p.d.field())
 	case key.Matches(msg, km.pageUp):

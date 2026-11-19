@@ -143,12 +143,12 @@ func TestPlanRequestedAppendsABlockAndTheSameTokenReplacesItsText(t *testing.T) 
 	tr.Apply(start("a"))
 	tr.Apply(event.PlanRequested{Token: 1, Plan: "# v1"})
 	tr.Apply(end("a"))
-	assert.Equal(t, []Block{row("a", OK), Plan{key: "item:1", Token: 1, Text: "# v1"}}, tr.Blocks(), "the tool row is an ordinary row")
+	assert.Equal(t, []Block{row("a", OK), Plan{key: "item:1", Text: "# v1"}}, tr.Blocks(), "the tool row is an ordinary row")
 
 	tr.Apply(event.PlanRequested{Token: 1, Plan: "# v2"})
 	tr.Apply(event.PlanEnded{Token: 1})
-	assert.Equal(t, []Block{row("a", OK), Plan{key: "item:1", Token: 1, Text: "# v2"}}, tr.Blocks(), "the block outlives the dialog")
+	assert.Equal(t, []Block{row("a", OK), Plan{key: "item:1", Text: "# v2"}}, tr.Blocks(), "the block outlives the dialog")
 
 	tr.Apply(event.PlanRequested{Token: 2, Plan: "# next"})
-	assert.Equal(t, []Block{row("a", OK), Plan{key: "item:1", Token: 1, Text: "# v2"}, Plan{key: "item:2", Token: 2, Text: "# next"}}, tr.Blocks())
+	assert.Equal(t, []Block{row("a", OK), Plan{key: "item:1", Text: "# v2"}, Plan{key: "item:2", Text: "# next"}}, tr.Blocks())
 }

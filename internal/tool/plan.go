@@ -40,11 +40,9 @@ func (p *Plans) Select(sessionID string) error {
 	return nil
 }
 
-// Path is the absolute plan file path, or "" when none is selected.
-func (p *Plans) Path() string { return p.current() }
-
-// current reads the selected file once, so one operation uses one name.
-func (p *Plans) current() string {
+// Path is the absolute plan file path, or "" when none is selected. It reads
+// the selected file once, so one operation uses one name.
+func (p *Plans) Path() string {
 	if p == nil {
 		return ""
 	}
@@ -58,7 +56,7 @@ func (p *Plans) current() string {
 
 // Read returns the plan's text; a missing file wraps fs.ErrNotExist.
 func (p *Plans) Read() (string, error) {
-	path := p.current()
+	path := p.Path()
 	if path == "" {
 		return "", fmt.Errorf("failed to read the plan file: %w", fs.ErrNotExist)
 	}
@@ -89,7 +87,7 @@ func (p *Plans) planTarget(path string) (policy.Target, error) {
 
 // target answers for abs when it is the plan file.
 func (p *Plans) target(abs string) (policy.Target, bool, error) {
-	path := p.current()
+	path := p.Path()
 	if path == "" || filepath.Clean(abs) != path {
 		return policy.Target{}, false, nil
 	}
@@ -100,19 +98,15 @@ func (p *Plans) target(abs string) (policy.Target, bool, error) {
 // prepare answers for abs when it is the plan file; path is the caller's
 // spelling, used in messages.
 func (p *Plans) prepare(abs, path string) (*writeDestination, bool, error) {
-	canonical := p.current()
-	if canonical == "" || filepath.Clean(abs) != canonical {
-		return nil, false, nil
+	t, ok, err := p.target(abs)
+	if !ok || err != nil {
+		return nil, ok, err
 	}
-	target, err := p.planTarget(canonical)
+	dest, err := p.destination(path, t.Path)
 	if err != nil {
 		return nil, true, err
 	}
-	dest, err := p.destination(path, canonical)
-	if err != nil {
-		return nil, true, err
-	}
-	dest.target = target
+	dest.target = t
 	return dest, true, nil
 }
 

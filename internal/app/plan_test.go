@@ -1,9 +1,11 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/synctest"
 
 	"github.com/MichaelKinsy/PiG/ai"
 	"github.com/stretchr/testify/assert"
@@ -214,4 +216,52 @@ func TestPlanModeWritesOnlyThePlanFile(t *testing.T) {
 	require.Len(t, results, 2)
 	assert.NotContains(t, results[0], "denied")
 	assert.Contains(t, results[1], policy.ErrDenied.Error())
+}
+
+func TestRefreshPlanIgnoresAnUnreadablePlanFile(t *testing.T) {
+	h := modeHarness(t)
+	w, req := planCall(t, h, "# Plan\n", pigruntimetest.Text("done"))
+
+	require.NoError(t, os.Remove(h.c.PlanFile()))
+	assert.False(t, h.c.RefreshPlan(req.Token), "the file is missing")
+	require.NoError(t, os.Mkdir(h.c.PlanFile(), 0o700))
+	assert.False(t, h.c.RefreshPlan(req.Token), "the file is a directory")
+
+	assert.Len(t, ofType[event.PlanRequested](h.rec.all()), 1)
+	assert.True(t, h.c.AnswerPlan(req.Token, tool.PlanAnswer{Feedback: "no"}), "the plan is still pending")
+	wait(t, w.Done())
+}
+
+func TestPlanApprovalSurvivesCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		rec := &recorder{}
+		c := &Controller{turn: &Work{sendCtx: ctx, cancel: cancel}, emit: rec.add, authority: policy.NewAuthority()}
+		type result struct {
+			answer tool.PlanAnswer
+			mode   policy.Mode
+			err    error
+		}
+		done := make(chan result)
+		go func() {
+			var r result
+			r.answer, r.mode, r.err = c.reviewPlan(ctx, "# Plan\n")
+			done <- r
+		}()
+
+		synctest.Wait()
+		asked := ofType[event.PlanRequested](rec.all())
+		require.Len(t, asked, 1)
+		require.Equal(t, policy.Plan, c.mode())
+		assert.True(t, c.AnswerPlan(asked[0].Token, tool.PlanAnswer{Approved: true}))
+		cancel()
+		synctest.Wait()
+
+		r := <-done
+		require.NoError(t, r.err)
+		assert.True(t, r.answer.Approved)
+		assert.Equal(t, policy.Execute, r.mode)
+		assert.Equal(t, policy.Execute, c.mode())
+	})
 }

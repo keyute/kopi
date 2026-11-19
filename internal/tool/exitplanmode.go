@@ -93,16 +93,15 @@ func NewExitPlanMode(plans *Plans, review ReviewPlan) Tool {
 }
 
 func planResult(a PlanAnswer, mode policy.Mode, edited bool) string {
-	var first string
+	var text string
 	switch {
 	case a.Approved:
-		first = planApproved
+		text = planApproved
 	case a.Feedback != "":
-		first = planRevise
+		text = planRevise
 	default:
-		first = planDismissed
+		text = planDismissed
 	}
-	text := first
 	if edited {
 		text += planEdited
 	}

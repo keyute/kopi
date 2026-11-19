@@ -455,6 +455,30 @@ func TestSubagentToolsNeverBackgroundOrDelegate(t *testing.T) {
 	}
 }
 
+func TestSubagentFileToolsNeverReachThePlanFile(t *testing.T) {
+	e := newTestEnv(t)
+	ws, err := tool.NewWorkspace(e.workspace, []string{e.kopiHome})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
+	plans := tool.NewPlans(filepath.Join(e.kopiHome, "plans"))
+	require.NoError(t, plans.Select("session"))
+	rootWS := ws.WithPlans(plans)
+	root := []tool.Tool{tool.NewRead(rootWS), tool.NewWrite(rootWS), tool.NewEdit(rootWS)}
+
+	args, err := json.Marshal(map[string]any{"file_path": plans.Path()})
+	require.NoError(t, err)
+	for _, tl := range root {
+		target, err := tl.Target(args)
+		require.NoError(t, err, "root %s", tl.Name)
+		assert.True(t, target.PlanFile, "root %s", tl.Name)
+	}
+	for _, tl := range agentTools(root, ws, nil, nil) {
+		target, err := tl.Target(args)
+		require.NoError(t, err, "subagent %s", tl.Name)
+		assert.False(t, target.PlanFile, "subagent %s", tl.Name)
+	}
+}
+
 func TestRootRejectsInvalidAgentDefinition(t *testing.T) {
 	e := newTestEnv(t)
 	path := e.writeAgent(t, "color: red\n")

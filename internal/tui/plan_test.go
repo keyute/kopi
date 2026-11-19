@@ -264,6 +264,7 @@ func recordExec(m *model) *[]execCall {
 func TestPlanEditKeyRunsTheEditorThenRefreshesThePlan(t *testing.T) {
 	m, c := openPlan(t)
 	m.getenv = func(string) string { return "vim -u NONE" }
+	c.planFile = planPath
 	calls := recordExec(m)
 
 	press(m, ctrlG)

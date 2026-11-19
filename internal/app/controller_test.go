@@ -2888,3 +2888,17 @@ func TestModeLineIsToldAgainWhenItsPromptWasNotDelivered(t *testing.T) {
 	c.untell(sent)
 	assert.Equal(t, line, c.tell([]pigruntime.Prompt{{Text: "c"}})[0].Mode)
 }
+
+func TestOpenReportsPlanFileSelectionFailure(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	blocker := filepath.Join(sb.Home, "blocker")
+	require.NoError(t, os.WriteFile(blocker, nil, 0o600))
+	h := newHarness(t, sb, Config{Plans: tool.NewPlans(filepath.Join(blocker, "plans"))})
+
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+
+	errs := ofType[event.Error](h.rec.all())
+	require.Len(t, errs, 1)
+	assert.ErrorContains(t, errs[0].Err, "failed to select the plan file")
+	assert.Empty(t, h.c.PlanFile())
+}

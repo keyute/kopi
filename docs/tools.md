@@ -173,7 +173,7 @@
   - A search an Anthropic response pauses mid-turn returns what it has.
 - In an `AskUserQuestion` dialog Space, Left, Right and the number keys are fixed keys, not [`keys`](configuration.md#keys) entries.
 - A note on an option that is not chosen is dropped.
-- The plan file is matched by its exact path only; any other path to the same file is treated like the rest of Kopi's home.
+- The plan file is matched by its absolute, cleaned path; a symlink, hard link or different-case spelling of it is treated like the rest of Kopi's home.
 - On resume the plan is not drawn again.
 - In an `ExitPlanMode` dialog the number keys are fixed keys, not [`keys`](configuration.md#keys) entries.
 - While a question is open PgUp and PgDn, and the mouse wheel over the dialog, scroll a cut preview or review, not the transcript, and do nothing when nothing is cut.
