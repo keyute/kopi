@@ -100,15 +100,3 @@ func (m *model) planKey(msg tea.KeyPressMsg) tea.Cmd {
 	m.c.AnswerPlan(p.token, tool.PlanAnswer{Approved: p.d.sel == 0, Feedback: p.d.text()})
 	return cmd
 }
-
-// endPlan drops the pending plan and, unless an approval is shown over it,
-// its dialog.
-func (m *model) endPlan() {
-	if m.plan == nil {
-		return
-	}
-	m.plan = nil
-	if m.approval == nil {
-		m.dialog = nil
-	}
-}

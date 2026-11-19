@@ -218,8 +218,8 @@ func TestLoginSecretNeverAppearsInTheView(t *testing.T) {
 
 func TestLoginPastesTheClipboardIntoTheMaskedField(t *testing.T) {
 	m, _ := openLogin(t, event.LoginRequested{Token: 1, Message: "API key", Secret: true})
-	m.Update(clipboardTextMsg{text: "sk-clip", field: m.dialog.field()})
-	assert.Equal(t, "sk-clip", m.dialog.text())
+	m.Update(clipboardTextMsg{text: "sk-clip", field: m.frontDialog().field()})
+	assert.Equal(t, "sk-clip", m.frontDialog().text())
 	assert.NotContains(t, m.View().Content, "clip")
 }
 
@@ -228,7 +228,7 @@ func TestLoginEnterAnswersWithTheTypedText(t *testing.T) {
 	pasteText(m, "abc")
 	press(m, enter)
 	assert.Equal(t, []loginAnswer{{7, "abc"}}, c.loginAnswers)
-	assert.Empty(t, m.dialog.text(), "the field is cleared once answered")
+	assert.Empty(t, m.frontDialog().text(), "the field is cleared once answered")
 	assert.True(t, m.composer.empty(), "the answer never enters the composer")
 }
 
@@ -263,7 +263,7 @@ func TestLoginEndedClosesTheDialog(t *testing.T) {
 
 	send(m, event.LoginEnded{Token: 4})
 	assert.Nil(t, m.login)
-	assert.Nil(t, m.dialog)
+	assert.Nil(t, m.frontDialog())
 	assert.NotContains(t, strings.Join(screen(m), "\n"), "Code")
 }
 
@@ -271,17 +271,17 @@ func TestLoginEndedKeepsAnApprovalDialog(t *testing.T) {
 	m, _ := newTestModel(t, 60, 20)
 	send(m, event.ApprovalRequested{Token: 1, Title: "Edit a.go"})
 	send(m, event.LoginEnded{Token: 1})
-	assert.NotNil(t, m.dialog)
+	assert.NotNil(t, m.frontDialog())
 }
 
 func TestLoginDialogSurvivesSessionChangeAndTurnEnd(t *testing.T) {
 	m, _ := openLogin(t, event.LoginRequested{Token: 1, Message: "Code"})
 	send(m, event.SessionChanged{})
 	assert.NotNil(t, m.login)
-	assert.NotNil(t, m.dialog)
+	assert.NotNil(t, m.frontDialog())
 	send(m, event.TurnEnd{})
 	assert.NotNil(t, m.login)
-	assert.NotNil(t, m.dialog)
+	assert.NotNil(t, m.frontDialog())
 }
 
 func TestSubmitFlashesWhileLoggingIn(t *testing.T) {

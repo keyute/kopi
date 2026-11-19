@@ -30,7 +30,7 @@ const (
 
 // questionDialog is the AskUserQuestion dialog, drawn in the composer's slot:
 // one page per question and, with several, a review page after them. The
-// model's dialog is current().
+// model's front dialog is current() while the question is in front.
 type questionDialog struct {
 	token  uint64
 	qs     []tool.Question
@@ -620,7 +620,6 @@ func (m *model) questionKey(msg tea.KeyPressMsg) tea.Cmd {
 	} else {
 		cmd = m.pageKey(msg)
 	}
-	m.dialog = q.current()
 	return cmd
 }
 

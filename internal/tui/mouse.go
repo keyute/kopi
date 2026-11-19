@@ -60,8 +60,8 @@ func (m *model) clearSelection() {
 func (m *model) deselect() {
 	m.clearSelection()
 	m.composer.ta.ClearSelection()
-	if m.dialog != nil {
-		for _, o := range m.dialog.options {
+	if d := m.frontDialog(); d != nil {
+		for _, o := range d.options {
 			if o.field != nil {
 				o.field.ta.ClearSelection()
 			}
@@ -97,7 +97,7 @@ func (m *model) mouse(msg tea.MouseMsg) tea.Cmd {
 	case tea.MouseReleaseMsg:
 		return m.release()
 	case tea.MouseWheelMsg:
-		if m.question != nil && m.approval == nil && msg.Y >= m.geo.composerTop-1 && msg.Y < m.geo.composerTop-1+len(m.prompt) {
+		if m.front() == promptQuestion && msg.Y >= m.geo.composerTop-1 && msg.Y < m.geo.composerTop-1+len(m.prompt) {
 			switch msg.Button {
 			case tea.MouseWheelUp:
 				m.question.scroll -= wheelStep
@@ -137,8 +137,8 @@ func (m *model) press(mo tea.Mouse) tea.Cmd {
 				m.focus = agentFocus{}
 			}
 			var cmd tea.Cmd
-			if m.dialog != nil {
-				cmd = m.dialog.pick(a.c)
+			if d := m.frontDialog(); d != nil {
+				cmd = d.pick(a.c)
 			}
 			m.drag = drag{region: regionField, field: a.c}
 			a.c.press(mo.X-a.x, mo.Y-a.y, n)
