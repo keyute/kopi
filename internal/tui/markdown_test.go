@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"image/color"
 	"strings"
 	"testing"
@@ -58,6 +59,30 @@ func TestMarkdownANSIThemesUsePaletteColors(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func TestMarkdownBodyTextUsesThemeText(t *testing.T) {
+	r, g, b, _ := mocha().text.RGBA()
+	got := strings.Join(newMarkdown(80, mocha()).lines("k", "Some text."), "\n")
+	assert.Equal(t, "Some text.", ansi.Strip(got))
+	assert.Contains(t, got, fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r>>8, g>>8, b>>8))
+
+	got = strings.Join(newMarkdown(80, builtinThemes["ansi-dark"]()).lines("k", "Some text."), "\n")
+	assert.Equal(t, "Some text.", got)
+}
+
+func TestMarkdownLinesCarryNoPaddingEscapes(t *testing.T) {
+	const text = "Some text.\n\n- item one\n\n> quote"
+	got := newMarkdown(200, mocha()).lines("k", text)
+
+	require.Equal(t, []string{"Some text.", "", "- item one", "", "│ quote"}, stripped(got))
+	assert.Equal(t, "", got[1])
+	for _, l := range got {
+		assert.NotRegexp(t, `(?:\x1b\[[0-9;:]*m){2,}$`, l)
+		if strings.Contains(l, "\x1b") {
+			assert.True(t, strings.HasSuffix(l, "\x1b[m"), "%q", l)
+		}
 	}
 }
 
