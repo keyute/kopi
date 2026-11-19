@@ -316,6 +316,17 @@ func TestRootAcceptsAskUserQuestionRuleWithoutTheTool(t *testing.T) {
 	assert.NotContains(t, toolNames(server.next(t)), "AskUserQuestion")
 }
 
+func TestRootAcceptsExitPlanModeRuleWithoutTheTool(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+
+	stdout, _, err := execute(t, "", "--model", mockModel, "--disallowed-tools", "ExitPlanMode", "-p", "hi")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok\n", stdout)
+}
+
 func TestRootOffersWebSearchForSearchingSmallModel(t *testing.T) {
 	e := newTestEnv(t)
 	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
@@ -441,6 +452,30 @@ func TestSubagentToolsNeverBackgroundOrDelegate(t *testing.T) {
 		if fn["name"] == "Bash" {
 			assert.NotContains(t, fn["parameters"].(map[string]any)["properties"], "run_in_background")
 		}
+	}
+}
+
+func TestSubagentFileToolsNeverReachThePlanFile(t *testing.T) {
+	e := newTestEnv(t)
+	ws, err := tool.NewWorkspace(e.workspace, []string{e.kopiHome})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
+	plans := tool.NewPlans(filepath.Join(e.kopiHome, "plans"))
+	require.NoError(t, plans.Select("session"))
+	rootWS := ws.WithPlans(plans)
+	root := []tool.Tool{tool.NewRead(rootWS), tool.NewWrite(rootWS), tool.NewEdit(rootWS)}
+
+	args, err := json.Marshal(map[string]any{"file_path": plans.Path()})
+	require.NoError(t, err)
+	for _, tl := range root {
+		target, err := tl.Target(args)
+		require.NoError(t, err, "root %s", tl.Name)
+		assert.True(t, target.PlanFile, "root %s", tl.Name)
+	}
+	for _, tl := range agentTools(root, ws, nil, nil) {
+		target, err := tl.Target(args)
+		require.NoError(t, err, "subagent %s", tl.Name)
+		assert.False(t, target.PlanFile, "subagent %s", tl.Name)
 	}
 }
 
@@ -1000,21 +1035,6 @@ func TestRootGrepHidesDeniedPaths(t *testing.T) {
 	assert.NotContains(t, results[0], "secret.txt")
 }
 
-// lastUserText is the text of the last user message in a chat-completions
-// request body, whose content is a list of parts.
-func lastUserText(body map[string]any) string {
-	var text string
-	for _, m := range body["messages"].([]any) {
-		if msg := m.(map[string]any); msg["role"] == "user" {
-			text = ""
-			for _, part := range msg["content"].([]any) {
-				text += fmt.Sprint(part.(map[string]any)["text"])
-			}
-		}
-	}
-	return text
-}
-
 func TestRootPromptFromStdinAndArgument(t *testing.T) {
 	for _, tc := range []struct {
 		name, stdin string
@@ -1033,7 +1053,12 @@ func TestRootPromptFromStdinAndArgument(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, "ok\n", stdout)
-			assert.Equal(t, tc.want, lastUserText(server.next(t).body))
+			// The mode line follows the prompt.
+			texts := messageTexts(t, server.next(t))
+			require.Len(t, texts, 3, texts)
+			assert.Equal(t, tc.want, texts[1])
+			assert.Equal(t, "The session is in plan mode.", texts[2], "print mode names no plan file")
+			assert.NoDirExists(t, filepath.Join(e.kopiHome, "plans"))
 		})
 	}
 }
@@ -2658,10 +2683,11 @@ func TestRootPrintLoadsAKopiHomeSkillWithThePrompt(t *testing.T) {
 	req, stderr := printWithMock(t, e, "-p", "/skill:foo do")
 
 	texts := messageTexts(t, req)
-	require.Len(t, texts, 3, texts)
+	require.Len(t, texts, 4, texts)
 	assert.Equal(t, "/skill:foo do", texts[1])
 	assert.Contains(t, texts[2], `<skill name="foo"`)
 	assert.Contains(t, texts[2], "foo body 3d9e")
+	assert.Contains(t, texts[3], "The session is in plan mode.")
 	assert.Contains(t, declaredTools(req), "Skill")
 	assert.NotContains(t, stderr, "skill")
 }
@@ -2744,7 +2770,7 @@ func TestRootPrintSkillPrefixFromConfig(t *testing.T) {
 	req, _ := printWithMock(t, e, "-p", "/foo do")
 
 	texts := messageTexts(t, req)
-	require.Len(t, texts, 3, texts)
+	require.Len(t, texts, 4, texts)
 	assert.Equal(t, "/foo do", texts[1])
 	assert.Contains(t, texts[2], "foo body 3d9e")
 }

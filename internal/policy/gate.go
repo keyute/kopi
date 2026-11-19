@@ -12,8 +12,13 @@ import (
 )
 
 // Target is the path a call acts on: Path as written, made absolute, and
-// Real with symlinks resolved.
-type Target struct{ Path, Real string }
+// Real with symlinks resolved. PlanFile marks the root session's plan file:
+// the gate admits it in plan mode and does not ask about it, though rules
+// still apply.
+type Target struct {
+	Path, Real string
+	PlanFile   bool
+}
 
 type ToolSpec struct {
 	Capability Capability
@@ -101,20 +106,28 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 	if !ok {
 		return fmt.Errorf("tool %q: %w", tool, ErrUnknownTool)
 	}
-	_, gen, ok := g.authority.Permits(spec)
-	if !ok {
+	_, gen, permitted := g.authority.Permits(spec)
+	var target *Target
+	var targetErr error
+	var planFile bool
+	if spec.Target != nil {
+		t, err := spec.Target(args)
+		// A target that failed to resolve still says whether it is the plan file.
+		planFile = t.PlanFile
+		if err != nil {
+			targetErr = err
+		} else {
+			target = &t
+		}
+	}
+	if !permitted && !planFile {
 		if spec.Capability == Exec && !strings.HasPrefix(tool, MCPPrefix) {
 			return fmt.Errorf("tool %q needs execute mode; the session is in plan mode, where it runs only in the OS sandbox, which is off or unavailable: %w", tool, ErrDenied)
 		}
 		return fmt.Errorf("tool %q needs execute mode; the session is in %s mode: %w", tool, Plan, ErrDenied)
 	}
-	var target *Target
-	if spec.Target != nil {
-		t, err := spec.Target(args)
-		if err != nil {
-			return fmt.Errorf("failed to resolve the path of tool %q: %w", tool, err)
-		}
-		target = &t
+	if targetErr != nil {
+		return fmt.Errorf("failed to resolve the path of tool %q: %w", tool, targetErr)
 	}
 	req := Request{CallID: callID, Tool: tool, Args: bytes.Clone(args)}
 	switch eff, rule, src := g.rules.decide(tool, target); eff {
@@ -127,7 +140,7 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 		}
 	case effectAllow:
 	default:
-		if spec.Ask || (spec.Capability != Read && !spec.Sandboxed && (spec.Capability != Write || !g.authority.EditsGranted())) {
+		if !planFile && (spec.Ask || spec.Capability != Read && !spec.Sandboxed && (spec.Capability != Write || !g.authority.EditsGranted())) {
 			req.Edits = spec.Capability == Write
 			allow := tool
 			if target != nil {
@@ -241,7 +254,7 @@ func (g *Gate) Admit(callID, tool string, args json.RawMessage, target *Target) 
 	}
 	spec := g.tools[tool]
 	mode, gen, ok := g.authority.Permits(spec)
-	if !ok || (spec.Capability.NeedsExecute() && gen != gr.generation) {
+	if (target == nil || !target.PlanFile) && (!ok || (spec.Capability.NeedsExecute() && gen != gr.generation)) {
 		return Plan, fmt.Errorf("tool %q: the session mode changed after the call was approved: %w", tool, ErrRevoked)
 	}
 	return mode, nil

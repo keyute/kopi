@@ -15,6 +15,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `trust.json` | Which folders you trust, see [trust](trust.md#folder-trust); Kopi writes it |
 | `history.jsonl` | Input history per working directory, written by the fullscreen interface; the last 100 entries are recalled |
 | `skills/` | Your [skills](skills.md) |
+| `plans/` | One [plan file](tools.md#exitplanmode) per session, `<session id>.md`; Kopi never deletes them |
 | `agents/` | Your [subagents](subagents.md), one Markdown file each |
 | `sandbox/` | The lock and the record of placeholders that Kopi processes sharing the home use to remove them safely (Linux), see [sandbox](sandbox.md#linux-placeholders) |
 | `images/` | Pasted clipboard images, removed after a day |
@@ -87,6 +88,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `toggle-mode` | `shift+tab` |
 | `background` | `ctrl+b` |
 | `stop-agent` | `x` (stops the running subagent selected in the [agent rows](subagents.md#agent-rows) or the `/tasks` list) |
+| `edit-plan` | `ctrl+g` |
 | `paste` | `ctrl+v` |
 | `history-prev`, `history-next` | `up`, `down` |
 | `queue-edit` | `up` |

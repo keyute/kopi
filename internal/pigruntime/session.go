@@ -55,6 +55,9 @@ type Prompt struct {
 	// FromAgent marks a prompt another agent sent rather than the human typed;
 	// it is carried only so input a run never read goes back to its sender.
 	FromAgent bool
+	// Mode is a line about the session's mode, read after Text and Skills; the
+	// transcript does not draw it. Empty sends none.
+	Mode string
 }
 
 // skillType is the PiG custom type of a skill text, stored in session history.
@@ -62,6 +65,13 @@ const skillType = "kopi.skill"
 
 func skillMessage(text string) extension.CustomMessageRef {
 	return extension.CustomMessageRef{CustomType: skillType, Content: text, Display: false}
+}
+
+// modeType is the PiG custom type of a mode line, stored in session history.
+const modeType = "kopi.mode"
+
+func modeMessage(text string) extension.CustomMessageRef {
+	return extension.CustomMessageRef{CustomType: modeType, Content: text, Display: false}
 }
 
 // Notice is input Kopi gives the model on its own behalf, not the human's. The
@@ -185,6 +195,9 @@ type SendResult struct {
 	// UndeliveredNotices are the notices, given or handed over, the model
 	// never read, in delivery order.
 	UndeliveredNotices []Notice
+	// ModeUndelivered reports that a handed-over prompt's mode line failed to
+	// reach the model, so the caller must offer it again.
+	ModeUndelivered bool
 }
 
 type (
@@ -229,7 +242,7 @@ func InterruptTurn(ctx context.Context) bool {
 // errors: they surface as a Failed outcome carrying the provider's error text.
 // An overlapping call returns ErrSendInProgress unless ctx is already done.
 //
-// The model reads p's skills, then the notices, after p; when p is empty, the
+// The model reads p's skills, then its mode line, then the notices, after p; when p is empty, the
 // notices alone start the run.
 //
 // At the end of each turn that did not fail and was not aborted, while ctx is
@@ -266,6 +279,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	// producer into PiG's queue and PiG delivers in queue order, after p, so
 	// each user message after p's is the head.
 	var handed []Prompt
+	var modeUndelivered bool
 	// pending is the notices not yet delivered. PiG delivers them in the
 	// order Send gives them, so each notice message is the head.
 	pending := slices.Clone(notices)
@@ -320,6 +334,12 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 						break
 					}
 				}
+				if q.Mode != "" {
+					if err := s.inner.SendCustomMessage(pigCtx, modeMessage(q.Mode), &extension.SendMessageOptions{DeliverAs: extension.DeliverAsSteer}); err != nil {
+						slog.Warn("failed to hand over mode line", "error", err)
+						modeUndelivered = true
+					}
+				}
 			}
 			// Prompts and notices share PiG's steering queue. TriggerTurn stays
 			// nil, so on an idle session a notice is only appended and never
@@ -350,7 +370,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	_, _ = s.inner.ClearQueue()
 	s.inner.Agent().ClearSteeringQueue()
 	s.inner.Agent().TakePendingNextTurn()
-	res := SendResult{Sent: sent, Undelivered: handed, UndeliveredNotices: pending}
+	res := SendResult{Sent: sent, Undelivered: handed, UndeliveredNotices: pending, ModeUndelivered: modeUndelivered}
 	if err != nil {
 		return res, err
 	}
@@ -395,6 +415,11 @@ func (s *Session) deliver(ctx context.Context, p Prompt, notices []Notice) error
 		for _, sk := range p.Skills {
 			if err := s.inner.SendCustomMessage(ctx, skillMessage(sk), &extension.SendMessageOptions{DeliverAs: extension.DeliverAsNextTurn}); err != nil {
 				return fmt.Errorf("failed to send skill: %w", reword(err))
+			}
+		}
+		if p.Mode != "" {
+			if err := s.inner.SendCustomMessage(ctx, modeMessage(p.Mode), &extension.SendMessageOptions{DeliverAs: extension.DeliverAsNextTurn}); err != nil {
+				return fmt.Errorf("failed to send mode line: %w", reword(err))
 			}
 		}
 	}

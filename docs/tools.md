@@ -2,15 +2,17 @@
 
 ## Modes
 
-- Sessions are in plan or execute mode. Only the user switches, with `/plan`, `/execute` or Shift+Tab.
+- Sessions are in plan or execute mode. Only the user switches, with `/plan`, `/execute`, Shift+Tab or by approving a plan with [`ExitPlanMode`](#exitplanmode).
 - Plan mode allows:
-  - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `Agent`, `SendMessage`, `TaskOutput`, `TaskStop`, `WebFetch`, `WebSearch`, `AskUserQuestion`
+  - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `Agent`, `SendMessage`, `TaskOutput`, `TaskStop`, `WebFetch`, `WebSearch`, `AskUserQuestion`, `ExitPlanMode`
   - read-only MCP tools
+  - `Write` and `Edit` on the session's [plan file](#exitplanmode) only
   - `Bash` only in the [sandbox](sandbox.md), where it cannot write the start directory
-- `Write`, `Edit` and other MCP tools need execute mode.
+- `Write`, `Edit` on any other file and other MCP tools need execute mode.
 - Sessions start and resume in the configured [`mode`](configuration.md#mode), including ones opened with `/new` and `/resume`.
 - `--mode` overrides the config file.
 - A mode switched to while the first session is opening is the mode it starts in.
+- The model is told the session's mode, and in plan mode in the fullscreen interface the plan file's path, in one hidden message sent with the first prompt of a session and with the first prompt after the mode changes. It is not part of the system prompt. No message follows an approved plan: the tool's result already tells the model the session is in execute mode.
 - [Rules](permissions.md#rules) decide which calls ask, run or are refused.
 
 ## File tools
@@ -35,7 +37,7 @@
 - `Write` creates a file or replaces its whole content.
 - `Edit` replaces a string that must match exactly once unless `replace_all` is set, in a text file of up to 10 MiB.
 - `Write` and `Edit` work inside the start directory, replace the file atomically and keep its mode.
-- `Read`, `Write` and `Edit` refuse Kopi's home, including paths there that do not exist yet.
+- `Read`, `Write` and `Edit` refuse Kopi's home, including paths there that do not exist yet, except the session's [plan file](#exitplanmode).
 - `Glob`, `Grep` and `LS` refuse a path there and leave Kopi's home out of what they search or list.
 
 ## Bash
@@ -102,6 +104,33 @@
 | Review | PgUp, PgDn | Scroll a cut review (the mouse wheel over the dialog does too) |
 | Any | Esc | Dismiss the questions (in a note, close the note) |
 
+## ExitPlanMode
+
+- Takes no arguments. In plan mode it shows you the plan from the session's plan file and asks `Approve this plan?` with `Yes` and `No`.
+- Each root session in the fullscreen interface has a plan file, `plans/<session id>.md` in Kopi's home. The model writes it with `Write` and `Edit`; `Read`, `Write` and `Edit` reach that one file in both modes without asking by default. [Rules](permissions.md#precedence) still apply to it.
+- A resumed session keeps its plan file; a new session gets a new one. Kopi never deletes plan files.
+- The plan is drawn in the main session's transcript as Markdown when it is presented, and that view opens if you were viewing a subagent. On resume only the tool's row is restored; the plan is in the file.
+- `Yes` switches the session to execute mode and the turn continues.
+- `No` takes feedback typed on its row. The feedback goes to the model, which stays in plan mode and can revise the plan and ask again. A blank `No` or Esc dismisses the plan and stops the turn; the model sees that you dismissed it.
+- The call is an error when the session is not in plan mode or the plan file is missing or empty.
+- If you edited the plan file while the dialog was open, the model is told.
+- The [`edit-plan`](configuration.md#keys) key in the dialog, and `/plan open` at any time, open the plan file in `$VISUAL`, else `$EDITOR`; with neither set a notice says so. Before the plan file exists `/plan open` shows a notice instead.
+- Only in the fullscreen interface; a deny rule removes it, a bare ask rule naming it or `*` makes it ask for approval, and [subagents](subagents.md#what-a-subagent-gets) never get it or the plan file. `Bash` in the [sandbox](sandbox.md) cannot reach it, as it cannot read or write Kopi's home. `kopi -p` has no `ExitPlanMode` and no plan file.
+- Keys while the plan is open; Up, Down, Enter, Esc, PgUp, PgDn, Ctrl+V and the newline keys follow [`keys`](configuration.md#keys):
+
+| Where | Key | Action |
+| --- | --- | --- |
+| Options | Up, Down | Move between `Yes` and `No` |
+| Options | Enter | Choose the focused option |
+| Options | 1 | Approve at once |
+| Options | 2 | Move to `No` to type the feedback |
+| `No` | Enter | Send the typed feedback; blank dismisses the plan and stops the turn |
+| `No` | Up on the first row | Back to `Yes` |
+| `No` | `newline`, `paste` and terminal paste | Start a line, insert clipboard or pasted text; digits are text |
+| Any | `edit-plan` (default Ctrl+G) | Open the plan file in your editor |
+| Any | Esc | Dismiss the plan and stop the turn |
+| Any | PgUp, PgDn | Scroll the transcript |
+
 ## WebFetch
 
 - Fetches one http or https page on a public host and has [`smallModel`](configuration.md#smallmodel) answer the call's prompt from it.
@@ -145,6 +174,9 @@
   - A search an Anthropic response pauses mid-turn returns what it has.
 - In an `AskUserQuestion` dialog Space, Left, Right and the number keys are fixed keys, not [`keys`](configuration.md#keys) entries.
 - A note on an option that is not chosen is dropped.
+- The plan file is matched by its absolute, cleaned path; a symlink, hard link or different-case spelling of it is treated like the rest of Kopi's home.
+- On resume the plan is not drawn again.
+- In an `ExitPlanMode` dialog the number keys are fixed keys, not [`keys`](configuration.md#keys) entries.
 - While a question is open PgUp and PgDn, and the mouse wheel over the dialog, scroll a cut preview or review, not the transcript, and do nothing when nothing is cut.
 
 ## Not implemented
@@ -156,3 +188,9 @@
 - Other search backends (an MCP server can provide one).
 - PDF and image pages.
 - Typed questions for `AskUserQuestion` (yes/no, text only, number), questions in print mode, and MCP elicitation.
+- Clearing the context when a plan is approved.
+- `/plan <task>`.
+- A tool that lets the model enter plan mode.
+- Plan approval in print mode.
+- Deleting old plan files.
+- A configurable plans directory.

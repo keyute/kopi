@@ -11,6 +11,7 @@ import (
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
+	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -58,7 +59,9 @@ func TestSettle(t *testing.T) {
 
 func TestPullHandsNothingToCancelledSend(t *testing.T) {
 	a := pigruntime.Prompt{Text: "a"}
-	r := &runner{c: &Controller{}, pending: []pigruntime.Prompt{a}}
+	c := &Controller{authority: policy.NewAuthority()}
+	r := &runner{c: c, pending: []pigruntime.Prompt{a}, told: modeLine(policy.Plan, "")}
+	c.main = r
 	emit := func(event.Event) {}
 
 	cancelled, cancel := context.WithCancel(t.Context())

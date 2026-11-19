@@ -116,7 +116,7 @@ func edit(ctx context.Context, ws *Workspace, args editArgs, admit func(policy.T
 		return Result{}, err
 	}
 	defer f.Close()
-	if err := ws.checkRead(f, args.FilePath); err != nil {
+	if err := ws.checkRead(dest, f, args.FilePath); err != nil {
 		return Result{}, err
 	}
 	if _, err := admit(dest.target); err != nil {

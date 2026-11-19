@@ -52,6 +52,10 @@ type runner struct {
 	// hold keeps notices from waking the model after an Interrupt until a human
 	// prompt starts a turn.
 	hold bool
+	// told is the last mode line delivered to the model in the current session;
+	// "" when none was, or when one was not delivered. Only the main session's
+	// is used.
+	told string
 }
 
 // role is what differs between the kinds of session a runner drives.
@@ -187,6 +191,9 @@ func (r *runner) stop(w *Work, emit func(event.Event)) {
 	if c.question != nil && c.question.work == w {
 		c.question = nil
 	}
+	if c.plan != nil && c.plan.work == w {
+		c.plan = nil
+	}
 	c.mu.Unlock()
 	w.cancel()
 }
@@ -247,6 +254,7 @@ func (r *runner) start(w *Work, parts []pigruntime.Prompt) {
 	sess, emit := r.sess, r.emit
 	c.mu.Unlock()
 	notices := r.takeNotices()
+	parts = r.tell(parts)
 	if len(parts) > 0 {
 		r.hold = false
 	}
@@ -282,7 +290,11 @@ func (r *runner) runTurn(ctx context.Context, sess *pigruntime.Session, emit fun
 		if !closed {
 			r.requeue(res.UndeliveredNotices)
 		}
+		if res.ModeUndelivered {
+			r.told = ""
+		}
 		next, unsent := settle(w.stopped, cancelled, res.Outcome, res.Sent, parts, res.Undelivered, w.handBack, r.pending)
+		r.untell(next, unsent)
 		if !w.stopped {
 			r.take(emit)
 		}
@@ -292,7 +304,7 @@ func (r *runner) runTurn(ctx context.Context, sess *pigruntime.Session, emit fun
 		if len(next) > 0 || wake {
 			ctx, w.cancel = context.WithCancel(w.base)
 			w.sendCtx = ctx
-			parts = next
+			parts = r.tell(next)
 			notices = r.takeNotices()
 			emit(event.TurnEnd{WorkID: w.id, Outcome: res.Outcome, Elapsed: elapsed})
 			emit(event.TurnStart{WorkID: w.id, Prompt: joined(parts).Text})
@@ -334,7 +346,7 @@ func (r *runner) pull(ctx context.Context, emit func(event.Event)) func() ([]pig
 		if ctx.Err() != nil {
 			return nil, nil
 		}
-		prompts := r.take(emit)
+		prompts := r.tell(r.take(emit))
 		if len(prompts) == 0 && !r.waking() {
 			return nil, nil
 		}
@@ -453,8 +465,12 @@ func joined(ps []pigruntime.Prompt) pigruntime.Prompt {
 	texts := make([]string, 0, len(ps))
 	var images []pigruntime.Image
 	var skills []string
+	var mode string
 	for _, p := range ps {
 		texts = append(texts, p.Text)
+		if p.Mode != "" {
+			mode = p.Mode
+		}
 		images = append(images, p.Images...)
 		for _, sk := range p.Skills {
 			if !slices.Contains(skills, sk) {
@@ -462,7 +478,7 @@ func joined(ps []pigruntime.Prompt) pigruntime.Prompt {
 			}
 		}
 	}
-	return pigruntime.Prompt{Text: strings.Join(texts, "\n\n"), Images: images, Skills: skills}
+	return pigruntime.Prompt{Text: strings.Join(texts, "\n\n"), Images: images, Skills: skills, Mode: mode}
 }
 
 func inputs(ps []pigruntime.Prompt) []event.Input {

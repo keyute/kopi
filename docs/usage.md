@@ -29,6 +29,7 @@ Commands in the fullscreen interface:
 | Command | Effect |
 | --- | --- |
 | `/plan` | Switch to plan mode |
+| `/plan open` | Open the session's [plan file](tools.md#exitplanmode) in `$VISUAL`, else `$EDITOR` |
 | `/execute` | Switch to execute mode |
 | `/new` | Start a new session |
 | `/resume <id>` | Resume a session |
@@ -61,6 +62,7 @@ Defaults; change them with [`keys`](configuration.md#keys).
 - Ctrl+B moves the running foreground `Bash` command to the background, where it keeps running as a [task](tools.md#background-tasks).
   - While one runs, the working row shows `ctrl+b to background`.
   - With none running, Ctrl+B keeps its meaning in the input.
+- Ctrl+G, while an [`ExitPlanMode`](tools.md#exitplanmode) plan is open, opens the plan file in `$VISUAL`, else `$EDITOR`.
 - Ctrl+V pastes text or an image from the clipboard.
 - Mouse wheel or PgUp/PgDn scrolls the transcript; while an [`AskUserQuestion`](tools.md#askuserquestion) dialog is open PgUp/PgDn scroll its cut preview or review instead.
 - Keys while the model asks you a question are listed under [`AskUserQuestion`](tools.md#askuserquestion).

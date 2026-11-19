@@ -651,7 +651,7 @@ func TestTaskEndDuringApprovalWaitsForBoundary(t *testing.T) {
 	wait(t, w.Done())
 
 	req := receive(t, requests)
-	assert.Equal(t, []string{"run it", endText("t1")}, req.UserTexts)
+	assert.Equal(t, []string{"run it", "The session is in execute mode.", endText("t1")}, req.UserTexts)
 	assert.Equal(t, []string{execOutput}, req.ToolResults)
 	assert.Equal(t, int32(1), ran.Load())
 	assert.Equal(t, []event.ModeChanged{{Mode: policy.Execute}}, ofType[event.ModeChanged](h.rec.all()))

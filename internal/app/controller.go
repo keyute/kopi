@@ -79,6 +79,9 @@ type Config struct {
 	// tools; Agent, SendMessage, TaskOutput, TaskStop and ToolSearch are never
 	// given to one.
 	AgentTools []tool.Tool
+	// Plans is the root session's plan file; nil means there is none, and no
+	// ExitPlanMode tool.
+	Plans *tool.Plans
 }
 
 const maxReferenceEntries = 10000
@@ -160,6 +163,9 @@ type Controller struct {
 	// question is the AskUserQuestion call waiting for AnswerQuestion; nil when none is.
 	question    *pendingQuestion
 	questionSeq uint64
+	// plan is the ExitPlanMode call waiting for AnswerPlan; nil when none is.
+	plan    *pendingPlan
+	planSeq uint64
 	// login is the running login; nil when none is. A login and a turn or a
 	// running subagent never run together: each is refused while the other is
 	// registered. The login's questions and an approval would otherwise share
@@ -233,6 +239,9 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	tools := slices.Clone(c.cfg.Tools)
 	if ask := tool.NewAskUserQuestion(c.askQuestion); !c.cfg.Unattended && !c.cfg.Rules.Removes(ask.Name) {
 		tools = append(tools, ask)
+	}
+	if exit := tool.NewExitPlanMode(c.cfg.Plans, c.reviewPlan); c.cfg.Plans != nil && !c.cfg.Unattended && !c.cfg.Rules.Removes(exit.Name) {
+		tools = append(tools, exit)
 	}
 	var search []tool.Tool
 	if small := c.SmallModel(); small != "" && c.rt.CanSearch(small) && !c.cfg.Rules.Removes("WebSearch") {
@@ -1037,6 +1046,12 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	}
 	unsubscribe := sess.Subscribe(emit)
 	id := sess.ID()
+	var planErr error
+	if c.cfg.Plans != nil {
+		if err := c.cfg.Plans.Select(id); err != nil {
+			planErr = fmt.Errorf("failed to select the plan file: %w", err)
+		}
+	}
 	c.queue.Lock()
 	c.mu.Lock()
 	if old != nil {
@@ -1044,6 +1059,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		c.main.hold = false
 	}
 	c.main.sess, c.sessID, c.main.emit, c.main.bound, c.main.unsubscribe = sess, id, emit, bound, unsubscribe
+	c.main.told = ""
 	c.deferred = nil
 	c.mu.Unlock()
 	c.queue.Unlock()
@@ -1059,6 +1075,9 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 	}
 	c.relay.emit(changed)
+	if planErr != nil {
+		c.relay.emit(event.Error{Err: planErr})
+	}
 	for _, ev := range c.startup {
 		c.relay.emit(ev)
 	}

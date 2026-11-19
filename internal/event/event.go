@@ -78,6 +78,17 @@ type QuestionRequested struct {
 // QuestionEnded follows every QuestionRequested: answered, dismissed or cancelled.
 type QuestionEnded struct{ Token uint64 }
 
+// PlanRequested asks the human to approve the plan of one ExitPlanMode call;
+// answer with Controller.AnswerPlan. It repeats with the same Token and the new
+// Plan when the plan file was read again, after the human edited it.
+type PlanRequested struct {
+	Token      uint64
+	Path, Plan string
+}
+
+// PlanEnded follows every PlanRequested: answered, dismissed or cancelled.
+type PlanEnded struct{ Token uint64 }
+
 // LoginRequested asks the human one question of a running login; answer with
 // Controller.AnswerLogin. There may be no session yet.
 type LoginRequested struct {
@@ -165,6 +176,8 @@ func (ApprovalRequested) isEvent()   {}
 func (ApprovalEnded) isEvent()       {}
 func (QuestionRequested) isEvent()   {}
 func (QuestionEnded) isEvent()       {}
+func (PlanRequested) isEvent()       {}
+func (PlanEnded) isEvent()           {}
 func (LoginRequested) isEvent()      {}
 func (LoginEnded) isEvent()          {}
 func (Notice) isEvent()              {}

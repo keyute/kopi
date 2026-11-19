@@ -72,6 +72,8 @@ func (c *renderCache) render(b transcript.Block, f blockFolds) []line {
 		return plain(shadedBox("❯ ", shade(th), b.Text, width, th))
 	case transcript.Assistant:
 		return plain(c.md.lines(b.Key(), b.Text))
+	case transcript.Plan:
+		return plain(append([]string{fg(th.muted).Render("Plan")}, c.md.lines(b.Key(), b.Text)...))
 	case transcript.Row:
 		return renderRow(b.Call, f, width, th)
 	case transcript.Group:

@@ -9,6 +9,8 @@ updates:
       timezone: Asia/Singapore
     cooldown:
       default-days: 7
+    # Group names are a contract with the dependabot-automerge job in test.yml: "auto" and
+    # patch-level "security" PRs merge on green ci, "review" waits for a maintainer.
     groups:
       auto:
         patterns:
@@ -40,6 +42,9 @@ updates:
       auto:
         patterns:
           - "*"
+        # lint.yml skips Dependabot PRs, so CI never exercises a MegaLinter bump (auto and security)
+        exclude-patterns:
+          - "oxsecurity/megalinter*"
         update-types:
           - minor
           - patch
@@ -50,3 +55,5 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
+        exclude-patterns:
+          - "oxsecurity/megalinter*"
