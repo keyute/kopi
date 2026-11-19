@@ -109,6 +109,8 @@ func TestTheFrontPromptStillAnswersAfterTheOneUnderItEnds(t *testing.T) {
 	}{
 		{questionCase, planCase, []bool{true}},
 		{questionCase, loginCase, []bool{true}},
+		{approvalCase, questionCase, []bool{true, false}},
+		{approvalCase, planCase, []bool{true, false}},
 		{approvalCase, loginCase, []bool{true, false}},
 		{planCase, loginCase, []bool{true}},
 	} {
@@ -132,6 +134,53 @@ func TestTheFrontPromptStillAnswersAfterTheOneUnderItEnds(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestMainTurnEndLeavesAChildApprovalAnswerableUnderAQuestion(t *testing.T) {
+	m, c := newTestModel(t, 70, 30)
+	send(m, questionCase.open, subagentAsk(5, "explore"))
+	require.NotNil(t, m.question)
+	require.Equal(t, promptApproval, m.front())
+
+	send(m, event.TurnEnd{})
+
+	assert.Nil(t, m.question)
+	assert.Equal(t, promptApproval, m.front())
+	assert.Contains(t, strings.Join(screen(m), "\n"), "Edit explore.go")
+	press(m, enter)
+	assert.Equal(t, []answer{{5, policy.Decision{Answer: policy.Allow}}}, c.answers)
+	assert.Zero(t, questionCase.answers(c))
+}
+
+func TestApprovalFieldTakesInputWhileALoginIsUnderIt(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	m.clip = &fakeClipboard{text: "clip"}
+	send(m, editApproval(), loginCase.open)
+	require.Equal(t, promptApproval, m.front())
+
+	press(m, digit('3'))
+	pasteText(m, "pasted")
+	assert.Equal(t, "pasted", m.approvalDialog.text())
+	assert.Empty(t, m.loginDialog.text())
+
+	m.Update(clipboardTextMsg{text: "y", field: m.loginDialog.field()})
+	assert.Equal(t, "pasted", m.approvalDialog.text())
+	assert.Empty(t, m.loginDialog.text())
+}
+
+func TestClickOnApprovalFieldTypesIntoItWhileALoginIsUnderIt(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	send(m, editApproval(), loginCase.open)
+	require.Len(t, m.geo.fields, 1)
+	a := m.geo.fields[0]
+
+	pressAt(m, a.x, a.y)
+	releaseAt(m, a.x, a.y)
+	keys(m, "hi")
+
+	assert.Equal(t, 2, m.approvalDialog.sel)
+	assert.Equal(t, "hi", m.approvalDialog.text())
+	assert.Empty(t, m.loginDialog.text())
 }
 
 func TestSessionChangeLeavesALoginUnderAQuestionAnswerable(t *testing.T) {

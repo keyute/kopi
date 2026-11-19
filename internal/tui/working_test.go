@@ -252,6 +252,19 @@ func TestWorkingRowWaitsDuringAQuestion(t *testing.T) {
 	})
 }
 
+func TestWorkingRowWaitsDuringALogin(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTestModel(t, 60, 30)
+		c.status.Foreground = true
+		send(m, event.TasksChanged{}, event.TurnStart{}, event.LoginRequested{Token: 1, Message: "Code"})
+		assert.Contains(t, screen(m), "⠋ Working… 0s")
+		assert.NotContains(t, screen(m), "⠋ Working… 0s · ctrl+b to background")
+
+		send(m, event.LoginEnded{Token: 1})
+		assert.Contains(t, screen(m), "⠋ Working… 0s · ctrl+b to background")
+	})
+}
+
 func TestWorkingRowFollowsTheView(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, c := agentsModel(t)

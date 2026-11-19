@@ -263,7 +263,7 @@ func TestLoginEndedClosesTheDialog(t *testing.T) {
 
 	send(m, event.LoginEnded{Token: 4})
 	assert.Nil(t, m.login)
-	assert.Nil(t, m.frontDialog())
+	assert.Nil(t, m.loginDialog)
 	assert.NotContains(t, strings.Join(screen(m), "\n"), "Code")
 }
 

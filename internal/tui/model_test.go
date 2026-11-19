@@ -1242,7 +1242,7 @@ func TestApprovalQueuePromotesInOrder(t *testing.T) {
 	assert.Equal(t, uint64(3), m.approval.Token)
 	send(m, event.ApprovalEnded{Token: 3})
 	assert.Nil(t, m.approval)
-	assert.Nil(t, m.frontDialog())
+	assert.Nil(t, m.approvalDialog)
 }
 
 func TestApprovalQueueEndOfAQueuedAskRemovesIt(t *testing.T) {
@@ -1278,7 +1278,7 @@ func TestApprovalQueueSessionChangeClearsAll(t *testing.T) {
 	send(m, editApproval(), subagentAsk(2, "explore"))
 	send(m, event.SessionChanged{SessionID: "s2"})
 	assert.Nil(t, m.approval)
-	assert.Nil(t, m.frontDialog())
+	assert.Nil(t, m.approvalDialog)
 	assert.Empty(t, m.approvalQueue)
 }
 

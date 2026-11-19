@@ -1,6 +1,6 @@
 package tui
 
-// promptKind is a kind of prompt; after promptNone the kinds are in the order they take the front.
+// promptKind is a kind of prompt.
 type promptKind int
 
 const (
