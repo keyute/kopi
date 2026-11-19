@@ -27,7 +27,11 @@ import (
 
 type fakeController struct {
 	// calls logs Submit, SendNow and Interrupt in the order they were made.
-	calls      []string
+	calls []string
+	// sessions logs the session argument of every Submit, SendNow, TakeQueued
+	// and Interrupt, in call order.
+	sessions   []string
+	agents     []app.AgentStatus
 	status     app.Status
 	running    bool
 	interrupts int
@@ -121,21 +125,24 @@ func (f *fakeController) Subscribe(fn func(event.Event)) func() {
 	return func() { f.subscriber = nil }
 }
 
-func (f *fakeController) Submit(_ context.Context, text string, images ...string) (*app.Work, error) {
+func (f *fakeController) Submit(_ context.Context, session, text string, images ...string) (*app.Work, error) {
+	f.sessions = append(f.sessions, session)
 	f.calls = append(f.calls, "submit "+text)
 	f.submitted = append(f.submitted, text)
 	f.images = append(f.images, images)
 	return nil, f.submitErr
 }
 
-func (f *fakeController) SendNow(_ context.Context, text string, images ...string) error {
+func (f *fakeController) SendNow(_ context.Context, session, text string, images ...string) error {
+	f.sessions = append(f.sessions, session)
 	f.calls = append(f.calls, "send-now "+text)
 	f.sentNow = append(f.sentNow, text)
 	f.nowImages = append(f.nowImages, images)
 	return f.sendNowErr
 }
 
-func (f *fakeController) TakeQueued() []event.Input {
+func (f *fakeController) TakeQueued(session string) []event.Input {
+	f.sessions = append(f.sessions, session)
 	f.takes++
 	q := f.queued
 	f.queued = nil
@@ -149,13 +156,16 @@ func (f *fakeController) History() []string {
 	return f.history
 }
 
-func (f *fakeController) Interrupt() bool {
+func (f *fakeController) Interrupt(session string) bool {
+	f.sessions = append(f.sessions, session)
 	f.calls = append(f.calls, "interrupt")
 	f.interrupts++
 	return f.running
 }
 
 func (f *fakeController) Status() app.Status { return f.status }
+
+func (f *fakeController) Agents() []app.AgentStatus { return f.agents }
 
 func (f *fakeController) Commands() []app.Command { return f.commands }
 
@@ -194,7 +204,7 @@ func (f *fakeController) StopTask(id string) error {
 
 // testOptions are the options config's defaults resolve to.
 func testOptions() Options {
-	return Options{Version: "v1.2.3", Keys: config.DefaultKeys(), StatusLine: config.DefaultStatusLine(), Themes: testThemes}
+	return Options{Version: "v1.2.3", Keys: config.DefaultKeys(), StatusLine: config.DefaultStatusLine(), AgentLine: config.DefaultAgentLine(), Themes: testThemes}
 }
 
 var testThemes = Themes{dark: mocha(), light: latte()}
@@ -255,7 +265,7 @@ func screen(m *model) []string {
 // body is the transcript's text below the header.
 func body(m *model) []string {
 	var out []string
-	for _, l := range m.lines[len(header(m.version, m.th)):] {
+	for _, l := range m.view().lines[len(header(m.version, m.th)):] {
 		out = append(out, strings.TrimRight(ansi.Strip(l.text), " "))
 	}
 	return out
@@ -382,7 +392,7 @@ func TestWrapsToWidthAndReflowsOnResize(t *testing.T) {
 		"", "κ one two", "  three",
 		"", "• a-very-", "  long-", "  name.go",
 	}, body(m))
-	for _, l := range m.lines[len(header(m.version, m.th)):] {
+	for _, l := range m.view().lines[len(header(m.version, m.th)):] {
 		assert.LessOrEqual(t, lipgloss.Width(l.text), 12, ansi.Strip(l.text))
 	}
 }
@@ -655,6 +665,43 @@ func TestSubmitErrors(t *testing.T) {
 	assert.Equal(t, tea.QuitMsg{}, cmd())
 }
 
+func TestSubmittedErrorsShowInTheViewOnScreen(t *testing.T) {
+	for _, key := range []tea.KeyPressMsg{enter, ctrlEnter} {
+		for _, shown := range []string{app.Main, "child"} {
+			for _, text := range []string{"/plan invalid", "/unknown", "prompt", "/skill:review details", "//plan invalid"} {
+				t.Run(key.String()+"/"+shown+"/"+text, func(t *testing.T) {
+					m, c := newTestModel(t, 60, 20)
+					m.agents = []app.AgentStatus{{ID: "child"}}
+					m.show(shown)
+					require.Equal(t, shown, m.shown)
+					c.submitErr, c.sendNowErr = errors.New("refused"), errors.New("refused")
+					c.history = []string{"earlier", text}
+					typeText(m, text)
+
+					press(m, key)
+
+					assert.Equal(t, shown, m.shown)
+					assert.Equal(t, text, m.composer.value())
+					assert.Equal(t, 2, c.histories, "refusal refreshes history")
+					assert.Equal(t, []string{shown}, c.sessions, "dispatch still targets the selected session")
+					if key == enter {
+						assert.Equal(t, []string{text}, c.submitted)
+					} else {
+						assert.Equal(t, []string{text}, c.sentNow)
+					}
+					assert.Len(t, m.view().tr.Blocks(), 1)
+					other := app.Main
+					if shown == app.Main {
+						other = "child"
+					}
+					assert.Empty(t, m.viewOf(other).tr.Blocks())
+					assert.Equal(t, []string{"", "κ refused"}, body(m))
+				})
+			}
+		}
+	}
+}
+
 func isQuit(cmd tea.Cmd) bool {
 	if cmd == nil {
 		return false
@@ -666,7 +713,7 @@ func isQuit(cmd tea.Cmd) bool {
 // statusText is the status line's text.
 func statusText(m *model) string {
 	s := screen(m)
-	return s[len(s)-1]
+	return s[len(s)-1-m.geo.agents]
 }
 
 func TestCancelInterruptsThenClearsThenTakesTwoToQuit(t *testing.T) {
@@ -759,25 +806,25 @@ func TestReboundKeys(t *testing.T) {
 func TestThinkingBatchKeepsLayoutAndRearmsBridge(t *testing.T) {
 	m, _ := newTestModel(t, 80, 24)
 	send(m, event.TurnStart{Prompt: "go"}, event.Notice{Text: "visible"})
-	oldLines := &m.lines[0]
+	oldLines := &m.view().lines[0]
 	oldView := m.View().Content
 	m.bridge.push(event.ThinkingDelta{Text: "thinking"})
 	_, cmd := m.Update(m.bridge.wait()())
 	require.NotNil(t, cmd)
-	assert.Same(t, oldLines, &m.lines[0])
+	assert.Same(t, oldLines, &m.view().lines[0])
 	assert.Equal(t, oldView, m.View().Content)
-	assert.True(t, m.busy)
+	assert.True(t, m.view().busy)
 	m.bridge.push(event.TextDelta{Text: "answer"})
 	m.Update(cmd())
 	assert.Contains(t, body(m), "answer", "the bridge wait was rearmed")
-	assert.NotSame(t, oldLines, &m.lines[0])
+	assert.NotSame(t, oldLines, &m.view().lines[0])
 }
 
 func TestMixedThinkingBatchRebuildsVisibleLayout(t *testing.T) {
 	m, _ := newTestModel(t, 80, 24)
 	_, cmd := m.Update(eventsMsg{event.ThinkingDelta{Text: "thinking"}, event.TurnStart{Prompt: "go"}, event.TextDelta{Text: "answer"}})
 	require.NotNil(t, cmd)
-	assert.True(t, m.busy)
+	assert.True(t, m.view().busy)
 	assert.Contains(t, body(m), "answer")
 	batch, ok := cmd().(tea.BatchMsg)
 	require.True(t, ok)

@@ -40,14 +40,14 @@ func request[T any](c *Controller, ctx context.Context, slot **pending[T], seq *
 		c.queue.Unlock()
 		return answer, err
 	}
-	if c.turn == nil || c.turn.stopped || c.turn.sendCtx.Err() != nil {
+	if c.main.work == nil || c.main.work.stopped || c.main.work.sendCtx.Err() != nil {
 		c.mu.Unlock()
 		c.queue.Unlock()
 		return answer, context.Canceled
 	}
 	*seq++
 	p.token = *seq
-	p.work, p.ctx, p.sendCtx, p.emit = c.turn, ctx, c.turn.sendCtx, c.emit
+	p.work, p.ctx, p.sendCtx, p.emit = c.main.work, ctx, c.main.work.sendCtx, c.main.emit
 	*slot = p
 	emit := p.emit
 	c.mu.Unlock()
@@ -103,7 +103,7 @@ func resolve[T any](c *Controller, slot **pending[T], token uint64, a T, dismiss
 	*slot = nil
 	c.mu.Unlock()
 	if dismissed {
-		c.stop(p.work, p.emit)
+		c.main.stop(p.work, p.emit)
 	}
 	if onAnswer != nil {
 		onAnswer()

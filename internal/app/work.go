@@ -7,10 +7,13 @@ import (
 	"github.com/keyute/kopi/internal/pigruntime"
 )
 
-// Work is one root turn: a sequence of sends sharing an ID, from the first
-// prompt until no input is left to continue with.
+// Work is one run of a session: a sequence of sends sharing an ID, from the
+// first prompt until no input is left to continue with.
 type Work struct {
-	id   string
+	id string
+	// base is the context every send of the Work derives from; it is never
+	// cancelled.
+	base context.Context
 	done chan struct{}
 	// outcome and reply are written before done is closed.
 	outcome event.Outcome
@@ -34,6 +37,9 @@ type Work struct {
 	// handBack is the queued input taken when the Work was stopped, handed
 	// back as unsent unless discarded.
 	handBack []pigruntime.Prompt
+	// byHuman is set when the human stopped the Work: by Interrupt, StopTask or
+	// rejecting an ask without a reason.
+	byHuman bool
 }
 
 func (w *Work) ID() string { return w.id }
@@ -62,8 +68,8 @@ func (c *Controller) FollowWork() *WorkQueue {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	q := &WorkQueue{c: c}
-	if c.turn != nil {
-		q.works = append(q.works, c.turn)
+	if c.main.work != nil {
+		q.works = append(q.works, c.main.work)
 	}
 	if c.followers == nil {
 		c.followers = map[*WorkQueue]struct{}{}

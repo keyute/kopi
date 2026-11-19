@@ -1,6 +1,9 @@
 package app
 
-import "github.com/keyute/kopi/internal/policy"
+import (
+	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/tool"
+)
 
 type Status struct {
 	SessionID    string
@@ -22,4 +25,20 @@ type Status struct {
 	// which Background can move.
 	Shells, Agents int
 	Foreground     bool
+}
+
+// AgentStatus describes one session for a frontend: the main session or a subagent's.
+type AgentStatus struct {
+	ID          string // Main for the main session, else the task id
+	Agent       string // the definition's name; "" for the main session
+	Description string // what the subagent was started for; "" for the main session
+	Model       string
+	State       tool.TaskStatus // a subagent's task status; "" for the main session
+	// ContextTokens and ContextWindow are zero while the usage is unknown.
+	ContextTokens, ContextWindow int
+	// Effort is empty when the model does not reason.
+	Effort    string
+	ToolCalls int
+	// Cost is in dollars, estimated from the model's price.
+	Cost float64
 }

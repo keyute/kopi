@@ -66,7 +66,7 @@
 
 ## TUI
 
-- Every screen ends with a footer row: the status line in a session, key hints on a screen of its own. A dialog sits directly above it and always draws both rules; do not add a dialog variant for what surrounds it.
+- Every screen ends with a footer: in a session, the status line with the agent rows under it while any show; key hints on a screen of its own. A dialog sits directly above the status line (or the key hints) and always draws both rules; do not add a dialog variant for what surrounds it.
 
 ## Style
 

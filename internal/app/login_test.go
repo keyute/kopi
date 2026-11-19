@@ -61,7 +61,7 @@ func (h *loginHarness) notice(t *testing.T, text string) {
 // startLogin starts /login and returns the run and its first question.
 func (h *loginHarness) startLogin(t *testing.T) (*loginRun, event.LoginRequested) {
 	t.Helper()
-	_, err := h.c.Submit(t.Context(), "/login "+loginProvider)
+	_, err := h.c.Submit(t.Context(), Main, "/login "+loginProvider)
 	require.NoError(t, err)
 	req := h.next(t, func(ev event.Event) bool { _, ok := ev.(event.LoginRequested); return ok }).(event.LoginRequested)
 	h.c.mu.Lock()
@@ -108,7 +108,7 @@ func TestLoginRequestCarriesOptionsAndSecretPrompt(t *testing.T) {
 	pigruntimetest.RegisterPromptingLoginProvider(t, h.c.rt, provider)
 	isRequest := func(ev event.Event) bool { _, ok := ev.(event.LoginRequested); return ok }
 
-	_, err := h.c.Submit(t.Context(), "/login "+provider)
+	_, err := h.c.Submit(t.Context(), Main, "/login "+provider)
 	require.NoError(t, err)
 	team := h.next(t, isRequest).(event.LoginRequested)
 	assert.Equal(t, event.LoginRequested{Token: team.Token, Provider: provider, Message: "Team:", Options: []event.LoginOption{
@@ -130,7 +130,7 @@ func TestLoginEmitsTheSignInNotice(t *testing.T) {
 	h := openLoginHarness(t, Config{})
 	pigruntimetest.RegisterPromptingLoginProvider(t, h.c.rt, "anthropic")
 
-	_, err := h.c.Submit(t.Context(), "/login anthropic")
+	_, err := h.c.Submit(t.Context(), Main, "/login anthropic")
 	require.NoError(t, err)
 	team := h.next(t, func(ev event.Event) bool { _, ok := ev.(event.LoginRequested); return ok }).(event.LoginRequested)
 	run := h.loginRun()
@@ -150,7 +150,7 @@ func TestLoginEmitsTheSignInNotice(t *testing.T) {
 func TestLoginFailureReportsAnErrorNotACancel(t *testing.T) {
 	h := openLoginHarness(t, Config{})
 
-	_, err := h.c.Submit(t.Context(), "/login no-such-provider")
+	_, err := h.c.Submit(t.Context(), Main, "/login no-such-provider")
 	require.NoError(t, err)
 
 	ev := h.next(t, func(ev event.Event) bool { _, ok := ev.(event.Error); return ok }).(event.Error)
@@ -161,7 +161,7 @@ func TestLoginFailureReportsAnErrorNotACancel(t *testing.T) {
 func TestLoginInterruptCancelsWithoutStoring(t *testing.T) {
 	h := openLoginHarness(t, Config{})
 	run, req := h.startLogin(t)
-	assert.True(t, h.c.Interrupt())
+	assert.True(t, h.c.Interrupt(Main))
 	h.notice(t, "Login cancelled.")
 	wait(t, run.done)
 
@@ -170,7 +170,26 @@ func TestLoginInterruptCancelsWithoutStoring(t *testing.T) {
 	assert.Empty(t, ofType[event.Error](evs))
 	assert.False(t, h.c.AnswerLogin(req.Token, "late"))
 	assert.False(t, h.loggedIn(t))
-	assert.False(t, h.c.Interrupt())
+	assert.False(t, h.c.Interrupt(Main))
+}
+
+func TestLoginInterruptCancelsWhenASubagentIsNamed(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
+	pigruntimetest.RegisterLoginProvider(t, a.c.rt, loginProvider)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("done")})
+	a.rootAcks(1)
+	ends, requested, loginEnded := turnEnds(a.c), subscribeTo[event.LoginRequested](a.c), subscribeTo[event.LoginEnded](a.c)
+	id := a.launch(t, "explorer", "find it", "go")
+	a.untilStatus(t, id, tool.TaskCompleted)
+	receiveEnd(t, ends)
+	_, err := a.c.Submit(t.Context(), Main, "/login "+loginProvider)
+	require.NoError(t, err)
+	req := receiveEvent(t, requested)
+
+	assert.True(t, a.c.Interrupt(id))
+
+	assert.Equal(t, event.LoginEnded{Token: req.Token}, receiveEvent(t, loginEnded))
+	assert.False(t, a.c.AnswerLogin(req.Token, "late"))
 }
 
 func TestLoginRefusals(t *testing.T) {
@@ -178,36 +197,36 @@ func TestLoginRefusals(t *testing.T) {
 	h := openLoginHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("done")})
 
-	_, err := h.c.Submit(t.Context(), "/login")
+	_, err := h.c.Submit(t.Context(), Main, "/login")
 	assert.ErrorIs(t, err, ErrMissingArgument)
-	_, err = h.c.Submit(t.Context(), "/logout")
+	_, err = h.c.Submit(t.Context(), Main, "/logout")
 	assert.ErrorIs(t, err, ErrMissingArgument)
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
-	_, err = h.c.Submit(t.Context(), "/login "+loginProvider)
+	_, err = h.c.Submit(t.Context(), Main, "/login "+loginProvider)
 	assert.ErrorIs(t, err, ErrWorkStillRunning)
 	close(release)
 	wait(t, w.Done())
 
 	run, _ := h.startLogin(t)
-	_, err = h.c.Submit(t.Context(), "/login "+loginProvider)
+	_, err = h.c.Submit(t.Context(), Main, "/login "+loginProvider)
 	assert.ErrorIs(t, err, ErrLoggingIn)
-	_, err = h.c.Submit(t.Context(), "/logout "+loginProvider)
+	_, err = h.c.Submit(t.Context(), Main, "/logout "+loginProvider)
 	assert.ErrorIs(t, err, ErrLoggingIn)
-	_, err = h.c.Submit(t.Context(), "hello")
+	_, err = h.c.Submit(t.Context(), Main, "hello")
 	assert.ErrorIs(t, err, ErrLoggingIn)
 	_, err = h.c.Prompt(t.Context(), "hello")
 	assert.ErrorIs(t, err, ErrLoggingIn)
-	_, err = h.c.Submit(t.Context(), "/new")
+	_, err = h.c.Submit(t.Context(), Main, "/new")
 	assert.ErrorIs(t, err, ErrLoggingIn)
-	_, err = h.c.Submit(t.Context(), "/resume some-id")
+	_, err = h.c.Submit(t.Context(), Main, "/resume some-id")
 	assert.ErrorIs(t, err, ErrLoggingIn)
 
-	h.c.Interrupt()
+	h.c.Interrupt(Main)
 	wait(t, run.done)
-	w, err = h.c.Submit(t.Context(), "hello")
+	w, err = h.c.Submit(t.Context(), Main, "hello")
 	require.NoError(t, err)
 	require.NotNil(t, w)
 	wait(t, w.Done())
@@ -228,7 +247,7 @@ func TestLogoutRefusesWhileASwitchRuns(t *testing.T) {
 	wait(t, started)
 	wait(t, run.done)
 
-	_, err := h.c.Submit(t.Context(), "/logout "+loginProvider)
+	_, err := h.c.Submit(t.Context(), Main, "/logout "+loginProvider)
 	assert.ErrorIs(t, err, ErrBusy)
 	close(release)
 	h.next(t, func(ev event.Event) bool { _, ok := ev.(event.SessionChanged); return ok })
@@ -247,7 +266,7 @@ func TestCloseEndsRunningLogin(t *testing.T) {
 	evs := h.rec.all()
 	assert.Contains(t, evs, event.LoginEnded{Token: req.Token})
 	assert.False(t, h.c.AnswerLogin(req.Token, "late"))
-	_, err := h.c.Submit(t.Context(), "/login "+loginProvider)
+	_, err := h.c.Submit(t.Context(), Main, "/login "+loginProvider)
 	assert.ErrorIs(t, err, ErrNoSession)
 	assert.False(t, h.loggedIn(t))
 }
@@ -290,7 +309,7 @@ func values(cs []Candidate) []string {
 
 func TestLogout(t *testing.T) {
 	h := openLoginHarness(t, Config{})
-	_, err := h.c.Submit(t.Context(), "/logout "+loginProvider)
+	_, err := h.c.Submit(t.Context(), Main, "/logout "+loginProvider)
 	assert.ErrorIs(t, err, pigruntime.ErrNotLoggedIn)
 
 	run, req := h.startLogin(t)
@@ -298,7 +317,7 @@ func TestLogout(t *testing.T) {
 	wait(t, run.done)
 	require.True(t, h.loggedIn(t))
 
-	_, err = h.c.Submit(t.Context(), "/logout "+loginProvider)
+	_, err = h.c.Submit(t.Context(), Main, "/logout "+loginProvider)
 	require.NoError(t, err)
 	h.notice(t, "Logged out of "+loginProvider+".")
 	assert.False(t, h.loggedIn(t))
@@ -329,7 +348,7 @@ func TestStartRunsFirstRunLoginThenOpens(t *testing.T) {
 	require.NotNil(t, run)
 	req := h.next(t, func(ev event.Event) bool { _, ok := ev.(event.LoginRequested); return ok }).(event.LoginRequested)
 	assert.Equal(t, loginProvider, req.Provider)
-	_, err := h.c.Submit(t.Context(), "hello")
+	_, err := h.c.Submit(t.Context(), Main, "hello")
 	assert.ErrorIs(t, err, ErrLoggingIn)
 
 	require.True(t, h.c.AnswerLogin(req.Token, "synthetic-code"))
@@ -346,13 +365,13 @@ func TestFirstRunLoginCancelThenLoginOpens(t *testing.T) {
 	run := h.loginRun()
 	require.NotNil(t, run)
 	h.next(t, func(ev event.Event) bool { _, ok := ev.(event.LoginRequested); return ok })
-	assert.True(t, h.c.Interrupt())
+	assert.True(t, h.c.Interrupt(Main))
 	ev := h.next(t, func(ev event.Event) bool { _, ok := ev.(event.Error); return ok }).(event.Error)
 	assert.ErrorIs(t, ev.Err, pigruntime.ErrNoCredential)
 	assert.ErrorContains(t, ev.Err, "run /login "+loginProvider)
 	wait(t, run.done)
 	assert.Empty(t, ofType[event.SessionChanged](h.rec.all()))
-	_, err := h.c.Submit(t.Context(), "hello")
+	_, err := h.c.Submit(t.Context(), Main, "hello")
 	assert.ErrorIs(t, err, ErrNoSession)
 
 	run, req := h.startLogin(t)
@@ -514,7 +533,7 @@ func TestUnsetModelInterruptAtThePickThenLoginOpens(t *testing.T) {
 	require.NotNil(t, run)
 	h.request(t)
 
-	assert.True(t, h.c.Interrupt())
+	assert.True(t, h.c.Interrupt(Main))
 
 	h.notice(t, "Login cancelled.")
 	ev := h.next(t, func(ev event.Event) bool { _, ok := ev.(event.Error); return ok }).(event.Error)
@@ -544,7 +563,7 @@ func TestUnsetModelNewAfterCancelledPickReportsMissingCredential(t *testing.T) {
 	run := h.loginRun()
 	require.NotNil(t, run)
 	h.request(t)
-	assert.True(t, h.c.Interrupt())
+	assert.True(t, h.c.Interrupt(Main))
 	wait(t, run.done)
 
 	err := h.c.NewSession(t.Context())
@@ -565,7 +584,7 @@ func TestUnsetModelNewAfterCancelledPickOffersWebSearch(t *testing.T) {
 	run := lh.loginRun()
 	require.NotNil(t, run)
 	lh.request(t)
-	assert.True(t, lh.c.Interrupt())
+	assert.True(t, lh.c.Interrupt(Main))
 	wait(t, run.done)
 	require.Equal(t, []string{"AskUserQuestion"}, toolNames(lh.c.tools))
 

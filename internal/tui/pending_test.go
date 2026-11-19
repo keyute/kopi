@@ -102,7 +102,7 @@ func TestLongQueueIsCapped(t *testing.T) {
 func TestPendingBudgetTracksComposerGrowth(t *testing.T) {
 	m, _ := newTestModel(t, 80, 24)
 	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []string{linesOf(30)}})
-	oldLines := &m.lines[0]
+	oldLines := &m.view().lines[0]
 	for range 7 {
 		press(m, tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt})
 		press(m, tea.KeyPressMsg{Code: 'a', Text: "a"})
@@ -112,7 +112,7 @@ func TestPendingBudgetTracksComposerGrowth(t *testing.T) {
 	}
 	assert.Equal(t, 8, m.composer.height())
 	assert.Len(t, m.pending, 10)
-	assert.Same(t, oldLines, &m.lines[0], "typing must not rebuild the transcript")
+	assert.Same(t, oldLines, &m.view().lines[0], "typing must not rebuild the transcript")
 }
 
 func TestPendingBudgetIncludesWrappedHelp(t *testing.T) {
@@ -160,10 +160,10 @@ func TestPendingGeometryInputPaths(t *testing.T) {
 				send(m, event.TurnEnd{})
 			}
 			budget := m.height - m.composer.height() - chromeRows
-			if m.busy {
+			if m.view().busy {
 				budget -= busyRows
 			}
-			assert.Equal(t, pendingRows(m.queued, &m.keys, m.width, max(2, m.height/3), budget, m.th), m.pending)
+			assert.Equal(t, pendingRows(m.view().queued, &m.keys, m.width, max(2, m.height/3), budget, m.th), m.pending)
 			assert.Len(t, screen(m), m.height)
 			assert.Equal(t, m.height-m.composer.height()-2, m.composerTop())
 		})
@@ -186,7 +186,7 @@ func TestPendingCacheReusesRenderedQueue(t *testing.T) {
 			assert.Same(t, box, &m.pendingCache.box[0])
 			assert.Same(t, note, &m.pendingCache.note[0])
 			budget := m.height - m.composer.height() - chromeRows - busyRows
-			assert.Equal(t, pendingRows(m.queued, &m.keys, m.width, max(2, m.height/3), budget, m.th), m.pending)
+			assert.Equal(t, pendingRows(m.view().queued, &m.keys, m.width, max(2, m.height/3), budget, m.th), m.pending)
 		})
 	}
 }
@@ -194,7 +194,7 @@ func TestPendingCacheReusesRenderedQueue(t *testing.T) {
 func TestPendingCacheInvalidatesRenderedQueue(t *testing.T) {
 	for name, update := range map[string]func(*model){
 		"content":         func(m *model) { send(m, event.QueueChanged{Pending: []string{"changed"}}) },
-		"mutated content": func(m *model) { m.queued[0] = "changed"; m.arrange() },
+		"mutated content": func(m *model) { m.view().queued[0] = "changed"; m.arrange() },
 		"width":           func(m *model) { m.Update(tea.WindowSizeMsg{Width: 40, Height: 30}) },
 		"theme":           func(m *model) { m.Update(tea.BackgroundColorMsg{Color: color.White}) },
 	} {
@@ -208,7 +208,7 @@ func TestPendingCacheInvalidatesRenderedQueue(t *testing.T) {
 			assert.NotSame(t, box, &m.pendingCache.box[0])
 			assert.NotSame(t, note, &m.pendingCache.note[0])
 			budget := m.height - m.composer.height() - chromeRows
-			assert.Equal(t, pendingRows(m.queued, &m.keys, m.width, max(2, m.height/3), budget, m.th), m.pending)
+			assert.Equal(t, pendingRows(m.view().queued, &m.keys, m.width, max(2, m.height/3), budget, m.th), m.pending)
 			send(m, event.QueueChanged{})
 			assert.Empty(t, m.pending)
 			assert.Empty(t, m.pendingCache.box)

@@ -50,5 +50,5 @@ func TestRestoredTurnSaysWorkedAndSessionChangeResetsVerbs(t *testing.T) {
 	}})
 
 	assert.Equal(t, []string{"", "", "❯ earlier", "", "", "κ Worked for 5s"}, body(m))
-	assert.Empty(t, m.folds.verbs)
+	assert.Empty(t, m.view().folds.verbs)
 }

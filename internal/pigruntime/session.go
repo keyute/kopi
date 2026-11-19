@@ -52,6 +52,9 @@ type Prompt struct {
 	// Skills holds the texts of the skills the prompt loads. The model reads
 	// them as messages right after Text; the transcript does not draw them.
 	Skills []string
+	// FromAgent marks a prompt another agent sent rather than the human typed;
+	// it is carried only so input a run never read goes back to its sender.
+	FromAgent bool
 	// Mode is a line about the session's mode, read after Text and Skills; the
 	// transcript does not draw it. Empty sends none.
 	Mode string
@@ -137,6 +140,22 @@ func (s *Session) ContextUsage() (tokens, window int, ok bool) {
 		return 0, 0, false
 	}
 	return *u.Tokens, u.ContextWindow, true
+}
+
+// Effort reports the reasoning level the session runs at, in the names
+// ParseEffort takes. It is "" when the model does not reason.
+func (s *Session) Effort() string {
+	if m := s.inner.Model(); m == nil || !m.ProviderMeta.Reasoning {
+		return ""
+	}
+	return string(s.inner.ThinkingLevel())
+}
+
+// Usage reports the tool calls the session has made and the cost of its
+// requests in dollars, computed from the model's price.
+func (s *Session) Usage() (toolCalls int, cost float64) {
+	st := s.inner.GetSessionStats()
+	return st.ToolCalls, st.Cost
 }
 
 // Subscribe registers fn to run synchronously on PiG's event executor. A slow

@@ -486,7 +486,7 @@ func TestLoadedMenuShrinksExhaustedPendingBudget(t *testing.T) {
 		m, _ := newMenuModel(t, 80, 14)
 		send(m, event.QueueChanged{Pending: []string{linesOf(8)}})
 		cmd := keys(m, "@")
-		require.False(t, m.busy)
+		require.False(t, m.view().busy)
 		require.Zero(t, m.menuHeight(), "the async load has not arrived")
 		pending := len(m.pending)
 		require.Positive(t, pending)

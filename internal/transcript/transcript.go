@@ -121,6 +121,16 @@ func (t *Transcript) running(id string) *Call {
 	return nil
 }
 
+// Running is the title of the latest call still running.
+func (t *Transcript) Running() (title string, ok bool) {
+	for i := len(t.items) - 1; i >= 0; i-- {
+		if it := t.items[i]; it.kind == callItem && it.call.State == Running {
+			return it.call.Title, true
+		}
+	}
+	return "", false
+}
+
 func (t *Transcript) settleUnfinished() {
 	for i := range t.items {
 		if t.items[i].kind == callItem && t.items[i].call.State == Running {

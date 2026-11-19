@@ -40,7 +40,7 @@ func (c *Controller) AnswerPlan(token uint64, a tool.PlanAnswer) bool {
 	return resolve(c, &c.plan, token, a, dismissed, func() {
 		if a.Approved {
 			// The call's result tells the model the mode, so no mode line follows.
-			c.told = modeLine(policy.Execute, "")
+			c.main.told = modeLine(policy.Execute, "")
 			c.EnterExecute()
 		}
 	})
@@ -83,30 +83,30 @@ func modeLine(mode policy.Mode, planPath string) string {
 
 // tell attaches the current mode line to the last of ps unless the model
 // already read it, and records it as told. ps carry no line of their own: an
-// earlier one that was not delivered has been taken back by untell. It must be
-// called with queue held.
-func (c *Controller) tell(ps []pigruntime.Prompt) []pigruntime.Prompt {
-	if len(ps) == 0 {
+// earlier one that was not delivered has been taken back by untell. Only the
+// main session is told its mode. It must be called with queue held.
+func (r *runner) tell(ps []pigruntime.Prompt) []pigruntime.Prompt {
+	if len(ps) == 0 || r != r.c.main {
 		return ps
 	}
 	ps = append([]pigruntime.Prompt(nil), ps...)
 	for i := range ps {
 		ps[i].Mode = ""
 	}
-	if line := modeLine(c.mode(), c.cfg.Plans.Path()); line != c.told {
+	if line := modeLine(r.c.mode(), r.c.cfg.Plans.Path()); line != r.told {
 		ps[len(ps)-1].Mode = line
-		c.told = line
+		r.told = line
 	}
 	return ps
 }
 
 // untell forgets what was told when a prompt that carried the line was not
 // delivered. It must be called with queue held.
-func (c *Controller) untell(ps ...[]pigruntime.Prompt) {
+func (r *runner) untell(ps ...[]pigruntime.Prompt) {
 	for _, group := range ps {
 		for _, p := range group {
 			if p.Mode != "" {
-				c.told = ""
+				r.told = ""
 			}
 		}
 	}

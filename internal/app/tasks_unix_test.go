@@ -100,7 +100,7 @@ func TestRealTasksDrainCompletionDuringSessionTeardown(t *testing.T) {
 				case "close":
 					result <- h.c.Close(context.Background())
 				case "new-command":
-					_, err := h.c.Submit(context.Background(), "/new")
+					_, err := h.c.Submit(context.Background(), Main, "/new")
 					if err == nil {
 						select {
 						case <-changes:

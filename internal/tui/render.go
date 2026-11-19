@@ -52,8 +52,6 @@ type cached struct {
 	lines []line
 }
 
-func (c *renderCache) reset() { c.entries = nil }
-
 func (c *renderCache) lines(b transcript.Block, f blockFolds, width int, th theme) []line {
 	if c.entries == nil || width != c.width || th != c.th {
 		c.entries, c.width, c.th = map[string]cached{}, width, th

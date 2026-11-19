@@ -34,7 +34,7 @@ func planCall(t *testing.T, h *harness, plan string, then ...ai.FauxResponseStep
 	asked := subscribeTo[event.PlanRequested](h.c)
 	writePlan(t, h, plan)
 	h.faux.SetResponses(append([]ai.FauxResponseStep{pigruntimetest.ToolCalls(exitPlanCall("call-1"))}, then...))
-	w, err := h.c.Submit(t.Context(), "plan it")
+	w, err := h.c.Submit(t.Context(), Main, "plan it")
 	require.NoError(t, err)
 	return w, receiveEvent(t, asked)
 }
@@ -85,7 +85,7 @@ func TestPlanDismissalStopsTurnAndModelSeesIt(t *testing.T) {
 	w, req := planCall(t, h, "# Plan\n", pigruntimetest.Text("unreached"))
 	ended := subscribeTo[event.PlanEnded](h.c)
 
-	queued, err := h.c.Submit(t.Context(), "queued meanwhile")
+	queued, err := h.c.Submit(t.Context(), Main, "queued meanwhile")
 	require.NoError(t, err)
 	assert.Nil(t, queued)
 	assert.True(t, h.c.AnswerPlan(req.Token, tool.PlanAnswer{Feedback: " "}))
@@ -110,7 +110,7 @@ func TestPlanCancelledByInterruptLeavesModeAlone(t *testing.T) {
 	w, req := planCall(t, h, "# Plan\n", pigruntimetest.Text("unreached"))
 	ended := subscribeTo[event.PlanEnded](h.c)
 
-	assert.True(t, h.c.Interrupt())
+	assert.True(t, h.c.Interrupt(Main))
 	wait(t, w.Done())
 
 	assert.Equal(t, event.PlanEnded{Token: req.Token}, receiveEvent(t, ended))
@@ -203,7 +203,7 @@ func TestPlanModeWritesOnlyThePlanFile(t *testing.T) {
 		pigruntimetest.Capture(t, requests, "done"),
 	})
 
-	w, err := h.c.Submit(t.Context(), "write")
+	w, err := h.c.Submit(t.Context(), Main, "write")
 	require.NoError(t, err)
 	wait(t, w.Done())
 
@@ -237,7 +237,8 @@ func TestPlanApprovalSurvivesCancellation(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		rec := &recorder{}
-		c := &Controller{turn: &Work{sendCtx: ctx, cancel: cancel}, emit: rec.add, authority: policy.NewAuthority()}
+		c := &Controller{authority: policy.NewAuthority()}
+		c.main = &runner{c: c, work: &Work{sendCtx: ctx, cancel: cancel}, emit: rec.add}
 		type result struct {
 			answer tool.PlanAnswer
 			mode   policy.Mode

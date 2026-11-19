@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"os/exec"
 	"slices"
@@ -17,9 +18,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/app"
+	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
-	"github.com/keyute/kopi/internal/transcript"
 )
 
 const (
@@ -36,7 +37,9 @@ const (
 // View draws and the mouse hit-tests.
 type geometry struct {
 	transcript, menu, composerTop int
-	fields                        []fieldArea
+	// agents is the agent rows drawn below the status line.
+	agents int
+	fields []fieldArea
 	// working is the working row's index in model.below, -1 without one.
 	working int
 }
@@ -71,23 +74,23 @@ type model struct {
 	composer      composer
 	spinner       spinner.Model
 	layout        statusLayout
-	home          string
-	commands      statusCommands
-	commandOut    map[string]string
-	geo           geometry
-	clip          clipboard
-	imageDir      string
+	agentLine     config.AgentLine
+	// usesActivity and usesElapsed report whether agentLine shows those segments.
+	usesActivity, usesElapsed bool
+	home                      string
+	commands                  statusCommands
+	commandOut                map[string]string
+	geo                       geometry
+	clip                      clipboard
+	imageDir                  string
 	// getenv and execProcess are os.Getenv and tea.ExecProcess, replaced in tests.
 	getenv      func(string) string
 	execProcess func(*exec.Cmd, tea.ExecCallback) tea.Cmd
 
-	tr    transcript.Transcript
-	folds folds
-	cache renderCache
-	lines []line
-	// offset is the first visible transcript line while not following.
-	offset int
-	follow bool
+	// views holds each session's state by id, main's under app.Main; shown is
+	// the id of the one drawn and acted on.
+	views map[string]*view
+	shown string
 	// sel is the selection in the space selIn names, drawn in reverse video.
 	sel   selection
 	selIn region
@@ -100,11 +103,15 @@ type model struct {
 	ticking bool
 
 	status app.Status
-	busy   bool
+	// agents is the Controller's sessions as of the last refresh.
+	agents []app.AgentStatus
+	// focus is the agent rows' key focus.
+	focus agentFocus
+	// agentFrom is the index of the first entry the agent rows' window shows.
+	agentFrom int
 	// activity is the Controller's latest event.Activity text.
 	activity string
-	// queued is the input queued for the running turn; pending is its rows.
-	queued       []string
+	// pending is the shown view's queued rows.
 	pending      []string
 	pendingCache pendingCache
 	// flashText is the status line's notice until flashMsg{flashSeq}.
@@ -113,14 +120,10 @@ type model struct {
 	// exitArmed is set by a cancel at idle with an empty draft; the next
 	// cancel quits.
 	exitArmed bool
-	// turnStart is when the running turn's TurnStart was applied.
-	turnStart time.Time
 	// waitStart is when the root went idle with background work running,
 	// zero otherwise.
 	waitStart time.Time
 	pickVerb  func() verb
-	// verb is the running or last turn's.
-	verb verb
 	// approval is the call awaiting an answer, nil when none; dialog is its
 	// prompt. tasks is the /tasks dialog, nil when closed; an approval closes
 	// it. prompt is the shown dialog's rows, drawn in place of the composer.
@@ -153,15 +156,18 @@ func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model
 			left: opts.StatusLine.Left, right: opts.StatusLine.Right,
 			separator: opts.StatusLine.Separator, segments: opts.StatusLine.Segments,
 		},
-		commandOut: map[string]string{},
-		clip:       systemClipboard{},
-		imageDir:   opts.ImageDir,
-		folds:      newFolds(),
-		follow:     true,
-		geo:        geometry{working: -1},
-		status:     c.Status(),
-		pickVerb:   randomVerb,
-		verb:       fallbackVerb,
+		agentLine:    opts.AgentLine,
+		usesActivity: slices.Contains(opts.AgentLine.Left, "activity") || slices.Contains(opts.AgentLine.Right, "activity"),
+		usesElapsed:  slices.Contains(opts.AgentLine.Left, "elapsed") || slices.Contains(opts.AgentLine.Right, "elapsed"),
+		commandOut:   map[string]string{},
+		clip:         systemClipboard{},
+		imageDir:     opts.ImageDir,
+		views:        map[string]*view{app.Main: newView()},
+		shown:        app.Main,
+		geo:          geometry{working: -1},
+		status:       c.Status(),
+		agents:       c.Agents(),
+		pickVerb:     randomVerb,
 	}
 	m.composer.setHistory(c.History())
 	m.home, _ = os.UserHomeDir()
@@ -174,14 +180,21 @@ func (m *model) Init() tea.Cmd {
 }
 
 func (m *model) statusInput() statusInput {
-	return statusInput{Status: m.status, notice: m.flashText, home: m.home, commands: m.commandOut}
+	in := statusInput{Status: m.status, notice: m.flashText, home: m.home, commands: m.commandOut}
+	if a, ok := m.agent(m.shown); ok {
+		in.Model, in.ContextTokens, in.ContextWindow = a.Model, a.ContextTokens, a.ContextWindow
+		in.Effort, in.ToolCalls, in.Cost = a.Effort, a.ToolCalls, a.Cost
+	}
+	return in
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	held := m.holding()
 	cmd := m.update(msg)
 	cmd = tea.Batch(cmd, m.syncInput(held))
+	m.syncFocus()
 	m.arrange()
+	m.syncFocus()
 	return m, cmd
 }
 
@@ -204,7 +217,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case eventsMsg:
 		return m.applyBatch(msg)
 	case spinner.TickMsg:
-		if _, shown := m.workingText(); !shown {
+		if !m.tickWanted() {
 			return nil
 		}
 		var cmd tea.Cmd
@@ -244,6 +257,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		}
 		return m.paste(msg.Content)
 	case imagePastedMsg:
+		m.focus = agentFocus{}
 		return m.composer.insertImage(msg.path)
 	case pasteFailedMsg:
 		return m.flash("paste failed")
@@ -273,6 +287,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	m.clearSelection()
 	km := &m.keys
 	if key.Matches(msg, km.cancel) {
+		m.focus = agentFocus{}
 		return m.cancel()
 	}
 	if m.exitArmed {
@@ -293,8 +308,13 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	if m.tasks != nil {
 		return m.tasksKey(msg)
 	}
+	if m.focus.on {
+		if cmd, ok := m.agentKey(msg); ok {
+			return cmd
+		}
+	}
 	// Unconsumed, the key reaches the composer, which may bind it too.
-	if key.Matches(msg, km.background) && m.c.Background() {
+	if m.shown == app.Main && key.Matches(msg, km.background) && m.c.Background() {
 		return nil
 	}
 	if m.menuHeight() > 0 && !m.holding() {
@@ -304,7 +324,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	switch {
 	case key.Matches(msg, km.interrupt):
-		m.c.Interrupt()
+		m.c.Interrupt(m.shown)
 		return nil
 	case key.Matches(msg, km.quit) && m.composer.empty():
 		return tea.Quit
@@ -321,15 +341,17 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(msg, km.toggleMode):
 		m.c.ToggleMode()
 		return nil
-	case key.Matches(msg, km.queueEdit) && len(m.queued) > 0 && m.composer.atTop():
+	case key.Matches(msg, km.queueEdit) && len(m.view().queued) > 0 && m.composer.atTop():
 		m.editQueue()
 		return nil
 	case key.Matches(msg, km.historyPrev) && m.composer.historyPrev():
 		return nil
 	case key.Matches(msg, km.historyNext) && m.composer.historyNext():
 		return nil
+	case key.Matches(msg, km.historyNext) && m.menuHeight() == 0 && m.composer.atBottom() && m.focusRows():
+		return nil
 	case key.Matches(msg, km.expandAll):
-		m.holdTop(m.folds.toggleAll)
+		m.holdTop(m.view().folds.toggleAll)
 		return nil
 	case key.Matches(msg, km.paste):
 		return readClipboard(m.ctx, m.clip, m.imageDir)
@@ -407,7 +429,7 @@ func (m *model) endQuestion() {
 func (m *model) loginKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch {
 	case key.Matches(msg, m.keys.interrupt):
-		m.c.Interrupt()
+		m.c.Interrupt(app.Main)
 		return nil
 	case key.Matches(msg, m.keys.paste) && m.dialog.field() != nil:
 		return readClipboardText(m.clip, m.dialog.field())
@@ -439,7 +461,7 @@ func (m *model) endLogin() {
 // clears the draft, else takes two in a row to quit.
 func (m *model) cancel() tea.Cmd {
 	switch {
-	case m.c.Interrupt():
+	case m.c.Interrupt(m.shown):
 		return nil
 	case !m.composer.empty():
 		m.composer.reset()
@@ -468,14 +490,14 @@ func (m *model) submit() tea.Cmd {
 		return nil
 	}
 	text, images := m.composer.expanded()
-	_, err := m.c.Submit(m.ctx, text, images...)
+	_, err := m.c.Submit(m.ctx, m.shown, text, images...)
 	return m.submitted(err)
 }
 
 // sendNow is submit through SendNow; an empty draft sends just the queue.
 func (m *model) sendNow() tea.Cmd {
 	text, images := m.composer.expanded()
-	return m.submitted(m.c.SendNow(m.ctx, text, images...))
+	return m.submitted(m.c.SendNow(m.ctx, m.shown, text, images...))
 }
 
 // submitted clears the draft once the Controller accepts it, and keeps it on
@@ -499,7 +521,7 @@ func (m *model) submitted(err error) tea.Cmd {
 	case errors.Is(err, app.ErrLoggingIn):
 		return m.flash("a login is under way")
 	default:
-		m.tr.Apply(event.Error{Err: err})
+		m.view().tr.Apply(event.Error{Err: err})
 		m.relayout()
 	}
 	return nil
@@ -507,45 +529,60 @@ func (m *model) submitted(err error) tea.Cmd {
 
 // editQueue moves the queued input into the composer, before the draft.
 func (m *model) editQueue() {
-	m.composer.restore(m.c.TakeQueued())
+	m.composer.restore(m.c.TakeQueued(m.shown))
 	// QueueChanged follows; clearing now keeps a second press from taking again.
-	m.queued = nil
+	m.view().queued = nil
 }
 
 // applyBatch applies events in order, refreshes the status when one of them
 // can change it, and starts the spinner when the working row appears.
 func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
-	_, wasShown := m.workingText()
-	refresh := false
+	wasShown := m.tickWanted()
+	refresh, redraw := false, false
 	pureThinking := len(evs) > 0
 	for _, ev := range evs {
-		if _, ok := ev.(event.ThinkingDelta); !ok {
+		_, inner := unwrap(ev)
+		if _, ok := inner.(event.ThinkingDelta); !ok {
 			pureThinking = false
 		}
-		switch ev.(type) {
+		switch inner.(type) {
 		case event.SessionChanged, event.ModeChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged:
 			refresh = true
 		}
 		if m.commands != nil {
 			m.commands.Observe(ev)
 		}
-		m.apply(ev)
+		if m.apply(ev) == m.view() {
+			redraw = true
+		}
 	}
 	if refresh {
-		m.status = m.c.Status()
+		m.status, m.agents = m.c.Status(), m.c.Agents()
 	}
 	m.syncWaiting()
-	if !pureThinking {
+	if redraw && !pureThinking {
 		m.relayout()
 	}
 	cmds := []tea.Cmd{m.bridge.wait()}
-	if _, shown := m.workingText(); shown && !wasShown {
+	if m.tickWanted() && !wasShown {
 		cmds = append(cmds, m.spinner.Tick)
 	}
 	return tea.Batch(cmds...)
 }
 
-func (m *model) apply(ev event.Event) {
+// unwrap is the session an event belongs to and the event itself; a bare
+// event is the main session's.
+func unwrap(ev event.Event) (string, event.Event) {
+	if s, ok := ev.(event.Session); ok {
+		return s.ID, s.Event
+	}
+	return app.Main, ev
+}
+
+// apply routes an event: the global ones act on the model, the rest on their
+// session's view, which it returns; nil when no view changed.
+func (m *model) apply(ev event.Event) *view {
+	id, ev := unwrap(ev)
 	switch ev := ev.(type) {
 	case event.StatusCommandResult:
 		if ev.Err != nil {
@@ -553,49 +590,62 @@ func (m *model) apply(ev event.Event) {
 		} else {
 			m.commandOut[ev.Name] = cleanStatusOutput(ev.Output)
 		}
-		return
+		return nil
 	case event.SessionChanged:
-		m.tr = transcript.Transcript{}
-		if len(ev.History) > 0 {
-			m.tr.Restore(ev.History)
+		// A turn running across the switch keeps its working row.
+		main := newView()
+		old := m.views[app.Main]
+		main.busy, main.turnStart, main.verb = old.busy, old.turnStart, old.verb
+		unsent := old.unsent
+		delete(m.views, app.Main)
+		for _, a := range m.agents {
+			if v := m.views[a.ID]; v != nil {
+				unsent = append(unsent, v.unsent...)
+				delete(m.views, a.ID)
+			}
 		}
-		m.folds = newFolds()
-		m.cache.reset()
+		// m.agents is the controller's list now: a switch has already dropped its
+		// subagents when an earlier batch refreshed it.
+		for _, id := range slices.Sorted(maps.Keys(m.views)) {
+			unsent = append(unsent, m.views[id].unsent...)
+		}
+		m.views, m.shown = map[string]*view{app.Main: main}, app.Main
+		m.composer.restore(unsent)
+		if len(ev.History) > 0 {
+			m.view().tr.Restore(ev.History)
+		}
 		m.clearSelection()
-		m.follow = true
-		m.queued = nil
 		m.dropApprovals(func(event.ApprovalRequested) bool { return true })
 		m.endQuestion()
 		m.endPlan()
-		m.tasks = nil
-		return
+		m.tasks, m.focus = nil, agentFocus{}
+		return m.view()
 	case event.TasksChanged:
 		m.refreshTasks()
-		return
-	case event.QueueChanged:
-		m.queued = ev.Pending
-		return
+		return nil
+	case event.ModeChanged:
+		return nil
 	case event.Activity:
 		m.activity = ev.Text
-		return
+		return nil
 	case event.ApprovalRequested:
 		if m.approval != nil {
 			m.approvalQueue = append(m.approvalQueue, ev)
-			return
+			return nil
 		}
 		m.approval, m.dialog, m.tasks = &ev, newApprovalDialog(&ev, &m.keys, m.th), nil
-		return
+		return nil
 	case event.QuestionRequested:
 		m.question, m.tasks = newQuestionDialog(ev, &m.keys, m.th), nil
 		if m.approval == nil {
 			m.dialog = m.question.current()
 		}
-		return
+		return nil
 	case event.QuestionEnded:
 		if m.question != nil && m.question.token == ev.Token {
 			m.endQuestion()
 		}
-		return
+		return nil
 	case event.PlanRequested:
 		// A repeat after an edit keeps the dialog and what was typed in it.
 		if m.plan == nil || m.plan.token != ev.Token {
@@ -603,54 +653,72 @@ func (m *model) apply(ev event.Event) {
 			if m.approval == nil {
 				m.dialog = m.plan.d
 			}
+			// The plan is a block in the main transcript and the dialog takes every key.
+			if m.shown != app.Main {
+				m.show(app.Main)
+			}
 		}
 	case event.PlanEnded:
 		if m.plan != nil && m.plan.token == ev.Token {
 			m.endPlan()
 		}
-		return
+		return nil
 	case event.LoginRequested:
 		m.login, m.dialog, m.tasks = &ev, newLoginDialog(ev, &m.keys, m.th), nil
-		return
+		return nil
 	case event.LoginEnded:
 		if m.login != nil && m.login.Token == ev.Token {
 			m.endLogin()
 		}
-		return
+		return nil
 	case event.ApprovalEnded:
 		m.dropApprovals(func(a event.ApprovalRequested) bool { return a.Token == ev.Token })
-		return
-	case event.TurnStart:
-		m.busy = true
-		m.turnStart = time.Now()
-		m.verb = m.pickVerb()
-	case event.TurnEnd:
-		m.tr.Apply(ev)
-		// Only a turn seen starting picked a verb; the Turn block is last.
-		if m.busy {
-			blocks := m.tr.Blocks()
-			m.folds.verbs[blocks[len(blocks)-1].Key()] = m.verb
-		}
-		m.busy = false
-		m.dropApprovals(func(a event.ApprovalRequested) bool { return a.Agent == "" })
-		m.endQuestion()
-		m.endPlan()
-		m.composer.restore(ev.Unsent)
-		return
+		return nil
 	}
-	m.tr.Apply(ev)
+	v := m.viewOf(id)
+	switch ev := ev.(type) {
+	case event.QueueChanged:
+		v.queued = ev.Pending
+		return v
+	case event.TurnStart:
+		v.busy = true
+		v.turnStart = time.Now()
+		v.verb = m.pickVerb()
+	case event.TurnEnd:
+		v.tr.Apply(ev)
+		// Only a turn seen starting picked a verb; the Turn block is last.
+		if v.busy {
+			blocks := v.tr.Blocks()
+			v.folds.verbs[blocks[len(blocks)-1].Key()] = v.verb
+		}
+		v.busy = false
+		m.dropApprovals(func(a event.ApprovalRequested) bool { return a.TaskID == id })
+		if id == app.Main {
+			m.endQuestion()
+			m.endPlan()
+		}
+		if id == m.shown {
+			m.composer.restore(ev.Unsent)
+		} else {
+			v.unsent = append(v.unsent, ev.Unsent...)
+		}
+		return v
+	}
+	v.tr.Apply(ev)
+	return v
 }
 
 // holdTop applies a fold change without moving the first visible line, so
 // what was clicked stays on its row; following stops unless the view is
 // still at the bottom.
 func (m *model) holdTop(change func()) {
+	v := m.view()
 	top := m.top()
 	m.clearSelection()
 	change()
 	m.relayout()
-	m.offset = min(top, m.maxOffset())
-	m.follow = m.offset == m.maxOffset()
+	v.offset = min(top, m.maxOffset())
+	v.follow = v.offset == m.maxOffset()
 }
 
 // relayout rebuilds the transcript's lines: the header, then each block
@@ -660,24 +728,25 @@ func (m *model) relayout() {
 	if m.width == 0 {
 		return
 	}
-	blocks := m.tr.Blocks()
-	m.folds.settle(blocks)
-	old := m.lines
-	m.lines = header(m.version, m.th)
+	v := m.view()
+	blocks := v.tr.Blocks()
+	v.folds.settle(blocks)
+	old := v.lines
+	v.lines = header(m.version, m.th)
 	for _, b := range blocks {
-		ls := m.cache.lines(b, m.folds.of(b), m.width, m.th)
+		ls := v.cache.lines(b, v.folds.of(b), m.width, m.th)
 		if len(ls) == 0 {
 			continue
 		}
-		m.lines = append(m.lines, line{})
-		m.lines = append(m.lines, ls...)
+		v.lines = append(v.lines, line{})
+		v.lines = append(v.lines, ls...)
 	}
 	if m.selIn != regionTranscript {
 		return
 	}
 	n := max(m.sel.anchor.line, m.sel.head.line) + 1
 	sameText := func(a, b line) bool { return a.text == b.text }
-	if !slices.EqualFunc(old[:min(n, len(old))], m.lines[:min(n, len(m.lines))], sameText) {
+	if !slices.EqualFunc(old[:min(n, len(old))], v.lines[:min(n, len(v.lines))], sameText) {
 		m.clearSelection()
 	}
 }
@@ -737,14 +806,18 @@ func (m *model) place() {
 		m.prompt = loginRows(m.dialog, m.width, max(2, m.height/3), free+2, m.th)
 		input = len(m.prompt) - 2
 	case m.tasks != nil:
-		m.prompt = m.tasks.rows(m.width, max(2, m.height/3), free+2, m.th)
+		m.prompt = m.tasks.rows(m.width, max(2, m.height/3), free+2, &m.keys, m.th)
 		input = len(m.prompt) - 2
 	default:
 		m.geo.menu = max(0, min(m.menu.want(), free-input))
 	}
 	free -= input + m.geo.menu
-	m.pending = m.pendingCache.rows(m.queued, &m.keys, m.width, max(2, m.height/3), free, m.th)
+	m.pending = m.pendingCache.rows(m.view().queued, &m.keys, m.width, max(2, m.height/3), free, m.th)
 	m.geo.transcript = max(0, free-len(m.pending))
+	// The rows take only what is left of the transcript.
+	agentRows := m.agentRows(m.geo.transcript)
+	m.geo.agents = len(agentRows)
+	m.geo.transcript -= m.geo.agents
 
 	rows := append([]string{""}, m.pending...)
 	if shown {
@@ -775,6 +848,7 @@ func (m *model) place() {
 		m.geo.fields = []fieldArea{{c: &m.composer, y: m.geo.composerTop, h: m.composer.height()}}
 	}
 	rows = append(rows, statusLine(m.statusInput(), m.layout, m.width, m.th))
+	rows = append(rows, agentRows...)
 	m.below = make([]line, len(rows))
 	for i, r := range rows {
 		m.below[i] = line{text: r}
@@ -789,22 +863,24 @@ func (m *model) transcriptHeight() int { return m.geo.transcript }
 func (m *model) composerTop() int { return m.geo.composerTop }
 
 func (m *model) maxOffset() int {
-	return max(0, len(m.lines)-m.transcriptHeight())
+	return max(0, len(m.view().lines)-m.transcriptHeight())
 }
 
 // top is the first visible transcript line. It is derived rather than stored
 // while following, so the composer growing keeps the bottom in view.
 func (m *model) top() int {
-	if m.follow {
+	v := m.view()
+	if v.follow {
 		return m.maxOffset()
 	}
-	return min(m.offset, m.maxOffset())
+	return min(v.offset, m.maxOffset())
 }
 
 // scroll moves the view by n lines; reaching the bottom resumes following.
 func (m *model) scroll(n int) {
-	m.offset = min(max(0, m.top()+n), m.maxOffset())
-	m.follow = m.offset == m.maxOffset()
+	v := m.view()
+	v.offset = min(max(0, m.top()+n), m.maxOffset())
+	v.follow = v.offset == m.maxOffset()
 }
 
 // selected is line i of space r with the part of it the selection covers
@@ -826,10 +902,11 @@ func (m *model) View() tea.View {
 	if m.width == 0 || m.height == 0 {
 		return v
 	}
+	lines := m.view().lines
 	h, top := m.transcriptHeight(), m.top()
 	rows := make([]string, 0, h+len(m.below))
 	for i := top; i < top+h; i++ {
-		if i < len(m.lines) {
+		if i < len(lines) {
 			rows = append(rows, m.selected(regionTranscript, i))
 		} else {
 			rows = append(rows, "")

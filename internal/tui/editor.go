@@ -33,7 +33,7 @@ func editorCommand(getenv func(string) string, path string) *exec.Cmd {
 func (m *model) openEditor(path string) tea.Cmd {
 	cmd := editorCommand(m.getenv, path)
 	if cmd == nil {
-		m.tr.Apply(event.Notice{Text: noEditorNotice})
+		m.view().tr.Apply(event.Notice{Text: noEditorNotice})
 		m.relayout()
 		return nil
 	}
@@ -48,7 +48,7 @@ func (m *model) openEditor(path string) tea.Cmd {
 // plan again, whichever editor run it was.
 func (m *model) editorDone(msg editorDoneMsg) {
 	if msg.err != nil {
-		m.tr.Apply(event.Error{Err: fmt.Errorf("failed to run the editor: %w", msg.err)})
+		m.view().tr.Apply(event.Error{Err: fmt.Errorf("failed to run the editor: %w", msg.err)})
 		m.relayout()
 	}
 	if m.plan != nil {

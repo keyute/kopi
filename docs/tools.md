@@ -66,7 +66,8 @@
 ## Agent and SendMessage
 
 - `Agent` starts a [subagent](subagents.md) on a prompt and returns its task id at once; the subagent runs in the background.
-- `SendMessage` sends a further message to a subagent by task id.
+- `SendMessage` sends a further message to a subagent by task id. A running subagent reads it when its current step ends; one that has ended, or whose run is being stopped, starts again with its earlier context, and the call does not wait for the stopping run to end.
+- The notice the agent receives when a subagent's run completes or fails, or when you stop it, lists the messages queued for it that it never read as undelivered. When the agent stops a subagent with `TaskStop` it receives no notice, and those messages are dropped.
 - Both exist only when a subagent is defined.
 
 ## AskUserQuestion
@@ -108,7 +109,7 @@
 - Takes no arguments. In plan mode it shows you the plan from the session's plan file and asks `Approve this plan?` with `Yes` and `No`.
 - Each root session in the fullscreen interface has a plan file, `plans/<session id>.md` in Kopi's home. The model writes it with `Write` and `Edit`; `Read`, `Write` and `Edit` reach that one file in both modes without asking by default. [Rules](permissions.md#precedence) still apply to it.
 - A resumed session keeps its plan file; a new session gets a new one. Kopi never deletes plan files.
-- The plan is drawn in the transcript as Markdown when it is presented. On resume only the tool's row is restored; the plan is in the file.
+- The plan is drawn in the main session's transcript as Markdown when it is presented, and that view opens if you were viewing a subagent. On resume only the tool's row is restored; the plan is in the file.
 - `Yes` switches the session to execute mode and the turn continues.
 - `No` takes feedback typed on its row. The feedback goes to the model, which stays in plan mode and can revise the plan and ask again. A blank `No` or Esc dismisses the plan and stops the turn; the model sees that you dismissed it.
 - The call is an error when the session is not in plan mode or the plan file is missing or empty.

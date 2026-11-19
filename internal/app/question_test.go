@@ -32,7 +32,7 @@ func TestQuestionAnswerReachesModel(t *testing.T) {
 	requests := make(chan pigruntimetest.Request, 1)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(questionCall("call-1")), pigruntimetest.Capture(t, requests, "done")})
 
-	w, err := h.c.Submit(t.Context(), "ask me")
+	w, err := h.c.Submit(t.Context(), Main, "ask me")
 	require.NoError(t, err)
 	req := receiveEvent(t, asked)
 	require.Len(t, req.Questions, 1)
@@ -56,10 +56,10 @@ func TestQuestionDismissalStopsTurnAndModelSeesIt(t *testing.T) {
 	ended := subscribeTo[event.QuestionEnded](h.c)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(questionCall("call-1"), writeCall("call-2", "b.txt")), pigruntimetest.Text("unreached")})
 
-	w, err := h.c.Submit(t.Context(), "ask me")
+	w, err := h.c.Submit(t.Context(), Main, "ask me")
 	require.NoError(t, err)
 	req := receiveEvent(t, asked)
-	queued, err := h.c.Submit(t.Context(), "queued meanwhile")
+	queued, err := h.c.Submit(t.Context(), Main, "queued meanwhile")
 	require.NoError(t, err)
 	assert.Nil(t, queued)
 	assert.True(t, h.c.AnswerQuestion(req.Token, nil))
@@ -89,7 +89,8 @@ func TestQuestionClaimedDismissalSurvivesCancellation(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		rec := &recorder{}
-		c := &Controller{turn: &Work{sendCtx: ctx, cancel: cancel}, emit: rec.add}
+		c := &Controller{}
+		c.main = &runner{c: c, work: &Work{sendCtx: ctx, cancel: cancel}, emit: rec.add}
 		done := make(chan struct{})
 		var answers []tool.Answer
 		var err error
@@ -135,10 +136,10 @@ func TestQuestionCancelledByInterruptEnds(t *testing.T) {
 	ended := subscribeTo[event.QuestionEnded](h.c)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(questionCall("call-1")), pigruntimetest.Text("unreached")})
 
-	w, err := h.c.Submit(t.Context(), "ask me")
+	w, err := h.c.Submit(t.Context(), Main, "ask me")
 	require.NoError(t, err)
 	req := receiveEvent(t, asked)
-	assert.True(t, h.c.Interrupt())
+	assert.True(t, h.c.Interrupt(Main))
 
 	assert.Equal(t, event.QuestionEnded{Token: req.Token}, receiveEvent(t, ended))
 	wait(t, w.Done())
@@ -152,7 +153,7 @@ func TestQuestionCancelledBySessionSwitchEnds(t *testing.T) {
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(questionCall("call-1")), pigruntimetest.Text("unreached")})
 	oldID := h.c.Status().SessionID
 
-	w, err := h.c.Submit(t.Context(), "ask me")
+	w, err := h.c.Submit(t.Context(), Main, "ask me")
 	require.NoError(t, err)
 	req := receiveEvent(t, asked)
 	require.NoError(t, h.c.NewSession(t.Context()))
@@ -175,7 +176,7 @@ func TestQuestionStaleAnswerIsIgnored(t *testing.T) {
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(questionCall("call-1")), pigruntimetest.Text("done")})
 	assert.False(t, h.c.AnswerQuestion(0, nil), "nothing is pending yet")
 
-	w, err := h.c.Submit(t.Context(), "ask me")
+	w, err := h.c.Submit(t.Context(), Main, "ask me")
 	require.NoError(t, err)
 	req := receiveEvent(t, asked)
 	assert.False(t, h.c.AnswerQuestion(req.Token+1, nil))
@@ -191,7 +192,7 @@ func TestQuestionCallsAreAskedOneAtATime(t *testing.T) {
 	asked := subscribeTo[event.QuestionRequested](h.c)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(questionCall("call-1"), questionCall("call-2")), pigruntimetest.Text("done")})
 
-	w, err := h.c.Submit(t.Context(), "ask me twice")
+	w, err := h.c.Submit(t.Context(), Main, "ask me twice")
 	require.NoError(t, err)
 	first := receiveEvent(t, asked)
 	assert.True(t, h.c.AnswerQuestion(first.Token, picked))
@@ -215,7 +216,7 @@ func TestQuestionNeedsNoApprovalInPlanMode(t *testing.T) {
 	asked := subscribeTo[event.QuestionRequested](h.c)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(questionCall("call-1")), pigruntimetest.Text("done")})
 
-	w, err := h.c.Submit(t.Context(), "ask me")
+	w, err := h.c.Submit(t.Context(), Main, "ask me")
 	require.NoError(t, err)
 	mode, _ := h.c.authority.Snapshot()
 	require.Equal(t, policy.Plan, mode)

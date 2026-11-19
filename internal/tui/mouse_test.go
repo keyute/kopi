@@ -143,7 +143,7 @@ func TestDoubleAndTripleClickSelectWordAndLine(t *testing.T) {
 
 		time.Sleep(300 * time.Millisecond)
 		cmd := click()
-		assert.Equal(t, "κ alpha beta gamma", strings.TrimRight(m.sel.text(m.lines), " "))
+		assert.Equal(t, "κ alpha beta gamma", strings.TrimRight(m.sel.text(m.view().lines), " "))
 		runCopy(t, cmd)
 
 		time.Sleep(401 * time.Millisecond)
@@ -225,6 +225,46 @@ func TestTranscriptDragStaysInTheTranscript(t *testing.T) {
 	assert.False(t, m.composer.ta.HasSelection())
 	assert.Equal(t, "draft", m.composer.value())
 	assertCopied(t, m, cmd, "κ first")
+}
+
+func TestComposerClickReturnsFocusFromBusyAgent(t *testing.T) {
+	for _, submit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("submit %t", submit), func(t *testing.T) {
+			m, c := focused(t, explorer("t1"))
+			press(m, down)
+			require.Equal(t, "t1", m.focus.id)
+			m.composer.paste("draft")
+			m.arrange()
+			shown := m.shown
+
+			pressAt(m, 7, m.composerTop())
+			releaseAt(m, 7, m.composerTop())
+			assert.Equal(t, agentFocus{}, m.focus)
+			if submit {
+				press(m, enter)
+				assert.Equal(t, []string{"draft"}, c.submitted)
+				assert.Equal(t, []string{shown}, c.sessions)
+			} else {
+				press(m, keyX)
+				assert.Equal(t, "draftx", m.composer.value())
+				assert.Empty(t, c.calls)
+				assert.Empty(t, c.stops)
+			}
+			assert.Equal(t, shown, m.shown)
+		})
+	}
+}
+
+func TestMouseOutsideComposerKeepsAgentFocus(t *testing.T) {
+	m, _ := focused(t, explorer("t1"))
+	press(m, down)
+	want := m.focus
+
+	pressAt(m, 0, 0)
+	releaseAt(m, 0, 0)
+	assert.Equal(t, want, m.focus)
+	m.Update(tea.MouseClickMsg{X: 0, Y: m.composerTop(), Button: tea.MouseRight})
+	assert.Equal(t, want, m.focus)
 }
 
 func TestComposerDragNeverSelectsTranscript(t *testing.T) {
@@ -590,7 +630,7 @@ func TestActiveTranscriptDragClearsWhenCoordinatesChange(t *testing.T) {
 		"theme":      func(m *model) { m.Update(tea.BackgroundColorMsg{Color: color.White}) },
 		"session":    func(m *model) { send(m, event.SessionChanged{}) },
 		"expand all": func(m *model) { press(m, ctrlO) },
-		"fold":       func(m *model) { m.holdTop(m.folds.toggleAll) },
+		"fold":       func(m *model) { m.holdTop(m.view().folds.toggleAll) },
 		"key":        func(m *model) { press(m, left) },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -630,7 +670,7 @@ func TestTranscriptDragWhenCandidatesConsumeViewport(t *testing.T) {
 					load := keys(m, "@")
 					require.True(t, m.menu.open)
 					require.Zero(t, m.menuHeight())
-					m.scroll(-len(m.lines))
+					m.scroll(-len(m.view().lines))
 					require.Zero(t, m.top())
 					for range clicks {
 						pressAt(m, 8, 2)
@@ -713,7 +753,7 @@ func TestSelectionSurvivesBlockAppendedBelow(t *testing.T) {
 
 	send(m, event.Notice{Text: "other"})
 
-	assert.Equal(t, "first", m.sel.text(m.lines))
+	assert.Equal(t, "first", m.sel.text(m.view().lines))
 	assert.Equal(t, []int{row}, reversedRows(m))
 }
 

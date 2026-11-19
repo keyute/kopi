@@ -22,10 +22,10 @@ import (
 // Controller is the part of app.Controller the frontend uses.
 type Controller interface {
 	Subscribe(fn func(event.Event)) func()
-	Submit(ctx context.Context, text string, images ...string) (*app.Work, error)
-	SendNow(ctx context.Context, text string, images ...string) error
-	TakeQueued() []event.Input
-	Interrupt() bool
+	Submit(ctx context.Context, session, text string, images ...string) (*app.Work, error)
+	SendNow(ctx context.Context, session, text string, images ...string) error
+	TakeQueued(session string) []event.Input
+	Interrupt(session string) bool
 	// Answer answers the pending approval for token; false when it is stale.
 	Answer(token uint64, d policy.Decision) bool
 	// AnswerLogin answers the pending login question for token; false when it
@@ -44,6 +44,7 @@ type Controller interface {
 	ToggleMode()
 	History() []string
 	Status() app.Status
+	Agents() []app.AgentStatus
 	Commands() []app.Command
 	Spans(text string) []app.Span
 	// Arguments and Files may read many files; call them off the event loop.
@@ -59,12 +60,13 @@ type Controller interface {
 
 // Options are the frontend's settings. Keys maps action names to key
 // strings; an action without keys is disabled. StatusLine is the config's
-// status line. ImageDir holds saved clipboard images. Themes
+// status line, AgentLine its agent rows'. ImageDir holds saved clipboard images. Themes
 // come from LoadThemes.
 type Options struct {
 	Version    string
 	Keys       map[string][]string
 	StatusLine config.StatusLine
+	AgentLine  config.AgentLine
 	ImageDir   string
 	Themes     Themes
 }

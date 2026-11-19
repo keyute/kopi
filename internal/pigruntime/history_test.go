@@ -624,6 +624,38 @@ func TestContextUsageMirrorsPiG(t *testing.T) {
 	assert.Greater(t, mirrors(), before)
 }
 
+func TestEffortNamesTheLevelOnlyForAReasoningModel(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	assert.Empty(t, openTestSession(t, r).Effort(), "faux-1 does not reason")
+
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "faux-thinker", Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, r.RegisterProvider(thinker.Provider()))
+	sess, err := r.Open(t.Context(), OpenOptions{Model: "faux-thinker/thinker", Effort: LowEffort, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+	assert.Equal(t, "low", sess.Effort())
+}
+
+func TestUsageMirrorsPiGsSessionStats(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "faux-thinker", Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, r.RegisterProvider(thinker.Provider()))
+	thinker.SetResponses([]ai.FauxResponseStep{callTool("Probe", "call-1"), reply("counted")})
+	probe := probeTool(func(context.Context, json.RawMessage) (string, error) { return "probed", nil })
+	sess, err := r.Open(t.Context(), OpenOptions{Model: "faux-thinker/thinker", Effort: LowEffort, SystemPrompt: kopiPrompt, Tools: []tool.Tool{probe}, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+	_, err = sess.Send(t.Context(), Prompt{Text: "count me"}, nil, nil)
+	require.NoError(t, err)
+
+	toolCalls, cost := sess.Usage()
+	want := sess.inner.GetSessionStats()
+	assert.Equal(t, want.ToolCalls, toolCalls)
+	assert.Equal(t, want.Cost, cost)
+	assert.Equal(t, 1, toolCalls)
+	assert.Equal(t, "low", sess.Effort())
+}
+
 func TestHistoryAndSessionListOmitSkills(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)

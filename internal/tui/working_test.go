@@ -251,3 +251,61 @@ func TestWorkingRowWaitsDuringAQuestion(t *testing.T) {
 		assert.Contains(t, screen(m), "⠋ Working… 0s · ctrl+b to background")
 	})
 }
+
+func TestWorkingRowFollowsTheView(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := agentsModel(t)
+		send(m, sub("t1", event.TurnStart{Prompt: "dig"}))
+		working := func() string { s := screen(m); return s[len(s)-6-m.geo.agents] }
+		time.Sleep(5 * time.Second)
+		assert.NotContains(t, screen(m), "⠋ Working… 5s", "main is idle")
+
+		cmd := display(m, "t1")
+		assert.NotNil(t, cmd, "the spinner ticks for the new view")
+		assert.Equal(t, "⠋ Working… 5s", working())
+
+		send(m, sub("t1", event.TurnEnd{}))
+		c.status.Agents = 1
+		send(m, event.TasksChanged{})
+		assert.NotContains(t, screen(m), "⠋ Waiting on 1 agent… 0s", "waiting shows in main only")
+
+		display(m, app.Main)
+		assert.Equal(t, "⠋ Waiting on 1 agent… 0s", working())
+	})
+}
+
+func TestWorkingRowKeepsMainsTurnAcrossSessionChanged(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 60, 20)
+		send(m, event.TurnStart{Prompt: "go"})
+
+		send(m, event.SessionChanged{SessionID: "s2"})
+
+		assert.True(t, m.views[app.Main].busy)
+		assert.Contains(t, screen(m), "⠋ Working… 0s")
+
+		send(m, event.TurnEnd{})
+		assert.False(t, m.views[app.Main].busy)
+		assert.NotContains(t, screen(m), "⠋ Working… 0s")
+	})
+}
+
+func TestWorkingRowInASubagentViewHidesMainsActivityAndBackgroundHint(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := agentsModel(t)
+		c.status.Foreground = true
+		send(m, event.TasksChanged{}, sub("t1", event.TurnStart{Prompt: "dig"}), event.Activity{Text: "Reading a.go"})
+
+		assert.Contains(t, screen(m), "⠋ Reading a.go")
+		display(m, "t1")
+		assert.Contains(t, screen(m), "⠋ Working… 0s")
+		assert.NotContains(t, screen(m), "Reading a.go")
+
+		display(m, app.Main)
+		send(m, event.TurnStart{Prompt: "go"})
+		assert.Contains(t, screen(m), "⠋ Working… 0s · ctrl+b to background")
+		display(m, "t1")
+		assert.Contains(t, screen(m), "⠋ Working… 0s")
+		assert.NotContains(t, screen(m), "to background")
+	})
+}

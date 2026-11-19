@@ -42,7 +42,8 @@ func (m *model) showTasks() tea.Cmd {
 }
 
 // tasksKey goes to the dialog: interrupt leaves the task for the list and
-// the list for the composer. Keys it has no use for are swallowed.
+// the list for the composer. Enter on a subagent's task shows its session.
+// Keys it has no use for are swallowed.
 func (m *model) tasksKey(msg tea.KeyPressMsg) tea.Cmd {
 	t := m.tasks
 	if key.Matches(msg, m.keys.interrupt) {
@@ -53,13 +54,28 @@ func (m *model) tasksKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	}
+	if t.open == "" && key.Matches(msg, m.keys.stopAgent) {
+		info := t.list[t.d.sel]
+		if info.Agent != "" && info.Status == tool.TaskRunning {
+			if err := m.c.StopTask(info.ID); err != nil {
+				m.showError(err)
+			}
+			m.taskList(info.ID)
+		}
+		return nil
+	}
 	picked, cmd := t.d.key(msg, &m.keys)
 	if !picked {
 		return cmd
 	}
 	switch {
 	case t.open == "":
-		m.openTask(t.list[t.d.sel].ID)
+		info := t.list[t.d.sel]
+		if _, ok := m.agent(info.ID); ok && info.Agent != "" {
+			m.tasks = nil
+			return m.show(info.ID)
+		}
+		m.openTask(info.ID)
 	case t.stoppable() && t.d.sel == 0:
 		if err := m.c.StopTask(t.open); err != nil {
 			m.showError(err)
@@ -115,7 +131,7 @@ func (m *model) taskList(id string) {
 }
 
 func (m *model) showError(err error) {
-	m.tr.Apply(event.Error{Err: err})
+	m.view().tr.Apply(event.Error{Err: err})
 	m.relayout()
 }
 
@@ -146,11 +162,17 @@ func (t *taskDialog) setOptions(width int) {
 
 // rows draws the dialog within maxRows; an open task's output fills what
 // the other rows leave, at most maxBody rows, from its end.
-func (t *taskDialog) rows(width, maxBody, maxRows int, th theme) []string {
+func (t *taskDialog) rows(width, maxBody, maxRows int, km *keyMap, th theme) []string {
 	if maxRows <= 0 {
 		return nil
 	}
 	t.setOptions(width)
+	t.d.note = ""
+	if t.open == "" {
+		if info := t.list[t.d.sel]; info.Agent != "" && info.Status == tool.TaskRunning {
+			t.d.note = binding(km.stopAgent, "stop agent")
+		}
+	}
 	t.d.body = nil
 	if t.open != "" {
 		t.d.body = t.tail(min(maxBody, maxRows-len(t.d.rows(width, maxRows, 1, th))), width-2, th)

@@ -110,7 +110,7 @@ func TestTasksListNamesAnAgentTask(t *testing.T) {
 	})
 }
 
-func TestTasksOpenAgentShowsItsOutputAndOptions(t *testing.T) {
+func TestTasksOpenAgentWithoutASessionShowsItsOutputAndOptions(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, c := tasksModel(t)
 		c.tasks[0].Agent = "explore"
@@ -122,6 +122,110 @@ func TestTasksOpenAgentShowsItsOutputAndOptions(t *testing.T) {
 		rule := strings.Repeat("─", 60)
 		want := []string{rule, "  t1 · running · 1m 2s · explore › look around", "    one", "    two", "", "❭ 1. Stop", "  2. Back", rule}
 		assert.Equal(t, want, dialogRows(t, m))
+	})
+}
+
+func TestTasksOpenAgentWithASessionShowsItsView(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		c.tasks[0].Agent = "explore"
+		c.agents = []app.AgentStatus{{ID: app.Main}, {ID: "t1", Agent: "explore"}}
+		send(m, event.TasksChanged{}, event.Session{ID: "t1", Event: event.TurnStart{Prompt: "dig"}})
+		submitText(m, "/tasks")
+		require.NotNil(t, m.tasks)
+
+		press(m, enter)
+
+		assert.Nil(t, m.tasks)
+		assert.Equal(t, "t1", m.shown)
+		assert.Contains(t, body(m), "❯ dig")
+	})
+}
+
+func TestTasksListStopsTheSelectedRunningAgent(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		c.tasks[1].Agent, c.tasks[1].Status = "explore", tool.TaskRunning
+		c.agents = []app.AgentStatus{{ID: app.Main}, {ID: "t2", Agent: "explore"}}
+		send(m, event.TasksChanged{}, sub("t2", event.TurnStart{Prompt: "dig"}))
+		submitText(m, "/tasks")
+		press(m, down)
+		assert.Contains(t, strings.Join(screen(m), "\n"), "x to stop agent")
+
+		press(m, keyX)
+
+		assert.Equal(t, []string{"t2"}, c.stops)
+		require.NotNil(t, m.tasks)
+		assert.Empty(t, m.tasks.open)
+		assert.Equal(t, "t2", m.tasks.list[m.tasks.d.sel].ID)
+		assert.Equal(t, tool.TaskStopped, m.tasks.list[m.tasks.d.sel].Status)
+		assert.NotContains(t, strings.Join(screen(m), "\n"), "to stop agent")
+		assert.Equal(t, app.Main, m.shown)
+		assert.Zero(t, c.interrupts, "list stopping uses StopTask, not Interrupt")
+
+		press(m, keyX)
+		assert.Equal(t, []string{"t2"}, c.stops, "an ended agent is not stopped again")
+		press(m, enter)
+		assert.Nil(t, m.tasks)
+		assert.Equal(t, "t2", m.shown, "Enter still opens the stopped agent's view")
+	})
+}
+
+func TestTasksListStopAgentBinding(t *testing.T) {
+	for _, keys := range [][]string{{"s"}, nil} {
+		t.Run(fmt.Sprint(keys), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				m, c := tasksModel(t)
+				m.keys.stopAgent.SetKeys(keys...)
+				c.tasks[0].Agent = "explore"
+				submitText(m, "/tasks")
+				press(m, keyX)
+				assert.Empty(t, c.stops, "the default binding is replaced")
+				if len(keys) > 0 {
+					assert.Contains(t, strings.Join(screen(m), "\n"), "s to stop agent")
+				} else {
+					assert.NotContains(t, strings.Join(screen(m), "\n"), "to stop agent")
+				}
+				press(m, tea.KeyPressMsg{Code: 's', Text: "s"})
+				if len(keys) > 0 {
+					assert.Equal(t, []string{"t1"}, c.stops)
+				} else {
+					assert.Empty(t, c.stops)
+				}
+				assert.Empty(t, m.composer.value())
+			})
+		})
+	}
+}
+
+func TestTasksListStopAgentDoesNothingForACompletedTask(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		c.tasks[1].Agent = "explore"
+		submitText(m, "/tasks")
+		press(m, down)
+		press(m, keyX)
+		assert.Empty(t, c.stops)
+		assert.Empty(t, m.tasks.open)
+		assert.Equal(t, "t2", m.tasks.list[m.tasks.d.sel].ID)
+		assert.NotContains(t, strings.Join(screen(m), "\n"), "to stop agent")
+	})
+}
+
+func TestTasksListStopAgentLeavesShellControlsUnchanged(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		submitText(m, "/tasks")
+		press(m, keyX)
+		assert.Empty(t, c.stops)
+		assert.Empty(t, m.tasks.open)
+		assert.NotContains(t, strings.Join(screen(m), "\n"), "to stop agent")
+		press(m, enter)
+		assert.Equal(t, "t1", m.tasks.open)
+		press(m, keyX)
+		assert.Empty(t, c.stops, "the output view still uses its Stop option")
+		press(m, enter)
+		assert.Equal(t, []string{"t1"}, c.stops)
 	})
 }
 

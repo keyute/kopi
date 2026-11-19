@@ -19,6 +19,7 @@ var newlines = strings.NewReplacer("\r\n", "\n", "\r", "\n")
 // terminal or from the paste key: a path to an image file as an image block,
 // anything else as text.
 func (m *model) paste(content string) tea.Cmd {
+	m.focus = agentFocus{}
 	content = newlines.Replace(content)
 	if path, ok := imagePath(content); ok {
 		return m.composer.insertImage(path)

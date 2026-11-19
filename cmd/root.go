@@ -502,6 +502,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			Version:    kopiVersion(),
 			Keys:       resolved.Config.Keys,
 			StatusLine: resolved.Config.StatusLine,
+			AgentLine:  resolved.Config.AgentLine,
 			ImageDir:   paths.ImageDir,
 			Themes:     themes,
 		})

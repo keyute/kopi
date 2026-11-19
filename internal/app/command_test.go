@@ -65,16 +65,16 @@ func TestTasksCommandShowsTasksIdleAndMidTurn(t *testing.T) {
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("done")})
 
-	_, err := h.c.Submit(t.Context(), "/tasks")
+	_, err := h.c.Submit(t.Context(), Main, "/tasks")
 	assert.ErrorIs(t, err, ErrShowTasks)
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
-	got, err := h.c.Submit(t.Context(), "/tasks")
+	got, err := h.c.Submit(t.Context(), Main, "/tasks")
 	assert.ErrorIs(t, err, ErrShowTasks)
 	assert.Nil(t, got)
-	assert.Empty(t, h.c.TakeQueued())
+	assert.Empty(t, h.c.TakeQueued(Main))
 	close(release)
 	wait(t, w.Done())
 }
@@ -85,27 +85,27 @@ func TestPlanCommandEntersPlanModeAndOpensThePlanFile(t *testing.T) {
 	h := newHarness(t, sb, Config{Plans: plans})
 	notices := subscribeTo[event.Notice](h.c)
 
-	_, err := h.c.Submit(t.Context(), "/plan open")
+	_, err := h.c.Submit(t.Context(), Main, "/plan open")
 	require.NoError(t, err, "without a session")
 	assert.Equal(t, event.Notice{Text: "This session has no plan file yet."}, receiveEvent(t, notices))
 
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
 	h.c.EnterExecute()
-	_, err = h.c.Submit(t.Context(), "/plan open")
+	_, err = h.c.Submit(t.Context(), Main, "/plan open")
 	require.NoError(t, err, "before the plan file exists")
 	assert.Equal(t, event.Notice{Text: "This session has no plan file yet."}, receiveEvent(t, notices))
 	assert.Equal(t, policy.Execute, h.c.Status().Mode)
 
 	require.NoError(t, os.WriteFile(h.c.PlanFile(), []byte("# Plan\n"), 0o600))
-	_, err = h.c.Submit(t.Context(), "/plan open")
+	_, err = h.c.Submit(t.Context(), Main, "/plan open")
 	assert.ErrorIs(t, err, ErrOpenPlan)
 	assert.Equal(t, policy.Execute, h.c.Status().Mode)
 
-	_, err = h.c.Submit(t.Context(), "/plan something")
+	_, err = h.c.Submit(t.Context(), Main, "/plan something")
 	assert.ErrorIs(t, err, ErrUnknownArgument)
 	assert.Equal(t, policy.Execute, h.c.Status().Mode)
 
-	_, err = h.c.Submit(t.Context(), "/plan")
+	_, err = h.c.Submit(t.Context(), Main, "/plan")
 	require.NoError(t, err)
 	assert.Equal(t, policy.Plan, h.c.Status().Mode)
 }

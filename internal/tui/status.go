@@ -17,14 +17,18 @@ import (
 // contextWarnPercent is the context use from which the percentage warns.
 const contextWarnPercent = 90
 
-// statusInput is what a segment draws from: the session status, the
-// current transient hint (empty when none shows), the home directory shown
+// statusInput is what a segment draws from: the session status with the open
+// view's effort, tool calls and cost (Effort is empty when the model does not
+// reason; Cost is in dollars), the current transient hint (empty when none shows), the home directory shown
 // as "~" and the last cleaned output of each command segment.
 type statusInput struct {
 	app.Status
-	notice   string
-	home     string
-	commands map[string]string
+	Effort    string
+	ToolCalls int
+	Cost      float64
+	notice    string
+	home      string
+	commands  map[string]string
 }
 
 // segment renders one part of the status line; false draws nothing.
@@ -35,16 +39,24 @@ var segments = map[string]segment{
 	"model": func(s statusInput, th theme) (string, bool) {
 		return fg(th.accent).Render(modelID(s.Model)), s.Model != ""
 	},
+	"effort": func(s statusInput, th theme) (string, bool) {
+		return fg(th.text).Render(s.Effort), s.Effort != ""
+	},
 	"context": func(s statusInput, th theme) (string, bool) {
-		if s.ContextWindow <= 0 {
-			return "", false
-		}
-		pct := float64(s.ContextTokens) * 100 / float64(s.ContextWindow)
+		text, warn, ok := contextText(s.ContextTokens, s.ContextWindow)
 		c := th.text
-		if pct >= contextWarnPercent {
+		if warn {
 			c = th.warning
 		}
-		return fg(c).Render(fmt.Sprintf("%.1f%%", pct)), true
+		return fg(c).Render(text), ok
+	},
+	"tools": func(s statusInput, th theme) (string, bool) {
+		text := toolsText(s.ToolCalls)
+		return fg(th.text).Render(text), text != ""
+	},
+	"cost": func(s statusInput, th theme) (string, bool) {
+		text := costText(s.Cost)
+		return fg(th.text).Render(text), text != ""
 	},
 	"branch": func(s statusInput, th theme) (string, bool) {
 		return fg(th.accent).Render(s.Branch), s.Branch != ""
@@ -72,6 +84,35 @@ var segments = map[string]segment{
 		text := taskCounts(s.Agents, s.Shells)
 		return fg(th.dim).Render(text), text != ""
 	},
+}
+
+// contextText is the share of the window the context fills, and whether it is
+// at or over contextWarnPercent; ok is false while the usage is unknown.
+func contextText(tokens, window int) (text string, warn, ok bool) {
+	if window <= 0 {
+		return "", false, false
+	}
+	pct := float64(tokens) * 100 / float64(window)
+	return fmt.Sprintf("%.1f%%", pct), pct >= contextWarnPercent, true
+}
+
+// toolsText is the tool call count, "" for none.
+func toolsText(n int) string {
+	switch n {
+	case 0:
+		return ""
+	case 1:
+		return "1 tool"
+	}
+	return fmt.Sprintf("%d tools", n)
+}
+
+// costText is the cost in dollars, "" for none.
+func costText(cost float64) string {
+	if cost <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("$%.2f", cost)
 }
 
 // statusLayout names the segments on each side of the status line, the

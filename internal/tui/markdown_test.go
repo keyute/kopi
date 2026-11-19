@@ -145,15 +145,15 @@ func TestAssistantMarkdownReflowsOnWidthAndTheme(t *testing.T) {
 
 	m.Update(tea.WindowSizeMsg{Width: 12, Height: 30})
 	assert.Equal(t, []string{"", "alpha beta", "gamma delta"}, body(m))
-	for _, l := range m.lines[len(header(m.version, m.th)):] {
+	for _, l := range m.view().lines[len(header(m.version, m.th)):] {
 		assert.LessOrEqual(t, ansi.StringWidth(l.text), 12)
 	}
 
 	m.Update(tea.WindowSizeMsg{Width: 40, Height: 30})
 	send(m, event.TextDelta{Text: " `code`"})
-	dark := m.lines[len(m.lines)-1].text
+	dark := m.view().lines[len(m.view().lines)-1].text
 	m.Update(tea.BackgroundColorMsg{Color: color.White})
-	assert.NotEqual(t, dark, m.lines[len(m.lines)-1].text, "a new theme re-renders")
+	assert.NotEqual(t, dark, m.view().lines[len(m.view().lines)-1].text, "a new theme re-renders")
 }
 
 func TestMarkdownWrapsLongCodeLines(t *testing.T) {

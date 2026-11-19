@@ -43,6 +43,7 @@ type Config struct {
 	// Keys maps an action from KeyActions to the keys bound to it.
 	Keys        map[string][]string  `koanf:"keys"`
 	StatusLine  StatusLine           `koanf:"statusline"`
+	AgentLine   AgentLine            `koanf:"agentline"`
 	Theme       Theme                `koanf:"theme"`
 	Permissions Permissions          `koanf:"permissions"`
 	Sandbox     Sandbox              `koanf:"sandbox"`
@@ -225,7 +226,15 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 	if c.Version != Version {
 		return nil, fmt.Errorf("%w: %d (from %s), want %d", ErrUnsupportedVersion, c.Version, originOf(origins, "version"), Version)
 	}
-	if err := validateSegmentRefs(c.StatusLine, origins); err != nil {
+	if err := validateSegmentRefs("statusline", c.StatusLine.Left, c.StatusLine.Right, func(name string) bool {
+		_, user := c.StatusLine.Segments[name]
+		return user || slices.Contains(StatusSegments, name)
+	}, origins); err != nil {
+		return nil, err
+	}
+	if err := validateSegmentRefs("agentline", c.AgentLine.Left, c.AgentLine.Right, func(name string) bool {
+		return slices.Contains(AgentSegments, name)
+	}, origins); err != nil {
 		return nil, err
 	}
 	return &Resolved{Config: c, Origins: origins}, nil
@@ -411,6 +420,9 @@ func (r *Resolved) Entries() []Entry {
 		"statusline.left":         c.StatusLine.Left,
 		"statusline.right":        c.StatusLine.Right,
 		"statusline.separator":    c.StatusLine.Separator,
+		"agentline.left":          c.AgentLine.Left,
+		"agentline.right":         c.AgentLine.Right,
+		"agentline.separator":     c.AgentLine.Separator,
 		"theme.dark":              c.Theme.Dark,
 		"theme.light":             c.Theme.Light,
 		"permissions.allow":       c.Permissions.Allow,

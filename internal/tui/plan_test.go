@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/tool"
@@ -170,12 +171,12 @@ func TestPlanCapturesKeys(t *testing.T) {
 func TestPlanPageKeysScrollTheTranscript(t *testing.T) {
 	m, _ := newTestModel(t, 40, 14)
 	send(m, event.TextDelta{Text: strings.Repeat("line\n\n", 30)}, planRequest(7, "plan"))
-	require.True(t, m.follow)
+	require.True(t, m.view().follow)
 
 	press(m, tea.KeyPressMsg{Code: tea.KeyPgUp})
-	assert.False(t, m.follow)
+	assert.False(t, m.view().follow)
 	press(m, pgDown)
-	assert.True(t, m.follow)
+	assert.True(t, m.view().follow)
 }
 
 func TestPlanRepeatKeepsTheDialogAndTheTypedFeedback(t *testing.T) {
@@ -215,6 +216,16 @@ func TestPlanBlockStaysAfterTheDialogCloses(t *testing.T) {
 	m, _ := openPlan(t)
 	send(m, event.PlanEnded{Token: 7})
 	assert.Contains(t, strings.Join(body(m), "\n"), "step one")
+}
+
+func TestPlanRequestShowsTheMainView(t *testing.T) {
+	m, _ := agentsModel(t)
+	display(m, "t1")
+	require.Equal(t, "t1", m.shown)
+
+	send(m, planRequest(7, "# Heading\n\nstep one"))
+	assert.Equal(t, app.Main, m.shown)
+	assert.NotNil(t, m.plan)
 }
 
 func TestPlanReturnsAfterAChildApprovalOverIt(t *testing.T) {

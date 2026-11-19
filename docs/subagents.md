@@ -48,8 +48,9 @@ Report file paths and line numbers.
 - The agent starts a subagent with the `Agent` tool: a short description, the prompt and the subagent's name.
 - Every subagent runs in the background. The call returns at once with a task id such as `t3`; the agent can go on working or start more subagents.
 - When a subagent ends, the agent is told with its final message and continues.
-- `SendMessage` sends a further message to a subagent by task id. A running subagent reads it when its current step ends; one that has ended starts again with its earlier context and reports again.
-- `TaskOutput` shows a subagent's activity so far and `TaskStop` stops it. `/tasks` lists subagents next to background commands and can stop them.
+- `SendMessage` sends a further message to a subagent by task id. A running subagent reads it when its current step ends; one that has ended, or whose run is being stopped, starts again with its earlier context and reports again. The call does not wait for the stopping run to end.
+- The notice the agent receives when a subagent's run completes or fails, or when you stop it, lists the messages queued for it that it never read as undelivered. When the agent stops a subagent with `TaskStop` it receives no notice, and those messages are dropped.
+- `TaskOutput` shows a subagent's activity so far and `TaskStop` stops it. `/tasks` lists subagents next to background commands, opens a subagent's view with Enter and stops the selected running subagent with `x` (`stop-agent`) from the list.
 
 ## What a subagent gets
 
@@ -69,10 +70,34 @@ Report file paths and line numbers.
 
 - In the transcript a call shows as `• explorer › <description>` with `↳ launched`, and its end as `• explorer finished · <description> · 2m 14s` (`failed` or `stopped` in the error colour).
 - While the main agent is idle and work is running, the row above the input reads `Waiting on 2 agents, 1 shell… <elapsed>`. The status line's [`tasks`](configuration.md#status-line) segment shows the same counts.
-- Esc interrupts the main agent only; subagents keep running until they finish or are stopped.
 - `/new`, `/resume` and exit stop them.
 - `kopi -p` waits for running subagents and prints the reply that follows their results.
 - Subagent transcripts are saved under the session's own directory and do not appear in `/resume`.
+
+### Agent rows
+
+- While a subagent runs, rows show under the status line, two columns in: `main` first, then one row per running subagent in start order, such as `  ○ explorer › Find the config loader · 22.1k tokens · gpt-5.6`. The segments are set by [`agentline`](configuration.md#agent-rows).
+- `●` marks the row of the session whose view is open, `○` the others.
+- A subagent that has ended leaves the rows, unless its view is the one open or holds input handed back when it stopped; then `main` and that row stay until you switch away, or for held input until you open it. With no running subagent and the main view open there are no rows.
+- At most five rows show; with more, `↑ N more` and `↓ N more` lines mark what is hidden. On a narrow terminal a row drops segments from the right end, then is cut.
+  - The window of five scrolls only when the cursor, or with no cursor the open view's row, would leave it, so rows keep their place as the cursor moves.
+- Down from the last line of the input, with no newer history entry, moves into the rows, starting at `main`; `❭` marks the cursor row, in the two columns left of `●`/`○`, and the row is drawn in the accent colour.
+  - Up and Down (`menu-up`, `menu-down`) move; Enter (`submit`) opens that session's view and leaves the cursor on that row.
+  - `x` (`stop-agent`) on a running subagent's row stops it; on the `main` row and on the open view's row it types an `x`.
+  - Esc, Up on `main` or typing returns to the input; typing also types. Esc there interrupts nothing.
+  - A dialog (approval, question, login, `/tasks`) takes keys first.
+
+### Views
+
+- Opening a row replaces the whole transcript with that session's. A subagent's view shows the prompt it was given, its messages and its tool calls as they happen, with its own scroll position and folds.
+- To go back, open the `main` row. A view stays open after its subagent ends. `/new` and `/resume` drop subagent views and return to main.
+- Input goes to the viewed subagent. Enter sends it: a running subagent reads it when its current step ends, and it shows as queued until then. An ended subagent starts again with its earlier context and reports to the main agent again when it ends; the main agent is woken by that end as by any subagent's end, and does not see what you typed.
+- Ctrl+Enter (`send-now`) stops the subagent's current step and continues with what is queued; Up with queued input (`queue-edit`) takes it back for editing. Images and a named skill go with the message.
+- Slash commands always act on the main session. Ctrl+B (`background`) moves nothing to the background in a subagent's view.
+- Esc and Ctrl+C act on the session whose view is open, never on another: in a subagent's view they stop that subagent's run only. The main agent is told at its next request that you stopped the subagent, and is not woken for it.
+- Input still queued for a stopped session returns to the input box; if its view is not open, when the view is next opened. A stopped subagent continues when you type in its view or the main agent uses `SendMessage`.
+- The status line keeps its layout; `model`, `effort`, `context`, `tools` and `cost` show the viewed subagent's own. The row above the input shows the viewed session's activity; `Waiting on 2 agents, 1 shell…` shows only in the main view.
+- Approvals are unchanged: a subagent's request shows as a dialog naming the subagent and its task whatever view is open.
 
 ## Limitations
 
@@ -83,7 +108,8 @@ Report file paths and line numbers.
 - An MCP tool named in `tools` is checked only for its `mcp__` prefix at startup; one that is not available is left out without an error.
 - Stopping a subagent (`TaskStop`, `/tasks`) and switching session wait for its current model request or tool call to stop.
 - `/login` is refused while a subagent is running, as it is while a turn runs.
-- After Esc, a subagent that finishes does not wake the agent until your next prompt.
+- After Esc in the main view, a subagent that finishes does not wake the agent until your next prompt.
 - Subagents are not restored when a session is resumed, and their earlier task ids cannot be messaged.
 - Definitions load only from Kopi's home, not from a project.
-- A running subagent's transcript cannot be viewed beyond `/tasks`.
+- A view cannot be opened by clicking a row.
+- The result of a slash command typed in a subagent's view shows in the main view.
