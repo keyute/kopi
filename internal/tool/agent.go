@@ -103,8 +103,9 @@ func NewAgent(defs []subagent.Definition, agents Agents) Tool {
 // agentDescription lists the subagents in the order given.
 func agentDescription(defs []subagent.Definition) string {
 	desc := "A subagent is another agent with its own context, instructions and tools; it sees only the prompt it is given. " +
-		"A call returns at once with a task id while the subagent runs in the background; when it ends, you are told, with its final message. " +
-		"TaskOutput reads its progress, TaskStop stops it, and SendMessage sends it a further message."
+		"A call returns at once with a task id while the subagent runs in the background. " +
+		"When it ends you are told, with its final message: within your turn, or in a new turn that its end starts if yours has ended. " +
+		"TaskOutput returns its activity so far, TaskStop stops it, and SendMessage sends it a further message."
 	if len(defs) == 0 {
 		return desc
 	}

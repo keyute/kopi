@@ -17,7 +17,7 @@ func TestTaskOutputDescribesItself(t *testing.T) {
 
 	assert.Equal(t, "TaskOutput", tool.Name)
 	assert.Equal(t, "TaskOutput", tool.Label)
-	assert.Equal(t, "Returns the status and output so far of a background task, a command or a subagent; long output keeps its start and end.", tool.Description)
+	assert.Equal(t, "Returns at once with the status and output so far of a background task, a command or a subagent; long output keeps its start and end.", tool.Description)
 	assert.Equal(t, []string{"task_id"}, tool.Parameters["required"])
 	assert.Equal(t, false, tool.Parameters["additionalProperties"])
 	assert.Contains(t, tool.Parameters["properties"], "task_id")

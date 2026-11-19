@@ -19,7 +19,7 @@ func NewTaskOutput(tasks *Tasks) Tool {
 	return Tool{
 		Name:        "TaskOutput",
 		Label:       "TaskOutput",
-		Description: "Returns the status and output so far of a background task, a command or a subagent; long output keeps its start and end.",
+		Description: "Returns at once with the status and output so far of a background task, a command or a subagent; long output keeps its start and end.",
 		Parameters:  taskIDParameters(),
 		Capability:  policy.Read,
 		Run: func(_ context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (Result, error) {
