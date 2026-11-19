@@ -459,7 +459,7 @@ func TestRegistryStopQueuesNoNoticeButStopTaskQueuesANonWakingOne(t *testing.T) 
 
 	queued := a.queuedNotices()
 	require.Len(t, queued, 1)
-	assert.Equal(t, fmt.Sprintf("Agent %s (explorer) stopped by the user: second\n%s", byHuman, outputTail(a.info(t, byHuman).Output)), queued[0].Text)
+	assert.Equal(t, fmt.Sprintf("Agent %s (explorer) stopped by the user: second", byHuman), queued[0].Text)
 	assert.True(t, a.idle())
 	assert.Zero(t, a.faux.CallCount(), "a stop wakes nobody")
 }
@@ -1200,6 +1200,68 @@ func TestSubmitToAnEndedChildStartsItsNextRunAndReportsItsEnd(t *testing.T) {
 	assert.Equal(t, []string{"go", "again"}, receive(t, childRequests).UserTexts)
 	assert.Contains(t, receive(t, rootRequests).UserTexts, fmt.Sprintf("Agent %s (explorer) completed: find it\nsecond", id))
 	assert.Equal(t, "second", a.info(t, id).Result)
+}
+
+func TestStoppedChildNoticeExcludesDeliveredHumanInputButKeepsUnreadAgentMessages(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	blocked := make(chan struct{}, 1)
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{
+		Wake:       true,
+		AgentTools: []tool.Tool{releaseTool(started, release), blockingTool(blocked)},
+	}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.Text("first"),
+		pigruntimetest.ToolCalls(call("Hold", "h1")),
+		pigruntimetest.ToolCalls(call("Block", "b1")),
+	})
+	a.rootAcks(1)
+	ends := turnEnds(a.c)
+	id := a.launch(t, "explorer", "find it", "go")
+	a.untilStatus(t, id, tool.TaskCompleted)
+	receiveEnd(t, ends)
+	a.until(t, func() bool { return a.workOf(a.childOf(id)) == nil })
+
+	const restart = "private human restart input"
+	const followup = "private human boundary follow-up"
+	const unread = "private unread human input"
+	evs := recordEvents(a.c)
+	w, err := a.c.Submit(t.Context(), id, restart)
+	require.NoError(t, err)
+	require.NotNil(t, w)
+	wait(t, started)
+	queuedWork, err := a.c.Submit(t.Context(), id, followup)
+	require.NoError(t, err)
+	assert.Nil(t, queuedWork)
+	close(release)
+	wait(t, blocked)
+
+	_, err = a.c.Submit(t.Context(), id, unread)
+	require.NoError(t, err)
+	resumed, err := a.c.message(t.Context(), id, "unread agent message")
+	require.NoError(t, err)
+	assert.False(t, resumed)
+	require.NoError(t, a.c.StopTask(id))
+	wait(t, w.Done())
+
+	info := a.info(t, id)
+	assert.Equal(t, tool.TaskStopped, info.Status)
+	assert.Contains(t, info.Output, "› "+restart+"\n")
+	assert.Contains(t, info.Output, "› "+followup+"\n")
+	own := sessionOf(untilSessionEnd(t, evs, id), id)
+	assert.Contains(t, own, event.UserMessage{Text: followup}, "the queued input was consumed at the boundary")
+	end, ok := own[len(own)-1].(event.TurnEnd)
+	require.True(t, ok)
+	assert.Equal(t, []event.Input{{Text: unread}}, end.Unsent)
+
+	notices := a.queuedNotices()
+	require.Len(t, notices, 1)
+	assert.Equal(t, fmt.Sprintf("Agent %s (explorer) stopped by the user: find it\nUndelivered messages:\nunread agent message", id), notices[0].Text)
+	for _, input := range []string{restart, followup, unread} {
+		assert.NotContains(t, notices[0].Text, input)
+	}
+	assert.Equal(t, taskEnded(info), notices[0].Shown)
+	assert.True(t, a.idle(), "the stopped notice does not wake the root")
+	assert.Equal(t, 1, a.faux.CallCount(), "only the initial completion woke the root")
 }
 
 func TestSendNowToARunningChildContinuesItWithTheQueuedInput(t *testing.T) {

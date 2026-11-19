@@ -323,7 +323,7 @@ func (c *Controller) endReporter(parent *pigruntime.Session) func(tool.TaskInfo,
 		case info.Status == tool.TaskCompleted || info.Status == tool.TaskFailed:
 			c.main.queueNoticeLocked(agentNotice(info, unread))
 		case info.Status == tool.TaskStopped && byHuman:
-			c.main.queueNoticeLocked(withUndelivered(notice(info, agentStoppedHead(info)), unread))
+			c.main.queueNoticeLocked(withUndelivered(pigruntime.Notice{Text: agentStoppedHead(info), Shown: taskEnded(info)}, unread))
 		}
 	}
 }
