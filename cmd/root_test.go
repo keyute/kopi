@@ -1012,21 +1012,6 @@ func TestRootGrepHidesDeniedPaths(t *testing.T) {
 	assert.NotContains(t, results[0], "secret.txt")
 }
 
-// lastUserText is the text of the last user message in a chat-completions
-// request body, whose content is a list of parts.
-func lastUserText(body map[string]any) string {
-	var text string
-	for _, m := range body["messages"].([]any) {
-		if msg := m.(map[string]any); msg["role"] == "user" {
-			text = ""
-			for _, part := range msg["content"].([]any) {
-				text += fmt.Sprint(part.(map[string]any)["text"])
-			}
-		}
-	}
-	return text
-}
-
 func TestRootPromptFromStdinAndArgument(t *testing.T) {
 	for _, tc := range []struct {
 		name, stdin string

@@ -30,12 +30,36 @@ func newPlanDialog(ev event.PlanRequested, km *keyMap, th theme) *planDialog {
 }
 
 // planRows draws d in place of the composer within maxRows, its field growing
-// to maxField rows.
+// to maxField rows. Both rules surround a window containing the selection.
 func planRows(d *dialog, width, maxField, maxRows int, th theme) []string {
 	if maxRows <= 0 {
+		d.areas = nil
 		return nil
 	}
-	return cutTop(d, d.rows(width, maxRows, max(1, maxField), th), maxRows)
+	rows := d.rows(width, maxRows, max(1, maxField), th)
+	if len(rows) <= maxRows {
+		return rows
+	}
+	if maxRows < 3 {
+		d.areas = nil
+		if maxRows == 2 {
+			return []string{rows[0], rows[len(rows)-1]}
+		}
+		return rows[:maxRows]
+	}
+	room := maxRows - 2
+	start := max(1, min(d.optionStarts[d.sel], len(rows)-1-room))
+	end := start + room
+	var areas []fieldArea
+	for _, fa := range d.areas {
+		top, bottom := max(fa.y, start), min(fa.y+fa.h, end)
+		if top < bottom {
+			fa.y, fa.h = top-start+1, bottom-top
+			areas = append(areas, fa)
+		}
+	}
+	d.areas = areas
+	return append(append([]string{rows[0]}, rows[start:end]...), rows[len(rows)-1])
 }
 
 // planKey goes to the dialog: Yes approves, No answers with the typed changes

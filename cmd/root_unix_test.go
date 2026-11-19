@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
@@ -219,7 +220,10 @@ func TestRootTerminalDispatch(t *testing.T) {
 					if !tc.terminalIn {
 						want = "piped context\n\nmatrix prompt"
 					}
-					assert.Equal(t, want, lastUserText(server.next(t).body))
+					texts := messageTexts(t, server.next(t))
+					require.Len(t, texts, 3, texts)
+					assert.Equal(t, want, texts[1])
+					assert.Equal(t, "The session is in plan mode.", texts[2], "print mode names no plan file")
 				}()
 			}
 			args := []string{"--model", mockModel}
@@ -362,7 +366,10 @@ func TestRootFullscreenStartupSubmitExit(t *testing.T) {
 	}
 	_, err := io.WriteString(master, "fullscreen prompt\r")
 	require.NoError(t, err)
-	assert.Equal(t, "fullscreen prompt", lastUserText(server.next(t).body))
+	texts := messageTexts(t, server.next(t))
+	require.Len(t, texts, 3, texts)
+	assert.Equal(t, "fullscreen prompt", texts[1])
+	assert.Regexp(t, "^"+regexp.QuoteMeta("The session is in plan mode. Its plan file is "+filepath.Join(e.kopiHome, "plans")+string(filepath.Separator))+`[^/]+\.md`+regexp.QuoteMeta("; Read, Write and Edit work on that file in both modes.")+"$", texts[2])
 	slog.Warn("fullscreen-log-marker")
 	close(respond)
 	select {

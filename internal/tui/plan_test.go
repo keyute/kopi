@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -46,6 +47,77 @@ func TestPlanDialogShowsTitleRowsAndHints(t *testing.T) {
 		rule,
 	}, rows[len(rows)-8:len(rows)-1], "directly above the footer")
 	assert.Contains(t, strings.Join(rows, "\n"), "Heading", "the plan is in the transcript")
+}
+
+func TestPlanDialogKeepsRulesAndSelectionOnAShortTerminal(t *testing.T) {
+	for _, sel := range []int{0, 1} {
+		t.Run(fmt.Sprint(sel), func(t *testing.T) {
+			m, _ := newTestModel(t, 100, 10)
+			send(m, event.TurnStart{Prompt: "go"}, planRequest(7, "plan"))
+			if sel == 1 {
+				press(m, digit('2'))
+			}
+			rows := screen(m)
+			require.Len(t, rows, 10)
+			prompt := plainRows(m.prompt)
+			require.GreaterOrEqual(t, len(prompt), 3)
+			rule := strings.Repeat("─", 100)
+			assert.Equal(t, rule, prompt[0])
+			assert.Equal(t, rule, prompt[len(prompt)-1])
+			assert.Contains(t, strings.Join(prompt, "\n"), fmt.Sprintf("❭ %d. ", sel+1))
+			assert.Equal(t, rule, rows[len(rows)-2], "directly above the footer")
+		})
+	}
+}
+
+func TestPlanRowsKeepRulesSelectionAndFieldAreasWithinBudget(t *testing.T) {
+	for _, feedback := range []string{"", "first\nsecond\nthird"} {
+		for _, sel := range []int{0, 1} {
+			for _, budget := range []int{0, 1, 2, 3, 4, 5, 8, 12} {
+				t.Run(fmt.Sprintf("%q/selection%d/rows%d", feedback, sel, budget), func(t *testing.T) {
+					km, th := newKeyMap(config.DefaultKeys()), mocha()
+					d := newPlanDialog(planRequest(7, "plan"), &km, th).d
+					f := d.options[1].field
+					f.ta.SetValue(feedback)
+					d.move(sel)
+					// Seed hit regions so a zero budget must clear stale ones too.
+					d.rows(100, 12, 6, th)
+					rows := plainRows(planRows(d, 100, 6, budget, th))
+					require.LessOrEqual(t, len(rows), budget)
+					if budget == 0 {
+						assert.Empty(t, rows)
+					} else {
+						assert.Equal(t, strings.Repeat("─", 100), rows[0])
+						if budget >= 2 {
+							assert.Equal(t, rows[0], rows[len(rows)-1])
+						}
+					}
+					if budget <= 2 {
+						assert.Empty(t, d.areas)
+						return
+					}
+					assert.Contains(t, strings.Join(rows, "\n"), fmt.Sprintf("❭ %d. ", sel+1))
+					for _, fa := range d.areas {
+						assert.Same(t, f, fa.c)
+						assert.GreaterOrEqual(t, fa.y, 1)
+						assert.Positive(t, fa.h)
+						assert.LessOrEqual(t, fa.y+fa.h, len(rows)-1)
+					}
+					if sel == 1 && feedback == "" {
+						require.Len(t, d.areas, 1)
+						assert.Equal(t, fieldArea{c: f, x: 15, y: len(rows) - 2, h: 1}, d.areas[0])
+						assert.Contains(t, rows[d.areas[0].y], "What should change?")
+					}
+					if sel == 1 && feedback != "" && budget == 3 {
+						assert.Empty(t, d.areas, "only the selected label fits")
+					}
+					if sel == 1 && feedback != "" && budget == 4 {
+						assert.Equal(t, []fieldArea{{c: f, x: 2, y: 2, h: 1}}, d.areas)
+					}
+				})
+			}
+		}
+	}
 }
 
 func TestPlanDialogHintsLeaveOutUnboundKeys(t *testing.T) {
