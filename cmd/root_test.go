@@ -316,6 +316,18 @@ func TestRootAcceptsAskUserQuestionRuleWithoutTheTool(t *testing.T) {
 	assert.NotContains(t, toolNames(server.next(t)), "AskUserQuestion")
 }
 
+func TestRootAcceptsExitPlanModeRuleWithoutTheTool(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+
+	stdout, _, err := execute(t, "", "--model", mockModel, "--disallowed-tools", "ExitPlanMode", "-p", "hi")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok\n", stdout)
+	assert.NotContains(t, toolNames(server.next(t)), "ExitPlanMode")
+}
+
 func TestRootOffersWebSearchForSearchingSmallModel(t *testing.T) {
 	e := newTestEnv(t)
 	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
@@ -1033,7 +1045,12 @@ func TestRootPromptFromStdinAndArgument(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, "ok\n", stdout)
-			assert.Equal(t, tc.want, lastUserText(server.next(t).body))
+			// The mode line follows the prompt.
+			texts := messageTexts(t, server.next(t))
+			require.Len(t, texts, 3, texts)
+			assert.Equal(t, tc.want, texts[1])
+			assert.Equal(t, "The session is in plan mode.", texts[2], "print mode names no plan file")
+			assert.NoDirExists(t, filepath.Join(e.kopiHome, "plans"))
 		})
 	}
 }
@@ -2658,10 +2675,11 @@ func TestRootPrintLoadsAKopiHomeSkillWithThePrompt(t *testing.T) {
 	req, stderr := printWithMock(t, e, "-p", "/skill:foo do")
 
 	texts := messageTexts(t, req)
-	require.Len(t, texts, 3, texts)
+	require.Len(t, texts, 4, texts)
 	assert.Equal(t, "/skill:foo do", texts[1])
 	assert.Contains(t, texts[2], `<skill name="foo"`)
 	assert.Contains(t, texts[2], "foo body 3d9e")
+	assert.Contains(t, texts[3], "The session is in plan mode.")
 	assert.Contains(t, declaredTools(req), "Skill")
 	assert.NotContains(t, stderr, "skill")
 }
@@ -2744,7 +2762,7 @@ func TestRootPrintSkillPrefixFromConfig(t *testing.T) {
 	req, _ := printWithMock(t, e, "-p", "/foo do")
 
 	texts := messageTexts(t, req)
-	require.Len(t, texts, 3, texts)
+	require.Len(t, texts, 4, texts)
 	assert.Equal(t, "/foo do", texts[1])
 	assert.Contains(t, texts[2], "foo body 3d9e")
 }

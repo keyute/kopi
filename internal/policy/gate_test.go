@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -687,4 +688,105 @@ func TestAllowEditsGrantCoversEveryGateOnTheAuthority(t *testing.T) {
 	a.ClearEdits()
 	require.NoError(t, second.Before(t.Context(), "c3", "Edit", pathArgs("/z")))
 	assert.Len(t, f.reqs, 2)
+}
+
+func planSpecs(targetErr error) map[string]ToolSpec {
+	target := func(args json.RawMessage) (Target, error) {
+		if targetErr != nil {
+			return Target{}, targetErr
+		}
+		var a struct {
+			Path string
+			Plan bool
+		}
+		if err := json.Unmarshal(args, &a); err != nil {
+			return Target{}, err
+		}
+		return Target{Path: a.Path, Real: a.Path, PlanFile: a.Plan}, nil
+	}
+	return map[string]ToolSpec{"Edit": {Capability: Write, Target: target}}
+}
+
+func planArgs(p string, plan bool) json.RawMessage {
+	b, _ := json.Marshal(map[string]any{"path": p, "plan": plan})
+	return b
+}
+
+func TestPlanFileIsAdmittedInPlanWithoutAsking(t *testing.T) {
+	f := &approver{answer: Allow}
+	a := NewAuthority()
+	g := NewGate(a, planSpecs(nil), nil, f.approve, nil)
+	args := planArgs("/home/plans/s.md", true)
+	require.NoError(t, g.Before(t.Context(), "c1", "Edit", args))
+	assert.NoError(t, admitApproved(g, "c1", "Edit"))
+	assert.Empty(t, f.reqs)
+}
+
+func TestPlanFileIsNotAskedInExecuteWithoutEditsGrant(t *testing.T) {
+	f := &approver{answer: Allow}
+	a := NewAuthority()
+	a.EnterExecute()
+	g := NewGate(a, planSpecs(nil), nil, f.approve, nil)
+	require.NoError(t, g.Before(t.Context(), "c1", "Edit", planArgs("/home/plans/s.md", true)))
+	assert.NoError(t, admitApproved(g, "c1", "Edit"))
+	require.NoError(t, g.Before(t.Context(), "c2", "Edit", planArgs("/x", false)))
+	assert.Len(t, f.reqs, 1)
+}
+
+func TestNonPlanWriteIsStillRefusedInPlan(t *testing.T) {
+	a := NewAuthority()
+	g := NewGate(a, planSpecs(nil), nil, nil, nil)
+	err := g.Before(t.Context(), "c1", "Edit", planArgs("/x", false))
+	require.ErrorIs(t, err, ErrDenied)
+	assert.Contains(t, err.Error(), `tool "Edit" needs execute mode; the session is in plan mode`)
+}
+
+func TestTargetErrorInPlanKeepsTheModeRefusal(t *testing.T) {
+	boom := errors.New("boom")
+	g := NewGate(NewAuthority(), planSpecs(boom), nil, nil, nil)
+	err := g.Before(t.Context(), "c1", "Edit", planArgs("/x", false))
+	require.ErrorIs(t, err, ErrDenied)
+	assert.NotErrorIs(t, err, boom)
+	assert.Contains(t, err.Error(), "needs execute mode")
+
+	a := NewAuthority()
+	a.EnterExecute()
+	g = NewGate(a, planSpecs(boom), nil, nil, nil)
+	err = g.Before(t.Context(), "c2", "Edit", planArgs("/x", false))
+	require.ErrorIs(t, err, boom)
+	assert.Contains(t, err.Error(), "failed to resolve the path")
+}
+
+func TestRulesStillApplyToThePlanFile(t *testing.T) {
+	d := newDirs(t)
+	args := planArgs("/home/plans/s.md", true)
+
+	g := NewGate(NewAuthority(), planSpecs(nil), d.rules(t, Source{Name: "config", Deny: []string{"Edit"}}), nil, nil)
+	err := g.Before(t.Context(), "c1", "Edit", args)
+	require.ErrorIs(t, err, ErrDenied)
+	assert.Contains(t, err.Error(), "denied by rule")
+
+	f := &approver{answer: Allow}
+	g = NewGate(NewAuthority(), planSpecs(nil), d.rules(t, Source{Name: "config", Ask: []string{"Edit"}}), f.approve, nil)
+	require.NoError(t, g.Before(t.Context(), "c2", "Edit", args))
+	assert.Len(t, f.reqs, 1)
+}
+
+func TestAdmitAfterModeChangeKeepsPlanFileAndRevokesOthers(t *testing.T) {
+	a := NewAuthority()
+	a.EnterExecute()
+	g := NewGate(a, planSpecs(nil), nil, (&approver{answer: Allow}).approve, nil)
+	require.NoError(t, g.Before(t.Context(), "plan", "Edit", planArgs("/home/plans/s.md", true)))
+	require.NoError(t, g.Before(t.Context(), "other", "Edit", planArgs("/x", false)))
+	a.EnterPlan()
+	assert.NoError(t, admitApproved(g, "plan", "Edit"))
+	assert.ErrorIs(t, admitApproved(g, "other", "Edit"), ErrRevoked)
+}
+
+func TestPlanFileFlagIsPartOfTheBoundTarget(t *testing.T) {
+	g := NewGate(NewAuthority(), planSpecs(nil), nil, nil, nil)
+	args := planArgs("/home/plans/s.md", true)
+	require.NoError(t, g.Before(t.Context(), "c1", "Edit", args))
+	_, err := g.Admit("c1", "Edit", args, &Target{Path: "/home/plans/s.md", Real: "/home/plans/s.md"})
+	assert.ErrorIs(t, err, ErrChangedCall)
 }

@@ -49,7 +49,11 @@ type fakeController struct {
 	loginAnswers []loginAnswer
 	// questionAnswers logs AnswerQuestion.
 	questionAnswers []questionAnswer
-	commands        []app.Command
+	// planAnswers logs AnswerPlan, refreshes RefreshPlan; planFile is PlanFile.
+	planAnswers []planAnswer
+	refreshes   []uint64
+	planFile    string
+	commands    []app.Command
 	// skills is what Spans highlights as skill commands; nil means none.
 	skills   *skill.Set
 	args     map[string][]app.Candidate
@@ -94,6 +98,23 @@ func (f *fakeController) AnswerQuestion(token uint64, answers []tool.Answer) boo
 	f.questionAnswers = append(f.questionAnswers, questionAnswer{token, answers})
 	return true
 }
+
+type planAnswer struct {
+	token  uint64
+	answer tool.PlanAnswer
+}
+
+func (f *fakeController) AnswerPlan(token uint64, a tool.PlanAnswer) bool {
+	f.planAnswers = append(f.planAnswers, planAnswer{token, a})
+	return true
+}
+
+func (f *fakeController) RefreshPlan(token uint64) bool {
+	f.refreshes = append(f.refreshes, token)
+	return true
+}
+
+func (f *fakeController) PlanFile() string { return f.planFile }
 
 func (f *fakeController) Subscribe(fn func(event.Event)) func() {
 	f.subscriber = fn

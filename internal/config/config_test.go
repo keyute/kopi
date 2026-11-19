@@ -260,6 +260,18 @@ func TestResolveAcceptsNoticeOnEitherSide(t *testing.T) {
 	assert.Equal(t, []string{"mode", "notice"}, r.Config.StatusLine.Right)
 }
 
+func TestEditPlanActionDefaultsToCtrlG(t *testing.T) {
+	assert.Contains(t, KeyActions, "edit-plan")
+	assert.Equal(t, []string{"ctrl+g"}, DefaultKeys()["edit-plan"])
+
+	r, err := Resolve(Defaults(), globalLayer(t, `{"keys": {"edit-plan": ["ctrl+e"]}}`))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ctrl+e"}, r.Config.Keys["edit-plan"])
+
+	_, err = Resolve(Defaults(), globalLayer(t, `{"keys": {"edit-plan": []}}`))
+	assert.ErrorIs(t, err, ErrInvalidValue)
+}
+
 func TestBackgroundActionAndTasksSegment(t *testing.T) {
 	assert.Contains(t, KeyActions, "background")
 	assert.Equal(t, []string{"ctrl+b"}, DefaultKeys()["background"])

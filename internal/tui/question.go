@@ -204,11 +204,17 @@ func (q *questionDialog) hint(cut bool) string {
 		parts = append([]string{"←/→ to switch questions"}, parts...)
 	}
 	if cut {
-		if up, down := km.pageUp.Keys(), km.pageDown.Keys(); len(up) > 0 && len(down) > 0 {
-			parts = append([]string{up[0] + "/" + down[0] + " to scroll"}, parts...)
-		}
+		parts = append([]string{scrollHint(km)}, parts...)
 	}
 	return strings.Join(slices.DeleteFunc(parts, isEmpty), " · ")
+}
+
+// scrollHint is "<page up>/<page down> to scroll", empty unless both are bound.
+func scrollHint(km *keyMap) string {
+	if up, down := km.pageUp.Keys(), km.pageDown.Keys(); len(up) > 0 && len(down) > 0 {
+		return up[0] + "/" + down[0] + " to scroll"
+	}
+	return ""
 }
 
 func isEmpty(s string) bool { return s == "" }

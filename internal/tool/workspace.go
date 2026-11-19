@@ -36,6 +36,16 @@ type Workspace struct {
 	// rename-over (new inode) and may appear after startup, so they are
 	// stat'd afresh on every Open.
 	protected []string
+	// plans, when set, makes the root session's plan file reachable although it
+	// lies in a protected store.
+	plans *Plans
+}
+
+// WithPlans returns a copy of w that also reaches plans' current plan file.
+func (w *Workspace) WithPlans(p *Plans) *Workspace {
+	c := *w
+	c.plans = p
+	return &c
 }
 
 func NewWorkspace(dir string, protected []string) (*Workspace, error) {
@@ -102,6 +112,9 @@ func (w *Workspace) Target(path string) (policy.Target, error) {
 	if !filepath.IsAbs(path) {
 		abs = filepath.Join(w.given, path)
 	}
+	if t, ok, err := w.plans.target(abs); ok {
+		return t, err
+	}
 	// A path inside the workspace is walked from realDir, as Open and WriteFile
 	// walk it, so a repointed workspace symlink cannot split the two.
 	start, rest := string(filepath.Separator), path
@@ -133,6 +146,13 @@ func (w *Workspace) WriteFile(path string, data []byte) error {
 // prepare resolves once, then pins the canonical parent without following any
 // newly installed symlinks in that traversal.
 func (w *Workspace) prepare(path string) (*writeDestination, error) {
+	abs := path
+	if !filepath.IsAbs(path) {
+		abs = filepath.Join(w.given, path)
+	}
+	if dest, ok, err := w.plans.prepare(abs, path); ok {
+		return dest, err
+	}
 	rel, err := w.relative(path)
 	if err != nil {
 		return nil, err
@@ -176,6 +196,8 @@ type writeDestination struct {
 	parent          *os.Root
 	rel, path, leaf string
 	missing         []string
+	// plan marks the plan file, which lies in a protected store on purpose.
+	plan bool
 }
 
 // prepareWrite pins the existing parent prefix without modifying the filesystem.
@@ -232,6 +254,9 @@ func (w *Workspace) checkParent(parent *os.Root, rel, path string) error {
 // checkDestination binds absent-store protection to the pinned parent, not its
 // original name: an EEXIST child may have followed a newly installed symlink.
 func (d *writeDestination) checkDestination(w *Workspace, remaining []string) error {
+	if d.plan {
+		return nil
+	}
 	parent, err := d.parent.Stat(".")
 	if err != nil {
 		return fmt.Errorf("failed to stat parent of %s: %w", d.path, err)
@@ -311,6 +336,8 @@ func (d *writeDestination) write(w *Workspace, data []byte) error {
 	}
 
 	switch {
+	case err == nil && d.plan && info.Mode()&fs.ModeSymlink != 0:
+		// The link is replaced, never followed.
 	case err == nil && info.IsDir():
 		return fmt.Errorf("%w: %s", ErrIsDirectory, path)
 	case err == nil && !info.Mode().IsRegular():
@@ -647,7 +674,10 @@ func (d *writeDestination) checkUnchanged() error {
 
 // checkRead retains os.Root's traversal restrictions on the original path,
 // while content is read only from the prepared leaf handle.
-func (w *Workspace) checkRead(f *os.File, path string) error {
+func (w *Workspace) checkRead(dest *writeDestination, f *os.File, path string) error {
+	if dest.plan {
+		return nil
+	}
 	rel, err := w.relative(path)
 	if err != nil {
 		return err

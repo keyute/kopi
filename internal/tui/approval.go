@@ -23,11 +23,23 @@ func approvalOptions(a *event.ApprovalRequested, km *keyMap) []approvalOption {
 	if a.Edits {
 		opts = append(opts, approvalOption{"Yes, allow all edits this session", policy.AllowEdits})
 	}
+	return append(opts, approvalOption{rejectLabel(km), policy.Reject})
+}
+
+// rejectLabel is the No row's label, naming the key that picks it without a
+// reason.
+func rejectLabel(km *keyMap) string {
 	no := "No"
 	if ks := km.interrupt.Keys(); len(ks) > 0 {
 		no += " (" + ks[0] + ")"
 	}
-	return append(opts, approvalOption{no, policy.Reject})
+	return no
+}
+
+// newFeedbackField is the text field of a No row.
+func newFeedbackField(km *keyMap, th theme) *composer {
+	f := newField(th, km.newline, "What should change?")
+	return &f
 }
 
 // newApprovalDialog is the prompt for a: the rule that asked as its note and
@@ -54,8 +66,7 @@ func newApprovalDialog(a *event.ApprovalRequested, km *keyMap, th theme) *dialog
 	for _, o := range approvalOptions(a, km) {
 		opt := option{label: o.label}
 		if o.answer == policy.Reject {
-			f := newField(th, km.newline, "What should change?")
-			opt.field = &f
+			opt.field = newFeedbackField(km, th)
 		}
 		d.options = append(d.options, opt)
 	}
@@ -76,7 +87,12 @@ func approvalRows(d *dialog, a *event.ApprovalRequested, width, maxPreview, maxR
 	// Measure the rest without the last render's preview.
 	d.body = nil
 	d.body = previewRows(a.Preview, min(maxPreview, maxRows-len(d.rows(width, maxRows, fieldCap, th))), width-2, th)
-	rows := d.rows(width, maxRows, fieldCap, th)
+	return cutTop(d, d.rows(width, maxRows, fieldCap, th), maxRows)
+}
+
+// cutTop is rows, drawn by d, without the top the rows past maxRows take, so
+// the options stay visible, along with any field area the cut reaches.
+func cutTop(d *dialog, rows []string, maxRows int) []string {
 	cut := max(0, len(rows)-maxRows)
 	var areas []fieldArea
 	for _, fa := range d.areas {

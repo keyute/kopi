@@ -2,10 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/keyute/kopi/internal/event"
 )
 
 type Command struct {
@@ -25,10 +29,7 @@ type command struct {
 
 func commandTable() []command {
 	return []command{
-		{Command: Command{Name: "plan", Summary: "switch to plan mode (workspace read-only)"}, run: func(c *Controller, _ context.Context, _ string) error {
-			c.EnterPlan()
-			return nil
-		}},
+		{Command: Command{Name: "plan", Summary: "switch to plan mode (workspace read-only); /plan open edits the plan file"}, run: (*Controller).planCommand},
 		{Command: Command{Name: "execute", Summary: "switch to execute mode"}, run: func(c *Controller, _ context.Context, _ string) error {
 			c.EnterExecute()
 			return nil
@@ -67,6 +68,31 @@ func leadingWord(text string) string {
 
 func isControl(name string) bool {
 	return slices.ContainsFunc(commandTable(), func(c command) bool { return c.Name == name })
+}
+
+// planCommand enters plan mode; "open" asks the frontend to open the plan file.
+func (c *Controller) planCommand(_ context.Context, arg string) error {
+	switch arg {
+	case "":
+		c.EnterPlan()
+		return nil
+	case "open":
+		c.mu.Lock()
+		hasSession := c.sessID != ""
+		c.mu.Unlock()
+		if hasSession {
+			_, err := c.cfg.Plans.Read()
+			if err == nil {
+				return ErrOpenPlan
+			}
+			if !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+		}
+		c.relay.emit(event.Notice{Text: "This session has no plan file yet."})
+		return nil
+	}
+	return fmt.Errorf("%w: /plan takes no argument or open, got %q", ErrUnknownArgument, arg)
 }
 
 func (c *Controller) resumeCommand(ctx context.Context, id string) error {

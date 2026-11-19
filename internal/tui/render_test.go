@@ -144,3 +144,29 @@ func TestTaskRowCutsALongCommand(t *testing.T) {
 	send(m, event.TaskEnded{ID: "t1", Command: strings.Repeat("x", 100), Status: "completed", Elapsed: time.Minute})
 	assert.Equal(t, []string{"", "• task t1 finished · " + strings.Repeat("x", 10) + "… · 1m 0s"}, body(m))
 }
+
+func TestPlanBlockDrawsAMutedTitleAndMarkdownAndRerendersWhenEdited(t *testing.T) {
+	var tr transcript.Transcript
+	tr.Apply(event.PlanRequested{Token: 1, Plan: "# Heading\n\n- first step"})
+	var c renderCache
+	text := func() []string {
+		var out []string
+		for _, l := range c.lines(tr.Blocks()[0], blockFolds{}, 40, mocha()) {
+			out = append(out, strings.TrimRight(ansi.Strip(l.text), " "))
+		}
+		return out
+	}
+
+	got := text()
+	assert.Equal(t, "Plan", got[0])
+	assert.Equal(t, fg(mocha().muted).Render("Plan"), c.lines(tr.Blocks()[0], blockFolds{}, 40, mocha())[0].text)
+	joined := strings.Join(got[1:], "\n")
+	assert.Contains(t, joined, "Heading")
+	assert.NotContains(t, joined, "# Heading", "the Markdown is rendered")
+	assert.Contains(t, joined, "first step")
+
+	tr.Apply(event.PlanRequested{Token: 1, Plan: "# Heading\n\n- second step"})
+	joined = strings.Join(text()[1:], "\n")
+	assert.Contains(t, joined, "second step")
+	assert.NotContains(t, joined, "first step")
+}

@@ -28,6 +28,7 @@ func TestResolvePathsPrefersKopiHome(t *testing.T) {
 		HistoryFile:     filepath.Join(kopiHome, "history.jsonl"),
 		ImageDir:        filepath.Join(kopiHome, "images"),
 		ThemeDir:        filepath.Join(kopiHome, "themes"),
+		PlansDir:        filepath.Join(kopiHome, "plans"),
 	}, p)
 	assert.NoDirExists(t, kopiHome)
 }
@@ -75,6 +76,7 @@ func TestResolvePathsDefaultsUnderUserHome(t *testing.T) {
 				HistoryFile:     filepath.Join(want, "history.jsonl"),
 				ImageDir:        filepath.Join(want, "images"),
 				ThemeDir:        filepath.Join(want, "themes"),
+				PlansDir:        filepath.Join(want, "plans"),
 			}, p)
 			assert.NoDirExists(t, want)
 		})
