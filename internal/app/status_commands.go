@@ -48,7 +48,8 @@ type StatusCommands struct {
 func NewStatusCommands(workspace string, line config.StatusLine) *StatusCommands {
 	s := &StatusCommands{workspace: workspace, runner: shellRunner{}}
 	seen := map[string]bool{}
-	for _, name := range config.SegmentNames(line.Left, line.Right) {
+	names := config.SegmentNames(line.Left, line.Right)
+	for _, name := range names {
 		def := line.Segments[name]
 		if slices.Contains(config.StatusSegments, name) || seen[name] || def.Command == "" {
 			continue
@@ -57,7 +58,7 @@ func NewStatusCommands(workspace string, line config.StatusLine) *StatusCommands
 		interval, _ := time.ParseDuration(def.Interval)
 		s.commands = append(s.commands, &statusCommand{name: name, command: def.Command, interval: interval})
 	}
-	if gitBranch(workspace) != "" && slices.Contains(config.SegmentNames(line.Left, line.Right), "changes") {
+	if slices.Contains(names, "changes") && gitBranch(workspace) != "" {
 		s.commands = append(s.commands, &statusCommand{name: "changes", command: changesCommand, changes: true})
 	}
 	return s
@@ -118,12 +119,18 @@ func (s *StatusCommands) launch(command *statusCommand) {
 		defer cancel()
 		out, err := s.runner.run(ctx, s.workspace, command.command)
 		s.mu.Lock()
-		if err != nil && !command.failing && s.ctx.Err() == nil {
+		// A failing changes run is a documented absent state (no commit yet), not a fault.
+		if err != nil && !command.changes && !command.failing && s.ctx.Err() == nil {
 			slog.Warn("status line command failed", "segment", command.name, "error", err)
 		}
 		command.failing = err != nil
 		command.running = false
 		if command.changes {
+			if ctx.Err() == context.DeadlineExceeded {
+				// exec may report "signal: killed" instead of the deadline error; keep the last counts.
+				s.mu.Unlock()
+				return
+			}
 			var changed event.Changes
 			if err == nil {
 				changed.Added, changed.Removed = parseShortstat(out)

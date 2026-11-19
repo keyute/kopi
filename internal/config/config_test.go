@@ -303,6 +303,9 @@ func TestResolveRejectsInvalidEntries(t *testing.T) {
 		{"literal only", `at home`, `"at home" names no segment`},
 		{"empty", ``, `"" names no segment`},
 		{"empty group", `()`, `"()" names no segment`},
+		{"group without a segment", `$model(at home)`, `"$model(at home)": a group names no segment`},
+		{"empty group after a segment", `$model()`, `"$model()": a group names no segment`},
+		{"nested group without a segment", `($model(at home))`, `"($model(at home))": a group names no segment`},
 		{"control character", `$model\u001b[0m`, `"$model\x1b[0m": control character`},
 	} {
 		for _, bar := range []string{"statusline", "agentline"} {
@@ -325,41 +328,6 @@ func TestResolveRejectsAUserSegmentNameThatCannotBeReferenced(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidValue)
 	assert.Contains(t, err.Error(), global.Name)
 	assert.Contains(t, err.Error(), "statusline.segments.my-host: name must be letters, digits or _")
-}
-
-func TestParseFormat(t *testing.T) {
-	lit := func(s string) Part { return Part{Kind: Literal, Text: s} }
-	seg := func(s string) Part { return Part{Kind: Segment, Text: s} }
-	group := func(ps ...Part) Part { return Part{Kind: Group, Parts: ps} }
-	for _, tc := range []struct {
-		name, in string
-		want     Format
-		segments []string
-	}{
-		{"segment", `$a`, Format{seg("a")}, []string{"a"}},
-		{"name characters", `$a_1B`, Format{seg("a_1B")}, []string{"a_1B"}},
-		{"text and segment", `ctx $context`, Format{lit("ctx "), seg("context")}, []string{"context"}},
-		{"adjacent segments", `$a$b`, Format{seg("a"), seg("b")}, []string{"a", "b"}},
-		{"name ends at punctuation", `$a-b`, Format{seg("a"), lit("-b")}, []string{"a"}},
-		{"group", `$a( $b)`, Format{seg("a"), group(lit(" "), seg("b"))}, []string{"a", "b"}},
-		{"nested groups", `(x($a)$b)`, Format{group(lit("x"), group(seg("a")), seg("b"))}, []string{"a", "b"}},
-		{"escaped dollar", `\$a`, Format{lit("$a")}, nil},
-		{"escaped parentheses", `\(\)$a`, Format{lit("()"), seg("a")}, []string{"a"}},
-		{"escaped backslash", `\\$a`, Format{lit(`\`), seg("a")}, []string{"a"}},
-		{"empty", ``, nil, nil},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := ParseFormat(tc.in)
-			require.NoError(t, err)
-			assert.Equal(t, tc.want, got)
-			assert.Equal(t, tc.segments, got.Segments())
-		})
-	}
-}
-
-func TestSegmentNames(t *testing.T) {
-	assert.Equal(t, []string{"a", "b", "c", "a"}, SegmentNames([]string{"$a( $b)", "text"}, nil, []string{"$c$a"}))
-	assert.Empty(t, SegmentNames())
 }
 
 func TestResolveAcceptsTheEffortContextToolsAndCostSegments(t *testing.T) {

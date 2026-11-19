@@ -9,8 +9,10 @@ import (
 // clean or process filter that the repository's or the user's git config
 // defines still runs on files .gitattributes assigns to it. safe.bareRepository
 // refuses a bare repository embedded in a clone; autoRefreshIndex keeps git
-// from writing the index and running its hook.
-const changesCommand = "LC_ALL=C git --no-optional-locks --no-pager -c core.fsmonitor=false -c safe.bareRepository=explicit -c diff.autoRefreshIndex=false diff --shortstat --no-ext-diff --no-textconv --ignore-submodules=dirty HEAD --"
+// from writing the index and running its hook; GIT_NO_LAZY_FETCH keeps a
+// partial clone's missing object from being fetched from a promisor remote,
+// which can run repository-configured commands and reach the network.
+const changesCommand = "LC_ALL=C GIT_NO_LAZY_FETCH=1 git --no-optional-locks --no-pager -c core.fsmonitor=false -c safe.bareRepository=explicit -c diff.autoRefreshIndex=false diff --shortstat --no-ext-diff --no-textconv --ignore-submodules=dirty HEAD --"
 
 var (
 	insertionsPattern = regexp.MustCompile(`(\d+) insertions?\(\+\)`)

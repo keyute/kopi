@@ -101,7 +101,7 @@ func TestStatusCommandsStartAndRefresh(t *testing.T) {
 		assert.Equal(t, "raw\nsecond line", (<-results).Output)
 		synctest.Wait()
 		assert.Len(t, r.started(), 1, "busy refresh does not queue catchup")
-		for i, ev := range []event.Event{event.SessionChanged{}, event.ModeChanged{}, event.ToolEnd{}, event.TurnEnd{}, event.TasksChanged{}} {
+		for i, ev := range []event.Event{event.TurnStart{}, event.SessionChanged{}, event.ModeChanged{}, event.ToolEnd{}, event.TurnEnd{}, event.TasksChanged{}} {
 			s.Observe(event.Notice{})
 			s.Observe(event.TextDelta{})
 			synctest.Wait()
@@ -348,5 +348,23 @@ func TestStatusCommandsChangesPublishAndTurnStart(t *testing.T) {
 		require.Len(t, r.started(), 2, "a turn start refreshes")
 		r.release <- runResult{err: errors.New("fatal: bad revision HEAD")}
 		assert.Equal(t, event.Changes{}, <-published, "a failed run publishes zero counts")
+	})
+}
+
+func TestStatusCommandsChangesTimeoutKeepsLastCounts(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, _ := newChangesStatusCommands(t, true, true, "$branch( $changes)")
+		r := &contextRunner{started: make(chan context.Context, 1)}
+		s.runner = r
+		published := make(chan event.Event, 4)
+		s.Start(t.Context(), func(ev event.Event) { published <- ev })
+		t.Cleanup(s.Close)
+		<-r.started
+		<-time.After(statusCommandTimeout + time.Second)
+		synctest.Wait()
+		assert.Empty(t, published, "a timed out run publishes nothing")
+		s.mu.Lock()
+		assert.False(t, s.commands[0].running)
+		s.mu.Unlock()
 	})
 }

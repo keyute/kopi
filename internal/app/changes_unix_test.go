@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +53,21 @@ func TestChangesCommandCountsAgainstHEAD(t *testing.T) {
 	added, removed := parseShortstat(out)
 	assert.Equal(t, 2, added)
 	assert.Equal(t, 1, removed)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "untracked"), []byte("x\ny\n"), 0o600))
+	out, err = shellRunner{}.run(t.Context(), dir, changesCommand)
+	require.NoError(t, err)
+	added, removed = parseShortstat(out)
+	assert.Equal(t, 2, added, "untracked files are not counted")
+	assert.Equal(t, 1, removed)
+}
+
+func TestChangesCommandFailsWithoutACommit(t *testing.T) {
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q")
+
+	_, err := shellRunner{}.run(t.Context(), dir, changesCommand)
+	require.Error(t, err)
 }
 
 func TestChangesCommandIgnoresEmbeddedBareRepository(t *testing.T) {
@@ -78,7 +94,14 @@ func TestChangesCommandIgnoresEmbeddedBareRepository(t *testing.T) {
 	gitIn(t, dir, "add", "inner")
 	gitIn(t, dir, "commit", "-q", "-m", "outer")
 
-	_, _ = shellRunner{}.run(t.Context(), inner, changesCommand)
+	unguarded := strings.Replace(changesCommand, " -c safe.bareRepository=explicit", "", 1)
+	require.NotEqual(t, changesCommand, unguarded)
+	_, _ = shellRunner{}.run(t.Context(), inner, unguarded)
+	require.FileExists(t, marker, "without the guard the filter runs")
+	require.NoError(t, os.Remove(marker))
+
+	_, err := shellRunner{}.run(t.Context(), inner, changesCommand)
+	require.Error(t, err)
 	assert.NoFileExists(t, marker, "the embedded repository's clean filter must not run")
 }
 
@@ -90,6 +113,14 @@ func TestChangesCommandDoesNotWriteIndex(t *testing.T) {
 	require.NoError(t, os.WriteFile(hook, []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755))
 	require.NoError(t, os.WriteFile(file, []byte("a\nb\nc\n"), 0o600))
 	later := time.Now().Add(time.Hour)
+	require.NoError(t, os.Chtimes(file, later, later))
+
+	refreshing := strings.Replace(changesCommand, "diff.autoRefreshIndex=false", "diff.autoRefreshIndex=true", 1)
+	require.NotEqual(t, changesCommand, refreshing)
+	_, err := shellRunner{}.run(t.Context(), dir, refreshing)
+	require.NoError(t, err)
+	require.FileExists(t, marker, "with a refresh the index is rewritten and the hook runs")
+	require.NoError(t, os.Remove(marker))
 	require.NoError(t, os.Chtimes(file, later, later))
 
 	out, err := shellRunner{}.run(t.Context(), dir, changesCommand)
@@ -110,4 +141,31 @@ func TestChangesCommandWithFileNamedHEAD(t *testing.T) {
 	added, removed := parseShortstat(out)
 	assert.Equal(t, 2, added)
 	assert.Equal(t, 1, removed)
+}
+
+func TestChangesCommandDoesNotLazyFetch(t *testing.T) {
+	dir, file := newCommittedRepo(t)
+	remote := t.TempDir()
+	gitIn(t, remote, "init", "-q", "--bare")
+	marker := filepath.Join(t.TempDir(), "marker")
+	uploadpack := "touch '" + marker + "'; exec git-upload-pack"
+	gitIn(t, dir, "config", "core.repositoryformatversion", "1")
+	gitIn(t, dir, "config", "extensions.partialClone", "origin")
+	gitIn(t, dir, "config", "remote.origin.promisor", "true")
+	gitIn(t, dir, "config", "remote.origin.url", "file://"+remote)
+	gitIn(t, dir, "config", "remote.origin.uploadpack", uploadpack)
+
+	blob := strings.TrimSpace(gitIn(t, dir, "rev-parse", "HEAD:f"))
+	require.NoError(t, os.Remove(filepath.Join(dir, ".git", "objects", blob[:2], blob[2:])))
+	require.NoError(t, os.WriteFile(file, []byte("a\nb\nc\nd\n"), 0o600))
+
+	lazy := strings.Replace(changesCommand, "GIT_NO_LAZY_FETCH=1 ", "", 1)
+	require.NotEqual(t, changesCommand, lazy)
+	_, _ = shellRunner{}.run(t.Context(), dir, lazy)
+	require.FileExists(t, marker, "without the guard git fetches the missing blob")
+	require.NoError(t, os.Remove(marker))
+
+	_, err := shellRunner{}.run(t.Context(), dir, changesCommand)
+	require.Error(t, err)
+	assert.NoFileExists(t, marker, "the missing blob must not be fetched")
 }

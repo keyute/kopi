@@ -226,7 +226,16 @@ func validateEntry(entry string, known func(string) bool) error {
 		}
 		return fmt.Errorf("%q names no segment", entry)
 	}
+	if hasEmptyGroup(f) {
+		return fmt.Errorf("%q: a group names no segment", entry)
+	}
 	return nil
+}
+
+func hasEmptyGroup(f Format) bool {
+	return slices.ContainsFunc(f, func(p Part) bool {
+		return p.Kind == Group && (len(Format(p.Parts).Segments()) == 0 || hasEmptyGroup(p.Parts))
+	})
 }
 
 // PartKind says what a Part of a Format is.

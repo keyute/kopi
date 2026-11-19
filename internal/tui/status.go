@@ -138,13 +138,25 @@ type statusLayout struct {
 	left, right []config.Format
 	separator   string
 	segments    map[string]config.StatusSegment
+	// mode is the entry that names the mode segment, the right side's first
+	// else the left side's first; nil when none does.
+	mode config.Format
 }
 
+func namesMode(f config.Format) bool { return slices.Contains(f.Segments(), "mode") }
+
 func newStatusLayout(line config.StatusLine) statusLayout {
-	return statusLayout{
+	l := statusLayout{
 		left: parseFormats(line.Left), right: parseFormats(line.Right),
 		separator: line.Separator, segments: line.Segments,
 	}
+	for _, side := range [][]config.Format{l.right, l.left} {
+		if i := slices.IndexFunc(side, namesMode); i >= 0 {
+			l.mode = side[i]
+			break
+		}
+	}
+	return l
 }
 
 // parseFormats parses entries the config has already validated.
@@ -156,13 +168,8 @@ func parseFormats(entries []string) []config.Format {
 	return fs
 }
 
-// renderFormat draws f: lookup gives a segment's text, literal styles literal
+// renderParts draws f: lookup gives a segment's text, literal styles literal
 // text. A group draws only when a segment inside it does.
-func renderFormat(f config.Format, lookup func(string) (string, bool), literal func(string) string) string {
-	text, _ := renderParts(f, lookup, literal)
-	return text
-}
-
 func renderParts(f config.Format, lookup func(string) (string, bool), literal func(string) string) (string, bool) {
 	var b strings.Builder
 	shown := false
@@ -189,15 +196,15 @@ func renderParts(f config.Format, lookup func(string) (string, bool), literal fu
 func renderEntries(fs []config.Format, lookup func(string) (string, bool), literal func(string) string) []string {
 	var parts []string
 	for _, f := range fs {
-		if text := renderFormat(f, lookup, literal); text != "" {
+		if text, _ := renderParts(f, lookup, literal); text != "" {
 			parts = append(parts, text)
 		}
 	}
 	return parts
 }
 
-func (l statusLayout) render(fs []config.Format, in statusInput, th theme) []string {
-	lookup := func(name string) (string, bool) {
+func (l statusLayout) lookup(in statusInput, th theme) func(string) (string, bool) {
+	return func(name string) (string, bool) {
 		if seg, builtin := segments[name]; builtin {
 			return seg(in, th)
 		}
@@ -206,7 +213,10 @@ func (l statusLayout) render(fs []config.Format, in statusInput, th theme) []str
 		}
 		return "", false
 	}
-	return renderEntries(fs, lookup, func(s string) string { return fg(th.text).Render(s) })
+}
+
+func (l statusLayout) render(fs []config.Format, in statusInput, th theme) []string {
+	return renderEntries(fs, l.lookup(in, th), func(s string) string { return fg(th.text).Render(s) })
 }
 
 func renderUserSegment(name string, def config.StatusSegment, in statusInput, th theme) (string, bool) {
@@ -323,16 +333,10 @@ func statusLine(in statusInput, layout statusLayout, width int, th theme) string
 			break
 		}
 	}
-	namesMode := func(f config.Format) bool { return slices.Contains(f.Segments(), "mode") }
-	modeEntry := slices.IndexFunc(layout.right, namesMode)
-	modeSide := layout.right
-	if modeEntry < 0 {
-		modeEntry, modeSide = slices.IndexFunc(layout.left, namesMode), layout.left
-	}
-	configuredMode := modeEntry >= 0
+	configuredMode := layout.mode != nil
 	var mode string
 	if configuredMode {
-		mode = layout.render(modeSide[modeEntry:modeEntry+1], in, th)[0]
+		mode, _ = renderParts(layout.mode, layout.lookup(in, th), func(s string) string { return fg(th.text).Render(s) })
 	}
 	if lipgloss.Width(right)+1 > width || (configuredMode && !strings.Contains(left+right, mode)) {
 		left = ""

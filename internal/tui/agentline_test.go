@@ -662,7 +662,7 @@ func TestWithoutElapsedAnIdleViewDoesNotTick(t *testing.T) {
 
 func TestElapsedStartsTheTickWhenAClockAppears(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		m, _ := agentLineModel(t, 60, lineOf([]string{"$agent", "$elapsed"}), explorer("t1"))
+		m, _ := agentLineModel(t, 60, lineOf([]string{"$agent", "($elapsed)"}), explorer("t1"))
 
 		cmd := m.applyBatch(eventsMsg{sub("t1", event.TurnStart{Prompt: "dig"})})
 
