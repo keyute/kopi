@@ -37,8 +37,8 @@ type Work struct {
 	// handBack is the queued input taken when the Work was stopped, handed
 	// back as unsent unless discarded.
 	handBack []pigruntime.Prompt
-	// byHuman is set when the human stopped the Work by rejecting an ask
-	// without a reason.
+	// byHuman is set when the human stopped the Work: by Interrupt, StopTask or
+	// rejecting an ask without a reason.
 	byHuman bool
 }
 

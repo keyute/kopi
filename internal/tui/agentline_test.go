@@ -112,6 +112,7 @@ func TestAgentSegment(t *testing.T) {
 		{"described", entry{AgentStatus: app.AgentStatus{ID: "t1", Agent: "explorer", Description: "Find it"}}, "explorer › Find it", true},
 		{"undescribed", entry{AgentStatus: app.AgentStatus{ID: "t1", Agent: "explorer"}}, "explorer", true},
 		{"multiline description", entry{AgentStatus: app.AgentStatus{ID: "t1", Agent: "x", Description: "a\n  b"}}, "x › a b", true},
+		{"control sequences", entry{AgentStatus: app.AgentStatus{ID: "t1", Agent: "x\x1b[31m", Description: "a\x1b]52;c;aGk=\x07 \x1b[2Jb"}}, "x › a b", true},
 		{"exactly 36", entry{AgentStatus: app.AgentStatus{ID: "t1", Agent: "x", Description: strings.Repeat("a", 36)}}, "x › " + strings.Repeat("a", 36), true},
 		{"cut at a word", entry{AgentStatus: app.AgentStatus{ID: "t1", Agent: "x", Description: "Find every place the configuration loader is called"}}, "x › Find every place the configuration…", true},
 		{"cut on a space", entry{AgentStatus: app.AgentStatus{ID: "t1", Agent: "x", Description: strings.Repeat("a", 35) + " bbb"}}, "x › " + strings.Repeat("a", 35) + "…", true},

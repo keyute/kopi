@@ -136,7 +136,9 @@ func (s *subagentRole) end(w *Work, unread []pigruntime.Prompt) {
 		for _, p := range unread {
 			texts = append(texts, p.Text)
 		}
-		s.report(info, w.byHuman, texts)
+		// A send-now cancel whose queued input the human took back ends the run
+		// with nothing to continue: that is the human's stop.
+		s.report(info, w.byHuman || !w.stopped && w.outcome.Status == event.Interrupted, texts)
 	}
 	c.relay.emit(event.TasksChanged{})
 }

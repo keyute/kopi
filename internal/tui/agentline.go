@@ -44,11 +44,11 @@ var agentSegments = map[string]agentSegment{
 		if e.ID == app.Main {
 			return "main", true
 		}
-		desc := strings.Join(strings.Fields(e.Description), " ")
+		name, desc := oneLine(e.Agent), strings.Join(strings.Fields(oneLine(e.Description)), " ")
 		if desc == "" {
-			return e.Agent, true
+			return name, true
 		}
-		return e.Agent + " › " + cutWords(desc, descriptionWidth), true
+		return name + " › " + cutWords(desc, descriptionWidth), true
 	},
 	"tokens": func(e entry, _ theme) (string, bool) {
 		return compactCount(e.ContextTokens) + " tokens", e.ContextTokens > 0

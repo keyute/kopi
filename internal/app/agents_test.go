@@ -1280,6 +1280,34 @@ func TestSendNowToARunningChildContinuesItWithTheQueuedInput(t *testing.T) {
 	assert.Len(t, a.tasks.List(), 1, "the same run continued")
 }
 
+func TestSendNowWhoseInputIsTakenBackReportsTheHumansStop(t *testing.T) {
+	started, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	slow := testTool("Slow", policy.Read, func(ctx context.Context, _ json.RawMessage) (string, error) {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+		return "", ctx.Err()
+	})
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{Wake: true, AgentTools: []tool.Tool{slow}}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Slow", "s1"))})
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, started)
+
+	require.NoError(t, a.c.SendNow(t.Context(), id, "instead, check b"))
+	wait(t, cancelled)
+	assert.Equal(t, []event.Input{{Text: "instead, check b"}}, a.c.TakeQueued(id))
+	close(release)
+	a.until(t, func() bool { return a.live() == 0 })
+
+	assert.Equal(t, tool.TaskStopped, a.info(t, id).Status)
+	queued := a.queuedNotices()
+	require.Len(t, queued, 1)
+	assert.Equal(t, fmt.Sprintf("Agent %s (explorer) stopped by the user: find it", id), queued[0].Text)
+	assert.True(t, a.idle())
+	assert.Zero(t, a.faux.CallCount(), "a stop wakes nobody")
+}
+
 func TestSendNowToAChildWithAPendingApprovalMakesItStale(t *testing.T) {
 	a, ran := askingChildren(t, Config{})
 	approvals := subscribeTo[event.ApprovalRequested](a.c)
