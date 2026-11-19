@@ -32,11 +32,11 @@ Permission rules in `config.json` allow, ask about or deny calls:
 ### Precedence
 
 - The session's [plan file](tools.md#exitplanmode) is the one file in Kopi's home that `Read`, `Write` and `Edit` reach, in both modes, and it does not ask by default. Deny and ask rules apply to it first; plan mode's refusal of `Write` and `Edit` does not.
-- Plan mode refuses `Write`, `Edit`, unsandboxed `Bash` and MCP tools not marked read-only before any rule; otherwise rules apply to `Bash` the same in both modes.
+- Plan mode refuses `Write`, `Edit`, unsandboxed `Bash` (including a sandboxed `Bash` call that sets `unsandboxed`) and MCP tools not marked read-only before any rule; otherwise rules apply to `Bash` the same in both modes.
 - Deny beats ask, and ask beats allow.
 - With no rule matching:
-  - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `Agent`, `SendMessage`, `TaskOutput`, `TaskStop`, `AskUserQuestion`, `ExitPlanMode` and sandboxed `Bash` are allowed.
-  - Any other call asks, including every `WebFetch` and `WebSearch` call and every `Bash` command without the sandbox.
+  - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `Agent`, `SendMessage`, `TaskOutput`, `TaskStop`, `AskUserQuestion`, `ExitPlanMode` and sandboxed `Bash` without `unsandboxed` are allowed.
+  - Any other call asks, including every `WebFetch` and `WebSearch` call and every `Bash` command without the sandbox and every `Bash` call that sets `unsandboxed`.
 - Built in: `Edit` and `Write` under any `.git` directory, and of any file named `.mcp.json` or the file the start directory's `.mcp.json` resolves to when it is a symlink, always ask unless a deny rule refuses them.
 
 ### Rules per tool
@@ -51,12 +51,13 @@ Permission rules in `config.json` allow, ask about or deny calls:
   - `Bash(path)` is rejected at start.
   - Path rules such as `*(~/.ssh)` never apply to `Bash`.
   - `"ask": ["Bash"]` makes every command ask.
+  - An allow rule that applies to it also allows calls that set [`unsandboxed`](sandbox.md#outside-the-sandbox).
 
 ## Approval dialog
 
 The fullscreen interface asks before a call that needs approval.
 
-- It shows the change or the command; the status line's `sandbox` segment shows whether `Bash` runs sandboxed.
+- It shows the change or the command; the status line's `sandbox` segment shows whether `Bash` runs sandboxed by default, and an `unsandboxed` call's title reads `Bash (unsandboxed) …`.
 - Options:
   - `Yes`
   - `Yes, allow all edits this session` (for `Write` and `Edit` when no rule asked)
@@ -112,10 +113,10 @@ Behaviour with `classifier.enabled`:
 - A call an ask rule matches, including the [built-in asks](#precedence), still asks you.
 - A call an allow rule matches runs without review.
 - With no rule matching, `Write` and `Edit` run without asking.
-- With no rule matching, any other call that would ask is reviewed instead: every `WebFetch` and `WebSearch` call, every MCP tool call, every `Bash` command without the sandbox.
+- With no rule matching, any other call that would ask is reviewed instead: every `WebFetch` and `WebSearch` call, every MCP tool call, every `Bash` command without the sandbox, every `Bash` call that sets `unsandboxed`.
   - The classifier allows it, denies it with a one-line reason the model gets while the turn goes on, or leaves it to you.
   - A review that fails, times out or returns anything else is left to you too.
-  - Sandboxed `Bash` never asks, so it is never reviewed.
+  - Sandboxed `Bash` without `unsandboxed` never asks, so it is never reviewed.
 - The third denial in a row, and the twentieth in a session, goes to you instead of being denied. A call the classifier allows or you approve ends the run of denials.
 - The classifier is sent:
   - the session's prompts (the last 8,000 bytes)

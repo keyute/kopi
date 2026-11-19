@@ -21,6 +21,9 @@ type Tool struct {
 	// PlanSandboxed reports that in plan mode the OS keeps the tool's calls
 	// from writing the workspace.
 	PlanSandboxed bool
+	// Unsandboxed reports that a call opts out of the OS sandbox; nil for a tool
+	// with no such opt-out.
+	Unsandboxed func(args json.RawMessage) bool
 	// Deferred keeps the tool out of the model's tool list until ToolSearch
 	// loads it.
 	Deferred bool
@@ -48,7 +51,7 @@ type Image struct {
 func Specs(tools []Tool) map[string]policy.ToolSpec {
 	specs := make(map[string]policy.ToolSpec, len(tools))
 	for _, t := range tools {
-		specs[t.Name] = policy.ToolSpec{Capability: t.Capability, Target: t.Target, Sandboxed: t.Sandboxed, Ask: t.Ask, PlanSandboxed: t.PlanSandboxed}
+		specs[t.Name] = policy.ToolSpec{Capability: t.Capability, Target: t.Target, Sandboxed: t.Sandboxed, Ask: t.Ask, PlanSandboxed: t.PlanSandboxed, Unsandboxed: t.Unsandboxed}
 	}
 	return specs
 }

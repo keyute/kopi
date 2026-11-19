@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -101,6 +102,48 @@ func TestBashRunInBackgroundUsesTheShellOfTheAdmittedMode(t *testing.T) {
 	assert.Equal(t, TaskCompleted, waitChange(t, changes).Status)
 	assert.Equal(t, []string{"plan"}, listDir(t, planDir))
 	assert.Empty(t, listDir(t, execDir))
+}
+
+func TestBashUnsandboxedBackgroundUsesTheUnsandboxedShell(t *testing.T) {
+	dir := t.TempDir()
+	tasks := NewTasks()
+	t.Cleanup(tasks.StopAll)
+	changes := taskChanges(tasks)
+	sh := NewShell(dir, &sandbox.Sandbox{})
+	sh.shell = filepath.Join(dir, "missing-shell")
+	tool := NewBash(sh, NewShell(dir, &sandbox.Sandbox{}), tasks)
+
+	out, err := tool.Run(t.Context(), json.RawMessage(`{"command":"touch outside","unsandboxed":true,"run_in_background":true}`), func(policy.Target) (policy.Mode, error) {
+		return policy.Execute, nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "Background task t1 started.", out.Text)
+	assert.Equal(t, TaskRunning, waitChange(t, changes).Status)
+	assert.Equal(t, TaskCompleted, waitChange(t, changes).Status)
+	assert.Equal(t, []string{"outside"}, listDir(t, dir))
+}
+
+func TestBashUnsandboxedTimeoutMovesCommandToBackground(t *testing.T) {
+	dir := t.TempDir()
+	tasks := NewTasks()
+	t.Cleanup(tasks.StopAll)
+	changes := taskChanges(tasks)
+	sh := NewShell(dir, &sandbox.Sandbox{})
+	sh.shell = filepath.Join(dir, "missing-shell")
+	tool := NewBash(sh, NewShell(dir, &sandbox.Sandbox{}), tasks)
+	gate := mkfifo(t, dir, "gate")
+	args, err := json.Marshal(map[string]any{"command": "read x <'" + gate + "'; touch outside", "timeout": 1, "unsandboxed": true})
+	require.NoError(t, err)
+
+	out, err := tool.Run(t.Context(), args, func(policy.Target) (policy.Mode, error) { return policy.Execute, nil })
+
+	require.NoError(t, err)
+	assert.Equal(t, "Background task t1: this command did not finish within its 1ms timeout and keeps running in the background.", out.Text)
+	assert.Equal(t, TaskRunning, waitChange(t, changes).Status)
+	require.NoError(t, os.WriteFile(gate, []byte("go\n"), 0o600))
+	assert.Equal(t, TaskCompleted, waitChange(t, changes).Status)
+	assert.FileExists(t, filepath.Join(dir, "outside"))
 }
 
 func TestBashTimeoutMovesCommandToBackground(t *testing.T) {

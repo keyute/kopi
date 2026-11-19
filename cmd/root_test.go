@@ -1279,12 +1279,17 @@ func sandboxAvailable(t *testing.T) bool {
 
 // streamBash answers with one Bash call running command.
 func streamBash(w http.ResponseWriter, command string) {
+	streamBashArgs(w, map[string]any{"command": command})
+}
+
+// streamBashArgs answers with one Bash call with args.
+func streamBashArgs(w http.ResponseWriter, args map[string]any) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	writeChunk(w, map[string]any{"role": "assistant", "content": ""}, nil)
-	args, _ := json.Marshal(map[string]any{"command": command})
+	raw, _ := json.Marshal(args)
 	writeChunk(w, map[string]any{"tool_calls": []any{map[string]any{
 		"index": 0, "id": "call_0", "type": "function",
-		"function": map[string]any{"name": "Bash", "arguments": string(args)},
+		"function": map[string]any{"name": "Bash", "arguments": string(raw)},
 	}}}, nil)
 	writeChunk(w, map[string]any{}, "tool_calls")
 	fmt.Fprint(w, "data: [DONE]\n\n")
@@ -1294,10 +1299,16 @@ func streamBash(w http.ResponseWriter, command string) {
 // and returns the tool result the model got back and kopi's stderr.
 func printBash(t *testing.T, e testEnv, command string, flags ...string) (result, stderr string) {
 	t.Helper()
+	return printBashArgs(t, e, map[string]any{"command": command}, flags...)
+}
+
+// printBashArgs is printBash for a Bash call with args.
+func printBashArgs(t *testing.T, e testEnv, args map[string]any, flags ...string) (result, stderr string) {
+	t.Helper()
 	var calls atomic.Int32
 	server := newMockProvider(t, func(w http.ResponseWriter) {
 		if calls.Add(1) == 1 {
-			streamBash(w, command)
+			streamBashArgs(w, args)
 			return
 		}
 		streamText(w, "done")
@@ -1514,6 +1525,44 @@ func TestRootSandboxedBashRunsWithoutAllowRule(t *testing.T) {
 	result, _ := printBash(t, newSandboxedEnv(t), "echo hi", "--mode", "execute")
 
 	assert.Equal(t, "hi\n", result)
+}
+
+func TestRootSandboxedBashUnsandboxedNeedsApproval(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+
+	result, _ := printBashArgs(t, newSandboxedEnv(t), map[string]any{"command": "echo hi", "unsandboxed": true}, "--mode", "execute")
+
+	assert.Contains(t, result, `tool "Bash" needs approval and this run cannot ask for it`)
+	assert.NotEqual(t, "hi\n", result)
+}
+
+func TestRootSandboxedBashUnsandboxedRunsOutsideTheSandbox(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	e := newSandboxedEnv(t)
+	secret := filepath.Join(e.kopiHome, "secret.txt")
+	e.writeFile(t, secret, "synthetic kopi Bash secret\n")
+	quoted := "'" + strings.ReplaceAll(secret, "'", "'\"'\"'") + "'"
+
+	command := `IFS= read -r secret < ` + quoted + ` && printf '%s\n' "$secret"`
+
+	result, _ := printBashArgs(t, e, map[string]any{"command": command, "unsandboxed": true}, "--mode", "execute", "--allowed-tools", "Bash")
+
+	assert.Equal(t, "synthetic kopi Bash secret\n", result)
+}
+
+func TestRootSandboxedBashUnsandboxedIsRefusedInPlan(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+
+	result, _ := printBashArgs(t, newSandboxedEnv(t), map[string]any{"command": "echo hi", "unsandboxed": true}, "--mode", "plan", "--allowed-tools", "Bash")
+
+	assert.Contains(t, result, `tool "Bash" needs execute mode; the session is in plan mode, where it never runs outside the OS sandbox`)
+	assert.NotEqual(t, "hi\n", result)
 }
 
 func TestRootSandboxedBashRefusesKopiHomeRead(t *testing.T) {

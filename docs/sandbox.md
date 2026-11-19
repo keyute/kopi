@@ -59,12 +59,23 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
 - A command has no network unless `sandbox.network` is true, which opens IP networking only.
 - Unix sockets (ssh-agent, Docker) stay blocked; on Linux so do VM sockets, Unix datagram socket pairs (stream and seqpacket pairs work) and io_uring.
 
+## Outside the sandbox
+
+- When `Bash` runs sandboxed it takes an optional boolean `unsandboxed`; a call that sets it runs that one command outside the sandbox.
+- Such a call is treated as `Bash` without the sandbox, see [permissions](permissions.md#precedence): plan mode refuses it before any rule; in execute mode rules apply and otherwise it asks, or the [classifier](permissions.md#classifier) reviews it.
+- Its title reads `Bash (unsandboxed) …`, in the approval dialog too.
+- A [subagent](subagents.md) can use it like the main agent; one whose definition pins plan mode is always refused.
+- Without the sandbox the parameter is not offered.
+
 ## Limitations
+
+- A command the sandbox blocks can be run with `unsandboxed`.
 
 ### macOS
 
 - `sandbox-exec` is deprecated by Apple.
 - `ps`, `pgrep` and `top` do not work.
+- Programs that open a pseudo-terminal, such as `script`, fail.
 
 ### Linux
 
@@ -94,6 +105,8 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
 
 - Sandboxed commands inherit Kopi's environment, including provider API keys, and can read any file outside Kopi's home and `sandbox.denyRead`.
 - With `sandbox.network` true, commands reach the network without asking, in plan mode too.
+- A bare `Bash` or `*` allow rule, or `--allowed-tools Bash`, lets `unsandboxed` calls run without asking.
+- The status line's `sandbox` segment shows the default, not whether a call set `unsandboxed`.
 - Tools that write outside the start directory and temp directories, such as Go's build cache and package-manager caches, fail until those paths are in `sandbox.allowWrite`.
 - `git init` in the start directory, `git config` writes, `git worktree add`, commits in a linked worktree (its git directory is outside the start directory), commits inside a submodule and commit signing through an agent socket fail.
 - The sandbox does not protect the config and hooks of repositories nested inside the start directory, or of the start directory itself when it is a bare repository or a git directory.
@@ -111,4 +124,3 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
 
 - Network allowlists by domain.
 - Allowing chosen Unix sockets.
-- A per-command way out of the sandbox.

@@ -32,6 +32,20 @@ type ToolSpec struct {
 	// PlanSandboxed reports that in plan mode the OS keeps a call from writing
 	// the workspace, so plan mode admits it.
 	PlanSandboxed bool
+	// Unsandboxed reports that a call opts out of the OS sandbox; the gate then
+	// treats it as a call of a tool that has none. Nil for a tool with no such
+	// opt-out.
+	Unsandboxed func(args json.RawMessage) bool
+}
+
+// forCall returns the spec that governs one call, and whether the call opted
+// out of the sandbox.
+func (s ToolSpec) forCall(args json.RawMessage) (ToolSpec, bool) {
+	if s.Unsandboxed == nil || !s.Unsandboxed(args) {
+		return s, false
+	}
+	s.Sandboxed, s.PlanSandboxed = false, false
+	return s, true
 }
 
 type Answer int
@@ -106,6 +120,7 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 	if !ok {
 		return fmt.Errorf("tool %q: %w", tool, ErrUnknownTool)
 	}
+	spec, optOut := spec.forCall(args)
 	_, gen, permitted := g.authority.Permits(spec)
 	var target *Target
 	var targetErr error
@@ -121,6 +136,9 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 		}
 	}
 	if !permitted && !planFile {
+		if optOut {
+			return fmt.Errorf("tool %q needs execute mode; the session is in plan mode, where it never runs outside the OS sandbox: %w", tool, ErrDenied)
+		}
 		if spec.Capability == Exec && !strings.HasPrefix(tool, MCPPrefix) {
 			return fmt.Errorf("tool %q needs execute mode; the session is in plan mode, where it runs only in the OS sandbox, which is off or unavailable: %w", tool, ErrDenied)
 		}
@@ -252,7 +270,7 @@ func (g *Gate) Admit(callID, tool string, args json.RawMessage, target *Target) 
 	if !bytes.Equal(gr.args, args) || (gr.target == nil) != (target == nil) || (target != nil && *gr.target != *target) {
 		return Plan, fmt.Errorf("tool %q: arguments or target changed; make a new call: %w", tool, ErrChangedCall)
 	}
-	spec := g.tools[tool]
+	spec, _ := g.tools[tool].forCall(args)
 	mode, gen, ok := g.authority.Permits(spec)
 	if (target == nil || !target.PlanFile) && (!ok || (spec.Capability.NeedsExecute() && gen != gr.generation)) {
 		return Plan, fmt.Errorf("tool %q: the session mode changed after the call was approved: %w", tool, ErrRevoked)
