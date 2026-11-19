@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"image/color"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -86,6 +87,8 @@ func (md *markdown) render(src string) []string {
 	return fitLines(strings.Split(s, "\n"), md.width)
 }
 
+var trailingSGR = regexp.MustCompile(`(?:\x1b\[[0-9;:]*m)+$`)
+
 // fitLines drops Glamour's trailing padding from each line and its blank
 // lines at either end, and breaks lines it leaves wider than width, such as
 // long code lines.
@@ -93,6 +96,15 @@ func fitLines(rendered []string, width int) []string {
 	var ls []string
 	for _, l := range rendered {
 		l = xansi.Truncate(l, xansi.StringWidth(strings.TrimRight(xansi.Strip(l), " ")), "")
+		// Glamour pads every line to the width with individually styled
+		// spaces, and Truncate keeps their escapes.
+		if trailingSGR.MatchString(l) {
+			if xansi.Strip(l) == "" {
+				l = ""
+			} else {
+				l = trailingSGR.ReplaceAllString(l, "\x1b[m")
+			}
+		}
 		if xansi.StringWidth(l) > width {
 			ls = append(ls, strings.Split(xansi.Hardwrap(l, width, true), "\n")...)
 			continue
@@ -232,7 +244,7 @@ func markdownStyle(width int, th theme) ansi.StyleConfig {
 	zero, one := uint(0), uint(1)
 	gutter := "│ "
 	return ansi.StyleConfig{
-		Document:       ansi.StyleBlock{Margin: &zero},
+		Document:       ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Color: c(th.text)}, Margin: &zero},
 		BlockQuote:     ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Color: c(th.muted)}, Indent: &one, IndentToken: &gutter},
 		List:           ansi.StyleList{LevelIndent: 2},
 		Heading:        ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Color: c(th.heading), Bold: &yes}},
