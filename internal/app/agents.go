@@ -281,7 +281,7 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 		c.children = map[string]*runner{}
 	}
 	c.children[r.id] = r
-	r.start(w, []pigruntime.Prompt{{Text: prompt}})
+	r.start(w, []pigruntime.Prompt{{Text: prompt, FromAgent: true}})
 	c.queue.Unlock()
 	c.relay.emit(event.TasksChanged{})
 	return r.id, nil

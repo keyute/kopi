@@ -853,6 +853,45 @@ func TestMessageToARunBeingStoppedStartsTheNextRunWithIt(t *testing.T) {
 	assert.NotSame(t, first, a.workOf(ch))
 }
 
+func TestInterruptBeforeLaunchPromptIsSent(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("unreached")})
+	evs := recordEvents(a.c)
+	const prompt = "go find it"
+	var stoppedID string
+	var work *Work
+	a.c.Subscribe(func(ev event.Event) {
+		s, ok := ev.(event.Session)
+		if !ok || s.ID == Main {
+			return
+		}
+		start, ok := s.Event.(event.TurnStart)
+		if !ok || start.Prompt != prompt {
+			return
+		}
+		// Launch holds queue here, before starting the send goroutine.
+		stoppedID = s.ID
+		work = a.c.interruptByHumanLocked(a.c.children[s.ID])
+	})
+
+	id := a.launch(t, "explorer", "find it", prompt)
+
+	require.Equal(t, id, stoppedID)
+	require.NotNil(t, work)
+	wait(t, work.Done())
+	assert.Zero(t, a.child.CallCount(), "the launch prompt never reached the provider")
+	assert.Equal(t, tool.TaskStopped, a.info(t, id).Status)
+	own := sessionOf(untilSessionEnd(t, evs, id), id)
+	end, ok := own[len(own)-1].(event.TurnEnd)
+	require.True(t, ok)
+	assert.Equal(t, event.Interrupted, end.Outcome.Status)
+	assert.Empty(t, end.Unsent, "an agent's launch prompt is not human input")
+	queued := a.queuedNotices()
+	require.Len(t, queued, 1)
+	assert.True(t, strings.HasPrefix(queued[0].Text, fmt.Sprintf("Agent %s (explorer) stopped by the user: find it", id)), queued[0].Text)
+	assert.True(t, strings.HasSuffix(queued[0].Text, "\nUndelivered messages:\n"+prompt), queued[0].Text)
+}
+
 func TestRunStoppedByTheHumanListsAnAgentMessageItNeverReadAsUndelivered(t *testing.T) {
 	a, _ := askingChildren(t, Config{})
 	approvals := subscribeTo[event.ApprovalRequested](a.c)
