@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -244,4 +245,21 @@ func TestSubagentTurnEndDropsOnlyItsOwnApproval(t *testing.T) {
 	send(m, event.TurnEnd{})
 	assert.Equal(t, uint64(2), m.approval.Token)
 	assert.Empty(t, m.approvalQueue)
+}
+
+func TestSubagentTurnEndKeepsMainsQuestionAndPlan(t *testing.T) {
+	m, _ := agentsModel(t)
+	send(m, event.QuestionRequested{Token: 7, Questions: previewQuestion("x")})
+
+	send(m, sub("t1", event.TurnEnd{}))
+
+	require.NotNil(t, m.question)
+	assert.Contains(t, strings.Join(screen(m), "\n"), "Which db?")
+
+	send(m, event.QuestionEnded{Token: 7}, planRequest(8, "# Heading\n\nstep one"))
+
+	send(m, sub("t1", event.TurnEnd{}))
+
+	require.NotNil(t, m.plan)
+	assert.Contains(t, strings.Join(screen(m), "\n"), "step one")
 }

@@ -88,14 +88,11 @@ func (l agentLauncher) Message(ctx context.Context, id, message string) (bool, e
 // the root session is replaced or closed, so a later view can use its Subscribe,
 // History and Send.
 type subagentRole struct {
-	c *Controller
 	r *runner
 	// task is set by launch before the first run starts.
 	task *tool.AgentTask
-	// report receives the end of a run the task registry reported: the task as
-	// it then is, whether the human stopped the run, and the messages it never
-	// read. It is called with queue held.
-	report func(info tool.TaskInfo, byHuman bool, unread []string)
+	// parent is the session the subagent was launched under.
+	parent *pigruntime.Session
 
 	outMu   sync.Mutex
 	midLine bool
@@ -104,7 +101,7 @@ type subagentRole struct {
 // begin counts the run in and marks the task running. The first run of a task
 // is neither: its launch reserved the slot and started the task.
 func (s *subagentRole) begin(w *Work) error {
-	c := s.c
+	c := s.r.c
 	if c.live >= maxAgents {
 		return ErrTooManyAgents
 	}
@@ -120,7 +117,7 @@ func (s *subagentRole) begin(w *Work) error {
 // end counts the run out and reports it in the queue section that deregisters
 // it, so no observer sees neither a running subagent nor its notice.
 func (s *subagentRole) end(w *Work, unread []pigruntime.Prompt) {
-	c := s.c
+	c := s.r.c
 	status, reason := tool.TaskCompleted, ""
 	switch {
 	case w.stopped || w.outcome.Status == event.Interrupted:
@@ -138,7 +135,7 @@ func (s *subagentRole) end(w *Work, unread []pigruntime.Prompt) {
 		}
 		// A send-now cancel whose queued input the human took back ends the run
 		// with nothing to continue: that is the human's stop.
-		s.report(info, w.byHuman || !w.stopped && w.outcome.Status == event.Interrupted, texts)
+		s.reportEnd(info, w.byHuman || !w.stopped && w.outcome.Status == event.Interrupted, texts)
 	}
 	c.relay.emit(event.TasksChanged{})
 }
@@ -229,7 +226,7 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 		model = c.Model()
 	}
 	r := &runner{c: c, name: spec.def.Name, d: newDisplay(spec.tools), model: model}
-	role := &subagentRole{c: c, r: r, report: c.endReporter(parent)}
+	role := &subagentRole{r: r, parent: parent}
 	r.role = role
 	if c.cfg.Classifier != nil {
 		r.rec = &classifier.Record{}
@@ -309,24 +306,24 @@ func (c *Controller) message(ctx context.Context, id, message string) (bool, err
 	return w != nil || running != nil && running.stopped, nil
 }
 
-// endReporter returns the report function of a subagent launched under parent.
-// It queues the end notice on the main runner, only while parent is still the
-// current session: a switch that installed another session after the run ended
-// must not receive it. It must be called with queue held.
-func (c *Controller) endReporter(parent *pigruntime.Session) func(tool.TaskInfo, bool, []string) {
-	return func(info tool.TaskInfo, byHuman bool, unread []string) {
-		c.mu.Lock()
-		current := c.main.sess == parent
-		c.mu.Unlock()
-		if !current {
-			return
-		}
-		switch {
-		case info.Status == tool.TaskCompleted || info.Status == tool.TaskFailed:
-			c.main.queueNoticeLocked(agentNotice(info, unread))
-		case info.Status == tool.TaskStopped && byHuman:
-			c.main.queueNoticeLocked(withUndelivered(pigruntime.Notice{Text: agentStoppedHead(info), Shown: taskEnded(info)}, unread))
-		}
+// reportEnd receives the end of a run the task registry reported: the task as
+// it then is, whether the human stopped the run, and the messages it never
+// read. It queues the end notice on the main runner, only while the parent is
+// still the current session: a switch that installed another session after the
+// run ended must not receive it. It must be called with queue held.
+func (s *subagentRole) reportEnd(info tool.TaskInfo, byHuman bool, unread []string) {
+	c := s.r.c
+	c.mu.Lock()
+	current := c.main.sess == s.parent
+	c.mu.Unlock()
+	if !current {
+		return
+	}
+	switch {
+	case info.Status == tool.TaskCompleted || info.Status == tool.TaskFailed:
+		c.main.queueNoticeLocked(agentNotice(info, unread))
+	case info.Status == tool.TaskStopped && byHuman:
+		c.main.queueNoticeLocked(withUndelivered(pigruntime.Notice{Text: agentStoppedHead(info), Shown: taskEnded(info)}, unread))
 	}
 }
 

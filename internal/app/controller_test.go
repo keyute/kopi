@@ -2448,19 +2448,25 @@ func TestStatusReportsContextUsageAndBranch(t *testing.T) {
 	assert.Equal(t, "feature/status", status.Branch)
 }
 
-func TestStatusAndAgentsReportEffortAndUsage(t *testing.T) {
-	h, _ := openHarness(t, Config{})
-	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("counted")})
+func TestAgentsReportEffortAndUsage(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	require.NoError(t, os.WriteFile(filepath.Join(sb.Workspace, "notes.txt"), []byte("kopi fixture 42\n"), 0o600))
+	rt := pigruntimetest.NewRuntime(t, sb)
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: fauxProvider, Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, rt.RegisterProvider(thinker.Provider()))
+	h := buildHarness(t, rt, thinker, sb, Config{Model: fauxProvider + "/thinker", Tools: []tool.Tool{readTool(t, sb)}})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(pigruntimetest.Call{Name: "Read", ID: "call-1", Args: map[string]any{"file_path": "notes.txt"}}),
+		pigruntimetest.Text("counted"),
+	})
 	h.turn(t, "count me")
 
-	sess := h.c.main.sess
-	toolCalls, cost := sess.Usage()
-	status := h.c.Status()
-	assert.Equal(t, sess.Effort(), status.Effort)
-	assert.Equal(t, toolCalls, status.ToolCalls)
-	assert.Equal(t, cost, status.Cost)
 	main := h.c.Agents()[0]
-	assert.Equal(t, sess.Effort(), main.Effort)
+	toolCalls, cost := h.c.main.sess.Usage()
+	assert.Equal(t, h.c.main.sess.Effort(), main.Effort)
+	assert.NotEmpty(t, main.Effort)
+	assert.Equal(t, 1, main.ToolCalls)
 	assert.Equal(t, toolCalls, main.ToolCalls)
 	assert.Equal(t, cost, main.Cost)
 }

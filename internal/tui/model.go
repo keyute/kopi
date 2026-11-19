@@ -75,12 +75,14 @@ type model struct {
 	spinner       spinner.Model
 	layout        statusLayout
 	agentLine     config.AgentLine
-	home          string
-	commands      statusCommands
-	commandOut    map[string]string
-	geo           geometry
-	clip          clipboard
-	imageDir      string
+	// usesActivity and usesElapsed report whether agentLine shows those segments.
+	usesActivity, usesElapsed bool
+	home                      string
+	commands                  statusCommands
+	commandOut                map[string]string
+	geo                       geometry
+	clip                      clipboard
+	imageDir                  string
 	// getenv and execProcess are os.Getenv and tea.ExecProcess, replaced in tests.
 	getenv      func(string) string
 	execProcess func(*exec.Cmd, tea.ExecCallback) tea.Cmd
@@ -154,16 +156,18 @@ func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model
 			left: opts.StatusLine.Left, right: opts.StatusLine.Right,
 			separator: opts.StatusLine.Separator, segments: opts.StatusLine.Segments,
 		},
-		agentLine:  opts.AgentLine,
-		commandOut: map[string]string{},
-		clip:       systemClipboard{},
-		imageDir:   opts.ImageDir,
-		views:      map[string]*view{app.Main: newView()},
-		shown:      app.Main,
-		geo:        geometry{working: -1},
-		status:     c.Status(),
-		agents:     c.Agents(),
-		pickVerb:   randomVerb,
+		agentLine:    opts.AgentLine,
+		usesActivity: slices.Contains(opts.AgentLine.Left, "activity") || slices.Contains(opts.AgentLine.Right, "activity"),
+		usesElapsed:  slices.Contains(opts.AgentLine.Left, "elapsed") || slices.Contains(opts.AgentLine.Right, "elapsed"),
+		commandOut:   map[string]string{},
+		clip:         systemClipboard{},
+		imageDir:     opts.ImageDir,
+		views:        map[string]*view{app.Main: newView()},
+		shown:        app.Main,
+		geo:          geometry{working: -1},
+		status:       c.Status(),
+		agents:       c.Agents(),
+		pickVerb:     randomVerb,
 	}
 	m.composer.setHistory(c.History())
 	m.home, _ = os.UserHomeDir()
@@ -177,7 +181,7 @@ func (m *model) Init() tea.Cmd {
 
 func (m *model) statusInput() statusInput {
 	in := statusInput{Status: m.status, notice: m.flashText, home: m.home, commands: m.commandOut}
-	if a, ok := m.agent(m.shown); ok && m.shown != app.Main {
+	if a, ok := m.agent(m.shown); ok {
 		in.Model, in.ContextTokens, in.ContextWindow = a.Model, a.ContextTokens, a.ContextWindow
 		in.Effort, in.ToolCalls, in.Cost = a.Effort, a.ToolCalls, a.Cost
 	}

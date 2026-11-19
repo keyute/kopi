@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -504,7 +505,7 @@ func TestStoppedChildFinalizationOverridesTheSendOutcome(t *testing.T) {
 				a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{Wake: true}, agentDef("explorer"))
 				a.rootAcks(1)
 				task := a.tasks.StartAgent("explorer", "find it", nil)
-				role := &subagentRole{c: a.c, task: task, report: a.c.endReporter(a.c.main.sess)}
+				role := &subagentRole{r: &runner{c: a.c}, task: task, parent: a.c.main.sess}
 				w := &Work{
 					stopped: true,
 					byHuman: byHuman,
@@ -823,7 +824,7 @@ func TestEndNoticeIsNotQueuedIntoTheNextSession(t *testing.T) {
 	// What the role's end does when End reported before the switch forgot the task.
 	for _, status := range []tool.TaskStatus{tool.TaskCompleted, tool.TaskFailed, tool.TaskStopped} {
 		a.c.queue.Lock()
-		ch.role.(*subagentRole).report(tool.TaskInfo{ID: id, Agent: "explorer", Command: "find it", Status: status, Result: "late"}, true, nil)
+		ch.role.(*subagentRole).reportEnd(tool.TaskInfo{ID: id, Agent: "explorer", Command: "find it", Status: status, Result: "late"}, true, nil)
 		a.c.queue.Unlock()
 	}
 
@@ -1233,6 +1234,30 @@ func TestSubmitToAnEndedChildStartsItsNextRunAndReportsItsEnd(t *testing.T) {
 	assert.Equal(t, []string{"go", "again"}, receive(t, childRequests).UserTexts)
 	assert.Contains(t, receive(t, rootRequests).UserTexts, fmt.Sprintf("Agent %s (explorer) completed: find it\nsecond", id))
 	assert.Equal(t, "second", a.info(t, id).Result)
+}
+
+func TestImageSubmittedToAnEndedChildReachesItsProvider(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
+	childRequests := make(chan pigruntimetest.Request, 1)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first"), pigruntimetest.Capture(t, childRequests, "a square")})
+	rootRequests := make(chan pigruntimetest.Request, 2)
+	a.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, rootRequests, "ack"), pigruntimetest.Capture(t, rootRequests, "ack")})
+	id := a.launch(t, "explorer", "find it", "go")
+	a.untilStatus(t, id, tool.TaskCompleted)
+	receive(t, rootRequests)
+	a.until(t, func() bool { return a.workOf(a.childOf(id)) == nil })
+	path := pngFile(t)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	w, err := a.c.Submit(t.Context(), id, "what is [image #1]", path)
+	require.NoError(t, err)
+	require.NotNil(t, w)
+	wait(t, w.Done())
+
+	req := receive(t, childRequests)
+	assert.Equal(t, []string{"go", "what is [image #1]"}, req.UserTexts)
+	assert.Contains(t, req.Raw, base64.StdEncoding.EncodeToString(data))
 }
 
 func TestStoppedChildNoticeExcludesDeliveredHumanInputButKeepsUnreadAgentMessages(t *testing.T) {

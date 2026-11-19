@@ -17,14 +17,18 @@ import (
 // contextWarnPercent is the context use from which the percentage warns.
 const contextWarnPercent = 90
 
-// statusInput is what a segment draws from: the session status, the
-// current transient hint (empty when none shows), the home directory shown
+// statusInput is what a segment draws from: the session status with the open
+// view's effort, tool calls and cost (Effort is empty when the model does not
+// reason; Cost is in dollars), the current transient hint (empty when none shows), the home directory shown
 // as "~" and the last cleaned output of each command segment.
 type statusInput struct {
 	app.Status
-	notice   string
-	home     string
-	commands map[string]string
+	Effort    string
+	ToolCalls int
+	Cost      float64
+	notice    string
+	home      string
+	commands  map[string]string
 }
 
 // segment renders one part of the status line; false draws nothing.

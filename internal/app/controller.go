@@ -516,8 +516,7 @@ func (c *Controller) input(ctx context.Context, session, text string, paths []st
 	if name, _, isCommand := parse(text); isCommand && isControl(name) {
 		session = Main
 	}
-	target, err := c.runnerOf(session)
-	if err != nil {
+	if _, err := c.runnerOf(session); err != nil {
 		return nil, err
 	}
 	images, err := loadImages(paths)
@@ -540,7 +539,14 @@ func (c *Controller) input(ctx context.Context, session, text string, paths []st
 	if strings.HasPrefix(prompt, "//") {
 		prompt = prompt[1:]
 	}
-	return target.submit(ctx, pigruntime.Prompt{Text: prompt, Images: images, Skills: c.skillTexts(text)}, now)
+	skills := c.skillTexts(text)
+	c.queue.Lock()
+	defer c.queue.Unlock()
+	target, err := c.runnerLocked(session)
+	if err != nil {
+		return nil, err
+	}
+	return target.submitLocked(ctx, pigruntime.Prompt{Text: prompt, Images: images, Skills: skills}, now)
 }
 
 // runnerOf returns the runner of session, Main or a subagent's task id.
@@ -730,7 +736,7 @@ func (c *Controller) Status() Status {
 	if sess != nil {
 		s.MessageCount = sess.MessageCount()
 		a := c.agentStatus(AgentStatus{}, sess)
-		s.ContextTokens, s.ContextWindow, s.Effort, s.ToolCalls, s.Cost = a.ContextTokens, a.ContextWindow, a.Effort, a.ToolCalls, a.Cost
+		s.ContextTokens, s.ContextWindow = a.ContextTokens, a.ContextWindow
 	}
 	for _, t := range c.cfg.Tools {
 		if t.Capability == policy.Exec {

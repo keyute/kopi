@@ -123,7 +123,7 @@ func (m *model) entries() []entry {
 			if e.busy = v.busy; e.busy {
 				e.since = v.turnStart
 			}
-			if slices.Contains(m.agentLine.Left, "activity") || slices.Contains(m.agentLine.Right, "activity") {
+			if m.usesActivity {
 				e.activity, _ = v.tr.Running()
 			}
 			held = len(v.unsent) > 0
@@ -142,7 +142,7 @@ func (m *model) entries() []entry {
 // elapsedTicks reports whether an entry shows a clock, which needs the screen
 // redrawn on every tick.
 func (m *model) elapsedTicks() bool {
-	if !slices.Contains(m.agentLine.Left, "elapsed") && !slices.Contains(m.agentLine.Right, "elapsed") {
+	if !m.usesElapsed {
 		return false
 	}
 	return slices.ContainsFunc(m.entries(), func(e entry) bool { return !e.since.IsZero() })
