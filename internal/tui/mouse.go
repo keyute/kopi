@@ -133,6 +133,9 @@ func (m *model) press(mo tea.Mouse) tea.Cmd {
 	n := m.clicks.press(time.Now(), mo.X, mo.Y)
 	for _, a := range m.geo.fields {
 		if mo.Y >= a.y && mo.Y < a.y+a.h && mo.X >= a.x {
+			if a.c == &m.composer {
+				m.focus = agentFocus{}
+			}
 			var cmd tea.Cmd
 			if m.dialog != nil {
 				cmd = m.dialog.pick(a.c)

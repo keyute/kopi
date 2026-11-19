@@ -252,6 +252,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		}
 		return m.paste(msg.Content)
 	case imagePastedMsg:
+		m.focus = agentFocus{}
 		return m.composer.insertImage(msg.path)
 	case pasteFailedMsg:
 		return m.flash("paste failed")

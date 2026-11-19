@@ -1309,6 +1309,35 @@ func TestBadImageRefusesInput(t *testing.T) {
 	assert.Empty(t, ofType[event.QueueChanged](h.rec.all()))
 }
 
+func TestControlOnUnknownTargetValidatesImagesBeforeRecordingAndRunning(t *testing.T) {
+	for _, now := range []bool{false, true} {
+		t.Run(map[bool]string{false: "submit", true: "send-now"}[now], func(t *testing.T) {
+			h, _ := openHarness(t, Config{History: historyStore(t)})
+			submit := func(images ...string) error {
+				if now {
+					return h.c.SendNow(t.Context(), "t99", "/execute", images...)
+				}
+				w, err := h.c.Submit(t.Context(), "t99", "/execute", images...)
+				assert.Nil(t, w)
+				return err
+			}
+
+			require.ErrorIs(t, submit(filepath.Join(t.TempDir(), "missing.png")), ErrBadImage)
+			assert.Empty(t, h.c.History())
+			assert.Equal(t, policy.Plan, h.c.Status().Mode)
+			require.NoError(t, submit())
+			assert.Equal(t, []string{"/execute"}, h.c.History())
+			assert.Equal(t, policy.Execute, h.c.Status().Mode)
+
+			require.NoError(t, h.c.Close(t.Context()))
+			require.ErrorIs(t, submit(), ErrNoSession)
+			w, err := h.c.Submit(t.Context(), "t99", "  ")
+			require.NoError(t, err)
+			assert.Nil(t, w)
+		})
+	}
+}
+
 func TestImageReachesProvider(t *testing.T) {
 	h, _ := openHarness(t, Config{})
 	requests := make(chan pigruntimetest.Request, 1)

@@ -1371,6 +1371,54 @@ func TestSlashCommandSubmittedToAChildActsOnTheMainSession(t *testing.T) {
 	assert.NotEmpty(t, receiveEvent(t, changed).SessionID)
 }
 
+func TestControlsIgnoreUnknownAndStaleSessionTargets(t *testing.T) {
+	for _, now := range []bool{false, true} {
+		for _, stale := range []bool{false, true} {
+			t.Run(fmt.Sprintf("now=%t/stale=%t", now, stale), func(t *testing.T) {
+				started := make(chan struct{}, 1)
+				cfg := skillConfig("skill", "a")
+				cfg.AgentTools = []tool.Tool{blockingTool(started)}
+				a := newAgentHarness(t, pigruntimetest.NewSandbox(t), cfg, agentDef("explorer"))
+				id := "t99"
+				if stale {
+					a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1"))})
+					id = a.launch(t, "explorer", "find it", "go")
+					wait(t, started)
+					require.NoError(t, a.c.NewSession(t.Context()))
+					require.Nil(t, a.childOf(id))
+				}
+				submit := func(text string) error {
+					if now {
+						return a.c.SendNow(t.Context(), id, text)
+					}
+					w, err := a.c.Submit(t.Context(), id, text)
+					assert.Nil(t, w)
+					return err
+				}
+
+				for _, text := range []string{"hello", "//quit", "/skill:a", "/nope"} {
+					assert.ErrorIs(t, submit(text), tool.ErrUnknownTask, text)
+				}
+				assert.ErrorIs(t, submit("/quit"), ErrQuit)
+				assert.ErrorIs(t, submit("/tasks"), ErrShowTasks)
+				require.NoError(t, submit("/execute"))
+				assert.Equal(t, policy.Execute, a.c.Status().Mode)
+				a.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("saved")})
+				a.turn(t, "save this session")
+				savedID := a.c.Status().SessionID
+				changed := subscribeTo[event.SessionChanged](a.c)
+				require.NoError(t, submit("/new"))
+				assert.NotEqual(t, savedID, receiveEvent(t, changed).SessionID)
+				assertSwitchDone(t, a.harness)
+				require.NoError(t, submit("/resume "+savedID))
+				assert.Equal(t, savedID, receiveEvent(t, changed).SessionID)
+				assertSwitchDone(t, a.harness)
+				assert.Equal(t, 1, a.faux.CallCount())
+			})
+		}
+	}
+}
+
 func TestUnknownSessionIsRefused(t *testing.T) {
 	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
 

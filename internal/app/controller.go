@@ -513,6 +513,9 @@ func (c *Controller) input(ctx context.Context, session, text string, paths []st
 	if closed {
 		return nil, ErrNoSession
 	}
+	if name, _, isCommand := parse(text); isCommand && isControl(name) {
+		session = Main
+	}
 	target, err := c.runnerOf(session)
 	if err != nil {
 		return nil, err
