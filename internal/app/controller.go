@@ -78,6 +78,9 @@ type Config struct {
 	// tools; Agent, SendMessage, TaskOutput, TaskStop and ToolSearch are never
 	// given to one.
 	AgentTools []tool.Tool
+	// Plans is the root session's plan file; nil means there is none, and no
+	// ExitPlanMode tool.
+	Plans *tool.Plans
 }
 
 const maxReferenceEntries = 10000
@@ -133,6 +136,9 @@ type Controller struct {
 	// hold, guarded by queue, keeps notices from waking the model after an
 	// Interrupt until a human prompt starts a turn.
 	hold bool
+	// told is the last mode line delivered to the model in the current session;
+	// "" when none was, or when one was not delivered. queue guards it.
+	told string
 	// children are the subagents of the current session by task id, and live
 	// counts the running ones; both are guarded by queue.
 	children map[string]*child
@@ -165,6 +171,9 @@ type Controller struct {
 	// question is the AskUserQuestion call waiting for AnswerQuestion; nil when none is.
 	question    *pendingQuestion
 	questionSeq uint64
+	// plan is the ExitPlanMode call waiting for AnswerPlan; nil when none is.
+	plan    *pendingPlan
+	planSeq uint64
 	// login is the running login; nil when none is. A login and a turn or a
 	// running subagent never run together: each is refused while the other is
 	// registered. The login's questions and an approval would otherwise share
@@ -237,6 +246,9 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	tools := slices.Clone(c.cfg.Tools)
 	if ask := tool.NewAskUserQuestion(c.askQuestion); !c.cfg.Unattended && !c.cfg.Rules.Removes(ask.Name) {
 		tools = append(tools, ask)
+	}
+	if exit := tool.NewExitPlanMode(c.cfg.Plans, c.reviewPlan); c.cfg.Plans != nil && !c.cfg.Unattended && !c.cfg.Rules.Removes(exit.Name) {
+		tools = append(tools, exit)
 	}
 	var search []tool.Tool
 	if small := c.SmallModel(); small != "" && c.rt.CanSearch(small) && !c.cfg.Rules.Removes("WebSearch") {
@@ -702,6 +714,9 @@ func (c *Controller) stop(w *Work, emit func(event.Event)) {
 	if c.question != nil && c.question.work == w {
 		c.question = nil
 	}
+	if c.plan != nil && c.plan.work == w {
+		c.plan = nil
+	}
 	c.mu.Unlock()
 	w.cancel()
 }
@@ -879,6 +894,7 @@ func (c *Controller) stopTasks(ctx context.Context) error {
 func (c *Controller) startTurn(ctx context.Context, parts []pigruntime.Prompt) *Work {
 	sess, emit := c.sess, c.emit
 	notices := c.takeNotices()
+	parts = c.tell(parts)
 	if len(parts) > 0 {
 		c.hold = false
 	}
@@ -926,7 +942,11 @@ func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session
 		if !closed {
 			c.requeue(res.UndeliveredNotices)
 		}
+		if res.ModeUndelivered {
+			c.told = ""
+		}
 		next, unsent := settle(w.stopped, cancelled, res.Outcome, res.Sent, parts, res.Undelivered, w.handBack, c.pending)
+		c.untell(next, unsent)
 		if !w.stopped {
 			c.take(emit)
 		}
@@ -936,7 +956,7 @@ func (c *Controller) runTurn(base, ctx context.Context, sess *pigruntime.Session
 		if len(next) > 0 || wake {
 			ctx, w.cancel = context.WithCancel(base)
 			w.sendCtx = ctx
-			parts = next
+			parts = c.tell(next)
 			notices = c.takeNotices()
 			emit(event.TurnEnd{WorkID: w.id, Outcome: res.Outcome, Elapsed: elapsed})
 			emit(event.TurnStart{WorkID: w.id, Prompt: joined(parts).Text})
@@ -975,7 +995,7 @@ func (c *Controller) pull(ctx context.Context, emit func(event.Event)) func() ([
 		if ctx.Err() != nil {
 			return nil, nil
 		}
-		prompts := c.take(emit)
+		prompts := c.tell(c.take(emit))
 		if len(prompts) == 0 && !c.waking() {
 			return nil, nil
 		}
@@ -1028,8 +1048,12 @@ func joined(ps []pigruntime.Prompt) pigruntime.Prompt {
 	texts := make([]string, 0, len(ps))
 	var images []pigruntime.Image
 	var skills []string
+	var mode string
 	for _, p := range ps {
 		texts = append(texts, p.Text)
+		if p.Mode != "" {
+			mode = p.Mode
+		}
 		images = append(images, p.Images...)
 		for _, sk := range p.Skills {
 			if !slices.Contains(skills, sk) {
@@ -1037,7 +1061,7 @@ func joined(ps []pigruntime.Prompt) pigruntime.Prompt {
 			}
 		}
 	}
-	return pigruntime.Prompt{Text: strings.Join(texts, "\n\n"), Images: images, Skills: skills}
+	return pigruntime.Prompt{Text: strings.Join(texts, "\n\n"), Images: images, Skills: skills, Mode: mode}
 }
 
 func inputs(ps []pigruntime.Prompt) []event.Input {
@@ -1217,6 +1241,12 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	}
 	unsubscribe := sess.Subscribe(emit)
 	id := sess.ID()
+	var planErr error
+	if c.cfg.Plans != nil {
+		if err := c.cfg.Plans.Select(id); err != nil {
+			planErr = fmt.Errorf("failed to select the plan file: %w", err)
+		}
+	}
 	c.queue.Lock()
 	c.mu.Lock()
 	if old != nil {
@@ -1224,6 +1254,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		c.hold = false
 	}
 	c.sess, c.sessID, c.emit, c.unsubscribe = sess, id, emit, unsubscribe
+	c.told = ""
 	c.deferred = nil
 	c.mu.Unlock()
 	c.queue.Unlock()
@@ -1239,6 +1270,9 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 	}
 	c.relay.emit(changed)
+	if planErr != nil {
+		c.relay.emit(event.Error{Err: planErr})
+	}
 	for _, ev := range c.startup {
 		c.relay.emit(ev)
 	}

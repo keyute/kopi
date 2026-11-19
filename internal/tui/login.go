@@ -47,28 +47,14 @@ func loginRows(d *dialog, width, maxFieldRows, maxRows int, th theme) []string {
 		return rows
 	}
 	if maxRows < 3 {
-		d.areas = nil
-		if maxRows == 2 {
-			return []string{rows[0], rows[len(rows)-1]}
-		}
-		return rows[:maxRows]
+		return squeeze(d, rows, maxRows)
 	}
 	if d.options[0].field == nil {
 		return pinnedRows(d, rows, width, maxRows, th)
 	}
 	room := maxRows - 2
 	start := min(d.optionStarts[d.sel], len(rows)-1-room)
-	end := start + room
-	var areas []fieldArea
-	for _, fa := range d.areas {
-		top, bottom := max(fa.y, start), min(fa.y+fa.h, end)
-		if top < bottom {
-			fa.y, fa.h = top-start+1, bottom-top
-			areas = append(areas, fa)
-		}
-	}
-	d.areas = areas
-	return append(append([]string{rows[0]}, rows[start:end]...), rows[len(rows)-1])
+	return clip(d, rows, 1, start, start+room)
 }
 
 // pinnedRows is rows for a dialog of plain options within maxRows (3 or more):

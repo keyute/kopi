@@ -204,11 +204,17 @@ func (q *questionDialog) hint(cut bool) string {
 		parts = append([]string{"←/→ to switch questions"}, parts...)
 	}
 	if cut {
-		if up, down := km.pageUp.Keys(), km.pageDown.Keys(); len(up) > 0 && len(down) > 0 {
-			parts = append([]string{up[0] + "/" + down[0] + " to scroll"}, parts...)
-		}
+		parts = append([]string{scrollHint(km)}, parts...)
 	}
 	return strings.Join(slices.DeleteFunc(parts, isEmpty), " · ")
+}
+
+// scrollHint is "<page up>/<page down> to scroll", empty unless both are bound.
+func scrollHint(km *keyMap) string {
+	if up, down := km.pageUp.Keys(), km.pageDown.Keys(); len(up) > 0 && len(down) > 0 {
+		return up[0] + "/" + down[0] + " to scroll"
+	}
+	return ""
 }
 
 func isEmpty(s string) bool { return s == "" }
@@ -296,17 +302,7 @@ func (q *questionDialog) rows(width, maxPreview, maxRows int, th theme) []string
 	}
 	room := maxRows - head - 1
 	start := max(head, min(d.optionStarts[d.sel], len(rows)-1-room))
-	end := start + room
-	var areas []fieldArea
-	for _, fa := range d.areas {
-		top, bottom := max(fa.y, start), min(fa.y+fa.h, end)
-		if top < bottom {
-			fa.y, fa.h = top-start+head, bottom-top
-			areas = append(areas, fa)
-		}
-	}
-	d.areas = areas
-	return append(append(slices.Clone(rows[:head]), rows[start:end]...), rows[len(rows)-1])
+	return clip(d, rows, head, start, start+room)
 }
 
 // window is lines within room rows from the scroll offset; the last row

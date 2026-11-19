@@ -871,6 +871,44 @@ func TestSendHandsOverSkillsWithPrompt(t *testing.T) {
 	assert.Equal(t, []event.Event{event.UserMessage{Text: "x"}}, drain(evs))
 }
 
+func TestSendQueuesModeAfterSkillsBeforeNotices(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "done")})
+	sess := openTestSession(t, r)
+	evs := recordDelivered(t, sess)
+	n := testNotice("t1")
+
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt", Skills: []string{"S"}, Mode: "M"}, []Notice{n}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, event.Completed, res.Outcome.Status)
+	assert.Equal(t, []string{"prompt", "S", "M", n.Text}, userTexts(<-requests))
+	assert.Equal(t, []event.Event{n.Shown}, drain(evs))
+	require.NoError(t, sess.Close(t.Context()))
+	assert.Equal(t, []event.Event{
+		event.TurnStart{Prompt: "prompt"},
+		n.Shown,
+		event.TextDelta{Text: "done"},
+	}, resume(t, r, sess.ID()).History())
+}
+
+func TestSendHandsOverModeWithPrompt(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done")})
+	sess := openTestSession(t, r, probeTool(okProbe))
+	evs := recordDelivered(t, sess)
+	more, _ := moreOnce(Prompt{Text: "x", Skills: []string{"S"}, Mode: "M"})
+
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
+	require.NoError(t, err)
+	assert.Equal(t, event.Completed, res.Outcome.Status)
+	assert.Equal(t, []string{"prompt", "x", "S", "M"}, userTexts(<-requests))
+	assert.Equal(t, []event.Event{event.UserMessage{Text: "x"}}, drain(evs))
+}
+
 func TestRootAndChildSessionsSendConcurrently(t *testing.T) {
 	r, rootFaux := newTestRuntime(t, newSandbox(t))
 	childFaux := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "kopi-faux-child", Model: "faux-1"})

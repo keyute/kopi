@@ -26,6 +26,7 @@ const (
 	errorItem
 	turnItem
 	taskItem
+	planItem
 )
 
 type item struct {
@@ -35,6 +36,8 @@ type item struct {
 	outcome event.Outcome
 	elapsed time.Duration
 	task    event.TaskEnded
+	// token is a planItem's ExitPlanMode call.
+	token uint64
 }
 
 // visible reports whether the item draws a block; whitespace-only assistant
@@ -88,6 +91,14 @@ func (t *Transcript) Apply(ev event.Event) {
 		t.items = append(t.items, item{kind: turnItem, outcome: ev.Outcome, elapsed: ev.Elapsed})
 	case event.TaskEnded:
 		t.items = append(t.items, item{kind: taskItem, task: ev})
+	case event.PlanRequested:
+		for i := range t.items {
+			if t.items[i].kind == planItem && t.items[i].token == ev.Token {
+				t.items[i].text = ev.Plan
+				return
+			}
+		}
+		t.items = append(t.items, item{kind: planItem, token: ev.Token, text: ev.Plan})
 	}
 }
 

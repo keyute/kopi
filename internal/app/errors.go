@@ -13,6 +13,8 @@ var (
 	ErrUnknownCommand   = errors.New("unknown command")
 	ErrNoSession        = errors.New("no open session")
 	ErrWorkStillRunning = errors.New("work is still running")
+	ErrOpenPlan         = errors.New("plan file requested")
+	ErrUnknownArgument  = errors.New("unknown argument")
 	ErrMissingArgument  = errors.New("missing argument")
 	ErrLoggingIn        = errors.New("a login is under way")
 	ErrTooManyAgents    = fmt.Errorf("%d subagents are already running", maxAgents)

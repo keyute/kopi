@@ -34,6 +34,13 @@ type Controller interface {
 	// AnswerQuestion answers the pending questions for token, one answer per
 	// question; nil dismisses them. False when it is stale.
 	AnswerQuestion(token uint64, answers []tool.Answer) bool
+	// AnswerPlan answers the pending plan for token; false when it is stale.
+	AnswerPlan(token uint64, a tool.PlanAnswer) bool
+	// RefreshPlan reads the plan file again, for after the human edited it,
+	// and repeats the plan's request; false when it is stale.
+	RefreshPlan(token uint64) bool
+	// PlanFile is the session's plan file, "" when it has none.
+	PlanFile() string
 	ToggleMode()
 	History() []string
 	Status() app.Status
@@ -116,7 +123,9 @@ func (f *Frontend) Run(ctx context.Context, interrupts <-chan os.Signal) error {
 				p.Quit()
 				return
 			case <-interrupts:
-				p.Send(interruptMsg{})
+				if !m.editing.Load() {
+					p.Send(interruptMsg{})
+				}
 			}
 		}
 	}()

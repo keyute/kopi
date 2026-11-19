@@ -199,7 +199,7 @@ func TestCommandTextIsSentAsPrompt(t *testing.T) {
 	require.NoError(t, h.wait(t))
 	select {
 	case req := <-requests:
-		assert.Equal(t, []string{"/execute"}, req.UserTexts)
+		assert.Equal(t, []string{"/execute", "The session is in plan mode."}, req.UserTexts)
 	case <-time.After(waitLimit):
 		t.Fatal("timed out waiting for a provider request")
 	}

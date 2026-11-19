@@ -29,16 +29,17 @@
 
 - Every model-facing tool goes through `internal/policy`: `Gate.Before` in the pre-dispatch hook and `Gate.Admit` inside execution.
 - Skills load only from `$KOPI_HOME/skills`, `~/.agents/skills` and a trusted folder's `.agents/skills`; the `Skill` tool reads only a loaded skill's text and files inside the directory that skill was loaded from, and on every read refuses a file in Kopi's home outside `skills/`.
-- Subagent definitions load only from `$KOPI_HOME/agents`, once at startup. A subagent's session has its own gate over the same rules and shares the mode holder unless its definition pins plan mode. A subagent never gets `Agent`, `SendMessage`, `AskUserQuestion`, `TaskOutput` or `TaskStop`, and its `Bash` never backgrounds.
-- Only human control input changes mode. Sessions start and resume in the configured `mode` (default plan); `--mode` overrides the config file.
+- Subagent definitions load only from `$KOPI_HOME/agents`, once at startup. A subagent's session has its own gate over the same rules and shares the mode holder unless its definition pins plan mode. A subagent never gets `Agent`, `SendMessage`, `AskUserQuestion`, `ExitPlanMode`, `TaskOutput` or `TaskStop`, never reaches the plan file, and its `Bash` never backgrounds.
+- Only human control input changes mode: `/plan`, `/execute`, Shift+Tab and Yes in the `ExitPlanMode` dialog. Sessions start and resume in the configured `mode` (default plan); `--mode` overrides the config file.
 - MCP servers start only from `mcpServers` in `config.json` and from a trusted folder's `.mcp.json`. Every MCP tool call asks unless a rule allows it or the opt-in classifier reviews an unmatched call; deny rules take precedence, and explicit and built-in ask rules always ask the human. A tool is Read only when its server marks it read-only.
 - `$KOPI_HOME/AGENTS.md` always loads. Project instruction files (`AGENTS.md`, else the first name in `instructionFallbacks`, one per directory from the git root down to the start directory) load only from a trusted folder.
-- File-modifying tools act only through `tool.Workspace` (os.Root confinement, Kopi's home refused before any side effect) and the permission rules. `Bash` runs commands only through `tool.Shell`: under the OS sandbox when it is enabled or available, otherwise only after approval or an allow rule. In plan mode `Bash` runs only under the sandbox's plan profile (workspace read-only), chosen from the mode `Gate.Admit` returns; without the sandbox, plan mode refuses it.
+- File-modifying tools act only through `tool.Workspace` (os.Root confinement, Kopi's home refused before any side effect, except the root session's plan file `$KOPI_HOME/plans/<session id>.md`, which the root's `Read`, `Write` and `Edit` reach in both modes without a default ask) and the permission rules. `Bash` runs commands only through `tool.Shell`: under the OS sandbox when it is enabled or available, otherwise only after approval or an allow rule. In plan mode `Bash` runs only under the sandbox's plan profile (workspace read-only), chosen from the mode `Gate.Admit` returns; without the sandbox, plan mode refuses it.
 
 ## State
 
 - Kopi reads and writes only under its home (`$KOPI_HOME`, default `~/.kopi`). Never read or write `~/.pi`, `~/.pig`, `~/.claude` or any other tool's store, in code or in tests. A shared place outside the project (see Built in or configured), such as `~/.agents/skills`, is not another tool's store; Kopi only reads it.
 - `trust.json` under Kopi's home holds trust decisions; the binary never writes `config.json`.
+- `plans/` under Kopi's home holds one plan file per root session; Kopi never deletes them.
 - Tests use `t.TempDir()`, synthetic credentials and no network, and synchronise on channels, never sleeps.
 
 ## Built in or configured

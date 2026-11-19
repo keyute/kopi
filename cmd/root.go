@@ -127,8 +127,8 @@ func permissionRules(cwd, home string, tools []tool.Tool, perms config.Permissio
 		{Name: origins["permissions.ask"], Ask: perms.Ask},
 		{Name: origins["permissions.deny"], Deny: perms.Deny},
 	}
-	// ToolSearch, Skill, WebSearch, AskUserQuestion, Agent and SendMessage are known to rules even when the session lacks them.
-	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil), tool.NewSkill(nil, ""), tool.NewWebSearch(nil), tool.NewAskUserQuestion(nil), tool.NewAgent(nil, nil), tool.NewSendMessage(nil)}))
+	// ToolSearch, Skill, WebSearch, AskUserQuestion, ExitPlanMode, Agent and SendMessage are known to rules even when the session lacks them.
+	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil), tool.NewSkill(nil, ""), tool.NewWebSearch(nil), tool.NewAskUserQuestion(nil), tool.NewExitPlanMode(nil, nil), tool.NewAgent(nil, nil), tool.NewSendMessage(nil)}))
 	rules, err := policy.NewRules(cwd, home, specs, append(sources, flagRules...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load permission rules: %w", err)
@@ -348,6 +348,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			ws.Close()
 		}
 	}()
+	plans := tool.NewPlans(paths.PlansDir)
 	tasks := tool.NewTasks()
 	// Commands run in their own session, so they would otherwise outlive Kopi.
 	defer tasks.StopAll()
@@ -373,9 +374,11 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	var rules *policy.Rules
 	hidden := func(name string, root, t policy.Target) bool { return rules.Hides(name, root, t) }
 	shell, planShell := tool.NewShell(cwd, sb), tool.NewShell(cwd, planSB)
+	// Only the root's file tools reach the plan file.
+	rootWS := ws.WithPlans(plans)
 	tools := []tool.Tool{
-		tool.NewRead(ws), tool.NewGlob(ws, hidden), tool.NewGrep(ws, hidden), tool.NewLS(ws, hidden),
-		tool.NewWrite(ws), tool.NewEdit(ws), tool.NewBash(shell, planShell, tasks),
+		tool.NewRead(rootWS), tool.NewGlob(ws, hidden), tool.NewGrep(ws, hidden), tool.NewLS(ws, hidden),
+		tool.NewWrite(rootWS), tool.NewEdit(rootWS), tool.NewBash(shell, planShell, tasks),
 		tool.NewTaskOutput(tasks), tool.NewTaskStop(tasks),
 		tool.NewWebFetch("Kopi/"+kopiVersion(), answer),
 	}
@@ -472,16 +475,13 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		Errors: slices.Concat(set.errs, instructionErrs, skillErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review,
 		Skills: skills, SkillPrefix: resolved.Config.Skills.Prefix,
 	}
+	// Print mode has no plan approval, so its session has no plan file.
+	if fullscreen {
+		cfg.Plans = plans
+	}
 	if len(agents) > 0 {
 		cfg.Agents = agents
-		for _, t := range tools {
-			switch t.Name {
-			case "Bash":
-				cfg.AgentTools = append(cfg.AgentTools, tool.NewBash(shell, planShell, nil))
-			default:
-				cfg.AgentTools = append(cfg.AgentTools, t)
-			}
-		}
+		cfg.AgentTools = agentTools(tools, ws, shell, planShell)
 	}
 	if len(set.servers) > 0 {
 		cfg.Servers = func(ctx context.Context) ([]pigruntime.ServerStatus, error) { return waitServers(ctx, servers) }
@@ -556,6 +556,27 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		closeErr = fmt.Errorf("running work did not stop before exit: %w", closeErr)
 	}
 	return errors.Join(runErr, closeErr)
+}
+
+// agentTools is tools with the file and shell tools rebound for a subagent.
+// ws is the plain workspace: only the root's own file tools reach the plan file.
+func agentTools(tools []tool.Tool, ws *tool.Workspace, shell, planShell *tool.Shell) []tool.Tool {
+	var out []tool.Tool
+	for _, t := range tools {
+		switch t.Name {
+		case "Bash":
+			out = append(out, tool.NewBash(shell, planShell, nil))
+		case "Read":
+			out = append(out, tool.NewRead(ws))
+		case "Write":
+			out = append(out, tool.NewWrite(ws))
+		case "Edit":
+			out = append(out, tool.NewEdit(ws))
+		default:
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // skippedList joins parts as "A are", "A and B are" or "A, B and C are"; each

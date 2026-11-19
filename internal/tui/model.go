@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -58,6 +60,9 @@ type model struct {
 	c       Controller
 	bridge  *bridge
 	version string
+	// editing is set while an editor runs in the terminal, whose SIGINT is not
+	// a cancel; the signal goroutine reads it.
+	editing atomic.Bool
 
 	th            theme
 	themes        Themes
@@ -72,6 +77,9 @@ type model struct {
 	geo           geometry
 	clip          clipboard
 	imageDir      string
+	// getenv and execProcess are os.Getenv and tea.ExecProcess, replaced in tests.
+	getenv      func(string) string
+	execProcess func(*exec.Cmd, tea.ExecCallback) tea.Cmd
 
 	tr    transcript.Transcript
 	folds folds
@@ -122,10 +130,11 @@ type model struct {
 	// login is the pending login question, whose prompt is dialog too.
 	login *event.LoginRequested
 	// question is the pending AskUserQuestion dialog, whose current page is
-	// dialog too.
+	// dialog too; plan is the pending ExitPlanMode dialog.
 	question *questionDialog
 	dialog   *dialog
 	tasks    *taskDialog
+	plan     *planDialog
 	prompt   []string
 	menu     menu
 	// seen is the draft and cursor syncInput last reconciled.
@@ -156,6 +165,7 @@ func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model
 	}
 	m.composer.setHistory(c.History())
 	m.home, _ = os.UserHomeDir()
+	m.getenv, m.execProcess = os.Getenv, tea.ExecProcess
 	return m
 }
 
@@ -206,6 +216,8 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return m.autoScroll()
 	case interruptMsg:
 		return m.cancel()
+	case editorDoneMsg:
+		m.editorDone(msg)
 	case flashMsg:
 		if msg.seq == m.flashSeq {
 			m.flashText, m.exitArmed = "", false
@@ -219,7 +231,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			}
 			return nil
 		}
-		if m.approval == nil && m.question == nil && m.tasks == nil {
+		if m.approval == nil && m.question == nil && m.plan == nil && m.tasks == nil {
 			return m.paste(msg.text)
 		}
 		return nil
@@ -271,6 +283,9 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	if m.question != nil {
 		return m.questionKey(msg)
+	}
+	if m.plan != nil {
+		return m.planKey(msg)
 	}
 	if m.login != nil {
 		return m.loginKey(msg)
@@ -363,11 +378,14 @@ func (m *model) dropApprovals(drop func(event.ApprovalRequested) bool) {
 		return
 	}
 	m.approval, m.dialog, m.approvalQueue = nil, nil, nil
-	if len(keep) > 0 {
+	switch {
+	case len(keep) > 0:
 		next := keep[0]
 		m.approval, m.dialog, m.approvalQueue = &next, newApprovalDialog(&next, &m.keys, m.th), keep[1:]
-	} else if m.question != nil {
+	case m.question != nil:
 		m.dialog = m.question.current()
+	case m.plan != nil:
+		m.dialog = m.plan.d
 	}
 }
 
@@ -471,6 +489,9 @@ func (m *model) submitted(err error) tea.Cmd {
 	case errors.Is(err, app.ErrShowTasks):
 		m.composer.reset()
 		return m.showTasks()
+	case errors.Is(err, app.ErrOpenPlan):
+		m.composer.reset()
+		return m.openEditor(m.c.PlanFile())
 	case err == nil:
 		m.composer.reset()
 	case errors.Is(err, app.ErrBusy):
@@ -545,6 +566,7 @@ func (m *model) apply(ev event.Event) {
 		m.queued = nil
 		m.dropApprovals(func(event.ApprovalRequested) bool { return true })
 		m.endQuestion()
+		m.endPlan()
 		m.tasks = nil
 		return
 	case event.TasksChanged:
@@ -574,6 +596,19 @@ func (m *model) apply(ev event.Event) {
 			m.endQuestion()
 		}
 		return
+	case event.PlanRequested:
+		// A repeat after an edit keeps the dialog and what was typed in it.
+		if m.plan == nil || m.plan.token != ev.Token {
+			m.plan, m.tasks = newPlanDialog(ev, &m.keys, m.th), nil
+			if m.approval == nil {
+				m.dialog = m.plan.d
+			}
+		}
+	case event.PlanEnded:
+		if m.plan != nil && m.plan.token == ev.Token {
+			m.endPlan()
+		}
+		return
 	case event.LoginRequested:
 		m.login, m.dialog, m.tasks = &ev, newLoginDialog(ev, &m.keys, m.th), nil
 		return
@@ -599,6 +634,7 @@ func (m *model) apply(ev event.Event) {
 		m.busy = false
 		m.dropApprovals(func(a event.ApprovalRequested) bool { return a.Agent == "" })
 		m.endQuestion()
+		m.endPlan()
 		m.composer.restore(ev.Unsent)
 		return
 	}
@@ -694,6 +730,9 @@ func (m *model) place() {
 	case m.question != nil:
 		m.prompt = m.question.rows(m.width, max(2, m.height/3), free+2, m.th)
 		input = len(m.prompt) - 2
+	case m.plan != nil:
+		m.prompt = planRows(m.dialog, m.width, max(2, m.height/3), free+2, m.th)
+		input = len(m.prompt) - 2
 	case m.login != nil:
 		m.prompt = loginRows(m.dialog, m.width, max(2, m.height/3), free+2, m.th)
 		input = len(m.prompt) - 2
@@ -715,7 +754,7 @@ func (m *model) place() {
 	// The +1 is the shaded top row that the composer and the prompt both draw.
 	m.geo.composerTop = m.geo.transcript + len(rows) + 1
 	switch {
-	case m.approval != nil || m.login != nil || m.question != nil:
+	case m.approval != nil || m.login != nil || m.question != nil || m.plan != nil:
 		rows = append(rows, m.prompt...)
 		if len(m.prompt) > 0 {
 			// The prompt's first row is the composer's top shaded row; with

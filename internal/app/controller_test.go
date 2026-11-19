@@ -83,6 +83,10 @@ type harness struct {
 	faux  *ai.FauxProviderHandle
 	rec   *recorder
 	tasks *fakeTasks
+	// showModeLine stops buildHarness marking each new session's mode line told.
+	showModeLine func()
+	// read counts the user messages userTexts has already returned.
+	read int
 }
 
 // newHarness builds a controller over a fresh runtime on sb. Its cleanup
@@ -129,7 +133,17 @@ func buildHarness(t *testing.T, rt *pigruntime.Runtime, faux *ai.FauxProviderHan
 	rec := &recorder{}
 	c.Subscribe(rec.add)
 	t.Cleanup(func() { assert.NoError(t, c.Close(context.Background())) })
-	return &harness{c: c, faux: faux, rec: rec, tasks: tasks}
+	// A new session's first prompt carries a mode line. It would show in every
+	// test that reads the user messages the model received, so the harness
+	// marks it told; the tests of the line itself call showModeLine first.
+	mute := c.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.SessionChanged); ok {
+			c.queue.Lock()
+			c.told = modeLine(c.mode(), c.cfg.Plans.Path())
+			c.queue.Unlock()
+		}
+	})
+	return &harness{c: c, faux: faux, rec: rec, tasks: tasks, showModeLine: mute}
 }
 
 func openHarness(t *testing.T, cfg Config) (*harness, pigruntimetest.Sandbox) {
@@ -630,7 +644,7 @@ func TestPromptWhileBusyIsQueuedAndCommandRuns(t *testing.T) {
 	close(release)
 	wait(t, w.Done())
 	assert.False(t, h.c.Status().Busy)
-	assert.Equal(t, []string{"hold", "another prompt"}, receive(t, requests).UserTexts)
+	assert.Equal(t, []string{"hold", "another prompt", "The session is in execute mode."}, receive(t, requests).UserTexts)
 	evs := untimed(h.rec.all())
 	queuedAt := slices.IndexFunc(evs, func(ev event.Event) bool {
 		return assert.ObjectsAreEqual(event.QueueChanged{Pending: []string{"another prompt"}}, ev)
@@ -1298,7 +1312,7 @@ func TestSettle(t *testing.T) {
 
 func TestPullHandsNothingToCancelledSend(t *testing.T) {
 	a := pigruntime.Prompt{Text: "a"}
-	c := &Controller{pending: []pigruntime.Prompt{a}}
+	c := &Controller{authority: policy.NewAuthority(), pending: []pigruntime.Prompt{a}, told: modeLine(policy.Plan, "")}
 	emit := func(event.Event) {}
 
 	cancelled, cancel := context.WithCancel(t.Context())
@@ -2771,4 +2785,120 @@ func TestCommandsListSkillsAfterControlCommands(t *testing.T) {
 	}, cmds[n:])
 	assert.Equal(t, []Span{{Start: 0, End: 8, Kind: KindCommand}}, c.Spans("/skill:a"))
 	assert.Nil(t, c.Spans("/skill:z"))
+}
+
+// modeHarness opens a harness whose sessions have a plan file and tell the
+// model their mode, the way a real first prompt does.
+func modeHarness(t *testing.T) *harness {
+	t.Helper()
+	sb := pigruntimetest.NewSandbox(t)
+	plans := tool.NewPlans(filepath.Join(sb.Home, "plans"))
+	h := newHarness(t, sb, Config{Plans: plans})
+	h.showModeLine()
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	return h
+}
+
+func (h *harness) planLine() string {
+	return "The session is in plan mode. Its plan file is " + h.c.PlanFile() + "; Read, Write and Edit work on that file in both modes."
+}
+
+// userTexts sends each prompt as its own turn and returns the user messages the
+// model read in each.
+func (h *harness) userTexts(t *testing.T, prompts ...string) [][]string {
+	t.Helper()
+	requests := make(chan pigruntimetest.Request, len(prompts))
+	var steps []ai.FauxResponseStep
+	for range prompts {
+		steps = append(steps, pigruntimetest.Capture(t, requests, "ok"))
+	}
+	h.faux.SetResponses(steps)
+	var out [][]string
+	for _, p := range prompts {
+		h.turn(t, p)
+		// The model reads the whole conversation: keep what this prompt added.
+		texts := receive(t, requests).UserTexts
+		out = append(out, texts[h.read:])
+		h.read = len(texts)
+	}
+	return out
+}
+
+func TestFirstPromptCarriesTheModeLineOnce(t *testing.T) {
+	h := modeHarness(t)
+	assert.Equal(t, [][]string{{"hi", h.planLine()}, {"again"}}, h.userTexts(t, "hi", "again"))
+}
+
+func TestModeLineFollowsTheNextPromptAfterAChange(t *testing.T) {
+	h := modeHarness(t)
+	got := h.userTexts(t, "one")
+	h.c.ToggleMode()
+	got = append(got, h.userTexts(t, "two")...)
+	h.c.ToggleMode()
+	h.c.ToggleMode()
+	got = append(got, h.userTexts(t, "three")...)
+
+	assert.Equal(t, [][]string{{"one", h.planLine()}, {"two", "The session is in execute mode."}, {"three"}}, got)
+}
+
+func TestNewSessionGetsTheModeLineAgain(t *testing.T) {
+	h := modeHarness(t)
+	h.userTexts(t, "one")
+	oldPath := h.c.PlanFile()
+	require.NoError(t, h.c.NewSession(t.Context()))
+	require.NotEqual(t, oldPath, h.c.PlanFile())
+	h.read = 0
+
+	assert.Equal(t, [][]string{{"two", h.planLine()}}, h.userTexts(t, "two"))
+}
+
+func TestResumedSessionRestoresItsPlanFile(t *testing.T) {
+	h := modeHarness(t)
+	h.userTexts(t, "one")
+	writePlan(t, h, "# Plan\n")
+	oldPath, oldID := h.c.PlanFile(), h.c.Status().SessionID
+	require.NoError(t, h.c.NewSession(t.Context()))
+	require.NotEqual(t, oldPath, h.c.PlanFile())
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{ResumeID: oldID}))
+	h.read = 0
+
+	assert.Equal(t, oldPath, h.c.PlanFile())
+	assert.Equal(t, [][]string{{"one", h.planLine(), "two", h.planLine()}}, h.userTexts(t, "two"), "the resumed history, then the line told again")
+}
+
+func TestHeadlessPromptCarriesTheModeLine(t *testing.T) {
+	h := modeHarness(t)
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "ok")})
+
+	w, err := h.c.Prompt(t.Context(), "hi")
+	require.NoError(t, err)
+	wait(t, w.Done())
+
+	assert.Equal(t, []string{"hi", h.planLine()}, receive(t, requests).UserTexts)
+}
+
+func TestModeLineIsToldAgainWhenItsPromptWasNotDelivered(t *testing.T) {
+	c := &Controller{authority: policy.NewAuthority()}
+	line := modeLine(policy.Plan, "")
+	sent := c.tell([]pigruntime.Prompt{{Text: "a"}})
+	assert.Equal(t, line, sent[0].Mode)
+	assert.Empty(t, c.tell([]pigruntime.Prompt{{Text: "b"}})[0].Mode)
+
+	c.untell(sent)
+	assert.Equal(t, line, c.tell([]pigruntime.Prompt{{Text: "c"}})[0].Mode)
+}
+
+func TestOpenReportsPlanFileSelectionFailure(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	blocker := filepath.Join(sb.Home, "blocker")
+	require.NoError(t, os.WriteFile(blocker, nil, 0o600))
+	h := newHarness(t, sb, Config{Plans: tool.NewPlans(filepath.Join(blocker, "plans"))})
+
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+
+	errs := ofType[event.Error](h.rec.all())
+	require.Len(t, errs, 1)
+	assert.ErrorContains(t, errs[0].Err, "failed to select the plan file")
+	assert.Empty(t, h.c.PlanFile())
 }

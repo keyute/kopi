@@ -29,4 +29,6 @@ var (
 	ErrPageTooLarge         = errors.New("page is too large")
 	ErrEmptyPage            = errors.New("page has no text")
 	ErrTooManyRedirects     = errors.New("too many redirects")
+	ErrNotPlanMode          = errors.New("the session is not in plan mode")
+	ErrNoPlan               = errors.New("the plan file is missing or empty")
 )
