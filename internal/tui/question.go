@@ -29,8 +29,7 @@ const (
 )
 
 // questionDialog is the AskUserQuestion dialog, drawn in the composer's slot:
-// one page per question and, with several, a review page after them. The
-// model's dialog is current().
+// one page per question and, with several, a review page after them.
 type questionDialog struct {
 	token  uint64
 	qs     []tool.Question
@@ -612,16 +611,13 @@ func plainKey(msg tea.KeyPressMsg, code rune) bool {
 func (m *model) questionKey(msg tea.KeyPressMsg) tea.Cmd {
 	q := m.question
 	q.notice = ""
-	var cmd tea.Cmd
 	if q.tab == len(q.qs) {
-		cmd = m.reviewKey(msg)
-	} else if q.pages[q.tab].settle(); q.pages[q.tab].noting >= 0 {
-		cmd = m.noteKey(msg)
-	} else {
-		cmd = m.pageKey(msg)
+		return m.reviewKey(msg)
 	}
-	m.dialog = q.current()
-	return cmd
+	if q.pages[q.tab].settle(); q.pages[q.tab].noting >= 0 {
+		return m.noteKey(msg)
+	}
+	return m.pageKey(msg)
 }
 
 func (m *model) dismissQuestion() { m.c.AnswerQuestion(m.question.token, nil) }

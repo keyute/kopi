@@ -67,6 +67,7 @@
 ## TUI
 
 - Every screen ends with a footer: in a session, the status line with the agent rows under it while any show; key hints on a screen of its own. A dialog sits directly above the status line (or the key hints) and always draws both rules; do not add a dialog variant for what surrounds it.
+- Which prompt is in front is decided only by `front()` in `internal/tui/prompt.go`; no other code tests the per-kind fields to decide what shows or takes input.
 
 ## Style
 

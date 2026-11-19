@@ -362,7 +362,7 @@ func TestOneLiveSelection(t *testing.T) {
 	}
 	reason := surface{
 		func(_ *testing.T, m *model) { a := m.geo.fields[0]; dragRow(m, a.x, a.x+5, a.y) },
-		func(m *model) bool { return m.dialog.field().ta.HasSelection() },
+		func(m *model) bool { return m.frontDialog().field().ta.HasSelection() },
 	}
 	for _, tc := range []struct {
 		name          string
@@ -412,7 +412,7 @@ func TestReasonFieldDragCopies(t *testing.T) {
 	require.True(t, strings.HasPrefix(screen(m)[a.y], "❭ 3. No (esc)  alpha beta"))
 
 	assertCopied(t, m, dragRow(m, a.x, a.x+5, a.y), "alpha")
-	assert.Equal(t, "alpha", m.dialog.field().ta.SelectedText())
+	assert.Equal(t, "alpha", m.frontDialog().field().ta.SelectedText())
 	assert.True(t, m.sel.empty())
 }
 
@@ -428,10 +428,10 @@ func TestReasonFieldSelectionIsReplaced(t *testing.T) {
 
 				clickTimes(m, 2, a.x+7, a.y)
 				releaseAt(m, a.x+7, a.y)
-				require.Equal(t, "beta", m.dialog.field().ta.SelectedText())
+				require.Equal(t, "beta", m.frontDialog().field().ta.SelectedText())
 				replace(m)
 
-				assert.Equal(t, "alpha gamma", m.dialog.text())
+				assert.Equal(t, "alpha gamma", m.frontDialog().text())
 			})
 		})
 	}
@@ -447,10 +447,10 @@ func TestPressOnUnselectedFieldSelectsItsOption(t *testing.T) {
 	pressAt(m, a.x, a.y)
 	releaseAt(m, a.x, a.y)
 
-	assert.Equal(t, 2, m.dialog.sel)
+	assert.Equal(t, 2, m.frontDialog().sel)
 	assert.True(t, strings.HasPrefix(screen(m)[a.y], "❭ 3. No (esc)"))
 	keys(m, "hi")
-	assert.Equal(t, "hi", m.dialog.text(), "the cursor is in the field")
+	assert.Equal(t, "hi", m.frontDialog().text(), "the cursor is in the field")
 }
 
 func TestApprovalEndedDuringReasonDragCopiesNothing(t *testing.T) {

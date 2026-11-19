@@ -200,7 +200,7 @@ func TestPlanClosesOnEndTurnAndSessionChange(t *testing.T) {
 			m, _ := openPlan(t)
 			send(m, ev)
 			assert.Nil(t, m.plan)
-			assert.Nil(t, m.dialog)
+			assert.Nil(t, m.frontDialog())
 			assert.NotContains(t, strings.Join(screen(m), "\n"), "Approve this plan?")
 		})
 	}

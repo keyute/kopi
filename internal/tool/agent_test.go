@@ -47,8 +47,9 @@ func TestAgentDescribesItself(t *testing.T) {
 	assert.Equal(t, "Agent", tool.Name)
 	assert.Equal(t, "Agent", tool.Label)
 	assert.Equal(t, "A subagent is another agent with its own context, instructions and tools; it sees only the prompt it is given. "+
-		"A call returns at once with a task id while the subagent runs in the background; when it ends, you are told, with its final message. "+
-		"TaskOutput reads its progress, TaskStop stops it, and SendMessage sends it a further message. Subagents:\n"+
+		"A call returns at once with a task id while the subagent runs in the background. "+
+		"When it ends you are told, with its final message: within your turn, or in a new turn that its end starts if yours has ended. "+
+		"TaskOutput returns its activity so far, TaskStop stops it, and SendMessage sends it a further message. Subagents:\n"+
 		"explore: Finds things.\nreview: Reviews a change.", tool.Description)
 	assert.Equal(t, []string{"description", "prompt", "subagent_type"}, tool.Parameters["required"])
 	assert.Equal(t, false, tool.Parameters["additionalProperties"])
