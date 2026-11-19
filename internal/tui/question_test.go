@@ -354,7 +354,7 @@ func TestQuestionTypedAnswer(t *testing.T) {
 	m, c := openQuestion(t, qs)
 	press(m, down)
 	press(m, down)
-	assert.True(t, m.dialog.field().ta.Focused())
+	assert.True(t, m.frontDialog().field().ta.Focused())
 	typeKeys(m, "mine 2")
 	press(m, enter)
 	assert.Equal(t, []tool.Answer{{Custom: "mine 2"}}, sent(t, c, qs))
@@ -364,9 +364,9 @@ func TestQuestionTypedAnswer(t *testing.T) {
 func TestQuestionDigitMovesToTheCustomRow(t *testing.T) {
 	m, c := openQuestion(t, choice("db", false, "A", "B"))
 	press(m, digit('3'))
-	assert.True(t, m.dialog.field().ta.Focused())
+	assert.True(t, m.frontDialog().field().ta.Focused())
 	typeKeys(m, "1")
-	assert.Equal(t, "1", m.dialog.text(), "digits are text on the custom row")
+	assert.Equal(t, "1", m.frontDialog().text(), "digits are text on the custom row")
 	assert.Empty(t, c.questionAnswers)
 }
 
@@ -374,7 +374,7 @@ func TestQuestionCustomRowGoesBackUp(t *testing.T) {
 	m, _ := openQuestion(t, choice("db", false, "A", "B"))
 	press(m, digit('3'))
 	press(m, up)
-	assert.Equal(t, 1, m.dialog.sel)
+	assert.Equal(t, 1, m.frontDialog().sel)
 }
 
 func TestQuestionBlankEnterOnTheCustomRowShowsANotice(t *testing.T) {
@@ -479,10 +479,10 @@ func TestQuestionArrowsSwitchTabsAndKeepDrafts(t *testing.T) {
 	press(m, left)
 	assert.Equal(t, 0, m.question.tab)
 	assert.True(t, m.question.pages[0].picked[1], "the pick survives")
-	assert.Equal(t, 1, m.dialog.sel, "so does the focused row")
+	assert.Equal(t, 1, m.frontDialog().sel, "so does the focused row")
 	press(m, right)
 	assert.Equal(t, 2, m.question.pages[1].d.sel)
-	assert.True(t, m.dialog.field().ta.Focused())
+	assert.True(t, m.frontDialog().field().ta.Focused())
 }
 
 func TestQuestionReviewJumpsToTheFirstGap(t *testing.T) {
@@ -522,7 +522,7 @@ func TestQuestionNoteIsSavedAndSentWithThePick(t *testing.T) {
 	assert.Contains(t, strings.Join(screen(m), "\n"), "enter to save · esc to go back")
 	typeKeys(m, "because 1")
 	press(m, enter)
-	assert.Nil(t, m.dialog.options[0].field)
+	assert.Nil(t, m.frontDialog().options[0].field)
 	assert.Contains(t, strings.Join(screen(m), "\n"), "↳ note: because 1")
 	assert.Empty(t, c.questionAnswers, "enter in the editor only saves")
 
@@ -556,8 +556,8 @@ func TestQuestionNoteEditorNeverMovesBetweenOptions(t *testing.T) {
 	press(m, tab)
 	press(m, down)
 	press(m, digit('2'))
-	assert.Equal(t, 0, m.dialog.sel)
-	assert.Equal(t, "2", m.dialog.text())
+	assert.Equal(t, 0, m.frontDialog().sel)
+	assert.Equal(t, "2", m.frontDialog().text())
 }
 
 func TestQuestionNotesOnUnchosenOptionsAreNotSent(t *testing.T) {
@@ -622,7 +622,7 @@ func TestQuestionPasteGoesToTheFocusedFieldOnly(t *testing.T) {
 	assert.Equal(t, "pasted", m.question.pages[0].customText())
 	assert.Equal(t, "draft", m.composer.value())
 
-	m.Update(clipboardTextMsg{text: " more", field: m.dialog.field()})
+	m.Update(clipboardTextMsg{text: " more", field: m.frontDialog().field()})
 	assert.Equal(t, "pasted more", m.question.pages[0].customText())
 
 	m.Update(clipboardTextMsg{text: "stray"})
@@ -676,7 +676,7 @@ func TestQuestionEndsWithItsEventTurnEndOrSessionChange(t *testing.T) {
 		send(m, event.QuestionRequested{Token: 7, Questions: qs})
 		send(m, ev)
 		assert.Nil(t, m.question, "%T", ev)
-		assert.Nil(t, m.dialog)
+		assert.Nil(t, m.frontDialog())
 		assert.NotContains(t, strings.Join(screen(m), "\n"), "Which db?")
 		assert.Contains(t, strings.Join(screen(m), "\n"), "❯")
 	}

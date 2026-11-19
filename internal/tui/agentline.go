@@ -256,7 +256,7 @@ func (m *model) syncFocus() {
 		return
 	}
 	es := m.entries()
-	if m.geo.agents == 0 || len(es) == 0 || m.dialog != nil || m.tasks != nil {
+	if m.geo.agents == 0 || len(es) == 0 || m.front() != promptNone {
 		m.focus = agentFocus{}
 		return
 	}
