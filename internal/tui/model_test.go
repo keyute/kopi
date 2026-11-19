@@ -30,17 +30,18 @@ type fakeController struct {
 	calls []string
 	// sessions logs the session argument of every Submit, SendNow, TakeQueued
 	// and Interrupt, in call order.
-	sessions   []string
-	agents     []app.AgentStatus
-	status     app.Status
-	running    bool
-	interrupts int
-	submitted  []string
-	images     [][]string
-	submitErr  error
-	sentNow    []string
-	nowImages  [][]string
-	sendNowErr error
+	sessions     []string
+	agents       []app.AgentStatus
+	status       app.Status
+	running      bool
+	interrupts   int
+	submitted    []string
+	images       [][]string
+	submitErr    error
+	commandInput bool
+	sentNow      []string
+	nowImages    [][]string
+	sendNowErr   error
 	// queued is what TakeQueued hands out once; takes counts the calls.
 	queued     []event.Input
 	takes      int
@@ -140,6 +141,8 @@ func (f *fakeController) SendNow(_ context.Context, session, text string, images
 	f.nowImages = append(f.nowImages, images)
 	return f.sendNowErr
 }
+
+func (f *fakeController) IsCommand(string) bool { return f.commandInput }
 
 func (f *fakeController) TakeQueued(session string) []event.Input {
 	f.sessions = append(f.sessions, session)
@@ -663,6 +666,58 @@ func TestSubmitErrors(t *testing.T) {
 	cmd := submitText(m, "/quit")
 	require.NotNil(t, cmd)
 	assert.Equal(t, tea.QuitMsg{}, cmd())
+}
+
+func TestSubmittedErrorsRouteCommandsToMain(t *testing.T) {
+	for _, key := range []tea.KeyPressMsg{enter, ctrlEnter} {
+		for _, shown := range []string{app.Main, "child"} {
+			for _, tc := range []struct {
+				text    string
+				command bool
+			}{
+				{"/plan invalid", true},
+				{"/unknown", true},
+				{"prompt", false},
+				{"/skill:review details", false},
+				{"//plan invalid", false},
+			} {
+				t.Run(key.String()+"/"+shown+"/"+tc.text, func(t *testing.T) {
+					m, c := newTestModel(t, 60, 20)
+					m.agents = []app.AgentStatus{{ID: "child"}}
+					m.show(shown)
+					require.Equal(t, shown, m.shown)
+					c.commandInput = tc.command
+					c.submitErr, c.sendNowErr = errors.New("refused"), errors.New("refused")
+					c.history = []string{"earlier", tc.text}
+					typeText(m, tc.text)
+
+					press(m, key)
+
+					assert.Equal(t, shown, m.shown)
+					assert.Equal(t, tc.text, m.composer.value())
+					assert.Equal(t, 2, c.histories, "refusal refreshes history")
+					assert.Equal(t, []string{shown}, c.sessions, "dispatch still targets the selected session")
+					if key == enter {
+						assert.Equal(t, []string{tc.text}, c.submitted)
+					} else {
+						assert.Equal(t, []string{tc.text}, c.sentNow)
+					}
+					target := shown
+					if tc.command {
+						target = app.Main
+					}
+					assert.Len(t, m.viewOf(target).tr.Blocks(), 1)
+					other := app.Main
+					if target == app.Main {
+						other = "child"
+					}
+					assert.Empty(t, m.viewOf(other).tr.Blocks())
+					m.show(target)
+					assert.Equal(t, []string{"", "κ refused"}, body(m))
+				})
+			}
+		}
+	}
 }
 
 func isQuit(cmd tea.Cmd) bool {

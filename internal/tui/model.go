@@ -485,18 +485,18 @@ func (m *model) submit() tea.Cmd {
 	}
 	text, images := m.composer.expanded()
 	_, err := m.c.Submit(m.ctx, m.shown, text, images...)
-	return m.submitted(err)
+	return m.submitted(text, err)
 }
 
 // sendNow is submit through SendNow; an empty draft sends just the queue.
 func (m *model) sendNow() tea.Cmd {
 	text, images := m.composer.expanded()
-	return m.submitted(m.c.SendNow(m.ctx, m.shown, text, images...))
+	return m.submitted(text, m.c.SendNow(m.ctx, m.shown, text, images...))
 }
 
 // submitted clears the draft once the Controller accepts it, and keeps it on
 // any refusal so it can be fixed or sent again.
-func (m *model) submitted(err error) tea.Cmd {
+func (m *model) submitted(text string, err error) tea.Cmd {
 	// The Controller records refused commands too.
 	m.composer.setHistory(m.c.History())
 	switch {
@@ -515,8 +515,14 @@ func (m *model) submitted(err error) tea.Cmd {
 	case errors.Is(err, app.ErrLoggingIn):
 		return m.flash("a login is under way")
 	default:
-		m.view().tr.Apply(event.Error{Err: err})
-		m.relayout()
+		id := m.shown
+		if m.c.IsCommand(text) {
+			id = app.Main
+		}
+		m.viewOf(id).tr.Apply(event.Error{Err: err})
+		if id == m.shown {
+			m.relayout()
+		}
 	}
 	return nil
 }
