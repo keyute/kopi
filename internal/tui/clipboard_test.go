@@ -58,7 +58,7 @@ func TestComposerClipboardCompletionDuringApprovalIsDiscarded(t *testing.T) {
 	m.Update(cmd())
 
 	assert.Equal(t, "draft", m.composer.value())
-	assert.Equal(t, "feedback", m.dialog.text())
+	assert.Equal(t, "feedback", m.frontDialog().text())
 }
 
 func TestApprovalClipboardWithoutTextChangesNothing(t *testing.T) {
@@ -73,7 +73,7 @@ func TestApprovalClipboardWithoutTextChangesNothing(t *testing.T) {
 
 		require.NotNil(t, cmd)
 		assert.Nil(t, cmd())
-		assert.Equal(t, "feedback", m.dialog.text())
+		assert.Equal(t, "feedback", m.frontDialog().text())
 		assert.Empty(t, m.composer.value())
 	}
 }

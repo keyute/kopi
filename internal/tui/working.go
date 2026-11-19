@@ -31,9 +31,9 @@ func workingRow(sp *spinner.Model, text, hint string, th theme) string {
 // main view only, the Controller's activity, then idle waiting on background
 // work. The waiting clock runs underneath the others.
 func (m *model) workingText() (string, bool) {
-	v := m.view()
+	v, front := m.view(), m.front()
 	switch {
-	case m.approval != nil || m.question != nil || m.plan != nil:
+	case front == promptApproval || front == promptQuestion || front == promptPlan:
 		return "Waiting for you…", true
 	case v.busy:
 		return v.verb.ing + "… " + formatDuration(time.Since(v.turnStart)), true
@@ -89,7 +89,7 @@ func (m *model) syncWaiting() {
 // command can be moved to the background, "" otherwise.
 func (m *model) workingHint() string {
 	ks := m.keys.background.Keys()
-	if m.shown != app.Main || !m.view().busy || m.approval != nil || m.question != nil || m.plan != nil || m.tasks != nil || !m.status.Foreground || len(ks) == 0 {
+	if m.shown != app.Main || !m.view().busy || m.front() != promptNone || !m.status.Foreground || len(ks) == 0 {
 		return ""
 	}
 	return " · " + ks[0] + " to background"

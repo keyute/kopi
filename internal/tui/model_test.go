@@ -1183,7 +1183,7 @@ func TestApprovalClipboardCompletionAfterTransitionIsDiscarded(t *testing.T) {
 			send(m, editApproval())
 			press(m, digit('3'))
 			keys(m, "feedback")
-			oldField := m.dialog.field()
+			oldField := m.frontDialog().field()
 			cmd := press(m, ctrlV)
 			require.NotNil(t, cmd)
 
@@ -1197,7 +1197,7 @@ func TestApprovalClipboardCompletionAfterTransitionIsDiscarded(t *testing.T) {
 			assert.Equal(t, "composer draft", m.composer.value())
 			assert.Equal(t, "feedback", oldField.value())
 			if m.approval != nil {
-				assert.Equal(t, "replacement feedback", m.dialog.text())
+				assert.Equal(t, "replacement feedback", m.frontDialog().text())
 			}
 		})
 	}
@@ -1209,7 +1209,7 @@ func TestApprovalClipboardCompletionAfterPromotionIsDiscarded(t *testing.T) {
 	send(m, editApproval(), subagentAsk(2, "explore"))
 	press(m, digit('3'))
 	keys(m, "feedback")
-	oldField := m.dialog.field()
+	oldField := m.frontDialog().field()
 	cmd := press(m, ctrlV)
 	require.NotNil(t, cmd)
 
@@ -1219,7 +1219,7 @@ func TestApprovalClipboardCompletionAfterPromotionIsDiscarded(t *testing.T) {
 	m.Update(cmd())
 
 	assert.Equal(t, "feedback", oldField.value())
-	assert.Empty(t, m.dialog.text(), "the promoted ask's reason field is unchanged")
+	assert.Empty(t, m.frontDialog().text(), "the promoted ask's reason field is unchanged")
 }
 
 func subagentAsk(token uint64, agent string) event.ApprovalRequested {
@@ -1242,7 +1242,7 @@ func TestApprovalQueuePromotesInOrder(t *testing.T) {
 	assert.Equal(t, uint64(3), m.approval.Token)
 	send(m, event.ApprovalEnded{Token: 3})
 	assert.Nil(t, m.approval)
-	assert.Nil(t, m.dialog)
+	assert.Nil(t, m.approvalDialog)
 }
 
 func TestApprovalQueueEndOfAQueuedAskRemovesIt(t *testing.T) {
@@ -1278,7 +1278,7 @@ func TestApprovalQueueSessionChangeClearsAll(t *testing.T) {
 	send(m, editApproval(), subagentAsk(2, "explore"))
 	send(m, event.SessionChanged{SessionID: "s2"})
 	assert.Nil(t, m.approval)
-	assert.Nil(t, m.dialog)
+	assert.Nil(t, m.approvalDialog)
 	assert.Empty(t, m.approvalQueue)
 }
 
@@ -1288,7 +1288,7 @@ func TestApprovalClipboardCompletionAfterLeavingFieldIsDiscarded(t *testing.T) {
 	send(m, editApproval())
 	press(m, digit('3'))
 	keys(m, "feedback")
-	field := m.dialog.field()
+	field := m.frontDialog().field()
 	cmd := press(m, ctrlV)
 	require.NotNil(t, cmd)
 
@@ -1355,7 +1355,7 @@ func TestApprovalPasteKeyLeavesAnImageOut(t *testing.T) {
 	require.NotNil(t, cmd)
 	m.Update(cmd())
 
-	assert.Empty(t, m.dialog.options[2].field.value())
+	assert.Empty(t, m.frontDialog().options[2].field.value())
 	assert.Empty(t, m.composer.value())
 }
 
