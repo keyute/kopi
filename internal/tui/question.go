@@ -302,17 +302,7 @@ func (q *questionDialog) rows(width, maxPreview, maxRows int, th theme) []string
 	}
 	room := maxRows - head - 1
 	start := max(head, min(d.optionStarts[d.sel], len(rows)-1-room))
-	end := start + room
-	var areas []fieldArea
-	for _, fa := range d.areas {
-		top, bottom := max(fa.y, start), min(fa.y+fa.h, end)
-		if top < bottom {
-			fa.y, fa.h = top-start+head, bottom-top
-			areas = append(areas, fa)
-		}
-	}
-	d.areas = areas
-	return append(append(slices.Clone(rows[:head]), rows[start:end]...), rows[len(rows)-1])
+	return clip(d, rows, head, start, start+room)
 }
 
 // window is lines within room rows from the scroll offset; the last row

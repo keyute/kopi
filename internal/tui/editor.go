@@ -28,7 +28,8 @@ func editorCommand(getenv func(string) string, path string) *exec.Cmd {
 	return nil
 }
 
-// openEditor runs the editor on path; its exit delivers an editorDoneMsg.
+// openEditor runs the editor on path; its exit delivers an editorDoneMsg. While
+// it runs, editing is set so SIGINT meant for the editor is not taken as a cancel.
 func (m *model) openEditor(path string) tea.Cmd {
 	cmd := editorCommand(m.getenv, path)
 	if cmd == nil {
@@ -36,7 +37,11 @@ func (m *model) openEditor(path string) tea.Cmd {
 		m.relayout()
 		return nil
 	}
-	return m.execProcess(cmd, func(err error) tea.Msg { return editorDoneMsg{err} })
+	m.editing.Store(true)
+	return m.execProcess(cmd, func(err error) tea.Msg {
+		m.editing.Store(false)
+		return editorDoneMsg{err}
+	})
 }
 
 // editorDone shows a failed run, then has the Controller read the pending

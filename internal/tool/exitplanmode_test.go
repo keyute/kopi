@@ -125,7 +125,6 @@ func TestExitPlanModeReportsTheAnswer(t *testing.T) {
 		{"approved", PlanAnswer{Approved: true}, policy.Execute, "", "The user approved the plan. The session is in execute mode."},
 		{"feedback", PlanAnswer{Feedback: "smaller steps"}, policy.Plan, "", "The user asked for changes to the plan. The session is in plan mode. Their feedback:\nsmaller steps"},
 		{"dismissed", PlanAnswer{}, policy.Plan, "", "The user dismissed the plan without answering. The session is in plan mode."},
-		{"blank feedback dismisses", PlanAnswer{Feedback: " \n"}, policy.Plan, "", "The user dismissed the plan without answering. The session is in plan mode."},
 		{"approved and edited", PlanAnswer{Approved: true}, policy.Execute, "# Edited\n", "The user approved the plan. The user edited the plan file before answering. The session is in execute mode."},
 		{"feedback and edited", PlanAnswer{Feedback: "x"}, policy.Plan, "# Edited\n", "The user asked for changes to the plan. The user edited the plan file before answering. The session is in plan mode. Their feedback:\nx"},
 		{"dismissed and edited", PlanAnswer{}, policy.Plan, "# Edited\n", "The user dismissed the plan without answering. The user edited the plan file before answering. The session is in plan mode."},
@@ -142,6 +141,19 @@ func TestExitPlanModeReportsTheAnswer(t *testing.T) {
 			assert.Equal(t, 1, calls)
 		})
 	}
+}
+
+func TestExitPlanModeReportsAPlanRemovedDuringReviewAsEdited(t *testing.T) {
+	plans := planFile(t, "# Plan\n")
+	tool := NewExitPlanMode(plans, func(context.Context, string) (PlanAnswer, policy.Mode, error) {
+		require.NoError(t, os.Remove(plans.Path()))
+		return PlanAnswer{}, policy.Plan, nil
+	})
+
+	out, err := tool.Run(t.Context(), json.RawMessage(`{}`), admitIn(policy.Plan))
+
+	require.NoError(t, err)
+	assert.Contains(t, out.Text, "The user edited the plan file before answering.")
 }
 
 func TestExitPlanModeShowsTheFileTextAndPassesReviewErrorThrough(t *testing.T) {

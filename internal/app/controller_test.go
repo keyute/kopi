@@ -2852,6 +2852,20 @@ func TestNewSessionGetsTheModeLineAgain(t *testing.T) {
 	assert.Equal(t, [][]string{{"two", h.planLine()}}, h.userTexts(t, "two"))
 }
 
+func TestResumedSessionRestoresItsPlanFile(t *testing.T) {
+	h := modeHarness(t)
+	h.userTexts(t, "one")
+	writePlan(t, h, "# Plan\n")
+	oldPath, oldID := h.c.PlanFile(), h.c.Status().SessionID
+	require.NoError(t, h.c.NewSession(t.Context()))
+	require.NotEqual(t, oldPath, h.c.PlanFile())
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{ResumeID: oldID}))
+	h.read = 0
+
+	assert.Equal(t, oldPath, h.c.PlanFile())
+	assert.Equal(t, [][]string{{"one", h.planLine(), "two", h.planLine()}}, h.userTexts(t, "two"), "the resumed history, then the line told again")
+}
+
 func TestHeadlessPromptCarriesTheModeLine(t *testing.T) {
 	h := modeHarness(t)
 	requests := make(chan pigruntimetest.Request, 1)

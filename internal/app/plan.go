@@ -11,66 +11,16 @@ import (
 	"github.com/keyute/kopi/internal/tool"
 )
 
-// pendingPlan is the one ExitPlanMode call waiting for AnswerPlan. The tool is
-// Exclusive, so its calls run one at a time and one slot is enough.
-type pendingPlan struct {
-	token   uint64
-	work    *Work
-	sendCtx context.Context
-	ctx     context.Context
-	emit    func(event.Event)
-	// answer has room for the one answer, so AnswerPlan never blocks.
-	answer  chan tool.PlanAnswer
-	claimed bool // guarded by Controller.mu; cancellation must wait for a claimed answer
-}
-
 func (c *Controller) reviewPlan(ctx context.Context, plan string) (tool.PlanAnswer, policy.Mode, error) {
-	p := &pendingPlan{answer: make(chan tool.PlanAnswer, 1)}
-	c.queue.Lock()
-	c.mu.Lock()
-	if err := ctx.Err(); err != nil {
-		c.mu.Unlock()
-		c.queue.Unlock()
+	a, err := request(c, ctx, &c.plan, &c.planSeq,
+		func(token uint64) event.Event {
+			return event.PlanRequested{Token: token, Path: c.cfg.Plans.Path(), Plan: plan}
+		},
+		func(token uint64) event.Event { return event.PlanEnded{Token: token} })
+	if err != nil {
 		return tool.PlanAnswer{}, policy.Plan, err
 	}
-	if c.turn == nil || c.turn.stopped || c.turn.sendCtx.Err() != nil {
-		c.mu.Unlock()
-		c.queue.Unlock()
-		return tool.PlanAnswer{}, policy.Plan, context.Canceled
-	}
-	c.planSeq++
-	p.token = c.planSeq
-	p.work, p.ctx, p.sendCtx, p.emit = c.turn, ctx, c.turn.sendCtx, c.emit
-	c.plan = p
-	emit := p.emit
-	c.mu.Unlock()
-	emit(event.PlanRequested{Token: p.token, Path: c.cfg.Plans.Path(), Plan: plan})
-	c.queue.Unlock()
-	defer emit(event.PlanEnded{Token: p.token})
-	select {
-	case a := <-p.answer:
-		return a, c.mode(), nil
-	case <-ctx.Done():
-	case <-p.sendCtx.Done():
-	}
-	c.queue.Lock()
-	c.mu.Lock()
-	claimed := p.claimed
-	if c.plan == p {
-		c.plan = nil
-	}
-	c.mu.Unlock()
-	c.queue.Unlock()
-	if claimed {
-		// AnswerPlan claimed the slot first and its answer is on the way; a
-		// dismissal interrupts before it is sent, and must still reach the model
-		// as a dismissal rather than as a cancel.
-		return <-p.answer, c.mode(), nil
-	}
-	if err := ctx.Err(); err != nil {
-		return tool.PlanAnswer{}, policy.Plan, err
-	}
-	return tool.PlanAnswer{}, policy.Plan, context.Canceled
+	return a, c.mode(), nil
 }
 
 func (c *Controller) mode() policy.Mode {
@@ -86,42 +36,14 @@ func (c *Controller) mode() policy.Mode {
 // plan call changes the mode.
 func (c *Controller) AnswerPlan(token uint64, a tool.PlanAnswer) bool {
 	a.Feedback = strings.TrimSpace(a.Feedback)
-	c.queue.Lock()
-	c.mu.Lock()
-	p := c.plan
-	if p == nil || p.token != token {
-		c.mu.Unlock()
-		c.queue.Unlock()
-		return false
-	}
-	if p.work.stopped || p.sendCtx.Err() != nil || p.ctx.Err() != nil {
-		c.plan = nil
-		c.mu.Unlock()
-		c.queue.Unlock()
-		return false
-	}
-	p.claimed = true
-	c.plan = nil
-	c.mu.Unlock()
 	dismissed := !a.Approved && a.Feedback == ""
-	if dismissed {
-		c.stop(p.work, p.emit)
-	}
-	if a.Approved {
-		// The call's result tells the model the mode, so no mode line follows.
-		c.told = modeLine(policy.Execute, "")
-	}
-	c.queue.Unlock()
-	if a.Approved {
-		c.EnterExecute()
-	}
-	if dismissed {
-		// Cancellation forwarding is asynchronous. Stop PiG synchronously
-		// before releasing the dismissal, without holding controller locks.
-		pigruntime.InterruptTurn(p.ctx)
-	}
-	p.answer <- a
-	return true
+	return resolve(c, &c.plan, token, a, dismissed, func() {
+		if a.Approved {
+			// The call's result tells the model the mode, so no mode line follows.
+			c.told = modeLine(policy.Execute, "")
+			c.EnterExecute()
+		}
+	})
 }
 
 // RefreshPlan reads the plan file again while the plan for token is pending
@@ -137,7 +59,7 @@ func (c *Controller) RefreshPlan(token uint64) bool {
 	defer c.queue.Unlock()
 	c.mu.Lock()
 	p := c.plan
-	live := p != nil && p.token == token && !p.work.stopped && p.sendCtx.Err() == nil && p.ctx.Err() == nil
+	live := p != nil && p.token == token && p.live()
 	c.mu.Unlock()
 	if !live {
 		return false

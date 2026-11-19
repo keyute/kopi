@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -59,6 +60,9 @@ type model struct {
 	c       Controller
 	bridge  *bridge
 	version string
+	// editing is set while an editor runs in the terminal, whose SIGINT is not
+	// a cancel; the signal goroutine reads it.
+	editing atomic.Bool
 
 	th            theme
 	themes        Themes

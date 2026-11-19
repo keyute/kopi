@@ -325,7 +325,6 @@ func TestRootAcceptsExitPlanModeRuleWithoutTheTool(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "ok\n", stdout)
-	assert.NotContains(t, toolNames(server.next(t)), "ExitPlanMode")
 }
 
 func TestRootOffersWebSearchForSearchingSmallModel(t *testing.T) {

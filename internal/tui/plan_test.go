@@ -136,7 +136,7 @@ func TestPlanYesApproves(t *testing.T) {
 	assert.NotNil(t, m.plan, "the dialog stays until PlanEnded")
 }
 
-func TestPlanNoSendsTheFeedbackOrDismissesWhenBlank(t *testing.T) {
+func TestPlanNoSendsTheTextAsTypedForTheControllerToJudge(t *testing.T) {
 	m, c := openPlan(t)
 	press(m, digit('2'))
 	typeKeys(m, "split it")
@@ -147,7 +147,7 @@ func TestPlanNoSendsTheFeedbackOrDismissesWhenBlank(t *testing.T) {
 	press(m, digit('2'))
 	typeKeys(m, "  ")
 	press(m, enter)
-	assert.Equal(t, []planAnswer{{7, tool.PlanAnswer{}}}, c.planAnswers)
+	assert.Equal(t, []planAnswer{{7, tool.PlanAnswer{Feedback: "  "}}}, c.planAnswers)
 }
 
 func TestPlanEscDismisses(t *testing.T) {

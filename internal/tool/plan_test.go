@@ -30,6 +30,14 @@ func newPlanFixture(t *testing.T) planFixture {
 	return planFixture{kopiHome: kopiHome, plansDir: plansDir, plans: plans, ws: plain.WithPlans(plans), plain: plain}
 }
 
+// readTool runs the model-facing Read on path.
+func readTool(t *testing.T, ws *Workspace, path string) (Result, error) {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{"file_path": path})
+	require.NoError(t, err)
+	return NewRead(ws).Run(t.Context(), raw, admitIn(policy.Plan))
+}
+
 // runTool runs t with args and returns the targets it admitted.
 func runTool(t *testing.T, tl Tool, args map[string]any) ([]policy.Target, error) {
 	t.Helper()
@@ -81,10 +89,7 @@ func TestWorkspaceWithPlansWritesReadsAndEditsThePlan(t *testing.T) {
 		assert.Equal(t, "# Plan\nstep one\n", string(data))
 	}
 
-	res, err := func() (Result, error) {
-		raw, _ := json.Marshal(map[string]any{"file_path": path})
-		return NewRead(f.ws).Run(t.Context(), raw, func(policy.Target) (policy.Mode, error) { return policy.Plan, nil })
-	}()
+	res, err := readTool(t, f.ws, path)
 	require.NoError(t, err)
 	assert.Contains(t, res.Text, "step one")
 
@@ -134,9 +139,13 @@ func TestWorkspaceWithPlansStillRefusesEverythingElse(t *testing.T) {
 			_, err = runTool(t, NewWrite(f.ws), map[string]any{"file_path": path, "content": "x"})
 			assert.ErrorIs(t, err, ErrOutsideWorkspace)
 			_, err = runTool(t, NewEdit(f.ws), map[string]any{"file_path": path, "old_string": "a", "new_string": "b"})
-			assert.Error(t, err)
+			assert.ErrorIs(t, err, ErrOutsideWorkspace)
 			_, err = f.ws.prepare(path)
 			assert.ErrorIs(t, err, ErrOutsideWorkspace)
+			res, err := readTool(t, f.ws, path)
+			require.ErrorIs(t, err, ErrOutsideWorkspace)
+			assert.NotContains(t, res.Text, "other")
+			assert.NotContains(t, res.Text, "old")
 		})
 	}
 	data, err := os.ReadFile(filepath.Join(f.plansDir, "other.md"))
@@ -176,10 +185,21 @@ func TestPlansSymlinkedLeafIsRefusedOnReadAndReplacedOnWrite(t *testing.T) {
 	writeFile(t, victim, "victim")
 	require.NoError(t, os.Symlink(victim, f.plans.Path()))
 
-	_, err := f.plans.Read()
-	assert.Error(t, err)
+	target, err := f.ws.Target(f.plans.Path())
+	require.NoError(t, err)
+	realDir, err := filepath.EvalSymlinks(f.plansDir)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(realDir, "s1.md"), target.Real)
+	assert.True(t, target.PlanFile)
+
+	// os.Root reports a symlink leaf that leaves its root with no exported sentinel.
+	_, err = f.plans.Read()
+	assert.ErrorContains(t, err, "path escapes from parent")
+	res, err := readTool(t, f.ws, f.plans.Path())
+	require.ErrorContains(t, err, "path escapes from parent")
+	assert.NotContains(t, res.Text, "victim")
 	_, err = runTool(t, NewEdit(f.ws), map[string]any{"file_path": f.plans.Path(), "old_string": "victim", "new_string": "x"})
-	assert.Error(t, err)
+	assert.ErrorContains(t, err, "path escapes from parent")
 
 	_, err = runTool(t, NewWrite(f.ws), map[string]any{"file_path": f.plans.Path(), "content": "plan"})
 	require.NoError(t, err)
@@ -217,8 +237,7 @@ func TestPlansInsideAWorkspaceThatContainsKopiHome(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "b\n", text)
 	}
-	raw, _ := json.Marshal(map[string]any{"file_path": rel})
-	res, err := NewRead(ws).Run(t.Context(), raw, func(policy.Target) (policy.Mode, error) { return policy.Plan, nil })
+	res, err := readTool(t, ws, rel)
 	require.NoError(t, err)
 	assert.Contains(t, res.Text, "b")
 
@@ -236,6 +255,9 @@ func TestPlansInsideAWorkspaceThatContainsKopiHome(t *testing.T) {
 			assert.ErrorIs(t, run(ws, NewEdit, map[string]any{"file_path": path, "old_string": "{", "new_string": "x"}), ErrProtected)
 			_, err := ws.prepare(path)
 			assert.ErrorIs(t, err, ErrProtected)
+			res, err := readTool(t, ws, path)
+			require.ErrorIs(t, err, ErrProtected)
+			assert.NotContains(t, res.Text, "{}")
 		})
 	}
 	assert.NoFileExists(t, filepath.Join(home, "plans", "other.md"))
@@ -253,8 +275,11 @@ func TestPlansInsideAWorkspaceThatContainsKopiHome(t *testing.T) {
 	require.NoError(t, os.Remove(plan))
 	require.NoError(t, os.Symlink(filepath.Join("..", "config.json"), plan))
 	_, err = plans.Read()
-	assert.Error(t, err)
-	assert.Error(t, run(ws, NewEdit, map[string]any{"file_path": plan, "old_string": "{", "new_string": "x"}))
+	assert.ErrorContains(t, err, "path escapes from parent")
+	res, err = readTool(t, ws, plan)
+	require.ErrorContains(t, err, "path escapes from parent")
+	assert.NotContains(t, res.Text, "{}")
+	assert.ErrorContains(t, run(ws, NewEdit, map[string]any{"file_path": plan, "old_string": "{", "new_string": "x"}), "path escapes from parent")
 	require.NoError(t, run(ws, NewWrite, map[string]any{"file_path": plan, "content": "plan"}))
 	data, err = os.ReadFile(config)
 	require.NoError(t, err)

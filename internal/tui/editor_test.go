@@ -84,3 +84,15 @@ func TestPlanOpenWithoutAnEditorShowsTheNotice(t *testing.T) {
 	assert.Empty(t, *calls)
 	assert.Contains(t, body(m), "κ "+noEditorNotice)
 }
+
+func TestOpenEditorMarksEditingUntilTheEditorExits(t *testing.T) {
+	m, _ := newTestModel(t, 70, 30)
+	m.getenv = env(map[string]string{"EDITOR": "vi"})
+	calls := recordExec(m)
+
+	m.openEditor(planPath)
+	assert.True(t, m.editing.Load())
+
+	m.Update((*calls)[0].done(nil))
+	assert.False(t, m.editing.Load())
+}

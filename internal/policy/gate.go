@@ -109,15 +109,17 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 	_, gen, permitted := g.authority.Permits(spec)
 	var target *Target
 	var targetErr error
+	var planFile bool
 	if spec.Target != nil {
 		t, err := spec.Target(args)
+		// A target that failed to resolve still says whether it is the plan file.
+		planFile = t.PlanFile
 		if err != nil {
 			targetErr = err
 		} else {
 			target = &t
 		}
 	}
-	planFile := target != nil && target.PlanFile
 	if !permitted && !planFile {
 		if spec.Capability == Exec && !strings.HasPrefix(tool, MCPPrefix) {
 			return fmt.Errorf("tool %q needs execute mode; the session is in plan mode, where it runs only in the OS sandbox, which is off or unavailable: %w", tool, ErrDenied)

@@ -12,7 +12,7 @@
 - Sessions start and resume in the configured [`mode`](configuration.md#mode), including ones opened with `/new` and `/resume`.
 - `--mode` overrides the config file.
 - A mode switched to while the first session is opening is the mode it starts in.
-- The model is told the session's mode, and in the fullscreen interface the plan file's path, in one hidden message sent with the first prompt of a session and with the first prompt after the mode changes. It is not part of the system prompt. No message follows an approved plan: the tool's result already tells the model the session is in execute mode.
+- The model is told the session's mode, and in plan mode in the fullscreen interface the plan file's path, in one hidden message sent with the first prompt of a session and with the first prompt after the mode changes. It is not part of the system prompt. No message follows an approved plan: the tool's result already tells the model the session is in execute mode.
 - [Rules](permissions.md#rules) decide which calls ask, run or are refused.
 
 ## File tools

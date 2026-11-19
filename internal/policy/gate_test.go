@@ -757,6 +757,17 @@ func TestTargetErrorInPlanKeepsTheModeRefusal(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to resolve the path")
 }
 
+func TestPlanFileThatFailsToResolveReportsTheResolveError(t *testing.T) {
+	boom := errors.New("boom")
+	specs := map[string]ToolSpec{"Edit": {Capability: Write, Target: func(json.RawMessage) (Target, error) {
+		return Target{Path: "/home/plans/s.md", PlanFile: true}, boom
+	}}}
+	err := NewGate(NewAuthority(), specs, nil, nil, nil).Before(t.Context(), "c1", "Edit", planArgs("/home/plans/s.md", true))
+	require.ErrorIs(t, err, boom)
+	assert.NotErrorIs(t, err, ErrDenied)
+	assert.Contains(t, err.Error(), "failed to resolve the path")
+}
+
 func TestRulesStillApplyToThePlanFile(t *testing.T) {
 	d := newDirs(t)
 	args := planArgs("/home/plans/s.md", true)

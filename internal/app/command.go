@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -77,7 +78,7 @@ func (c *Controller) planCommand(_ context.Context, arg string) error {
 		c.EnterPlan()
 		return nil
 	case "open":
-		_, err := c.cfg.Plans.Read()
+		_, err := os.Stat(c.cfg.Plans.Path())
 		if err == nil {
 			return ErrOpenPlan
 		}

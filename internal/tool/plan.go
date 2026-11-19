@@ -41,31 +41,28 @@ func (p *Plans) Select(sessionID string) error {
 }
 
 // Path is the absolute plan file path, or "" when none is selected.
-func (p *Plans) Path() string {
-	path, _ := p.current()
-	return path
-}
+func (p *Plans) Path() string { return p.current() }
 
 // current reads the selected file once, so one operation uses one name.
-func (p *Plans) current() (path, name string) {
+func (p *Plans) current() string {
 	if p == nil {
-		return "", ""
+		return ""
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.name == "" {
-		return "", ""
+		return ""
 	}
-	return filepath.Join(p.dir, p.name), p.name
+	return filepath.Join(p.dir, p.name)
 }
 
 // Read returns the plan's text; a missing file wraps fs.ErrNotExist.
 func (p *Plans) Read() (string, error) {
-	path, name := p.current()
+	path := p.current()
 	if path == "" {
 		return "", fmt.Errorf("failed to read the plan file: %w", fs.ErrNotExist)
 	}
-	dest, err := p.destination(path, name)
+	dest, err := p.destination(path, path)
 	if err != nil {
 		return "", err
 	}
@@ -78,45 +75,40 @@ func (p *Plans) Read() (string, error) {
 	return readForEdit(f, path)
 }
 
-// matches reports whether abs, cleaned, is exactly the plan file, and returns
-// the path and name it matched.
-func (p *Plans) matches(abs string) (path, name string, ok bool) {
-	path, name = p.current()
-	return path, name, path != "" && filepath.Clean(abs) == path
-}
-
-// planTarget builds the target from the canonical path, not the caller's
-// spelling.
-func planTarget(path string) (policy.Target, error) {
-	real, _, err := walk(string(filepath.Separator), path, nil)
+// planTarget builds the target from the canonical plans directory and the leaf,
+// not the caller's spelling. The leaf is not followed: Write replaces a
+// symlink there rather than writing through it. PlanFile is set even when
+// resolving fails, so the gate can tell the plan file from other paths.
+func (p *Plans) planTarget(path string) (policy.Target, error) {
+	dir, _, err := walk(string(filepath.Separator), p.dir, nil)
 	if err != nil {
-		return policy.Target{}, err
+		return policy.Target{Path: path, PlanFile: true}, err
 	}
-	return policy.Target{Path: path, Real: real, PlanFile: true}, nil
+	return policy.Target{Path: path, Real: filepath.Join(dir, filepath.Base(path)), PlanFile: true}, nil
 }
 
 // target answers for abs when it is the plan file.
 func (p *Plans) target(abs string) (policy.Target, bool, error) {
-	path, _, ok := p.matches(abs)
-	if !ok {
+	path := p.current()
+	if path == "" || filepath.Clean(abs) != path {
 		return policy.Target{}, false, nil
 	}
-	t, err := planTarget(path)
+	t, err := p.planTarget(path)
 	return t, true, err
 }
 
 // prepare answers for abs when it is the plan file; path is the caller's
 // spelling, used in messages.
 func (p *Plans) prepare(abs, path string) (*writeDestination, bool, error) {
-	canonical, name, ok := p.matches(abs)
-	if !ok {
+	canonical := p.current()
+	if canonical == "" || filepath.Clean(abs) != canonical {
 		return nil, false, nil
 	}
-	target, err := planTarget(canonical)
+	target, err := p.planTarget(canonical)
 	if err != nil {
 		return nil, true, err
 	}
-	dest, err := p.destination(path, name)
+	dest, err := p.destination(path, canonical)
 	if err != nil {
 		return nil, true, err
 	}
@@ -125,9 +117,9 @@ func (p *Plans) prepare(abs, path string) (*writeDestination, bool, error) {
 }
 
 // destination pins the plans directory, which must be a real directory and not
-// a symlink, with the same check, open and verify as prepareWrite. name is the
-// leaf the caller matched.
-func (p *Plans) destination(path, name string) (*writeDestination, error) {
+// a symlink, with the same check, open and verify as prepareWrite. plan is the
+// canonical plan file path, whose leaf is the one pinned.
+func (p *Plans) destination(path, plan string) (*writeDestination, error) {
 	dir := p.dir
 	before, err := os.Lstat(dir)
 	if err != nil {
@@ -145,5 +137,5 @@ func (p *Plans) destination(path, name string) (*writeDestination, error) {
 		root.Close()
 		return nil, fmt.Errorf("%w: %s", ErrTargetChanged, path)
 	}
-	return &writeDestination{parent: root, rel: ".", path: path, leaf: name, plan: true}, nil
+	return &writeDestination{parent: root, rel: ".", path: path, leaf: filepath.Base(plan), plan: true}, nil
 }

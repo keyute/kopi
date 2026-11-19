@@ -123,7 +123,9 @@ func (f *Frontend) Run(ctx context.Context, interrupts <-chan os.Signal) error {
 				p.Quit()
 				return
 			case <-interrupts:
-				p.Send(interruptMsg{})
+				if !m.editing.Load() {
+					p.Send(interruptMsg{})
+				}
 			}
 		}
 	}()

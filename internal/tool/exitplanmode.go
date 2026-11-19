@@ -93,12 +93,11 @@ func NewExitPlanMode(plans *Plans, review ReviewPlan) Tool {
 }
 
 func planResult(a PlanAnswer, mode policy.Mode, edited bool) string {
-	feedback := strings.TrimSpace(a.Feedback)
 	var first string
 	switch {
 	case a.Approved:
 		first = planApproved
-	case feedback != "":
+	case a.Feedback != "":
 		first = planRevise
 	default:
 		first = planDismissed
@@ -108,8 +107,8 @@ func planResult(a PlanAnswer, mode policy.Mode, edited bool) string {
 		text += planEdited
 	}
 	text += fmt.Sprintf(" The session is in %s mode.", mode)
-	if !a.Approved && feedback != "" {
-		text += " Their feedback:\n" + feedback
+	if !a.Approved && a.Feedback != "" {
+		text += " Their feedback:\n" + a.Feedback
 	}
 	return text
 }

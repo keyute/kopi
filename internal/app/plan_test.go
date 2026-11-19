@@ -2,6 +2,7 @@ package app
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/MichaelKinsy/PiG/ai"
@@ -182,4 +183,35 @@ func TestExitPlanModeToolIsAttendedOnlyAndNeverForAgents(t *testing.T) {
 	assert.Contains(t, toolNames(a.c.tools), "ExitPlanMode")
 	require.Len(t, a.c.agents, 1)
 	assert.Equal(t, []string{"Read"}, toolNames(a.c.agents[0].tools))
+}
+
+func TestPlanModeWritesOnlyThePlanFile(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	plans := tool.NewPlans(filepath.Join(sb.Home, "plans"))
+	ws, err := tool.NewWorkspace(sb.Workspace, []string{sb.Home})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
+	rootWS := ws.WithPlans(plans)
+	h := newHarness(t, sb, Config{Plans: plans, Tools: []tool.Tool{tool.NewWrite(rootWS), tool.NewEdit(rootWS)}})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	other := filepath.Join(filepath.Dir(h.c.PlanFile()), "other.md")
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(writeCall("w1", h.c.PlanFile()), writeCall("w2", other)),
+		pigruntimetest.Capture(t, requests, "done"),
+	})
+
+	w, err := h.c.Submit(t.Context(), "write")
+	require.NoError(t, err)
+	wait(t, w.Done())
+
+	got, err := os.ReadFile(h.c.PlanFile())
+	require.NoError(t, err)
+	assert.Equal(t, "gamma\n", string(got))
+	assert.NoFileExists(t, other)
+	assert.Empty(t, ofType[event.ApprovalRequested](h.rec.all()))
+	results := receive(t, requests).ToolResults
+	require.Len(t, results, 2)
+	assert.NotContains(t, results[0], "denied")
+	assert.Contains(t, results[1], policy.ErrDenied.Error())
 }
