@@ -11,6 +11,7 @@ import (
 
 	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/tool"
 )
 
 func TestIdleLayout(t *testing.T) {
@@ -228,5 +229,19 @@ func TestWorkingRowUsesTheConfiguredBackgroundKey(t *testing.T) {
 			s := screen(m)
 			assert.Equal(t, want, s[len(s)-6])
 		}
+	})
+}
+
+func TestWorkingRowWaitsDuringAQuestion(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTestModel(t, 60, 30)
+		c.status.Foreground = true
+		ask := event.QuestionRequested{Token: 1, Questions: []tool.Question{choice("db", false, "A", "B")}}
+		send(m, event.TasksChanged{}, event.TurnStart{}, ask)
+		assert.Contains(t, screen(m), "⠋ Waiting for you…", "without the background hint")
+		assert.NotContains(t, screen(m), "⠋ Working… 0s")
+
+		send(m, event.QuestionEnded{Token: 1})
+		assert.Contains(t, screen(m), "⠋ Working… 0s · ctrl+b to background")
 	})
 }

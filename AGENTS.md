@@ -29,7 +29,7 @@
 
 - Every model-facing tool goes through `internal/policy`: `Gate.Before` in the pre-dispatch hook and `Gate.Admit` inside execution.
 - Skills load only from `$KOPI_HOME/skills`, `~/.agents/skills` and a trusted folder's `.agents/skills`; the `Skill` tool reads only a loaded skill's text and files inside the directory that skill was loaded from, and on every read refuses a file in Kopi's home outside `skills/`.
-- Subagent definitions load only from `$KOPI_HOME/agents`, once at startup. A subagent's session has its own gate over the same rules and shares the mode holder unless its definition pins plan mode. A subagent never gets `Agent`, `SendMessage`, `TaskOutput` or `TaskStop`, and its `Bash` never backgrounds.
+- Subagent definitions load only from `$KOPI_HOME/agents`, once at startup. A subagent's session has its own gate over the same rules and shares the mode holder unless its definition pins plan mode. A subagent never gets `Agent`, `SendMessage`, `AskUserQuestion`, `TaskOutput` or `TaskStop`, and its `Bash` never backgrounds.
 - Only human control input changes mode. Sessions start and resume in the configured `mode` (default plan); `--mode` overrides the config file.
 - MCP servers start only from `mcpServers` in `config.json` and from a trusted folder's `.mcp.json`. Every MCP tool call asks unless a rule allows it or the opt-in classifier reviews an unmatched call; deny rules take precedence, and explicit and built-in ask rules always ask the human. A tool is Read only when its server marks it read-only.
 - `$KOPI_HOME/AGENTS.md` always loads. Project instruction files (`AGENTS.md`, else the first name in `instructionFallbacks`, one per directory from the git root down to the start directory) load only from a trusted folder.

@@ -127,8 +127,8 @@ func permissionRules(cwd, home string, tools []tool.Tool, perms config.Permissio
 		{Name: origins["permissions.ask"], Ask: perms.Ask},
 		{Name: origins["permissions.deny"], Deny: perms.Deny},
 	}
-	// ToolSearch, Skill, WebSearch, Agent and SendMessage are known to rules even when the session lacks them.
-	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil), tool.NewSkill(nil, ""), tool.NewWebSearch(nil), tool.NewAgent(nil, nil), tool.NewSendMessage(nil)}))
+	// ToolSearch, Skill, WebSearch, AskUserQuestion, Agent and SendMessage are known to rules even when the session lacks them.
+	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil), tool.NewSkill(nil, ""), tool.NewWebSearch(nil), tool.NewAskUserQuestion(nil), tool.NewAgent(nil, nil), tool.NewSendMessage(nil)}))
 	rules, err := policy.NewRules(cwd, home, specs, append(sources, flagRules...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load permission rules: %w", err)

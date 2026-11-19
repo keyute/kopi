@@ -304,6 +304,18 @@ func TestRootAcceptsWebSearchRuleWithoutHostedSearch(t *testing.T) {
 	assert.NotContains(t, toolNames(server.next(t)), "WebSearch")
 }
 
+func TestRootAcceptsAskUserQuestionRuleWithoutTheTool(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+
+	stdout, _, err := execute(t, "", "--model", mockModel, "--disallowed-tools", "AskUserQuestion", "-p", "hi")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok\n", stdout)
+	assert.NotContains(t, toolNames(server.next(t)), "AskUserQuestion")
+}
+
 func TestRootOffersWebSearchForSearchingSmallModel(t *testing.T) {
 	e := newTestEnv(t)
 	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })

@@ -162,6 +162,9 @@ type Controller struct {
 	// approvals are the calls waiting for Answer, oldest first.
 	approvals   []*pendingApproval
 	approvalSeq uint64
+	// question is the AskUserQuestion call waiting for AnswerQuestion; nil when none is.
+	question    *pendingQuestion
+	questionSeq uint64
 	// login is the running login; nil when none is. A login and a turn or a
 	// running subagent never run together: each is refused while the other is
 	// registered. The login's questions and an approval would otherwise share
@@ -232,6 +235,9 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 		servers = append(servers, server)
 	}
 	tools := slices.Clone(c.cfg.Tools)
+	if ask := tool.NewAskUserQuestion(c.askQuestion); !c.cfg.Unattended && !c.cfg.Rules.Removes(ask.Name) {
+		tools = append(tools, ask)
+	}
 	var search []tool.Tool
 	if small := c.SmallModel(); small != "" && c.rt.CanSearch(small) && !c.cfg.Rules.Removes("WebSearch") {
 		search = append(search, tool.NewWebSearch(func(ctx context.Context, system, query string) (tool.SearchResult, error) {
@@ -693,6 +699,9 @@ func (c *Controller) stop(w *Work, emit func(event.Event)) {
 	w.stopped = true
 	c.mu.Lock()
 	c.approvals = slices.DeleteFunc(c.approvals, func(p *pendingApproval) bool { return p.work == w })
+	if c.question != nil && c.question.work == w {
+		c.question = nil
+	}
 	c.mu.Unlock()
 	w.cancel()
 }

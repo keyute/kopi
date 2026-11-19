@@ -716,3 +716,37 @@ func TestSelectionSurvivesBlockAppendedBelow(t *testing.T) {
 	assert.Equal(t, "first", m.sel.text(m.lines))
 	assert.Equal(t, []int{row}, reversedRows(m))
 }
+
+func TestWheelOverAQuestionDialogScrollsItsPreview(t *testing.T) {
+	var lines []string
+	for i := range 20 {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	m, _ := newTestModel(t, 90, 20)
+	notices(m, 30)
+	send(m, event.QuestionRequested{Token: 7, Questions: previewQuestion(strings.Join(lines, "\n\n"))})
+	top := m.top()
+	require.Contains(t, strings.Join(screen(m), "\n"), "more lines")
+
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: 10, Y: m.geo.composerTop})
+	assert.Contains(t, strings.Join(screen(m), "\n"), "earlier lines", "the wheel over the dialog scrolls the preview")
+	assert.Equal(t, top, m.top(), "and not the transcript")
+
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, X: 10, Y: m.geo.composerTop})
+	assert.NotContains(t, strings.Join(screen(m), "\n"), "earlier lines")
+
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, X: 10, Y: 0})
+	assert.Equal(t, top-wheelStep, m.top(), "above the dialog it scrolls the transcript")
+	assert.NotContains(t, strings.Join(screen(m), "\n"), "earlier lines")
+}
+
+func TestWheelOverAnApprovalAboveAQuestionScrollsTheTranscript(t *testing.T) {
+	m, _ := newTestModel(t, 90, 20)
+	notices(m, 30)
+	send(m, event.QuestionRequested{Token: 7, Questions: previewQuestion("x")})
+	send(m, event.ApprovalRequested{Title: "Bash"})
+	require.NotNil(t, m.approval)
+	top := m.top()
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, X: 10, Y: m.geo.composerTop})
+	assert.Equal(t, top-wheelStep, m.top())
+}

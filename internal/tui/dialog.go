@@ -9,17 +9,30 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // cursorMark marks the selected row in the menu and in dialogs.
 const cursorMark = "❭ "
 
 // option is a dialog choice; one with a field takes text, and selecting it
-// focuses the field. One with no label draws its field alone, unnumbered: a
-// dialog's sole option.
+// focuses the field. One with no label draws its field in place of the label:
+// numbered after mark, or alone and unnumbered when it is the dialog's sole
+// option.
 type option struct {
 	label string
 	field *composer
+	// chosen draws the label bold; a label-less field with no mark also ends
+	// with a ✔ while unselected.
+	chosen bool
+	// mark is drawn between a label-less field's number and the field.
+	mark string
+	// fieldPrefix, when set, puts the field below the detail instead of beside
+	// the label, after this muted prefix.
+	fieldPrefix string
+	// detail is rows the caller rendered for width-2, drawn two columns in
+	// under the label's rows; a field below the label comes after them.
+	detail []string
 }
 
 // dialog is a choice drawn in the composer's slot. It is drawn between two
@@ -64,21 +77,42 @@ func (d *dialog) rows(width, budget, fieldCap int, th theme) []string {
 		if i == d.sel {
 			prefix, st = cursorMark, fg(th.accent)
 		}
+		if o.chosen {
+			st = st.Bold(true)
+		}
 		if o.field != nil && o.label == "" {
-			slots = append(slots, fieldSlot{option: i, at: len(rows), f: o.field, head: fg(th.accent).Render(prefix), indent: lipgloss.Width(prefix)})
+			if len(d.options) == 1 {
+				slots = append(slots, fieldSlot{option: i, at: len(rows), f: o.field, head: fg(th.accent).Render(prefix), indent: lipgloss.Width(prefix)})
+				continue
+			}
+			head := fmt.Sprintf("%d. %s", i+1, o.mark)
+			s := fieldSlot{option: i, at: len(rows), f: o.field, head: fg(th.accent).Render(prefix) + st.Render(head), indent: lipgloss.Width(prefix + head)}
+			if o.chosen && o.mark == "" && i != d.sel {
+				s.tail = " ✔"
+			}
+			slots = append(slots, s)
 			continue
 		}
 		label := fmt.Sprintf("%d. %s", i+1, o.label)
 		if o.field == nil {
 			rows = append(rows, hang(prefix, fg(th.accent), label, st, width)...)
+			rows = withDetail(rows, o)
+			continue
+		}
+		if o.fieldPrefix != "" {
+			rows = append(rows, hang(prefix, fg(th.accent), label, st, width)...)
+			rows = withDetail(rows, o)
+			slots = append(slots, fieldSlot{option: i, at: len(rows), f: o.field, head: "  " + fg(th.muted).Render(o.fieldPrefix), indent: 2 + lipgloss.Width(o.fieldPrefix)})
 			continue
 		}
 		head := label + "  "
 		if indent := lipgloss.Width(prefix + head); fitsBeside(o.field.value(), width-indent) {
 			slots = append(slots, fieldSlot{option: i, at: len(rows), f: o.field, head: fg(th.accent).Render(prefix) + st.Render(head), indent: indent})
+			rows = withDetail(rows, o)
 			continue
 		}
 		rows = append(rows, hang(prefix, fg(th.accent), label, st, width)...)
+		rows = withDetail(rows, o)
 		slots = append(slots, fieldSlot{option: i, at: len(rows), f: o.field, indent: 2, selected: i == d.sel})
 	}
 	d.optionStarts = append(d.optionStarts, len(rows))
@@ -100,6 +134,13 @@ func (d *dialog) rows(width, budget, fieldCap int, th theme) []string {
 	return rows
 }
 
+func withDetail(rows []string, o option) []string {
+	for _, r := range o.detail {
+		rows = append(rows, "  "+r)
+	}
+	return rows
+}
+
 // fitsBeside reports whether draft v fits one row of inline cells. The
 // textarea wraps a row that fills its width, as it keeps a cell for the
 // cursor, so this is decided here rather than by setting a trial width,
@@ -117,6 +158,8 @@ type fieldSlot struct {
 	head     string
 	indent   int
 	selected bool
+	// tail, when set, draws the field's text bold with tail after it.
+	tail string
 }
 
 func (s fieldSlot) rows(width, fieldMax int, th theme) []string {
@@ -131,6 +174,13 @@ func (s fieldSlot) rows(width, fieldMax int, th theme) []string {
 		return []string{strings.Repeat(" ", s.indent) + row}
 	}
 	rows := strings.Split(s.f.ta.View(), "\n")
+	if s.tail != "" {
+		bold := lipgloss.NewStyle().Bold(true)
+		for i := range rows {
+			rows[i] = bold.Render(strings.TrimRight(ansi.Strip(rows[i]), " "))
+		}
+		rows[len(rows)-1] += s.tail
+	}
 	for i := range rows {
 		if i == 0 && s.head != "" {
 			rows[i] = s.head + rows[i]

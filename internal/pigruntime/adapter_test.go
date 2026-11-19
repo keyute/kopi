@@ -660,3 +660,11 @@ func TestReviewDenialBlocksToolAndReportsReason(t *testing.T) {
 	assert.Contains(t, lastToolResult(t, <-requests), "too risky")
 	assert.Zero(t, ran.Load())
 }
+
+func TestExecutionModeRunsExclusiveReadToolAlone(t *testing.T) {
+	read := tool.Tool{Capability: policy.Read}
+	exclusive := tool.Tool{Capability: policy.Read, Exclusive: true}
+
+	assert.Equal(t, agent.ToolModeParallel, agentTool{tool: read}.ExecutionMode())
+	assert.Equal(t, agent.ToolModeSequential, agentTool{tool: exclusive}.ExecutionMode())
+}

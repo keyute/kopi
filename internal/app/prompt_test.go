@@ -48,7 +48,7 @@ func TestPromptMentionsExecuteModeOnlyWhenNonReadToolAvailable(t *testing.T) {
 	require.NoError(t, err)
 	h := newHarness(t, sb, Config{Tools: []tool.Tool{read, write, edit}, Rules: rules})
 	assert.NotContains(t, joinPrompt(h.c.prompt), sentence)
-	assert.Contains(t, joinPrompt(h.c.prompt), "Tools available: Read.\n")
+	assert.Contains(t, joinPrompt(h.c.prompt), "Tools available: Read, AskUserQuestion.\n")
 }
 
 func TestPromptAppendsServerInstructionsInNameOrder(t *testing.T) {

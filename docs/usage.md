@@ -60,7 +60,8 @@ Defaults; change them with [`keys`](configuration.md#keys).
   - While one runs, the working row shows `ctrl+b to background`.
   - With none running, Ctrl+B keeps its meaning in the input.
 - Ctrl+V pastes text or an image from the clipboard.
-- Mouse wheel or PgUp/PgDn scrolls the transcript.
+- Mouse wheel or PgUp/PgDn scrolls the transcript; while an [`AskUserQuestion`](tools.md#askuserquestion) dialog is open PgUp/PgDn scroll its cut preview or review instead.
+- Keys while the model asks you a question are listed under [`AskUserQuestion`](tools.md#askuserquestion).
 - Ctrl+O expands every group and call output until pressed again.
 
 ## Menus and highlighting

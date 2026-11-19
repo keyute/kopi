@@ -567,7 +567,7 @@ func TestUnsetModelNewAfterCancelledPickOffersWebSearch(t *testing.T) {
 	lh.request(t)
 	assert.True(t, lh.c.Interrupt())
 	wait(t, run.done)
-	require.Empty(t, toolNames(lh.c.tools))
+	require.Equal(t, []string{"AskUserQuestion"}, toolNames(lh.c.tools))
 
 	t.Setenv("OPENAI_API_KEY", "synthetic-key")
 	require.NoError(t, lh.c.NewSession(t.Context()))
@@ -576,5 +576,5 @@ func TestUnsetModelNewAfterCancelledPickOffersWebSearch(t *testing.T) {
 		n, ok := ev.(event.Notice)
 		return ok && strings.HasPrefix(n.Text, "Using openai/")
 	})
-	assert.Equal(t, []string{"WebSearch"}, toolNames(lh.c.tools))
+	assert.Equal(t, []string{"AskUserQuestion", "WebSearch"}, toolNames(lh.c.tools))
 }

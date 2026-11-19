@@ -24,6 +24,8 @@ type Tool struct {
 	// Deferred keeps the tool out of the model's tool list until ToolSearch
 	// loads it.
 	Deferred bool
+	// Exclusive runs each call alone: no other call of the same response runs alongside it.
+	Exclusive bool
 	// Run must acquire a nonmutating operation, call admit with its bound
 	// target before reading content or modifying files, and use that operation.
 	// admit returns the mode the call is admitted under.
