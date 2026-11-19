@@ -64,7 +64,7 @@ func newTaskBash(t *testing.T, dir string) (Tool, *Tasks) {
 	t.Helper()
 	tasks := NewTasks()
 	t.Cleanup(tasks.StopAll)
-	return NewBash(NewShell(dir, nil), NewShell(dir, nil), tasks), tasks
+	return NewBash(NewShell(dir, nil), NewShell(dir, nil), tasks, true), tasks
 }
 
 func TestBashRunInBackgroundStartsTask(t *testing.T) {
@@ -90,7 +90,7 @@ func TestBashRunInBackgroundUsesTheShellOfTheAdmittedMode(t *testing.T) {
 	tasks := NewTasks()
 	t.Cleanup(tasks.StopAll)
 	changes := taskChanges(tasks)
-	tool := NewBash(NewShell(execDir, &sandbox.Sandbox{}), NewShell(planDir, &sandbox.Sandbox{}), tasks)
+	tool := NewBash(NewShell(execDir, &sandbox.Sandbox{}), NewShell(planDir, &sandbox.Sandbox{}), tasks, true)
 
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"command":"touch plan","run_in_background":true}`), func(policy.Target) (policy.Mode, error) {
 		return policy.Plan, nil
@@ -111,7 +111,7 @@ func TestBashUnsandboxedBackgroundUsesTheUnsandboxedShell(t *testing.T) {
 	changes := taskChanges(tasks)
 	sh := NewShell(dir, &sandbox.Sandbox{})
 	sh.shell = filepath.Join(dir, "missing-shell")
-	tool := NewBash(sh, NewShell(dir, &sandbox.Sandbox{}), tasks)
+	tool := NewBash(sh, NewShell(dir, &sandbox.Sandbox{}), tasks, true)
 
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"command":"touch outside","unsandboxed":true,"run_in_background":true}`), func(policy.Target) (policy.Mode, error) {
 		return policy.Execute, nil
@@ -131,7 +131,7 @@ func TestBashUnsandboxedTimeoutMovesCommandToBackground(t *testing.T) {
 	changes := taskChanges(tasks)
 	sh := NewShell(dir, &sandbox.Sandbox{})
 	sh.shell = filepath.Join(dir, "missing-shell")
-	tool := NewBash(sh, NewShell(dir, &sandbox.Sandbox{}), tasks)
+	tool := NewBash(sh, NewShell(dir, &sandbox.Sandbox{}), tasks, true)
 	gate := mkfifo(t, dir, "gate")
 	args, err := json.Marshal(map[string]any{"command": "read x <'" + gate + "'; touch outside", "timeout": 1, "unsandboxed": true})
 	require.NoError(t, err)
@@ -208,7 +208,7 @@ func TestBashCancelKillsForegroundCommand(t *testing.T) {
 
 func TestForegroundBashStopsCommandAtTimeout(t *testing.T) {
 	dir := t.TempDir()
-	tool := NewBash(NewShell(dir, nil), NewShell(dir, nil), nil)
+	tool := NewBash(NewShell(dir, nil), NewShell(dir, nil), nil, true)
 	command, started, dead := holdFIFO(t, dir)
 	args, err := json.Marshal(map[string]any{"command": "echo partial; " + command, "timeout": 500})
 	require.NoError(t, err)
@@ -224,7 +224,7 @@ func TestForegroundBashStopsCommandAtTimeout(t *testing.T) {
 
 func TestForegroundBashCancelKillsCommand(t *testing.T) {
 	dir := t.TempDir()
-	tool := NewBash(NewShell(dir, nil), NewShell(dir, nil), nil)
+	tool := NewBash(NewShell(dir, nil), NewShell(dir, nil), nil, true)
 	command, started, dead := holdFIFO(t, dir)
 	args, err := json.Marshal(map[string]any{"command": command})
 	require.NoError(t, err)

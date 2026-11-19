@@ -31,8 +31,9 @@ var backgroundResult = regexp.MustCompile(`^Background task (t\d+)[ :.]`)
 // must keep commands from writing the workspace; with plan unsandboxed, plan
 // mode cannot run commands. Commands run through tasks, which keeps those
 // moved to the background; with nil tasks they run in the foreground only and
-// one still running at its timeout is stopped.
-func NewBash(sh, plan *Shell, tasks *Tasks) Tool {
+// one still running at its timeout is stopped. The unsandboxed parameter is
+// offered only when sh is sandboxed and allowUnsandboxed is true.
+func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 	description := "Runs a shell command (bash, else sh) in the workspace and returns its combined stdout and stderr; " +
 		"long output keeps its start and end. Every call starts a fresh shell in the workspace with no input: " +
 		"cd and variables do not carry over. A non-zero exit status is an error that reports the exit code. "
@@ -67,8 +68,10 @@ func NewBash(sh, plan *Shell, tasks *Tasks) Tool {
 		description += " Commands run in an OS sandbox that allows writing only in temporary directories, paths the user allowed " +
 			"and, in execute mode, the workspace; it may block reading some paths and the network. " +
 			"A blocked operation fails, typically with \"Operation not permitted\" or \"Read-only file system\". " +
-			"A directory it blocks reading may instead appear empty. " +
-			"unsandboxed runs one command outside it; that call asks for approval unless a rule allows it."
+			"A directory it blocks reading may instead appear empty."
+	}
+	if sh.Sandboxed() && allowUnsandboxed {
+		description += " unsandboxed runs one command outside it; that call asks for approval unless a rule allows it."
 		properties["unsandboxed"] = map[string]any{
 			"type":        "boolean",
 			"description": "Run this command outside the OS sandbox; plan mode refuses such a call.",

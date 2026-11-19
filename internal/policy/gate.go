@@ -164,6 +164,9 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 			if target != nil {
 				allow += "(" + escape(filepath.ToSlash(target.Path)) + ")"
 			}
+			if optOut {
+				allow = ""
+			}
 			switch {
 			case g.review == nil:
 				if err := g.ask(ctx, req, allow); err != nil {
@@ -184,11 +187,14 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 }
 
 // ask asks the approver about r. allow is the rule that would allow the call
-// when no rule asked about it.
+// when no rule asked about it; empty when no rule should be suggested.
 func (g *Gate) ask(ctx context.Context, r Request, allow string) error {
 	if g.approve == nil {
 		if r.Rule != "" {
 			return fmt.Errorf("rule %s requires approval for tool %q and this run cannot ask for it: %w", r.Rule, r.Tool, ErrDenied)
+		}
+		if allow == "" {
+			return fmt.Errorf("tool %q needs approval and this run cannot ask for it: %w", r.Tool, ErrDenied)
 		}
 		return fmt.Errorf("tool %q needs approval and this run cannot ask for it; add an allow rule to permissions.allow in config.json or pass --allowed-tools, such as %s: %w", r.Tool, allow, ErrDenied)
 	}
@@ -249,6 +255,9 @@ func (g *Gate) reviewed(ctx context.Context, r Request, allow string) error {
 		}
 	default:
 		if g.approve == nil {
+			if allow == "" {
+				return fmt.Errorf("tool %q needs approval, the approval classifier could not decide and this run cannot ask for it: %w", r.Tool, ErrDenied)
+			}
 			return fmt.Errorf("tool %q needs approval, the approval classifier could not decide and this run cannot ask for it; add an allow rule to permissions.allow in config.json or pass --allowed-tools, such as %s: %w", r.Tool, allow, ErrDenied)
 		}
 	}

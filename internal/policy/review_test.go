@@ -378,3 +378,14 @@ func TestReviewSeesUnsandboxedCallsOnly(t *testing.T) {
 	assert.Equal(t, "c2", f.reqs[0].CallID)
 	assert.Empty(t, h.reqs)
 }
+
+func TestReviewUndecidedUnsandboxedCallWithoutApproverHasNoRuleHint(t *testing.T) {
+	f := &reviewer{reviews: []Review{{Verdict: VerdictAsk}}}
+	_, g := newReviewGate(t, f, nil)
+
+	err := g.Before(t.Context(), "c1", "Shell", json.RawMessage(`{"unsandboxed":true}`))
+
+	require.ErrorIs(t, err, ErrDenied)
+	assert.Contains(t, err.Error(), `tool "Shell" needs approval, the approval classifier could not decide and this run cannot ask for it`)
+	assert.NotContains(t, err.Error(), "add an allow rule")
+}

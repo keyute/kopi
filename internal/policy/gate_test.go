@@ -876,6 +876,7 @@ func TestUnsandboxedCallWithoutApproverIsDenied(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrDenied)
 	assert.Contains(t, err.Error(), `tool "Shell" needs approval and this run cannot ask for it`)
+	assert.NotContains(t, err.Error(), "add an allow rule")
 }
 
 func TestUnsandboxedGrantIsRevokedOnModeChange(t *testing.T) {

@@ -71,6 +71,8 @@ type Sandbox struct {
 	AllowWrite []string `koanf:"allowWrite"`
 	DenyRead   []string `koanf:"denyRead"`
 	Network    bool     `koanf:"network"`
+	// AllowUnsandboxed offers Bash's unsandboxed parameter.
+	AllowUnsandboxed bool `koanf:"allowUnsandboxed"`
 }
 
 // Classifier configures the model that reviews calls that would otherwise ask;
@@ -123,7 +125,7 @@ func Defaults() Layer {
 	values["mode"] = policy.Plan.String()
 	values["instructionFallbacks"] = []string{"CLAUDE.md"}
 	values["permissions"] = map[string]any{"allow": []string{}, "ask": []string{}, "deny": []string{}}
-	values["sandbox"] = map[string]any{"allowWrite": []string{}, "denyRead": []string{}, "network": false}
+	values["sandbox"] = map[string]any{"allowWrite": []string{}, "denyRead": []string{}, "network": false, "allowUnsandboxed": true}
 	values["skills"] = map[string]any{"prefix": "skill"}
 	values["classifier"] = map[string]any{"enabled": false, "instructions": []string{}}
 	values["mcpServers"] = map[string]any{}
@@ -412,30 +414,31 @@ type Entry struct{ Key, Value, Origin string }
 func (r *Resolved) Entries() []Entry {
 	c := r.Config
 	values := map[string]any{
-		"model":                   c.Model,
-		"smallModel":              c.SmallModel,
-		"mode":                    c.Mode,
-		"instructionFallbacks":    c.InstructionFallbacks,
-		"version":                 c.Version,
-		"statusline.left":         c.StatusLine.Left,
-		"statusline.right":        c.StatusLine.Right,
-		"statusline.separator":    c.StatusLine.Separator,
-		"agentline.left":          c.AgentLine.Left,
-		"agentline.right":         c.AgentLine.Right,
-		"agentline.separator":     c.AgentLine.Separator,
-		"theme.dark":              c.Theme.Dark,
-		"theme.light":             c.Theme.Light,
-		"permissions.allow":       c.Permissions.Allow,
-		"permissions.ask":         c.Permissions.Ask,
-		"permissions.deny":        c.Permissions.Deny,
-		"sandbox.enabled":         c.Sandbox.Enabled,
-		"sandbox.allowWrite":      c.Sandbox.AllowWrite,
-		"sandbox.denyRead":        c.Sandbox.DenyRead,
-		"sandbox.network":         c.Sandbox.Network,
-		"skills.prefix":           c.Skills.Prefix,
-		"classifier.enabled":      c.Classifier.Enabled,
-		"classifier.model":        c.Classifier.Model,
-		"classifier.instructions": c.Classifier.Instructions,
+		"model":                    c.Model,
+		"smallModel":               c.SmallModel,
+		"mode":                     c.Mode,
+		"instructionFallbacks":     c.InstructionFallbacks,
+		"version":                  c.Version,
+		"statusline.left":          c.StatusLine.Left,
+		"statusline.right":         c.StatusLine.Right,
+		"statusline.separator":     c.StatusLine.Separator,
+		"agentline.left":           c.AgentLine.Left,
+		"agentline.right":          c.AgentLine.Right,
+		"agentline.separator":      c.AgentLine.Separator,
+		"theme.dark":               c.Theme.Dark,
+		"theme.light":              c.Theme.Light,
+		"permissions.allow":        c.Permissions.Allow,
+		"permissions.ask":          c.Permissions.Ask,
+		"permissions.deny":         c.Permissions.Deny,
+		"sandbox.enabled":          c.Sandbox.Enabled,
+		"sandbox.allowWrite":       c.Sandbox.AllowWrite,
+		"sandbox.denyRead":         c.Sandbox.DenyRead,
+		"sandbox.network":          c.Sandbox.Network,
+		"sandbox.allowUnsandboxed": c.Sandbox.AllowUnsandboxed,
+		"skills.prefix":            c.Skills.Prefix,
+		"classifier.enabled":       c.Classifier.Enabled,
+		"classifier.model":         c.Classifier.Model,
+		"classifier.instructions":  c.Classifier.Instructions,
 	}
 	for _, action := range KeyActions {
 		values["keys."+action] = c.Keys[action]

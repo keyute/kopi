@@ -472,10 +472,33 @@ func TestSubagentFileToolsNeverReachThePlanFile(t *testing.T) {
 		require.NoError(t, err, "root %s", tl.Name)
 		assert.True(t, target.PlanFile, "root %s", tl.Name)
 	}
-	for _, tl := range agentTools(root, ws, nil, nil) {
+	for _, tl := range agentTools(root, ws, nil, nil, true) {
 		target, err := tl.Target(args)
 		require.NoError(t, err, "subagent %s", tl.Name)
 		assert.False(t, target.PlanFile, "subagent %s", tl.Name)
+	}
+}
+
+func TestAgentToolsHonourAllowUnsandboxed(t *testing.T) {
+	dir := t.TempDir()
+	ws, err := tool.NewWorkspace(dir, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
+	shell, planShell := tool.NewShell(dir, &sandbox.Sandbox{}), tool.NewShell(dir, &sandbox.Sandbox{})
+	root := []tool.Tool{tool.NewBash(shell, planShell, nil, true)}
+
+	for _, allow := range []bool{false, true} {
+		got := agentTools(root, ws, shell, planShell, allow)
+		require.Len(t, got, 1)
+		properties, ok := got[0].Parameters["properties"].(map[string]any)
+		require.True(t, ok)
+		if allow {
+			assert.Contains(t, properties, "unsandboxed")
+			assert.NotNil(t, got[0].Unsandboxed)
+		} else {
+			assert.NotContains(t, properties, "unsandboxed")
+			assert.Nil(t, got[0].Unsandboxed)
+		}
 	}
 }
 
@@ -1552,6 +1575,24 @@ func TestRootSandboxedBashUnsandboxedRunsOutsideTheSandbox(t *testing.T) {
 	result, _ := printBashArgs(t, e, map[string]any{"command": command, "unsandboxed": true}, "--mode", "execute", "--allowed-tools", "Bash")
 
 	assert.Equal(t, "synthetic kopi Bash secret\n", result)
+}
+
+func TestRootSandboxedBashUnsandboxedIsRefusedWhenNotAllowed(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	e := newSandboxedEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"sandbox":{"allowUnsandboxed":false}}`)
+	secret := filepath.Join(e.kopiHome, "secret.txt")
+	const sentinel = "synthetic kopi Bash secret"
+	e.writeFile(t, secret, sentinel+"\n")
+	quoted := "'" + strings.ReplaceAll(secret, "'", "'\"'\"'") + "'"
+	command := `IFS= read -r secret < ` + quoted + ` && printf '%s\n' "$secret"`
+
+	result, _ := printBashArgs(t, e, map[string]any{"command": command, "unsandboxed": true}, "--mode", "execute", "--allowed-tools", "Bash")
+
+	assert.NotContains(t, result, sentinel)
+	assert.Contains(t, result, "unsandboxed")
 }
 
 func TestRootSandboxedBashUnsandboxedIsRefusedInPlan(t *testing.T) {

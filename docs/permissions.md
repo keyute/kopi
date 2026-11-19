@@ -75,7 +75,7 @@ The fullscreen interface asks before a call that needs approval.
   - `the classifier could not decide`
   - `: <reason>` is added when the classifier gave one.
 - Interrupting during a review stops it without asking.
-- Print mode cannot ask, so it denies those calls; the refusal says to add an allow rule, such as `--allowed-tools Bash`. It also:
+- Print mode cannot ask, so it denies those calls; the refusal says to add an allow rule, such as `--allowed-tools Bash`, except for a `Bash` call that sets `unsandboxed`. It also:
   - denies a call the classifier leaves to the user and one an ask rule matches
   - runs the calls the classifier allows without an allow rule
 
@@ -117,6 +117,7 @@ Behaviour with `classifier.enabled`:
   - The classifier allows it, denies it with a one-line reason the model gets while the turn goes on, or leaves it to you.
   - A review that fails, times out or returns anything else is left to you too.
   - Sandboxed `Bash` without `unsandboxed` never asks, so it is never reviewed.
+  - `sandbox.allowUnsandboxed` false keeps `unsandboxed` calls from being offered, reviewed or allowed.
 - The third denial in a row, and the twentieth in a session, goes to you instead of being denied. A call the classifier allows or you approve ends the run of denials.
 - The classifier is sent:
   - the session's prompts (the last 8,000 bytes)

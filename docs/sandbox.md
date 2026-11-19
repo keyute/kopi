@@ -20,7 +20,8 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
   "sandbox": {
     "allowWrite": ["~/Library/Caches/go-build"],
     "denyRead": ["~/.ssh"],
-    "network": false
+    "network": false,
+    "allowUnsandboxed": true
   }
 }
 ```
@@ -32,6 +33,7 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
 - `sandbox.allowWrite` and `sandbox.denyRead` take plain paths, no globs: `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory. So `.env` means only `<start directory>/.env`, unlike in a [rule](permissions.md#rules).
 - A later layer's `sandbox.allowWrite` or `sandbox.denyRead` replaces an earlier one's whole.
 - `sandbox.network` (default `false`) allows IP networking in the sandbox.
+- `sandbox.allowUnsandboxed` (default `true`) offers `Bash` the [`unsandboxed`](#outside-the-sandbox) parameter.
 
 ## Write
 
@@ -65,11 +67,11 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
 - Such a call is treated as `Bash` without the sandbox, see [permissions](permissions.md#precedence): plan mode refuses it before any rule; in execute mode rules apply and otherwise it asks, or the [classifier](permissions.md#classifier) reviews it.
 - Its title reads `Bash (unsandboxed) …`, in the approval dialog too.
 - A [subagent](subagents.md) can use it like the main agent; one whose definition pins plan mode is always refused.
-- Without the sandbox the parameter is not offered.
+- Without the sandbox, or with `sandbox.allowUnsandboxed` false, the parameter is not offered.
 
 ## Limitations
 
-- A command the sandbox blocks can be run with `unsandboxed`.
+- A command the sandbox blocks can be run with `unsandboxed`, unless `sandbox.allowUnsandboxed` is false.
 
 ### macOS
 
@@ -105,7 +107,7 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
 
 - Sandboxed commands inherit Kopi's environment, including provider API keys, and can read any file outside Kopi's home and `sandbox.denyRead`.
 - With `sandbox.network` true, commands reach the network without asking, in plan mode too.
-- A bare `Bash` or `*` allow rule, or `--allowed-tools Bash`, lets `unsandboxed` calls run without asking.
+- A bare `Bash` or `*` allow rule, or `--allowed-tools Bash`, lets `unsandboxed` calls run without asking; `sandbox.allowUnsandboxed` false stops them.
 - The status line's `sandbox` segment shows the default, not whether a call set `unsandboxed`.
 - Tools that write outside the start directory and temp directories, such as Go's build cache and package-manager caches, fail until those paths are in `sandbox.allowWrite`.
 - `git init` in the start directory, `git config` writes, `git worktree add`, commits in a linked worktree (its git directory is outside the start directory), commits inside a submodule and commit signing through an agent socket fail.
