@@ -464,6 +464,39 @@ func TestRegistryStopQueuesNoNoticeButStopTaskQueuesANonWakingOne(t *testing.T) 
 	assert.Zero(t, a.faux.CallCount(), "a stop wakes nobody")
 }
 
+func TestHumanStopOfAStoppingChildReportsAMessageTheModelSent(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{releaseTool(started, release)}}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "c1"))})
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, started)
+	ch := a.childOf(id)
+	first := a.workOf(ch)
+
+	a.c.queue.Lock()
+	sendDone := first.sendCtx.Done()
+	a.c.queue.Unlock()
+	stopped := make(chan error, 1)
+	go func() {
+		_, err := a.tasks.Stop(id)
+		stopped <- err
+	}()
+	wait(t, sendDone)
+	resumed, err := a.c.message(t.Context(), id, "b")
+	require.NoError(t, err)
+	assert.True(t, resumed)
+	require.True(t, a.c.Interrupt(id))
+	close(release)
+	require.NoError(t, receiveError(t, stopped))
+	a.until(t, func() bool { return a.live() == 0 })
+
+	queued := a.queuedNotices()
+	require.Len(t, queued, 1)
+	assert.Contains(t, queued[0].Text, "stopped by the user: find it")
+	assert.Contains(t, queued[0].Text, "\nUndelivered messages:\nb")
+	assert.Equal(t, 1, a.child.CallCount(), "the message did not start another run")
+}
+
 func TestStoppedChildFinalizationOverridesTheSendOutcome(t *testing.T) {
 	for _, status := range []event.Status{event.Completed, event.Failed} {
 		for _, byHuman := range []bool{false, true} {

@@ -666,9 +666,10 @@ func (c *Controller) Interrupt(session string) bool {
 	return r.interrupt()
 }
 
-// interruptByHumanLocked stops r's running Work as the human's stop, unless it
-// is already stopped, and returns it; nil when none runs. It must be called
-// with queue held.
+// interruptByHumanLocked stops r's running Work as the human's stop and returns
+// it; nil when none runs. A Work already stopped by someone else stays theirs,
+// unless input is pending: the stop then hands that input back, so the human's
+// stop must report it. It must be called with queue held.
 func (c *Controller) interruptByHumanLocked(r *runner) *Work {
 	c.mu.Lock()
 	w := r.work
@@ -676,7 +677,7 @@ func (c *Controller) interruptByHumanLocked(r *runner) *Work {
 	if w == nil {
 		return nil
 	}
-	if !w.stopped {
+	if !w.stopped || len(r.pending) > 0 {
 		w.byHuman = true
 	}
 	r.interrupt()
