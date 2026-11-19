@@ -24,7 +24,6 @@ type Controller interface {
 	Subscribe(fn func(event.Event)) func()
 	Submit(ctx context.Context, session, text string, images ...string) (*app.Work, error)
 	SendNow(ctx context.Context, session, text string, images ...string) error
-	IsCommand(text string) bool
 	TakeQueued(session string) []event.Input
 	Interrupt(session string) bool
 	// Answer answers the pending approval for token; false when it is stale.

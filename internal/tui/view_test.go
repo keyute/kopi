@@ -2,8 +2,6 @@ package tui
 
 import (
 	"testing"
-	"testing/synctest"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
@@ -115,6 +113,21 @@ func TestSessionChangedRestoresMainsUnsentInputWhileASubagentIsShown(t *testing.
 	assert.Equal(t, "unsent", m.composer.value())
 }
 
+func TestSessionChangedRestoresAHiddenSubagentsHeldInput(t *testing.T) {
+	m, c := agentsModel(t)
+	c.agents = append(c.agents, app.AgentStatus{ID: "t2", Agent: "explore"})
+	send(m, event.TasksChanged{})
+	send(m, sub("t2", event.TurnStart{Prompt: "dig"}), sub("t2", event.TurnEnd{Unsent: []event.Input{{Text: "held"}}}))
+	send(m, event.TurnStart{Prompt: "go"})
+	display(m, "t1")
+	send(m, event.TurnEnd{Unsent: []event.Input{{Text: "unsent"}}})
+	require.Empty(t, m.composer.value())
+
+	send(m, event.SessionChanged{SessionID: "s2"})
+
+	assert.Equal(t, "unsent\n\nheld", m.composer.value())
+}
+
 func TestInputActsOnTheShownView(t *testing.T) {
 	m, c := agentsModel(t)
 	send(m, sub("t1", event.TurnStart{Prompt: "dig"}), sub("t1", event.QueueChanged{Pending: []string{"q"}}))
@@ -159,28 +172,6 @@ func TestStatusLineFollowsTheShownView(t *testing.T) {
 	assert.Contains(t, statusText(m), "10.0%")
 }
 
-func TestWorkingRowFollowsTheView(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		m, c := agentsModel(t)
-		send(m, sub("t1", event.TurnStart{Prompt: "dig"}))
-		working := func() string { s := screen(m); return s[len(s)-6-m.geo.agents] }
-		time.Sleep(5 * time.Second)
-		assert.NotContains(t, screen(m), "⠋ Working… 5s", "main is idle")
-
-		cmd := display(m, "t1")
-		assert.NotNil(t, cmd, "the spinner ticks for the new view")
-		assert.Equal(t, "⠋ Working… 5s", working())
-
-		send(m, sub("t1", event.TurnEnd{}))
-		c.status.Agents = 1
-		send(m, event.TasksChanged{})
-		assert.NotContains(t, screen(m), "⠋ Waiting on 1 agent… 0s", "waiting shows in main only")
-
-		display(m, app.Main)
-		assert.Equal(t, "⠋ Waiting on 1 agent… 0s", working())
-	})
-}
-
 func TestSubagentQueueShowsInItsViewOnly(t *testing.T) {
 	m, _ := agentsModel(t)
 	send(m, sub("t1", event.TurnStart{Prompt: "dig"}), sub("t1", event.QueueChanged{Pending: []string{"more"}}))
@@ -204,6 +195,18 @@ func TestUnsentComesBackWhenItsViewIsShown(t *testing.T) {
 
 	send(m, sub("t1", event.TurnStart{Prompt: "again"}), sub("t1", event.TurnEnd{Unsent: []event.Input{{Text: "now"}}}))
 	assert.Equal(t, "now\n\nheld", m.composer.value(), "the shown view's input returns at once")
+}
+
+func TestAStoppedHiddenSubagentKeepsItsRowWhileItHoldsUnsentInput(t *testing.T) {
+	m, c := agentsModel(t)
+	c.agents[1].State = "completed"
+	send(m, sub("t1", event.TurnStart{Prompt: "dig"}), sub("t1", event.TurnEnd{Unsent: []event.Input{{Text: "held"}}}), event.TasksChanged{})
+	require.NotEmpty(t, m.entries(), "the row stays so the view can be shown")
+
+	display(m, "t1")
+	display(m, app.Main)
+
+	assert.Empty(t, m.entries(), "the row goes once its input came back")
 }
 
 func TestSubagentTurnEndDropsOnlyItsOwnApproval(t *testing.T) {

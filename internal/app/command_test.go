@@ -12,7 +12,6 @@ import (
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/policy"
-	"github.com/keyute/kopi/internal/skill"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -34,38 +33,6 @@ func TestParse(t *testing.T) {
 			assert.Equal(t, tc.name, name)
 			assert.Equal(t, tc.args, args)
 			assert.Equal(t, tc.isCommand, isCommand)
-		})
-	}
-}
-
-func TestIsCommand(t *testing.T) {
-	for _, prefix := range []string{"", "skill"} {
-		t.Run(prefix, func(t *testing.T) {
-			h, _ := openHarness(t, Config{SkillPrefix: prefix, Skills: []skill.Skill{{Name: "review"}}})
-			name := "review"
-			if prefix != "" {
-				name = prefix + ":" + name
-			}
-			for _, tc := range []struct {
-				text string
-				want bool
-			}{
-				{"/plan invalid", true},
-				{"  /resume missing  ", true},
-				{"/unknown argument", true},
-				{"/", true},
-				{"/" + name + " argument", false},
-				{"/" + name + "\targument", false},
-				{"//plan", false},
-				{"  //unknown", false},
-				{"normal prompt", false},
-				{"", false},
-			} {
-				assert.Equal(t, tc.want, h.c.IsCommand(tc.text), tc.text)
-			}
-			for _, cmd := range commandTable() {
-				assert.True(t, h.c.IsCommand("/"+cmd.Name), cmd.Name)
-			}
 		})
 	}
 }

@@ -728,11 +728,8 @@ func (c *Controller) Status() Status {
 	s := Status{SessionID: sessID, Mode: mode, Model: c.Model(), Busy: busy, Branch: gitBranch(c.cfg.Workspace), Workspace: c.cfg.Workspace}
 	if sess != nil {
 		s.MessageCount = sess.MessageCount()
-		if tokens, window, ok := sess.ContextUsage(); ok {
-			s.ContextTokens, s.ContextWindow = tokens, window
-		}
-		s.Effort = sess.Effort()
-		s.ToolCalls, s.Cost = sess.Usage()
+		a := c.agentStatus(AgentStatus{}, sess)
+		s.ContextTokens, s.ContextWindow, s.Effort, s.ToolCalls, s.Cost = a.ContextTokens, a.ContextWindow, a.Effort, a.ToolCalls, a.Cost
 	}
 	for _, t := range c.cfg.Tools {
 		if t.Capability == policy.Exec {

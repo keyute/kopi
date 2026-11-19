@@ -226,10 +226,15 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 	if c.Version != Version {
 		return nil, fmt.Errorf("%w: %d (from %s), want %d", ErrUnsupportedVersion, c.Version, originOf(origins, "version"), Version)
 	}
-	if err := validateSegmentRefs(c.StatusLine, origins); err != nil {
+	if err := validateSegmentRefs("statusline", c.StatusLine.Left, c.StatusLine.Right, func(name string) bool {
+		_, user := c.StatusLine.Segments[name]
+		return user || slices.Contains(StatusSegments, name)
+	}, origins); err != nil {
 		return nil, err
 	}
-	if err := validateAgentSegmentRefs(c.AgentLine, origins); err != nil {
+	if err := validateSegmentRefs("agentline", c.AgentLine.Left, c.AgentLine.Right, func(name string) bool {
+		return slices.Contains(AgentSegments, name)
+	}, origins); err != nil {
 		return nil, err
 	}
 	return &Resolved{Config: c, Origins: origins}, nil

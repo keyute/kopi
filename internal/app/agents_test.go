@@ -1399,6 +1399,28 @@ func TestSlashCommandSubmittedToAChildActsOnTheMainSession(t *testing.T) {
 	assert.NotEmpty(t, receiveEvent(t, changed).SessionID)
 }
 
+func TestSkillCommandSubmittedToAChildReachesItAndAnUnknownOneIsRefused(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), skillConfig("skill", "a"), agentDef("explorer"))
+	childRequests := make(chan pigruntimetest.Request, 1)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first"), pigruntimetest.Capture(t, childRequests, "second")})
+	rootRequests := make(chan pigruntimetest.Request, 2)
+	a.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, rootRequests, "ack"), pigruntimetest.Capture(t, rootRequests, "ack")})
+	id := a.launch(t, "explorer", "find it", "go")
+	a.untilStatus(t, id, tool.TaskCompleted)
+	receive(t, rootRequests)
+	a.until(t, func() bool { return a.workOf(a.childOf(id)) == nil })
+
+	_, err := a.c.Submit(t.Context(), id, "/nope")
+	assert.ErrorIs(t, err, ErrUnknownCommand)
+	w, err := a.c.Submit(t.Context(), id, "/skill:a do it")
+	require.NoError(t, err)
+	require.NotNil(t, w)
+	wait(t, w.Done())
+
+	assert.Contains(t, receive(t, childRequests).UserTexts, skillText("a"))
+	assert.NotContains(t, receive(t, rootRequests).UserTexts, "/skill:a do it", "main gets only the end notice")
+}
+
 func TestControlsIgnoreUnknownAndStaleSessionTargets(t *testing.T) {
 	for _, now := range []bool{false, true} {
 		for _, stale := range []bool{false, true} {
@@ -1474,6 +1496,8 @@ func TestAgentsListsMainThenEverySubagentInTaskOrder(t *testing.T) {
 
 	require.Len(t, got, 3)
 	model := childProvider + "/faux-1"
+	assert.NotZero(t, got[2].ToolCalls, "the second subagent's tool call counts for it")
+	assert.NotEqual(t, got[0].ToolCalls, got[2].ToolCalls, "usage is per session")
 	for i, want := range []AgentStatus{
 		{ID: Main, Model: a.c.Model()},
 		{ID: first, Agent: "explorer", Description: "first job", Model: model, State: tool.TaskCompleted},

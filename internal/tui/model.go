@@ -486,18 +486,18 @@ func (m *model) submit() tea.Cmd {
 	}
 	text, images := m.composer.expanded()
 	_, err := m.c.Submit(m.ctx, m.shown, text, images...)
-	return m.submitted(text, err)
+	return m.submitted(err)
 }
 
 // sendNow is submit through SendNow; an empty draft sends just the queue.
 func (m *model) sendNow() tea.Cmd {
 	text, images := m.composer.expanded()
-	return m.submitted(text, m.c.SendNow(m.ctx, m.shown, text, images...))
+	return m.submitted(m.c.SendNow(m.ctx, m.shown, text, images...))
 }
 
 // submitted clears the draft once the Controller accepts it, and keeps it on
 // any refusal so it can be fixed or sent again.
-func (m *model) submitted(text string, err error) tea.Cmd {
+func (m *model) submitted(err error) tea.Cmd {
 	// The Controller records refused commands too.
 	m.composer.setHistory(m.c.History())
 	switch {
@@ -516,14 +516,8 @@ func (m *model) submitted(text string, err error) tea.Cmd {
 	case errors.Is(err, app.ErrLoggingIn):
 		return m.flash("a login is under way")
 	default:
-		id := m.shown
-		if m.c.IsCommand(text) {
-			id = app.Main
-		}
-		m.viewOf(id).tr.Apply(event.Error{Err: err})
-		if id == m.shown {
-			m.relayout()
-		}
+		m.view().tr.Apply(event.Error{Err: err})
+		m.relayout()
 	}
 	return nil
 }
@@ -597,8 +591,14 @@ func (m *model) apply(ev event.Event) *view {
 		main := newView()
 		old := m.views[app.Main]
 		main.busy, main.turnStart, main.verb = old.busy, old.turnStart, old.verb
+		unsent := old.unsent
+		for _, a := range m.agents {
+			if v := m.views[a.ID]; v != nil && a.ID != app.Main {
+				unsent = append(unsent, v.unsent...)
+			}
+		}
 		m.views, m.shown = map[string]*view{app.Main: main}, app.Main
-		m.composer.restore(old.unsent)
+		m.composer.restore(unsent)
 		if len(ev.History) > 0 {
 			m.view().tr.Restore(ev.History)
 		}

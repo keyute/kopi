@@ -54,8 +54,10 @@ func (m *model) viewOf(id string) *view {
 // An id with no view that is not in m.agents is ignored. The command keeps the
 // spinner ticking when the view has a working row.
 func (m *model) show(id string) tea.Cmd {
-	if _, ok := m.views[id]; !ok && !slices.ContainsFunc(m.agents, func(a app.AgentStatus) bool { return a.ID == id }) {
-		return nil
+	if _, ok := m.views[id]; !ok {
+		if _, known := m.agent(id); !known {
+			return nil
+		}
 	}
 	wasShown := m.tickWanted()
 	v := m.viewOf(id)

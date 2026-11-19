@@ -185,33 +185,16 @@ func validateSegments(segments map[string]StatusSegment) error {
 	return nil
 }
 
-// validateSegmentRefs checks the merged statusline lists against the built-in
-// and user-defined segments, naming the layer that set each list.
-func validateSegmentRefs(s StatusLine, origins map[string]string) error {
+// validateSegmentRefs checks the merged lists of the bar named by prefix
+// against its known segments, naming the layer that set each list.
+func validateSegmentRefs(prefix string, left, right []string, known func(string) bool, origins map[string]string) error {
 	for _, side := range []struct {
 		name string
 		segs []string
-	}{{"left", s.Left}, {"right", s.Right}} {
+	}{{"left", left}, {"right", right}} {
 		for _, name := range side.segs {
-			if _, user := s.Segments[name]; !user && !slices.Contains(StatusSegments, name) {
-				key := "statusline." + side.name
-				return fmt.Errorf("config layer %s: %w: %s: unknown segment %q", originOf(origins, key), ErrInvalidValue, key, name)
-			}
-		}
-	}
-	return nil
-}
-
-// validateAgentSegmentRefs checks the merged agentline lists against
-// AgentSegments, naming the layer that set each list.
-func validateAgentSegmentRefs(a AgentLine, origins map[string]string) error {
-	for _, side := range []struct {
-		name string
-		segs []string
-	}{{"left", a.Left}, {"right", a.Right}} {
-		for _, name := range side.segs {
-			if !slices.Contains(AgentSegments, name) {
-				key := "agentline." + side.name
+			if !known(name) {
+				key := prefix + "." + side.name
 				return fmt.Errorf("config layer %s: %w: %s: unknown segment %q", originOf(origins, key), ErrInvalidValue, key, name)
 			}
 		}

@@ -90,7 +90,7 @@ func TestAgentRowsDropAnEndedSubagentUnlessShown(t *testing.T) {
 	ended := explorer("t1")
 	ended.State = "completed"
 	c.agents[1] = ended
-	m.views["t1"].busy = false
+	send(m, sub("t1", event.TurnEnd{}))
 	send(m, event.TasksChanged{})
 	assert.Equal(t, statusText(m), screen(m)[len(screen(m))-1], "no rows")
 
@@ -534,7 +534,7 @@ func TestFocusEndsWhenEnterOnMainDropsTheRows(t *testing.T) {
 	ended := explorer("t1")
 	ended.State = "completed"
 	c.agents[1] = ended
-	m.views["t1"].busy = false
+	send(m, sub("t1", event.TurnEnd{}))
 	send(m, event.TasksChanged{})
 	require.True(t, m.focus.on)
 	require.Equal(t, app.Main, m.focus.id)
@@ -613,7 +613,7 @@ func TestFocusMovesToTheNearestEntryWhenItsOwnVanishes(t *testing.T) {
 	press(m, down)
 	require.Equal(t, "t2", m.focus.id)
 
-	m.views["t2"].busy = false
+	send(m, sub("t2", event.TurnEnd{}))
 	send(m, event.TasksChanged{})
 
 	assert.True(t, m.focus.on)

@@ -112,19 +112,23 @@ func compactCount(n int) string {
 	return strconv.Itoa(n)
 }
 
-// entries is the agent rows' entries: main, then each subagent that is busy or
-// shown. Without a subagent entry there are none.
+// entries is the agent rows' entries: main, then each subagent that is busy,
+// shown or holding handed-back input. Without a subagent entry there are none.
 func (m *model) entries() []entry {
 	var es []entry
 	for _, a := range m.agents {
 		e := entry{AgentStatus: a}
+		held := false
 		if v := m.views[a.ID]; v != nil {
 			if e.busy = v.busy; e.busy {
 				e.since = v.turnStart
 			}
-			e.activity, _ = v.tr.Running()
+			if slices.Contains(m.agentLine.Left, "activity") || slices.Contains(m.agentLine.Right, "activity") {
+				e.activity, _ = v.tr.Running()
+			}
+			held = len(v.unsent) > 0
 		}
-		if a.ID != app.Main && !e.busy && a.ID != m.shown {
+		if a.ID != app.Main && !e.busy && !held && a.ID != m.shown {
 			continue
 		}
 		es = append(es, e)

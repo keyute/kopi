@@ -67,20 +67,6 @@ func leadingWord(text string) string {
 	return strings.TrimPrefix(word, "/")
 }
 
-// IsCommand reports whether text is a control command or an unknown slash
-// command, rather than a prompt (including named skills and // escapes).
-func (c *Controller) IsCommand(text string) bool {
-	name, _, command := parse(text)
-	if !command {
-		return false
-	}
-	if isControl(name) {
-		return true
-	}
-	_, skill := c.skills.Lookup(leadingWord(text))
-	return !skill
-}
-
 func isControl(name string) bool {
 	return slices.ContainsFunc(commandTable(), func(c command) bool { return c.Name == name })
 }
