@@ -113,7 +113,7 @@
 - `No` takes feedback typed on its row. The feedback goes to the model, which stays in plan mode and can revise the plan and ask again. A blank `No` or Esc dismisses the plan and stops the turn; the model sees that you dismissed it.
 - The call is an error when the session is not in plan mode or the plan file is missing or empty.
 - If you edited the plan file while the dialog was open, the model is told.
-- The [`edit-plan`](configuration.md#keys) key in the dialog, and `/plan open` at any time, open the plan file in `$VISUAL`, else `$EDITOR`; with neither set a notice says so.
+- The [`edit-plan`](configuration.md#keys) key in the dialog, and `/plan open` at any time, open the plan file in `$VISUAL`, else `$EDITOR`; with neither set a notice says so. Before the plan file exists `/plan open` shows a notice instead.
 - Only in the fullscreen interface; a deny rule removes it, a bare ask rule naming it or `*` makes it ask for approval, and [subagents](subagents.md#what-a-subagent-gets) never get it or the plan file. `Bash` in the [sandbox](sandbox.md) cannot reach it, as it cannot read or write Kopi's home. `kopi -p` has no `ExitPlanMode` and no plan file.
 - Keys while the plan is open; Up, Down, Enter, Esc, PgUp, PgDn, Ctrl+V and the newline keys follow [`keys`](configuration.md#keys):
 

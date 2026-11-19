@@ -348,10 +348,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			ws.Close()
 		}
 	}()
-	plans, err := tool.NewPlans(paths.PlansDir)
-	if err != nil {
-		return err
-	}
+	plans := tool.NewPlans(paths.PlansDir)
 	tasks := tool.NewTasks()
 	// Commands run in their own session, so they would otherwise outlive Kopi.
 	defer tasks.StopAll()

@@ -81,12 +81,11 @@ func TestTasksCommandShowsTasksIdleAndMidTurn(t *testing.T) {
 
 func TestPlanCommandEntersPlanModeAndOpensThePlanFile(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
-	plans, err := tool.NewPlans(filepath.Join(sb.Home, "plans"))
-	require.NoError(t, err)
+	plans := tool.NewPlans(filepath.Join(sb.Home, "plans"))
 	h := newHarness(t, sb, Config{Plans: plans})
 	notices := subscribeTo[event.Notice](h.c)
 
-	_, err = h.c.Submit(t.Context(), "/plan open")
+	_, err := h.c.Submit(t.Context(), "/plan open")
 	require.NoError(t, err, "without a session")
 	assert.Equal(t, event.Notice{Text: "This session has no plan file yet."}, receiveEvent(t, notices))
 

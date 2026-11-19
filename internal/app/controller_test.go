@@ -2792,8 +2792,7 @@ func TestCommandsListSkillsAfterControlCommands(t *testing.T) {
 func modeHarness(t *testing.T) *harness {
 	t.Helper()
 	sb := pigruntimetest.NewSandbox(t)
-	plans, err := tool.NewPlans(filepath.Join(sb.Home, "plans"))
-	require.NoError(t, err)
+	plans := tool.NewPlans(filepath.Join(sb.Home, "plans"))
 	h := newHarness(t, sb, Config{Plans: plans})
 	h.showModeLine()
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))

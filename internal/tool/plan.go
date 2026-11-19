@@ -20,11 +20,8 @@ type Plans struct {
 	name string
 }
 
-func NewPlans(dir string) (*Plans, error) {
-	if !filepath.IsAbs(dir) {
-		return nil, fmt.Errorf("plans directory %q is not absolute", dir)
-	}
-	return &Plans{dir: filepath.Clean(dir)}, nil
+func NewPlans(dir string) *Plans {
+	return &Plans{dir: filepath.Clean(dir)}
 }
 
 // Select names the plan file of sessionID and creates the directory. An id that
@@ -33,7 +30,7 @@ func (p *Plans) Select(sessionID string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.name = ""
-	if sessionID == "" || strings.ContainsRune(sessionID, '/') || strings.ContainsRune(sessionID, filepath.Separator) || strings.HasPrefix(sessionID, ".") {
+	if sessionID == "" || !filepath.IsLocal(sessionID) || filepath.Base(sessionID) != sessionID || strings.HasPrefix(sessionID, ".") {
 		return fmt.Errorf("session id %q is not usable in a plan file name", sessionID)
 	}
 	if err := os.MkdirAll(p.dir, 0o700); err != nil {

@@ -160,8 +160,7 @@ func TestRefreshPlanRepeatsTheRequestWithTheEditedText(t *testing.T) {
 
 func TestExitPlanModeToolIsAttendedOnlyAndNeverForAgents(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
-	plans, err := tool.NewPlans(sb.Home + "/plans")
-	require.NoError(t, err)
+	plans := tool.NewPlans(sb.Home + "/plans")
 
 	h, _ := openHarness(t, Config{})
 	assert.NotContains(t, toolNames(h.c.tools), "ExitPlanMode", "without a plan file")

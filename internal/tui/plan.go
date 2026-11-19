@@ -73,7 +73,7 @@ func (m *model) planKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.c.AnswerPlan(p.token, tool.PlanAnswer{})
 		return nil
 	case key.Matches(msg, km.editPlan):
-		return m.openEditor(p.path, p.token)
+		return m.openEditor(p.path)
 	case key.Matches(msg, km.paste) && p.d.field() != nil:
 		return readClipboardText(m.clip, p.d.field())
 	case key.Matches(msg, km.pageUp):

@@ -487,7 +487,7 @@ func (m *model) submitted(err error) tea.Cmd {
 		return m.showTasks()
 	case errors.Is(err, app.ErrOpenPlan):
 		m.composer.reset()
-		return m.openEditor(m.c.PlanFile(), 0)
+		return m.openEditor(m.c.PlanFile())
 	case err == nil:
 		m.composer.reset()
 	case errors.Is(err, app.ErrBusy):

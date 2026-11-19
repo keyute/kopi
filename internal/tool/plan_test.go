@@ -24,8 +24,7 @@ func newPlanFixture(t *testing.T) planFixture {
 	kopiHome := filepath.Join(t.TempDir(), "home")
 	writeFile(t, filepath.Join(kopiHome, "config.json"), "{}")
 	plansDir := filepath.Join(kopiHome, "plans")
-	plans, err := NewPlans(plansDir)
-	require.NoError(t, err)
+	plans := NewPlans(plansDir)
 	require.NoError(t, plans.Select("s1"))
 	plain := newWorkspace(t, t.TempDir(), []string{kopiHome})
 	return planFixture{kopiHome: kopiHome, plansDir: plansDir, plans: plans, ws: plain.WithPlans(plans), plain: plain}
@@ -42,11 +41,6 @@ func runTool(t *testing.T, tl Tool, args map[string]any) ([]policy.Target, error
 		return policy.Plan, nil
 	})
 	return admitted, err
-}
-
-func TestPlansRefuseRelativeDir(t *testing.T) {
-	_, err := NewPlans("plans")
-	assert.Error(t, err)
 }
 
 func TestPlansSelectRefusesUnusableIDs(t *testing.T) {
@@ -205,8 +199,7 @@ func TestPlansInsideAWorkspaceThatContainsKopiHome(t *testing.T) {
 	home := filepath.Join(root, ".kopi")
 	config := filepath.Join(home, "config.json")
 	writeFile(t, config, "{}")
-	plans, err := NewPlans(filepath.Join(home, "plans"))
-	require.NoError(t, err)
+	plans := NewPlans(filepath.Join(home, "plans"))
 	require.NoError(t, plans.Select("s1"))
 	plain := newWorkspace(t, root, []string{home})
 	ws := plain.WithPlans(plans)

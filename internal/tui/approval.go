@@ -87,12 +87,7 @@ func approvalRows(d *dialog, a *event.ApprovalRequested, width, maxPreview, maxR
 	// Measure the rest without the last render's preview.
 	d.body = nil
 	d.body = previewRows(a.Preview, min(maxPreview, maxRows-len(d.rows(width, maxRows, fieldCap, th))), width-2, th)
-	return cutTop(d, d.rows(width, maxRows, fieldCap, th), maxRows)
-}
-
-// cutTop is rows, drawn by d, without the top the rows past maxRows take, so
-// the options stay visible, along with any field area the cut reaches.
-func cutTop(d *dialog, rows []string, maxRows int) []string {
+	rows := d.rows(width, maxRows, fieldCap, th)
 	cut := max(0, len(rows)-maxRows)
 	var areas []fieldArea
 	for _, fa := range d.areas {

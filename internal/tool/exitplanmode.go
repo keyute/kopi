@@ -3,7 +3,9 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 
 	"github.com/keyute/kopi/internal/policy"
@@ -56,7 +58,10 @@ func NewExitPlanMode(plans *Plans, review ReviewPlan) Tool {
 				return Result{}, ErrNotPlanMode
 			}
 			plan, err := plans.Read()
-			if err != nil || strings.TrimSpace(plan) == "" {
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return Result{}, err
+			}
+			if strings.TrimSpace(plan) == "" {
 				if path := plans.Path(); path != "" {
 					return Result{}, fmt.Errorf("%w: write the plan to %s first", ErrNoPlan, path)
 				}

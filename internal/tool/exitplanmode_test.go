@@ -31,8 +31,7 @@ func reviewing(t *testing.T, a PlanAnswer, mode policy.Mode, calls *int, plans *
 
 func planFile(t *testing.T, text string) *Plans {
 	t.Helper()
-	plans, err := NewPlans(filepath.Join(t.TempDir(), "plans"))
-	require.NoError(t, err)
+	plans := NewPlans(filepath.Join(t.TempDir(), "plans"))
 	require.NoError(t, plans.Select("s1"))
 	if text != "" {
 		require.NoError(t, os.WriteFile(plans.Path(), []byte(text), 0o600))
@@ -94,6 +93,19 @@ func TestExitPlanModeNeedsAPlan(t *testing.T) {
 	_, err := NewExitPlanMode(nil, nil).Run(t.Context(), json.RawMessage(`{}`), admitIn(policy.Plan))
 	assert.ErrorIs(t, err, ErrNoPlan)
 	assert.ErrorContains(t, err, "this session has no plan file")
+}
+
+func TestExitPlanModeReportsAnUnreadablePlan(t *testing.T) {
+	plans := planFile(t, "")
+	require.NoError(t, os.WriteFile(plans.Path(), []byte("a\x00b"), 0o600))
+	calls := 0
+	tool := NewExitPlanMode(plans, reviewing(t, PlanAnswer{}, policy.Plan, &calls, plans, ""))
+
+	_, err := tool.Run(t.Context(), json.RawMessage(`{}`), admitIn(policy.Plan))
+
+	assert.ErrorIs(t, err, ErrBinary)
+	assert.NotErrorIs(t, err, ErrNoPlan)
+	assert.Zero(t, calls)
 }
 
 func TestExitPlanModeRefusesArguments(t *testing.T) {

@@ -77,17 +77,12 @@ func (c *Controller) planCommand(_ context.Context, arg string) error {
 		c.EnterPlan()
 		return nil
 	case "open":
-		c.mu.Lock()
-		hasSession := c.sessID != ""
-		c.mu.Unlock()
-		if hasSession {
-			_, err := c.cfg.Plans.Read()
-			if err == nil {
-				return ErrOpenPlan
-			}
-			if !errors.Is(err, fs.ErrNotExist) {
-				return err
-			}
+		_, err := c.cfg.Plans.Read()
+		if err == nil {
+			return ErrOpenPlan
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return err
 		}
 		c.relay.emit(event.Notice{Text: "This session has no plan file yet."})
 		return nil

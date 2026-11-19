@@ -102,16 +102,21 @@ func (w *Workspace) Open(path string) (*os.File, error) {
 	return f, nil
 }
 
+// absolute is path resolved against the directory the workspace was given.
+func (w *Workspace) absolute(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(w.given, path)
+}
+
 func (w *Workspace) Close() error { return w.root.Close() }
 
 // Target applies no confinement: the permission rules and the tool's own Run
 // decide what may be touched. Real is walked as Open and WriteFile walk it, so
 // the rules judge the file the tool acts on.
 func (w *Workspace) Target(path string) (policy.Target, error) {
-	abs := path
-	if !filepath.IsAbs(path) {
-		abs = filepath.Join(w.given, path)
-	}
+	abs := w.absolute(path)
 	if t, ok, err := w.plans.target(abs); ok {
 		return t, err
 	}
@@ -146,10 +151,7 @@ func (w *Workspace) WriteFile(path string, data []byte) error {
 // prepare resolves once, then pins the canonical parent without following any
 // newly installed symlinks in that traversal.
 func (w *Workspace) prepare(path string) (*writeDestination, error) {
-	abs := path
-	if !filepath.IsAbs(path) {
-		abs = filepath.Join(w.given, path)
-	}
+	abs := w.absolute(path)
 	if dest, ok, err := w.plans.prepare(abs, path); ok {
 		return dest, err
 	}
