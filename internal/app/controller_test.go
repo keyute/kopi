@@ -151,7 +151,7 @@ func wait(t *testing.T, ch <-chan struct{}) {
 
 func (h *harness) turn(t *testing.T, prompt string) *Work {
 	t.Helper()
-	w, err := h.c.Submit(t.Context(), prompt)
+	w, err := h.c.Submit(t.Context(), Main, prompt)
 	require.NoError(t, err)
 	require.NotNil(t, w)
 	wait(t, w.Done())
@@ -343,7 +343,7 @@ func TestExecToolFollowsMode(t *testing.T) {
 	requests := make(chan pigruntimetest.Request, 1)
 	turn := func(asks bool) string {
 		h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Exec", "call-1")), pigruntimetest.Capture(t, requests, "ok")})
-		w, err := h.c.Submit(t.Context(), "run it")
+		w, err := h.c.Submit(t.Context(), Main, "run it")
 		require.NoError(t, err)
 		if asks {
 			assert.True(t, h.c.Answer(receiveEvent(t, approvals).Token, policy.Decision{Answer: policy.Allow}))
@@ -402,10 +402,10 @@ func TestPlanCommandStopsLaterExecCallInSameTurn(t *testing.T) {
 	})
 	h.c.EnterExecute()
 
-	w, err := h.c.Submit(t.Context(), "hold then exec")
+	w, err := h.c.Submit(t.Context(), Main, "hold then exec")
 	require.NoError(t, err)
 	wait(t, started)
-	_, err = h.c.Submit(t.Context(), "/plan")
+	_, err = h.c.Submit(t.Context(), Main, "/plan")
 	require.NoError(t, err)
 	close(release)
 	wait(t, w.Done())
@@ -439,12 +439,12 @@ func TestInterruptDuringToolEndsInterruptedAndPersists(t *testing.T) {
 	})
 	h, sb := openHarness(t, Config{Tools: []tool.Tool{block}})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "call-1")), pigruntimetest.Text("unreached")})
-	assert.False(t, h.c.Interrupt(), "nothing to interrupt yet")
+	assert.False(t, h.c.Interrupt(Main), "nothing to interrupt yet")
 
-	w, err := h.c.Submit(t.Context(), "block")
+	w, err := h.c.Submit(t.Context(), Main, "block")
 	require.NoError(t, err)
 	wait(t, started)
-	assert.True(t, h.c.Interrupt())
+	assert.True(t, h.c.Interrupt(Main))
 	wait(t, w.Done())
 
 	assert.Equal(t, event.Outcome{Status: event.Interrupted}, w.Outcome())
@@ -492,12 +492,12 @@ func TestInterruptAfterTurnFinishedSparesNextTurn(t *testing.T) {
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first"), pigruntimetest.Text("second")})
 	reached, unblock := blockOnFirstTurnEnd(h.c)
 
-	w, err := h.c.Submit(t.Context(), "first")
+	w, err := h.c.Submit(t.Context(), Main, "first")
 	require.NoError(t, err)
 	wait(t, reached)
 	// The TurnEnd is delivered under the lock Interrupt takes.
 	interrupted := make(chan bool, 1)
-	go func() { interrupted <- h.c.Interrupt() }()
+	go func() { interrupted <- h.c.Interrupt(Main) }()
 	close(unblock)
 	wait(t, w.Done())
 	assert.Equal(t, event.Completed, w.Outcome().Status)
@@ -517,7 +517,7 @@ func TestSubmitAsTurnFinishesStartsNextTurn(t *testing.T) {
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first"), pigruntimetest.Text("second")})
 	reached, unblock := blockOnFirstTurnEnd(h.c)
 
-	w, err := h.c.Submit(t.Context(), "first")
+	w, err := h.c.Submit(t.Context(), Main, "first")
 	require.NoError(t, err)
 	wait(t, reached)
 	// The TurnEnd is delivered under the lock Submit takes to queue input.
@@ -527,7 +527,7 @@ func TestSubmitAsTurnFinishesStartsNextTurn(t *testing.T) {
 	}
 	second := make(chan submitted, 1)
 	go func() {
-		w, err := h.c.Submit(context.Background(), "second")
+		w, err := h.c.Submit(context.Background(), Main, "second")
 		second <- submitted{w, err}
 	}()
 	close(unblock)
@@ -557,13 +557,13 @@ func TestRejectedSendIsHandedBackOnce(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("done")})
-	running, err := h.c.Submit(t.Context(), "hold")
+	running, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
 
 	ctx, cancel := context.WithCancel(t.Context())
-	w := &Work{id: "turn-rejected", done: make(chan struct{}), cancel: cancel}
-	h.c.runTurn(t.Context(), ctx, h.c.sess, h.c.emit, w, []pigruntime.Prompt{{Text: "rejected"}}, nil)
+	w := &Work{id: "turn-rejected", base: t.Context(), done: make(chan struct{}), cancel: cancel}
+	h.c.main.runTurn(ctx, h.c.main.sess, h.c.main.emit, w, []pigruntime.Prompt{{Text: "rejected"}}, nil)
 	wait(t, w.Done())
 	close(release)
 	wait(t, running.Done())
@@ -587,7 +587,7 @@ func TestFailedResumeAsTurnFinishesKeepsSessionUsable(t *testing.T) {
 	reached, unblock := blockOnFirstTurnEnd(h.c)
 	id := h.c.Status().SessionID
 
-	w, err := h.c.Submit(t.Context(), "first")
+	w, err := h.c.Submit(t.Context(), Main, "first")
 	require.NoError(t, err)
 	wait(t, reached)
 	// The TurnEnd is delivered under the lock the switch takes to stop the turn.
@@ -614,14 +614,14 @@ func TestPromptWhileBusyIsQueuedAndCommandRuns(t *testing.T) {
 	requests := make(chan pigruntimetest.Request, 1)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "done")})
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
 
-	got, err := h.c.Submit(t.Context(), "another prompt")
+	got, err := h.c.Submit(t.Context(), Main, "another prompt")
 	require.NoError(t, err)
 	assert.Nil(t, got)
-	got, err = h.c.Submit(t.Context(), "/execute")
+	got, err = h.c.Submit(t.Context(), Main, "/execute")
 	require.NoError(t, err)
 	assert.Nil(t, got)
 	assert.True(t, h.c.Status().Busy)
@@ -647,10 +647,10 @@ func TestQueuedInputIsDeliveredAtBoundary(t *testing.T) {
 	requests := make(chan pigruntimetest.Request, 1)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "done")})
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
-	_, err = h.c.Submit(t.Context(), "next")
+	_, err = h.c.Submit(t.Context(), Main, "next")
 	require.NoError(t, err)
 	close(release)
 	wait(t, w.Done())
@@ -719,14 +719,14 @@ func TestInterruptHandsQueuedInputBack(t *testing.T) {
 	requests := make(chan pigruntimetest.Request, 1)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "call-1")), pigruntimetest.Capture(t, requests, "fresh")})
 
-	w, err := h.c.Submit(t.Context(), "block")
+	w, err := h.c.Submit(t.Context(), Main, "block")
 	require.NoError(t, err)
 	wait(t, started)
 	img := pngFile(t)
-	got, err := h.c.Submit(t.Context(), "look at [image #1]", img)
+	got, err := h.c.Submit(t.Context(), Main, "look at [image #1]", img)
 	require.NoError(t, err)
 	assert.Nil(t, got)
-	assert.True(t, h.c.Interrupt())
+	assert.True(t, h.c.Interrupt(Main))
 	wait(t, w.Done())
 
 	assert.Equal(t, []event.TurnEnd{{
@@ -748,13 +748,13 @@ func TestFailedResumeCommandHandsQueuedInputBack(t *testing.T) {
 	id := h.c.Status().SessionID
 	errs := subscribeTo[event.Error](h.c)
 
-	w, err := h.c.Submit(t.Context(), "block")
+	w, err := h.c.Submit(t.Context(), Main, "block")
 	require.NoError(t, err)
 	wait(t, started)
 	img := pngFile(t)
-	_, err = h.c.Submit(t.Context(), "queued [image #1]", img)
+	_, err = h.c.Submit(t.Context(), Main, "queued [image #1]", img)
 	require.NoError(t, err)
-	_, err = h.c.Submit(t.Context(), "/resume no-such-session")
+	_, err = h.c.Submit(t.Context(), Main, "/resume no-such-session")
 	require.NoError(t, err)
 	require.ErrorIs(t, receiveEvent(t, errs).Err, pigruntime.ErrSessionNotFound)
 	wait(t, w.Done())
@@ -778,22 +778,22 @@ func TestAsyncResumeCapturesInputBeforeWaitingForLife(t *testing.T) {
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("after")})
 	errs := subscribeTo[event.Error](h.c)
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
-	require.True(t, h.c.Interrupt())
+	require.True(t, h.c.Interrupt(Main))
 	img := pngFile(t)
-	_, err = h.c.Submit(t.Context(), "after interrupt [image #1]", img)
+	_, err = h.c.Submit(t.Context(), Main, "after interrupt [image #1]", img)
 	require.NoError(t, err)
 
 	// The command must capture the stopped turn before its starter gets life.
 	h.c.life.Lock()
-	_, err = h.c.Submit(t.Context(), "/resume no-such-session")
+	_, err = h.c.Submit(t.Context(), Main, "/resume no-such-session")
 	assert.NoError(t, err)
 	close(release)
 	wait(t, w.Done())
 	h.c.queue.Lock()
-	assert.Empty(t, h.c.pending)
+	assert.Empty(t, h.c.main.pending)
 	assert.True(t, w.switchHold)
 	assert.NotNil(t, w.terminal)
 	h.c.queue.Unlock()
@@ -813,12 +813,12 @@ func TestSyncResumeHoldsSettlementWhileCapturingInput(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1"))})
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
-	require.True(t, h.c.Interrupt())
+	require.True(t, h.c.Interrupt(Main))
 	img := pngFile(t)
-	_, err = h.c.Submit(t.Context(), "later [image #1]", img)
+	_, err = h.c.Submit(t.Context(), Main, "later [image #1]", img)
 	require.NoError(t, err)
 	capturing, proceed := make(chan struct{}), make(chan struct{})
 	h.c.Subscribe(func(ev event.Event) {
@@ -856,11 +856,11 @@ func TestCloseDiscardsDeregisteredSwitchWorkBeforeDelayedStart(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1"))})
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
-	require.True(t, h.c.Interrupt())
-	_, err = h.c.Submit(t.Context(), "later [image #1]", pngFile(t))
+	require.True(t, h.c.Interrupt(Main))
+	_, err = h.c.Submit(t.Context(), Main, "later [image #1]", pngFile(t))
 	require.NoError(t, err)
 	op, err := h.c.beginSwitch(nil)
 	require.NoError(t, err)
@@ -911,11 +911,11 @@ func TestSwitchJoinTimeoutHandsQueuedInputBack(t *testing.T) {
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{block}})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("after")})
 	id := h.c.Status().SessionID
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
 	img := pngFile(t)
-	_, err = h.c.Submit(t.Context(), "queued [image #1]", img)
+	_, err = h.c.Submit(t.Context(), Main, "queued [image #1]", img)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -960,14 +960,15 @@ func TestInterruptBeforeSendHandsOriginalAndQueuedInputBack(t *testing.T) {
 	cancel()
 	w := &Work{
 		id:       "turn-1",
+		base:     t.Context(),
 		done:     make(chan struct{}),
 		cancel:   cancel,
 		handBack: []pigruntime.Prompt{later},
 		stopped:  true,
 	}
-	h.c.turn = w
+	h.c.main.work = w
 
-	h.c.runTurn(t.Context(), ctx, h.c.sess, h.c.emit, w, []pigruntime.Prompt{original}, nil)
+	h.c.main.runTurn(ctx, h.c.main.sess, h.c.main.emit, w, []pigruntime.Prompt{original}, nil)
 	wait(t, w.Done())
 
 	assert.Zero(t, h.faux.CallCount())
@@ -989,13 +990,13 @@ func TestSendNowContinuesTurnWithQueuedAndDraft(t *testing.T) {
 	requests := make(chan pigruntimetest.Request, 1)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "call-1")), pigruntimetest.Capture(t, requests, "joined")})
 
-	w, err := h.c.Submit(t.Context(), "block")
+	w, err := h.c.Submit(t.Context(), Main, "block")
 	require.NoError(t, err)
 	wait(t, started)
-	got, err := h.c.Submit(t.Context(), "q")
+	got, err := h.c.Submit(t.Context(), Main, "q")
 	require.NoError(t, err)
 	assert.Nil(t, got)
-	require.NoError(t, h.c.SendNow(t.Context(), "d"))
+	require.NoError(t, h.c.SendNow(t.Context(), Main, "d"))
 	wait(t, w.Done())
 
 	assert.Equal(t, []string{"block", "q\n\nd"}, receive(t, requests).UserTexts)
@@ -1021,11 +1022,11 @@ func TestSendNowWithNothingToSendInterruptsNothing(t *testing.T) {
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("done")})
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
-	require.NoError(t, h.c.SendNow(t.Context(), ""))
-	require.NoError(t, h.c.SendNow(t.Context(), "  "))
+	require.NoError(t, h.c.SendNow(t.Context(), Main, ""))
+	require.NoError(t, h.c.SendNow(t.Context(), Main, "  "))
 	close(release)
 	wait(t, w.Done())
 
@@ -1039,9 +1040,9 @@ func TestSendNowAtIdleSubmits(t *testing.T) {
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "ok")})
 	ends := turnEnds(h.c)
 
-	require.NoError(t, h.c.SendNow(t.Context(), ""))
+	require.NoError(t, h.c.SendNow(t.Context(), Main, ""))
 	assert.Empty(t, ofType[event.TurnStart](h.rec.all()), "a blank send-now at idle starts nothing")
-	require.NoError(t, h.c.SendNow(t.Context(), "hi"))
+	require.NoError(t, h.c.SendNow(t.Context(), Main, "hi"))
 
 	assert.Equal(t, []string{"hi"}, receive(t, requests).UserTexts)
 	end := receiveEnd(t, ends)
@@ -1054,18 +1055,18 @@ func TestTakeQueuedEmptiesQueueAndTurnContinues(t *testing.T) {
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
 	requests := make(chan pigruntimetest.Request, 1)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "done")})
-	assert.Nil(t, h.c.TakeQueued(), "nothing runs")
+	assert.Nil(t, h.c.TakeQueued(Main), "nothing runs")
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
 	img := pngFile(t)
-	_, err = h.c.Submit(t.Context(), "q1")
+	_, err = h.c.Submit(t.Context(), Main, "q1")
 	require.NoError(t, err)
-	_, err = h.c.Submit(t.Context(), "q2 [image #1]", img)
+	_, err = h.c.Submit(t.Context(), Main, "q2 [image #1]", img)
 	require.NoError(t, err)
-	assert.Equal(t, []event.Input{{Text: "q1"}, {Text: "q2 [image #1]", Images: []string{img}}}, h.c.TakeQueued())
-	assert.Empty(t, h.c.TakeQueued())
+	assert.Equal(t, []event.Input{{Text: "q1"}, {Text: "q2 [image #1]", Images: []string{img}}}, h.c.TakeQueued(Main))
+	assert.Empty(t, h.c.TakeQueued(Main))
 	close(release)
 	wait(t, w.Done())
 
@@ -1084,12 +1085,12 @@ func TestTakeQueuedDuringSendIsNeverDelivered(t *testing.T) {
 	requests := make(chan pigruntimetest.Request, 1)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "done")})
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
-	_, err = h.c.Submit(t.Context(), queued)
+	_, err = h.c.Submit(t.Context(), Main, queued)
 	require.NoError(t, err)
-	assert.Equal(t, []event.Input{{Text: queued}}, h.c.TakeQueued())
+	assert.Equal(t, []event.Input{{Text: queued}}, h.c.TakeQueued(Main))
 	evs := h.rec.all()
 	assert.Equal(t, event.QueueChanged{Pending: []string{}}, evs[len(evs)-1])
 	close(release)
@@ -1131,11 +1132,11 @@ func TestSessionSwitchDiscardsQueuedInput(t *testing.T) {
 			ends := turnEnds(h.c)
 			oldID := h.c.Status().SessionID
 
-			w, err := h.c.Submit(t.Context(), "block")
+			w, err := h.c.Submit(t.Context(), Main, "block")
 			require.NoError(t, err)
 			wait(t, started)
 			img := pngFile(t)
-			_, err = h.c.Submit(t.Context(), queued, img)
+			_, err = h.c.Submit(t.Context(), Main, queued, img)
 			require.NoError(t, err)
 			require.NoError(t, switchTo(t.Context()))
 
@@ -1180,12 +1181,12 @@ func TestSteeredImageIsResizedAndKeepsOrder(t *testing.T) {
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "done")})
 	path, data := widePNGFile(t)
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
-	_, err = h.c.Submit(t.Context(), "wide [image #1]", path)
+	_, err = h.c.Submit(t.Context(), Main, "wide [image #1]", path)
 	require.NoError(t, err)
-	_, err = h.c.Submit(t.Context(), "after")
+	_, err = h.c.Submit(t.Context(), Main, "after")
 	require.NoError(t, err)
 	close(release)
 	wait(t, w.Done())
@@ -1208,16 +1209,16 @@ func TestInputAfterInterruptStartsNextTurn(t *testing.T) {
 			h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "fresh")})
 			ends := turnEnds(h.c)
 
-			w, err := h.c.Submit(t.Context(), "hold")
+			w, err := h.c.Submit(t.Context(), Main, "hold")
 			require.NoError(t, err)
 			wait(t, started)
-			_, err = h.c.Submit(t.Context(), "before")
+			_, err = h.c.Submit(t.Context(), Main, "before")
 			require.NoError(t, err)
-			require.True(t, h.c.Interrupt())
+			require.True(t, h.c.Interrupt(Main))
 			if now {
-				require.NoError(t, h.c.SendNow(t.Context(), "after"))
+				require.NoError(t, h.c.SendNow(t.Context(), Main, "after"))
 			} else {
-				got, err := h.c.Submit(t.Context(), "after")
+				got, err := h.c.Submit(t.Context(), Main, "after")
 				require.NoError(t, err)
 				assert.Nil(t, got)
 			}
@@ -1244,16 +1245,16 @@ func TestSecondInterruptHandsBackLaterInput(t *testing.T) {
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("unused")})
 	ends := turnEnds(h.c)
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
-	_, err = h.c.Submit(t.Context(), "before")
+	_, err = h.c.Submit(t.Context(), Main, "before")
 	require.NoError(t, err)
-	require.True(t, h.c.Interrupt())
-	got, err := h.c.Submit(t.Context(), "after")
+	require.True(t, h.c.Interrupt(Main))
+	got, err := h.c.Submit(t.Context(), Main, "after")
 	require.NoError(t, err)
 	assert.Nil(t, got)
-	require.True(t, h.c.Interrupt())
+	require.True(t, h.c.Interrupt(Main))
 	close(release)
 
 	assert.Equal(t, event.TurnEnd{WorkID: w.ID(), Outcome: event.Outcome{Status: event.Interrupted}, Unsent: []event.Input{{Text: "before"}, {Text: "after"}}}, receiveEnd(t, ends))
@@ -1265,59 +1266,6 @@ func TestSecondInterruptHandsBackLaterInput(t *testing.T) {
 	assert.Equal(t, 1, h.faux.CallCount())
 }
 
-func TestSettle(t *testing.T) {
-	a, b, c, d := pigruntime.Prompt{Text: "a"}, pigruntime.Prompt{Text: "b"}, pigruntime.Prompt{Text: "c"}, pigruntime.Prompt{Text: "d"}
-	completed, interrupted, failed := event.Outcome{Status: event.Completed}, event.Outcome{Status: event.Interrupted}, event.Outcome{Status: event.Failed, Message: "boom"}
-	ps := func(p ...pigruntime.Prompt) []pigruntime.Prompt { return p }
-	for _, tc := range []struct {
-		name                           string
-		stopped, cancelled, sent       bool
-		outcome                        event.Outcome
-		undelivered, handBack, pending []pigruntime.Prompt
-		wantNext, wantUnsent           []pigruntime.Prompt
-	}{
-		{name: "completed alone ends", sent: true, outcome: completed},
-		{name: "completed continues with undelivered then pending", sent: true, outcome: completed, undelivered: ps(b), pending: ps(c), wantNext: ps(b, c)},
-		{name: "stopped hands back unsent parts, undelivered and hand-back", stopped: true, cancelled: true, outcome: interrupted, undelivered: ps(b), handBack: ps(c), wantUnsent: ps(a, b, c)},
-		{name: "stopped keeps pending for the next turn", stopped: true, cancelled: true, sent: true, outcome: interrupted, handBack: ps(b), pending: ps(c), wantUnsent: ps(b)},
-		{name: "stopped after completing hands back", stopped: true, cancelled: true, sent: true, outcome: completed, handBack: ps(b), wantUnsent: ps(b)},
-		{name: "send-now continues with pending", cancelled: true, sent: true, outcome: interrupted, undelivered: ps(b), pending: ps(c, d), wantNext: ps(b, c, d)},
-		{name: "send-now before the prompt was read resends it", cancelled: true, outcome: interrupted, pending: ps(b), wantNext: ps(a, b)},
-		{name: "send-now continues after a failure", cancelled: true, sent: true, outcome: failed, pending: ps(b), wantNext: ps(b)},
-		{name: "failed hands everything back", sent: true, outcome: failed, undelivered: ps(b), pending: ps(c), wantUnsent: ps(b, c)},
-		{name: "rejected prompt is handed back", outcome: failed, pending: ps(b), wantUnsent: ps(a, b)},
-		{name: "interrupted by the provider hands pending back", sent: true, outcome: interrupted, pending: ps(b), wantUnsent: ps(b)},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			next, unsent := settle(tc.stopped, tc.cancelled, tc.outcome, tc.sent, ps(a), tc.undelivered, tc.handBack, tc.pending)
-			assert.Equal(t, tc.wantNext, next)
-			assert.Equal(t, tc.wantUnsent, unsent)
-		})
-	}
-}
-
-func TestPullHandsNothingToCancelledSend(t *testing.T) {
-	a := pigruntime.Prompt{Text: "a"}
-	c := &Controller{pending: []pigruntime.Prompt{a}}
-	emit := func(event.Event) {}
-
-	cancelled, cancel := context.WithCancel(t.Context())
-	cancel()
-	prompts, _ := c.pull(cancelled, emit)()
-	assert.Empty(t, prompts)
-	assert.Equal(t, []pigruntime.Prompt{a}, c.pending)
-
-	prompts, _ = c.pull(t.Context(), emit)()
-	assert.Equal(t, []pigruntime.Prompt{a}, prompts)
-	assert.Empty(t, c.pending)
-}
-
-func TestJoinedPromptsKeepOrder(t *testing.T) {
-	i1, i2 := pigruntime.Image{Path: "/1.png"}, pigruntime.Image{Path: "/2.png"}
-	got := joined([]pigruntime.Prompt{{Text: "one [image #1]", Images: []pigruntime.Image{i1}}, {Text: "two"}, {Text: "three [image #2]", Images: []pigruntime.Image{i2}}})
-	assert.Equal(t, pigruntime.Prompt{Text: "one [image #1]\n\ntwo\n\nthree [image #2]", Images: []pigruntime.Image{i1, i2}}, got)
-}
-
 func TestBadImageRefusesInput(t *testing.T) {
 	store := historyStore(t)
 	started, release := make(chan struct{}), make(chan struct{})
@@ -1326,21 +1274,21 @@ func TestBadImageRefusesInput(t *testing.T) {
 	bad := badImages(t)
 
 	for name, path := range bad {
-		_, err := h.c.Submit(t.Context(), "look [image #1]", path)
+		_, err := h.c.Submit(t.Context(), Main, "look [image #1]", path)
 		require.ErrorIs(t, err, ErrBadImage, name)
-		require.ErrorIs(t, h.c.SendNow(t.Context(), "look [image #1]", path), ErrBadImage, name)
+		require.ErrorIs(t, h.c.SendNow(t.Context(), Main, "look [image #1]", path), ErrBadImage, name)
 	}
 	assert.Zero(t, h.faux.CallCount())
 	assert.Empty(t, ofType[event.TurnStart](h.rec.all()))
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
 	for name, path := range bad {
-		_, err := h.c.Submit(t.Context(), "queued [image #1]", path)
+		_, err := h.c.Submit(t.Context(), Main, "queued [image #1]", path)
 		require.ErrorIs(t, err, ErrBadImage, name)
 	}
-	assert.Nil(t, h.c.TakeQueued())
+	assert.Nil(t, h.c.TakeQueued(Main))
 	close(release)
 	wait(t, w.Done())
 	assert.Equal(t, []string{"hold"}, h.c.History())
@@ -1355,7 +1303,7 @@ func TestImageReachesProvider(t *testing.T) {
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 
-	w, err := h.c.Submit(t.Context(), "what is [image #1]", path)
+	w, err := h.c.Submit(t.Context(), Main, "what is [image #1]", path)
 	require.NoError(t, err)
 	wait(t, w.Done())
 
@@ -1395,16 +1343,16 @@ func TestInputIsRecordedInHistory(t *testing.T) {
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}, History: historyStore(t)})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("done")})
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
 	for _, input := range []string{"queued", "/plan", "/plan", "  "} {
-		_, err := h.c.Submit(t.Context(), input)
+		_, err := h.c.Submit(t.Context(), Main, input)
 		require.NoError(t, err, input)
 	}
-	_, err = h.c.Submit(t.Context(), "/nope")
+	_, err = h.c.Submit(t.Context(), Main, "/nope")
 	require.ErrorIs(t, err, ErrUnknownCommand)
-	require.NoError(t, h.c.SendNow(t.Context(), ""))
+	require.NoError(t, h.c.SendNow(t.Context(), Main, ""))
 	h.c.ToggleMode()
 	close(release)
 	wait(t, w.Done())
@@ -1426,7 +1374,7 @@ func TestUnwritableHistoryNeverFailsSubmit(t *testing.T) {
 
 func TestHistoryIsNilWithoutStore(t *testing.T) {
 	h, _ := openHarness(t, Config{})
-	_, err := h.c.Submit(t.Context(), "/plan")
+	_, err := h.c.Submit(t.Context(), Main, "/plan")
 	require.NoError(t, err)
 	assert.Nil(t, h.c.History())
 }
@@ -1455,11 +1403,11 @@ func TestUnknownCommandNeverReachesProvider(t *testing.T) {
 	requests := make(chan pigruntimetest.Request, 1)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "ok")})
 
-	w, err := h.c.Submit(t.Context(), "/frobnicate now")
+	w, err := h.c.Submit(t.Context(), Main, "/frobnicate now")
 	require.ErrorIs(t, err, ErrUnknownCommand)
 	assert.Contains(t, err.Error(), "/frobnicate")
 	assert.Nil(t, w)
-	w, err = h.c.Submit(t.Context(), "   ")
+	w, err = h.c.Submit(t.Context(), Main, "   ")
 	require.NoError(t, err)
 	assert.Nil(t, w)
 	assert.Zero(t, h.faux.CallCount())
@@ -1506,7 +1454,7 @@ func TestNewSessionIsRefusedWhileWorkWillNotStop(t *testing.T) {
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("done")})
 	oldID := h.c.Status().SessionID
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
 
@@ -1543,7 +1491,7 @@ func TestNewSessionStopsRunningTurn(t *testing.T) {
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "call-1")), pigruntimetest.Text("unreached")})
 	oldID := h.c.Status().SessionID
 
-	w, err := h.c.Submit(t.Context(), "block")
+	w, err := h.c.Submit(t.Context(), Main, "block")
 	require.NoError(t, err)
 	wait(t, started)
 	require.NoError(t, h.c.NewSession(t.Context()))
@@ -1585,10 +1533,10 @@ func TestPromptDuringSessionSwitchIsRefused(t *testing.T) {
 		}
 	})
 
-	_, err := h.c.Submit(t.Context(), "/new")
+	_, err := h.c.Submit(t.Context(), Main, "/new")
 	require.NoError(t, err)
 	wait(t, reached)
-	w, err := h.c.Submit(t.Context(), "too early")
+	w, err := h.c.Submit(t.Context(), Main, "too early")
 	close(unblock)
 	assert.ErrorIs(t, err, ErrBusy)
 	assert.Nil(t, w)
@@ -1639,12 +1587,12 @@ func TestSwitchCommandReturnsAtOnceAndRefusesInputUntilDone(t *testing.T) {
 	// Holding life keeps the switch from starting; asserts only, so a failure
 	// cannot leave it held.
 	h.c.life.Lock()
-	_, err := h.c.Submit(t.Context(), "/new")
+	_, err := h.c.Submit(t.Context(), Main, "/new")
 	assert.NoError(t, err)
-	w, err := h.c.Submit(t.Context(), "too early")
+	w, err := h.c.Submit(t.Context(), Main, "too early")
 	assert.ErrorIs(t, err, ErrBusy)
 	assert.Nil(t, w)
-	_, err = h.c.Submit(t.Context(), "/new")
+	_, err = h.c.Submit(t.Context(), Main, "/new")
 	assert.ErrorIs(t, err, ErrBusy)
 	h.c.life.Unlock()
 
@@ -1663,7 +1611,7 @@ func TestFailedResumeCommandArrivesAsError(t *testing.T) {
 	id := h.c.Status().SessionID
 	errs := subscribeTo[event.Error](h.c)
 
-	_, err := h.c.Submit(t.Context(), "/resume no-such-session")
+	_, err := h.c.Submit(t.Context(), Main, "/resume no-such-session")
 	require.NoError(t, err)
 	require.ErrorIs(t, receiveEvent(t, errs).Err, pigruntime.ErrSessionNotFound)
 
@@ -1720,14 +1668,14 @@ func TestNewAndResumeCommandsStartInConfiguredMode(t *testing.T) {
 	changes := subscribeTo[event.SessionChanged](h.c)
 
 	h.c.EnterPlan()
-	_, err := h.c.Submit(t.Context(), "/new")
+	_, err := h.c.Submit(t.Context(), Main, "/new")
 	require.NoError(t, err)
 	assert.NotEqual(t, savedID, receiveEvent(t, changes).SessionID)
 	assertSwitchDone(t, h)
 	assert.Equal(t, policy.Execute, h.c.Status().Mode)
 
 	h.c.EnterPlan()
-	_, err = h.c.Submit(t.Context(), "/resume "+savedID)
+	_, err = h.c.Submit(t.Context(), Main, "/resume "+savedID)
 	require.NoError(t, err)
 	assert.Equal(t, savedID, receiveEvent(t, changes).SessionID)
 	assertSwitchDone(t, h)
@@ -1745,14 +1693,14 @@ func TestNewAndResumeCommandsDropExecuteInPlanConfig(t *testing.T) {
 	changes := subscribeTo[event.SessionChanged](h.c)
 
 	h.c.EnterExecute()
-	_, err := h.c.Submit(t.Context(), "/new")
+	_, err := h.c.Submit(t.Context(), Main, "/new")
 	require.NoError(t, err)
 	assert.NotEqual(t, savedID, receiveEvent(t, changes).SessionID)
 	assertSwitchDone(t, h)
 	assert.Equal(t, policy.Plan, h.c.Status().Mode)
 
 	h.c.EnterExecute()
-	_, err = h.c.Submit(t.Context(), "/resume "+savedID)
+	_, err = h.c.Submit(t.Context(), Main, "/resume "+savedID)
 	require.NoError(t, err)
 	assert.Equal(t, savedID, receiveEvent(t, changes).SessionID)
 	assertSwitchDone(t, h)
@@ -1988,7 +1936,7 @@ func TestStartQueuesPromptsUntilTheSessionOpens(t *testing.T) {
 
 	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
 	for i, want := range [][]string{{"first"}, {"first", "second"}} {
-		w, err := h.c.Submit(t.Context(), want[i])
+		w, err := h.c.Submit(t.Context(), Main, want[i])
 		require.NoError(t, err)
 		assert.Nil(t, w)
 		assert.Equal(t, want, receiveEvent(t, queued).Pending)
@@ -1996,7 +1944,7 @@ func TestStartQueuesPromptsUntilTheSessionOpens(t *testing.T) {
 	status := h.c.Status()
 	assert.Empty(t, status.SessionID)
 	assert.False(t, status.Busy)
-	assert.False(t, h.c.Interrupt())
+	assert.False(t, h.c.Interrupt(Main))
 
 	close(srv.release)
 	assert.Equal(t, "first\n\nsecond", receiveEvent(t, starts).Prompt)
@@ -2016,7 +1964,7 @@ func TestSendNowWhileStartingQueues(t *testing.T) {
 	ends := turnEnds(h.c)
 
 	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
-	require.NoError(t, h.c.SendNow(t.Context(), "now"))
+	require.NoError(t, h.c.SendNow(t.Context(), Main, "now"))
 	assert.Equal(t, []string{"now"}, receiveEvent(t, queued).Pending)
 
 	close(srv.release)
@@ -2062,7 +2010,7 @@ func TestModeChosenWhileStartingCarriesIntoTheSession(t *testing.T) {
 
 	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
 	assert.Equal(t, policy.Plan, h.c.Status().Mode)
-	_, err := h.c.Submit(t.Context(), "/execute")
+	_, err := h.c.Submit(t.Context(), Main, "/execute")
 	require.NoError(t, err)
 	h.c.ToggleMode()
 	h.c.ToggleMode()
@@ -2097,7 +2045,7 @@ func TestNewAfterFailedStartOpensInConfiguredMode(t *testing.T) {
 
 	h.c.ToggleMode()
 	assert.Equal(t, policy.Execute, h.c.Status().Mode)
-	_, err := h.c.Submit(t.Context(), "/new")
+	_, err := h.c.Submit(t.Context(), Main, "/new")
 	require.NoError(t, err)
 	receiveEvent(t, changes)
 	assertSwitchDone(t, h)
@@ -2111,7 +2059,7 @@ func TestSwitchCommandsAreBusyWhileStarting(t *testing.T) {
 
 	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
 	for _, cmd := range []string{"/new", "/resume some-session"} {
-		_, err := h.c.Submit(t.Context(), cmd)
+		_, err := h.c.Submit(t.Context(), Main, cmd)
 		assert.ErrorIs(t, err, ErrBusy, cmd)
 	}
 
@@ -2127,10 +2075,10 @@ func TestTakeQueuedWhileStarting(t *testing.T) {
 	changes := subscribeTo[event.SessionChanged](h.c)
 
 	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
-	_, err := h.c.Submit(t.Context(), "take me back")
+	_, err := h.c.Submit(t.Context(), Main, "take me back")
 	require.NoError(t, err)
-	assert.Equal(t, []event.Input{{Text: "take me back"}}, h.c.TakeQueued())
-	assert.Nil(t, h.c.TakeQueued())
+	assert.Equal(t, []event.Input{{Text: "take me back"}}, h.c.TakeQueued(Main))
+	assert.Nil(t, h.c.TakeQueued(Main))
 	assert.Equal(t, []event.QueueChanged{{Pending: []string{"take me back"}}, {Pending: []string{}}}, ofType[event.QueueChanged](h.rec.all()))
 
 	close(srv.release)
@@ -2146,14 +2094,14 @@ func TestCloseWhileStartingEndsTheWait(t *testing.T) {
 	ignore := goleak.IgnoreCurrent()
 
 	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
-	_, err := h.c.Submit(t.Context(), "never sent")
+	_, err := h.c.Submit(t.Context(), Main, "never sent")
 	require.NoError(t, err)
 	require.NoError(t, h.c.Close(t.Context()))
 	delivered := len(h.rec.all())
 	wait(t, srv.cancelled)
 	goleak.VerifyNone(t, ignore)
 
-	assert.Nil(t, h.c.sess)
+	assert.Nil(t, h.c.main.sess)
 	assert.Empty(t, h.c.Status().SessionID)
 	assert.Empty(t, ofType[event.SessionChanged](h.rec.all()))
 	assert.Len(t, h.rec.all(), delivered, "no event may be delivered after Close returned")
@@ -2170,7 +2118,7 @@ func TestStartReportsFailureAndKeepsQueuedInput(t *testing.T) {
 	changes := subscribeTo[event.SessionChanged](h.c)
 
 	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
-	_, err := h.c.Submit(t.Context(), "keep me")
+	_, err := h.c.Submit(t.Context(), Main, "keep me")
 	require.NoError(t, err)
 	close(srv.release)
 	require.ErrorIs(t, receiveEvent(t, errs).Err, interrupted)
@@ -2182,11 +2130,11 @@ func TestStartReportsFailureAndKeepsQueuedInput(t *testing.T) {
 	assert.Less(t, ended, failed, "the activity ends before the failure is reported")
 
 	assert.Empty(t, h.c.Status().SessionID)
-	_, err = h.c.Submit(t.Context(), "no session yet")
+	_, err = h.c.Submit(t.Context(), Main, "no session yet")
 	assert.ErrorIs(t, err, ErrNoSession)
-	assert.Equal(t, []event.Input{{Text: "keep me"}}, h.c.TakeQueued())
+	assert.Equal(t, []event.Input{{Text: "keep me"}}, h.c.TakeQueued(Main))
 
-	_, err = h.c.Submit(t.Context(), "/new")
+	_, err = h.c.Submit(t.Context(), Main, "/new")
 	require.NoError(t, err)
 	changed := receiveEvent(t, changes)
 	assertSwitchDone(t, h)
@@ -2204,13 +2152,13 @@ func TestNewAfterFailedStartSendsQueuedInput(t *testing.T) {
 	ends := turnEnds(h.c)
 
 	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
-	_, err := h.c.Submit(t.Context(), "keep me")
+	_, err := h.c.Submit(t.Context(), Main, "keep me")
 	require.NoError(t, err)
 	close(srv.release)
 	require.ErrorIs(t, receiveEvent(t, errs).Err, srv.err)
 	assertSwitchDone(t, h)
 
-	_, err = h.c.Submit(t.Context(), "/new")
+	_, err = h.c.Submit(t.Context(), Main, "/new")
 	require.NoError(t, err)
 	assert.Equal(t, "keep me", receiveEvent(t, starts).Prompt)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, receiveEnd(t, ends).Outcome)
@@ -2393,7 +2341,7 @@ func TestResumeWithoutIDIsMissingArgument(t *testing.T) {
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("still here")})
 	id := h.c.Status().SessionID
 
-	_, err := h.c.Submit(t.Context(), "/resume")
+	_, err := h.c.Submit(t.Context(), Main, "/resume")
 	require.ErrorIs(t, err, ErrMissingArgument)
 
 	assert.Equal(t, id, h.c.Status().SessionID)
@@ -2427,7 +2375,7 @@ func TestOpenErrorsPassThrough(t *testing.T) {
 			})
 			require.ErrorIs(t, h.c.Open(t.Context(), tc.req), tc.want)
 			require.ErrorIs(t, h.c.Start(t.Context(), tc.req), tc.want)
-			_, err := h.c.Submit(t.Context(), "hello")
+			_, err := h.c.Submit(t.Context(), Main, "hello")
 			assert.ErrorIs(t, err, ErrNoSession)
 			assert.Empty(t, h.rec.all())
 		})
@@ -2449,7 +2397,7 @@ func TestStatusReportsContextUsageAndBranch(t *testing.T) {
 	h.turn(t, "count me")
 
 	status = h.c.Status()
-	tokens, window, ok := h.c.sess.ContextUsage()
+	tokens, window, ok := h.c.main.sess.ContextUsage()
 	require.True(t, ok)
 	assert.Positive(t, tokens)
 	assert.Equal(t, tokens, status.ContextTokens)
@@ -2459,7 +2407,7 @@ func TestStatusReportsContextUsageAndBranch(t *testing.T) {
 
 func TestQuitReturnsErrQuit(t *testing.T) {
 	h, _ := openHarness(t, Config{})
-	_, err := h.c.Submit(t.Context(), "/quit")
+	_, err := h.c.Submit(t.Context(), Main, "/quit")
 	assert.ErrorIs(t, err, ErrQuit)
 }
 
@@ -2554,7 +2502,7 @@ func TestCloseJoinsRunningTurn(t *testing.T) {
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "call-1")), pigruntimetest.Text("unreached")})
 
-	w, err := h.c.Submit(t.Context(), "block")
+	w, err := h.c.Submit(t.Context(), Main, "block")
 	require.NoError(t, err)
 	wait(t, started)
 	require.NoError(t, h.c.Close(t.Context()))
@@ -2576,10 +2524,10 @@ func TestCloseDiscardsQueuedInput(t *testing.T) {
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "call-1")), pigruntimetest.Text("unreached")})
 	id := h.c.Status().SessionID
 
-	w, err := h.c.Submit(t.Context(), "block")
+	w, err := h.c.Submit(t.Context(), Main, "block")
 	require.NoError(t, err)
 	wait(t, started)
-	_, err = h.c.Submit(t.Context(), queued, pngFile(t))
+	_, err = h.c.Submit(t.Context(), Main, queued, pngFile(t))
 	require.NoError(t, err)
 	require.NoError(t, h.c.Close(t.Context()))
 
@@ -2601,10 +2549,10 @@ func TestCloseKeepsSessionWhileWorkWillNotStop(t *testing.T) {
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("done")})
 	id := h.c.Status().SessionID
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
-	_, err = h.c.Submit(t.Context(), "queued [image #1]", pngFile(t))
+	_, err = h.c.Submit(t.Context(), Main, "queued [image #1]", pngFile(t))
 	require.NoError(t, err)
 
 	// Assertions only until the tool is released, so a failure cannot hang the test.
@@ -2613,7 +2561,7 @@ func TestCloseKeepsSessionWhileWorkWillNotStop(t *testing.T) {
 	status := h.c.Status()
 	assert.Equal(t, id, status.SessionID)
 	assert.True(t, status.Busy)
-	_, err = h.c.Submit(t.Context(), "after close")
+	_, err = h.c.Submit(t.Context(), Main, "after close")
 	assert.ErrorIs(t, err, ErrNoSession)
 	assertInertAfterClose(t, h)
 	delivered := len(h.rec.all())
@@ -2637,7 +2585,7 @@ func assertInertAfterClose(t *testing.T, h *harness) {
 	delivered := len(h.rec.all())
 	mode, gen := h.c.authority.Snapshot()
 	for _, cmd := range []string{"/execute", "/plan", "/new", "/resume", "/resume no-such-session"} {
-		_, err := h.c.Submit(t.Context(), cmd)
+		_, err := h.c.Submit(t.Context(), Main, cmd)
 		assert.ErrorIs(t, err, ErrNoSession, cmd)
 	}
 	cs, err := h.c.Arguments("resume")
@@ -2699,7 +2647,7 @@ func TestTypedSkillsLoadWithTheirPrompt(t *testing.T) {
 func TestUnknownLeadingSkillIsUnknownCommand(t *testing.T) {
 	h, _ := openHarness(t, skillConfig("skill", "a"))
 
-	_, err := h.c.Submit(t.Context(), "/skill:nope x")
+	_, err := h.c.Submit(t.Context(), Main, "/skill:nope x")
 
 	require.ErrorIs(t, err, ErrUnknownCommand)
 	assert.Zero(t, h.faux.CallCount())
@@ -2709,7 +2657,7 @@ func TestSkillNamedLikeControlCommandIsNotTypable(t *testing.T) {
 	h, _ := openHarness(t, skillConfig("", "plan", "a"))
 	h.c.EnterExecute()
 
-	w, err := h.c.Submit(t.Context(), "/plan")
+	w, err := h.c.Submit(t.Context(), Main, "/plan")
 
 	require.NoError(t, err)
 	assert.Nil(t, w)
@@ -2743,20 +2691,15 @@ func TestQueuedPromptKeepsItsSkill(t *testing.T) {
 	requests := make(chan pigruntimetest.Request, 1)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "done")})
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
-	_, err = h.c.Submit(t.Context(), "/skill:a next")
+	_, err = h.c.Submit(t.Context(), Main, "/skill:a next")
 	require.NoError(t, err)
 	close(release)
 	wait(t, w.Done())
 
 	assert.Equal(t, []string{"hold", "/skill:a next", skillText("a")}, receive(t, requests).UserTexts)
-}
-
-func TestJoinedPromptsMergeSkillsWithoutDuplicates(t *testing.T) {
-	got := joined([]pigruntime.Prompt{{Text: "one", Skills: []string{"a", "b"}}, {Text: "two"}, {Text: "three", Skills: []string{"b", "c"}}})
-	assert.Equal(t, pigruntime.Prompt{Text: "one\n\ntwo\n\nthree", Skills: []string{"a", "b", "c"}}, got)
 }
 
 func TestCommandsListSkillsAfterControlCommands(t *testing.T) {

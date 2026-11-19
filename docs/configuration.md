@@ -33,6 +33,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `skills` | `skills.prefix`, see [`skills.prefix`](#skillsprefix) |
 | `keys` | Key bindings for fullscreen actions, see [Keys](#keys) |
 | `statusline` | Status line segments, see [Status line](#status-line) |
+| `agentline` | Agent row segments, see [Agent rows](#agent-rows) |
 | `theme` | Colour themes, see [Theme](#theme) |
 | `permissions` | Allow, ask and deny rules, see [permissions](permissions.md#rules) |
 | `classifier` | Reviewer of calls that would ask, see [permissions](permissions.md#classifier) |
@@ -85,6 +86,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `quit` | `ctrl+d` |
 | `toggle-mode` | `shift+tab` |
 | `background` | `ctrl+b` |
+| `stop-agent` | `x` (stops the subagent on the selected [agent row](subagents.md#agent-rows)) |
 | `paste` | `ctrl+v` |
 | `history-prev`, `history-next` | `up`, `down` |
 | `queue-edit` | `up` |
@@ -129,6 +131,39 @@ A segment in `segments`:
     "right": ["notice", "load", "context", "mode"],
     "separator": " | ",
     "segments": { "load": { "command": "uptime | awk '{print $NF}'", "interval": "30s", "color": "muted" } }
+  }
+}
+```
+
+## Agent rows
+
+`agentline` lists the `left` and `right` segments of the [agent rows](subagents.md#agent-rows) shown under the status line.
+
+- Defaults: left `agent, tokens, model`; right none.
+- `separator` goes between segments (default ` · `, `""` for none; no control characters).
+- At most five rows show; the limit is fixed. On a short terminal fewer rows show.
+
+Segments:
+
+| Segment | Shows |
+| --- | --- |
+| `agent` | The subagent's name and what it was started for, the description cut to 36 columns (`explorer › Find the config loader`); `main` on the main row |
+| `tokens` | The session's context size (`22.1k tokens`); absent until known |
+| `model` | The session's model, in the form of the status line's `model` |
+| `elapsed` | How long the current turn has been running; absent while idle |
+| `state` | `running`, `completed`, `failed` or `stopped`; on the main row `running` while a turn runs, else absent |
+| `activity` | The tool call running now; absent when none |
+| `id` | The task id (`t3`); absent on the main row |
+
+- Only these segments exist; there are no user-defined segments. An unknown name stops Kopi at start with an error naming the config layer.
+
+```json
+{
+  "version": 1,
+  "agentline": {
+    "left": ["agent", "activity"],
+    "right": ["elapsed", "id"],
+    "separator": " | "
   }
 }
 ```

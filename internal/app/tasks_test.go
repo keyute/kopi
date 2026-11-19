@@ -181,7 +181,7 @@ func endText(id string) string {
 func (h *harness) queuedNotices() []pigruntime.Notice {
 	h.c.queue.Lock()
 	defer h.c.queue.Unlock()
-	return slices.Clone(h.c.notices)
+	return slices.Clone(h.c.main.notices)
 }
 
 // idle reports whether no turn is registered; it waits out a queue section
@@ -191,7 +191,7 @@ func (h *harness) idle() bool {
 	defer h.c.queue.Unlock()
 	h.c.mu.Lock()
 	defer h.c.mu.Unlock()
-	return h.c.turn == nil
+	return h.c.main.work == nil
 }
 
 // gated answers with text once gate is closed.
@@ -318,7 +318,7 @@ func TestCloseDrainsTaskAdoptedAfterFirstSweep(t *testing.T) {
 	h, _ := openHarness(t, Config{Tasks: f, Tools: []tool.Tool{adopt}})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Adopt", "call-1")), pigruntimetest.Text("done")})
 	var err error
-	w, err = h.c.Submit(t.Context(), "adopt")
+	w, err = h.c.Submit(t.Context(), Main, "adopt")
 	require.NoError(t, err)
 	wait(t, started)
 	require.NoError(t, h.c.Close(t.Context()))
@@ -351,7 +351,7 @@ func TestCloseRetryJoinsPendingFinalSweep(t *testing.T) {
 	})
 	h, _ := openHarness(t, Config{Tasks: f, Tools: []tool.Tool{adopt}, JoinTimeout: 50 * time.Millisecond})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Adopt", "call-1")), pigruntimetest.Text("done")})
-	w, err := h.c.Submit(t.Context(), "adopt")
+	w, err := h.c.Submit(t.Context(), Main, "adopt")
 	require.NoError(t, err)
 	wait(t, started)
 	id := h.c.Status().SessionID
@@ -402,7 +402,7 @@ func TestTaskEndDuringTurnIsSteered(t *testing.T) {
 	requests := make(chan pigruntimetest.Request, 1)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "done")})
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
 	h.tasks.end(endedTask("t1"))
@@ -483,7 +483,7 @@ func TestTaskEndAsTurnEndsStartsOneTurn(t *testing.T) {
 	reached, unblock := blockOnFirstTurnEnd(h.c)
 	ends := turnEnds(h.c)
 
-	w, err := h.c.Submit(t.Context(), "first")
+	w, err := h.c.Submit(t.Context(), Main, "first")
 	require.NoError(t, err)
 	wait(t, reached)
 	ended := make(chan struct{})
@@ -513,16 +513,16 @@ func TestTaskEndAfterInterruptWaitsForNextPrompt(t *testing.T) {
 	ends := turnEnds(h.c)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "call-1")), pigruntimetest.Capture(t, requests, "next"), gated(gate, "woken")})
 
-	w, err := h.c.Submit(t.Context(), "block")
+	w, err := h.c.Submit(t.Context(), Main, "block")
 	require.NoError(t, err)
 	wait(t, started)
-	require.True(t, h.c.Interrupt())
+	require.True(t, h.c.Interrupt(Main))
 	wait(t, w.Done())
 	h.tasks.end(endedTask("t1"))
 
 	assert.True(t, h.idle(), "a task end after Interrupt does not wake the model")
 	assert.Equal(t, 1, h.faux.CallCount())
-	assert.Empty(t, h.c.TakeQueued())
+	assert.Empty(t, h.c.TakeQueued(Main))
 	for _, end := range ofType[event.TurnEnd](h.rec.all()) {
 		assert.Empty(t, end.Unsent)
 	}
@@ -642,7 +642,7 @@ func TestTaskEndDuringApprovalWaitsForBoundary(t *testing.T) {
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Exec", "call-1")), pigruntimetest.Capture(t, requests, "ok")})
 	h.c.EnterExecute()
 
-	w, err := h.c.Submit(t.Context(), "run it")
+	w, err := h.c.Submit(t.Context(), Main, "run it")
 	require.NoError(t, err)
 	token := receiveEvent(t, approvals).Token
 	h.tasks.end(endedTask("t1"))
@@ -664,11 +664,11 @@ func TestSendNowCarriesQueuedNotices(t *testing.T) {
 	requests := make(chan pigruntimetest.Request, 1)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "call-1")), pigruntimetest.Capture(t, requests, "joined")})
 
-	w, err := h.c.Submit(t.Context(), "block")
+	w, err := h.c.Submit(t.Context(), Main, "block")
 	require.NoError(t, err)
 	wait(t, started)
 	h.tasks.end(endedTask("t1"))
-	require.NoError(t, h.c.SendNow(t.Context(), "now"))
+	require.NoError(t, h.c.SendNow(t.Context(), Main, "now"))
 	wait(t, w.Done())
 
 	assert.Equal(t, []string{"block", "now", endText("t1")}, receive(t, requests).UserTexts)
@@ -687,7 +687,7 @@ func TestSessionSwitchDropsNoticesAndStopsTasks(t *testing.T) {
 	// Holding life keeps the switch under way; asserts only, so a failure
 	// cannot leave it held.
 	h.c.life.Lock()
-	_, err := h.c.Submit(t.Context(), "/new")
+	_, err := h.c.Submit(t.Context(), Main, "/new")
 	assert.NoError(t, err)
 	h.tasks.end(endedTask("t2"))
 	assert.Len(t, h.queuedNotices(), 2, "kept until the switch commits")
@@ -727,7 +727,7 @@ func TestCloseStopsTasksWhenWorkWillNotStop(t *testing.T) {
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}, JoinTimeout: 50 * time.Millisecond})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("done")})
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
 	assert.ErrorIs(t, h.c.Close(t.Context()), pigruntime.ErrJoinTimeout)
@@ -832,17 +832,17 @@ func TestUndeliveredStopNoticeDoesNotContinueTurn(t *testing.T) {
 	h.tasks.set(runningTask("t1"))
 	require.NoError(t, h.c.StopTask("t1"))
 	h.c.queue.Lock()
-	notices := h.c.takeNotices()
+	notices := h.c.main.takeNotices()
 	h.c.queue.Unlock()
 	require.Len(t, notices, 1)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	w := &Work{id: "turn-1", done: make(chan struct{}), cancel: cancel}
+	w := &Work{id: "turn-1", base: t.Context(), done: make(chan struct{}), cancel: cancel}
 	h.c.mu.Lock()
-	h.c.turn = w
+	h.c.main.work = w
 	h.c.mu.Unlock()
 
-	h.c.runTurn(t.Context(), ctx, h.c.sess, h.c.emit, w, nil, notices)
+	h.c.main.runTurn(ctx, h.c.main.sess, h.c.main.emit, w, nil, notices)
 	wait(t, w.Done())
 
 	assert.Zero(t, h.faux.CallCount())
@@ -862,13 +862,13 @@ func TestRequeueKeepsStopNoticesNonWaking(t *testing.T) {
 	h.c.queue.Lock()
 	defer h.c.queue.Unlock()
 
-	h.c.requeue([]pigruntime.Notice{stop})
-	assert.False(t, h.c.waking())
+	h.c.main.requeue([]pigruntime.Notice{stop})
+	assert.False(t, h.c.main.waking())
 
-	h.c.takeNotices()
-	h.c.requeue([]pigruntime.Notice{stop, end})
-	assert.Equal(t, []pigruntime.Notice{stop, end}, h.c.notices)
-	assert.True(t, h.c.waking())
+	h.c.main.takeNotices()
+	h.c.main.requeue([]pigruntime.Notice{stop, end})
+	assert.Equal(t, []pigruntime.Notice{stop, end}, h.c.main.notices)
+	assert.True(t, h.c.main.waking())
 }
 
 // A human stop during the final reply is not handed over alone, so the run
@@ -902,7 +902,7 @@ func TestStopNoticeIsHandedOverWithWakingNotice(t *testing.T) {
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "done")})
 	h.tasks.set(runningTask("t1"))
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
 	require.NoError(t, h.c.StopTask("t1"))
@@ -926,7 +926,7 @@ func TestFailedSwitchKeepsNotices(t *testing.T) {
 	// Holding life keeps the switch under way; asserts only, so a failure
 	// cannot leave it held.
 	h.c.life.Lock()
-	_, err := h.c.Submit(t.Context(), "/resume no-such-session")
+	_, err := h.c.Submit(t.Context(), Main, "/resume no-such-session")
 	assert.NoError(t, err)
 	h.tasks.end(endedTask("t2"))
 	assert.True(t, h.idle(), "no turn starts during a switch")
@@ -955,7 +955,7 @@ func TestTaskEndDuringLoginWakesAfterLogin(t *testing.T) {
 	assert.Len(t, h.queuedNotices(), 1)
 	assert.Empty(t, ofType[event.TurnStart](h.rec.all()))
 
-	require.True(t, h.c.Interrupt())
+	require.True(t, h.c.Interrupt(Main))
 	<-run.done
 
 	end := receiveEnd(t, ends)
@@ -996,7 +996,7 @@ func TestAgentEndContinuesTurnWithoutWake(t *testing.T) {
 	requests := make(chan pigruntimetest.Request, 1)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "done")})
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
 	h.tasks.end(endedAgent("t1"))
@@ -1027,8 +1027,8 @@ func TestWakingIsPerNotice(t *testing.T) {
 			h, _ := openHarness(t, Config{Wake: tc.wake})
 			h.c.queue.Lock()
 			defer h.c.queue.Unlock()
-			h.c.notices = []pigruntime.Notice{notice(tc.notice, "head")}
-			assert.Equal(t, tc.want, h.c.waking())
+			h.c.main.notices = []pigruntime.Notice{notice(tc.notice, "head")}
+			assert.Equal(t, tc.want, h.c.main.waking())
 		})
 	}
 }

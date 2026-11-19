@@ -185,13 +185,13 @@ func TestClickWhileFollowingKeepsClickedLineOnItsRow(t *testing.T) {
 		m, _ := newTestModel(t, 40, 20)
 		notices(m, 10)
 		send(m, sealedGroup()...)
-		require.True(t, m.follow)
+		require.True(t, m.view().follow)
 		row := rowOf(t, m, "▸ Read 2 files")
 
 		clickRow(m, row)
 
 		assert.Equal(t, "▾ Read 2 files", screen(m)[row])
-		assert.False(t, m.follow)
+		assert.False(t, m.view().follow)
 		send(m, event.Notice{Text: "later"})
 		assert.Equal(t, "▾ Read 2 files", screen(m)[row], "the view no longer follows the tail")
 	})

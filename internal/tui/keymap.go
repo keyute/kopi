@@ -3,7 +3,7 @@ package tui
 import "charm.land/bubbles/v2/key"
 
 type keyMap struct {
-	submit, newline, interrupt, cancel, quit, sendNow, toggleMode, background, expandAll,
+	submit, newline, interrupt, cancel, quit, sendNow, toggleMode, background, stopAgent, expandAll,
 	pageUp, pageDown, paste, historyPrev, historyNext, queueEdit,
 	complete, menuUp, menuDown, menuClose key.Binding
 }
@@ -20,6 +20,7 @@ func (km *keyMap) bindings() map[string]*key.Binding {
 		"send-now":     &km.sendNow,
 		"toggle-mode":  &km.toggleMode,
 		"background":   &km.background,
+		"stop-agent":   &km.stopAgent,
 		"expand-all":   &km.expandAll,
 		"page-up":      &km.pageUp,
 		"page-down":    &km.pageDown,

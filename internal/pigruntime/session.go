@@ -52,6 +52,9 @@ type Prompt struct {
 	// Skills holds the texts of the skills the prompt loads. The model reads
 	// them as messages right after Text; the transcript does not draw them.
 	Skills []string
+	// FromAgent marks a prompt another agent sent rather than the human typed;
+	// it is carried only so input a run never read goes back to its sender.
+	FromAgent bool
 }
 
 // skillType is the PiG custom type of a skill text, stored in session history.

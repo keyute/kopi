@@ -45,7 +45,7 @@ func (c *Controller) beginLogin(ctx context.Context, provider string) (*loginRun
 		return nil, nil, ErrLoggingIn
 	case c.switching != nil:
 		return nil, nil, ErrBusy
-	case c.turn != nil || c.live > 0:
+	case c.main.work != nil || c.live > 0:
 		return nil, nil, fmt.Errorf("failed to log in to %q: %w", provider, ErrWorkStillRunning)
 	}
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -257,7 +257,7 @@ func (c *Controller) endLogin() {
 	defer c.queue.Unlock()
 	c.mu.Lock()
 	c.login = nil
-	c.wakeLocked()
+	c.main.wakeLocked()
 }
 
 func (c *Controller) isClosed() bool {

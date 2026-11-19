@@ -42,7 +42,8 @@ func (m *model) showTasks() tea.Cmd {
 }
 
 // tasksKey goes to the dialog: interrupt leaves the task for the list and
-// the list for the composer. Keys it has no use for are swallowed.
+// the list for the composer. Enter on a subagent's task shows its session.
+// Keys it has no use for are swallowed.
 func (m *model) tasksKey(msg tea.KeyPressMsg) tea.Cmd {
 	t := m.tasks
 	if key.Matches(msg, m.keys.interrupt) {
@@ -59,7 +60,12 @@ func (m *model) tasksKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	switch {
 	case t.open == "":
-		m.openTask(t.list[t.d.sel].ID)
+		info := t.list[t.d.sel]
+		if _, ok := m.agent(info.ID); ok && info.Agent != "" {
+			m.tasks = nil
+			return m.show(info.ID)
+		}
+		m.openTask(info.ID)
 	case t.stoppable() && t.d.sel == 0:
 		if err := m.c.StopTask(t.open); err != nil {
 			m.showError(err)
@@ -115,7 +121,7 @@ func (m *model) taskList(id string) {
 }
 
 func (m *model) showError(err error) {
-	m.tr.Apply(event.Error{Err: err})
+	m.view().tr.Apply(event.Error{Err: err})
 	m.relayout()
 }
 

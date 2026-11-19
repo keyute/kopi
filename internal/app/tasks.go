@@ -1,9 +1,7 @@
 package app
 
 import (
-	"context"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/keyute/kopi/internal/event"
@@ -13,7 +11,9 @@ import (
 
 // Tasks is the background task manager the Controller reports on and controls.
 // OnChange's callback re-enters the Controller, so the Controller never calls
-// a Tasks method with queue or mu held.
+// a Tasks method with queue or mu held; the exception is a subagent's task,
+// started, run and ended with queue held, for which the callback is never
+// called.
 type Tasks interface {
 	OnChange(f func(tool.TaskInfo))
 	OnForeground(f func())
@@ -42,69 +42,7 @@ func (c *Controller) taskChanged(info tool.TaskInfo) {
 		return
 	}
 	head := fmt.Sprintf("Background task %s %s (%s): %s", info.ID, info.Status, info.Reason, commandLine(info.Command))
-	c.queueNotice(notice(info, head))
-}
-
-// queueNotice queues n for the model and, while no turn runs, no session
-// switch is under way and no login runs, starts a turn with no human prompt;
-// the end of the login does that for a notice that arrived during it.
-// It drops n once closed or with no session. A switch that commits clears what
-// was queued; one that fails keeps it for the next prompt or wake.
-func (c *Controller) queueNotice(n pigruntime.Notice) {
-	c.queue.Lock()
-	defer c.queue.Unlock()
-	c.queueNoticeLocked(n)
-}
-
-// queueNoticeLocked is queueNotice with queue held.
-func (c *Controller) queueNoticeLocked(n pigruntime.Notice) {
-	c.mu.Lock()
-	if c.closed || c.sess == nil {
-		c.mu.Unlock()
-		return
-	}
-	c.notices = append(c.notices, n)
-	c.wakeLocked()
-}
-
-// wakeLocked starts a turn with no human prompt for the queued notices unless
-// one runs, a switch is under way, a login runs or nothing queued wakes. It
-// must be called with queue and mu held, and releases mu.
-func (c *Controller) wakeLocked() {
-	if c.closed || c.sess == nil || c.turn != nil || c.switching != nil || c.login != nil || c.hold || !c.waking() {
-		c.mu.Unlock()
-		return
-	}
-	c.startTurn(context.Background(), nil)
-}
-
-// takeNotices empties notices; it must be called with queue held.
-func (c *Controller) takeNotices() []pigruntime.Notice {
-	if len(c.notices) == 0 {
-		return nil
-	}
-	out := c.notices
-	c.notices = nil
-	return out
-}
-
-// waking reports whether a queued notice may start or continue a turn; it must
-// be called with queue held. The notice StopTask queues for a stopped task
-// never wakes; a subagent's end wakes even without Config.Wake, a shell
-// command's only with it.
-func (c *Controller) waking() bool {
-	return slices.ContainsFunc(c.notices, func(n pigruntime.Notice) bool {
-		return n.Shown.Status != string(tool.TaskStopped) && (c.cfg.Wake || n.Shown.Agent != "")
-	})
-}
-
-// requeue puts notices the model never read back ahead of those queued since;
-// it must be called with queue held.
-func (c *Controller) requeue(ns []pigruntime.Notice) {
-	if len(ns) == 0 {
-		return
-	}
-	c.notices = append(slices.Clone(ns), c.notices...)
+	c.main.queueNotice(notice(info, head))
 }
 
 func notice(info tool.TaskInfo, head string) pigruntime.Notice {
@@ -160,17 +98,31 @@ func (c *Controller) TaskOutput(id string) (tool.TaskInfo, error) {
 }
 
 // StopTask stops a running background task for the human. The model is told
-// with the next request but is not woken for it. Stopping a task that has
+// with the next request but is not woken for it; a subagent's stop is reported
+// by its run's end, like Interrupt's. Stopping a task that has
 // already ended does nothing.
 func (c *Controller) StopTask(id string) error {
 	c.mu.Lock()
-	owner := c.sess
+	owner := c.main.sess
 	c.mu.Unlock()
 	info, err := c.cfg.Tasks.Output(id)
 	if err != nil {
 		return err
 	}
 	if info.Status != tool.TaskRunning {
+		return nil
+	}
+	c.queue.Lock()
+	child := c.children[id]
+	var w *Work
+	if child != nil {
+		w = c.interruptByHumanLocked(child)
+	}
+	c.queue.Unlock()
+	if child != nil {
+		if w != nil {
+			<-w.done
+		}
 		return nil
 	}
 	info, err = c.cfg.Tasks.Stop(id)
@@ -188,8 +140,8 @@ func (c *Controller) StopTask(id string) error {
 	defer c.queue.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.closed && owner != nil && c.sess == owner {
-		c.notices = append(c.notices, notice(info, head))
+	if !c.closed && owner != nil && c.main.sess == owner {
+		c.main.notices = append(c.main.notices, notice(info, head))
 	}
 	return nil
 }

@@ -101,10 +101,19 @@ func (a *agentHarness) live() int {
 	return a.c.live
 }
 
-func (a *agentHarness) childOf(id string) *child {
+func (a *agentHarness) childOf(id string) *runner {
 	a.c.queue.Lock()
 	defer a.c.queue.Unlock()
 	return a.c.children[id]
+}
+
+// workOf returns the run r has registered, nil when it has none.
+func (a *agentHarness) workOf(r *runner) *Work {
+	a.c.queue.Lock()
+	defer a.c.queue.Unlock()
+	a.c.mu.Lock()
+	defer a.c.mu.Unlock()
+	return r.work
 }
 
 type childRequest struct {
@@ -460,13 +469,13 @@ func TestRootInterruptLeavesChildrenRunning(t *testing.T) {
 	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{Tools: []tool.Tool{blockTool(rootStarted)}, AgentTools: []tool.Tool{releaseTool(childStarted, release)}}, agentDef("explorer"))
 	a.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "r1"))})
 	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "c1")), pigruntimetest.Text("done")})
-	w, err := a.c.Submit(t.Context(), "go")
+	w, err := a.c.Submit(t.Context(), Main, "go")
 	require.NoError(t, err)
 	wait(t, rootStarted)
 	id := a.launch(t, "explorer", "find it", "go")
 	wait(t, childStarted)
 
-	require.True(t, a.c.Interrupt())
+	require.True(t, a.c.Interrupt(Main))
 	wait(t, w.Done())
 
 	assert.Equal(t, tool.TaskRunning, a.info(t, id).Status)
@@ -687,7 +696,7 @@ func TestParallelAgentCallsInOneMessageLaunchAndNotifyEach(t *testing.T) {
 		pigruntimetest.Capture(t, rootRequests, "ack"),
 	})
 
-	w, err := a.c.Submit(t.Context(), "delegate")
+	w, err := a.c.Submit(t.Context(), Main, "delegate")
 	require.NoError(t, err)
 	wait(t, w.Done())
 	a.untilStatus(t, "t1", tool.TaskCompleted)
@@ -711,13 +720,13 @@ func TestLoginIsRefusedWhileAChildRunsAndSubagentsCannotStartDuringOne(t *testin
 	id := a.launch(t, "explorer", "find it", "go")
 	wait(t, started)
 
-	_, err := a.c.Submit(t.Context(), "/login "+loginProvider)
+	_, err := a.c.Submit(t.Context(), Main, "/login "+loginProvider)
 	require.ErrorIs(t, err, ErrWorkStillRunning)
 
 	_, err = a.tasks.Stop(id)
 	require.NoError(t, err)
 	a.until(t, func() bool { return a.live() == 0 })
-	_, err = a.c.Submit(t.Context(), "/login "+loginProvider)
+	_, err = a.c.Submit(t.Context(), Main, "/login "+loginProvider)
 	require.NoError(t, err, "a login works again once no child runs")
 
 	_, err = a.c.launch(t.Context(), "explorer", "more", "go")
@@ -737,28 +746,15 @@ func TestEndNoticeIsNotQueuedIntoTheNextSession(t *testing.T) {
 	require.NotNil(t, ch)
 	require.NoError(t, a.c.NewSession(t.Context()))
 
-	// What runChild does when End reported before the switch forgot the task.
+	// What the role's end does when End reported before the switch forgot the task.
 	for _, status := range []tool.TaskStatus{tool.TaskCompleted, tool.TaskFailed, tool.TaskStopped} {
-		ch.userStopped = true
 		a.c.queue.Lock()
-		a.c.queueEndNoticeLocked(ch, tool.TaskInfo{ID: id, Agent: "explorer", Command: "find it", Status: status, Result: "late"}, nil)
+		ch.role.(*subagentRole).report(tool.TaskInfo{ID: id, Agent: "explorer", Command: "find it", Status: status, Result: "late"}, true, nil)
 		a.c.queue.Unlock()
 	}
 
 	assert.Empty(t, a.queuedNotices())
 	assert.True(t, a.idle(), "nothing woke the new session")
-}
-
-// doneProbe reports when Done is first read.
-type doneProbe struct {
-	context.Context
-	entered chan struct{}
-	once    sync.Once
-}
-
-func (p *doneProbe) Done() <-chan struct{} {
-	p.once.Do(func() { close(p.entered) })
-	return p.Context.Done()
 }
 
 func TestMessageToACancelledRunIsNotLost(t *testing.T) {
@@ -770,47 +766,104 @@ func TestMessageToACancelledRunIsNotLost(t *testing.T) {
 	id := a.launch(t, "explorer", "find it", "go")
 	wait(t, started)
 	ch := a.childOf(id)
+	running := a.workOf(ch)
 	a.c.queue.Lock()
-	ch.cancel()
+	ch.stop(running, ch.emit)
 	a.c.queue.Unlock()
 
-	// The run is stopping, so the message waits for it rather than joining the inbox.
+	// The run is stopping, so the messages wait for the next run, which they start together.
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
 	resumed, err := a.c.message(cancelled, id, "lost?")
-	assert.ErrorIs(t, err, context.Canceled)
-	assert.False(t, resumed)
+	require.NoError(t, err)
+	assert.True(t, resumed)
+	resumed, err = a.c.message(t.Context(), id, "more work")
+	require.NoError(t, err)
+	assert.True(t, resumed)
+	close(release)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	assert.Contains(t, receive(t, requests).UserTexts, "lost?\n\nmore work")
+}
+
+func TestMessageToARunBeingStoppedStartsTheNextRunWithIt(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{releaseTool(started, release)}}, agentDef("explorer"))
+	requests := make(chan pigruntimetest.Request, 1)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "c1")), pigruntimetest.Capture(t, requests, "second done")})
+	a.rootAcks(1)
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, started)
+	ch := a.childOf(id)
+	first := a.workOf(ch)
 	a.c.queue.Lock()
-	assert.Empty(t, ch.inbox)
+	ch.stop(first, ch.emit)
 	a.c.queue.Unlock()
 
-	type result struct {
-		resumed bool
-		err     error
-	}
-	done := make(chan result, 1)
-	waiting := &doneProbe{Context: t.Context(), entered: make(chan struct{})}
-	go func() {
-		r, err := a.c.message(waiting, id, "more work")
-		done <- result{r, err}
-	}()
-	// Done is read as the message starts waiting for the run to end; the run
-	// cannot end before release is closed.
-	wait(t, waiting.entered)
-	a.c.queue.Lock()
-	assert.True(t, ch.running && ch.runCtx.Err() != nil)
-	a.c.queue.Unlock()
+	resumed, err := a.c.message(t.Context(), id, "instead, check b")
+	require.NoError(t, err)
+	assert.True(t, resumed, "the message starts the next run once this one has ended")
 	close(release)
-	var res result
-	select {
-	case res = <-done:
-	case <-time.After(waitLimit):
-		t.Fatal("timed out waiting for the message")
-	}
-	require.NoError(t, res.err)
-	assert.True(t, res.resumed, "the child runs again with the message")
+	wait(t, first.Done())
 	a.untilStatus(t, id, tool.TaskCompleted)
-	assert.Contains(t, receive(t, requests).UserTexts, "more work")
+
+	assert.Contains(t, receive(t, requests).UserTexts, "instead, check b")
+	assert.Contains(t, a.info(t, id).Output, "› instead, check b\nsecond done")
+	assert.NotSame(t, first, a.workOf(ch))
+}
+
+func TestRunStoppedByTheHumanListsAnAgentMessageItNeverReadAsUndelivered(t *testing.T) {
+	a, _ := askingChildren(t, Config{})
+	approvals := subscribeTo[event.ApprovalRequested](a.c)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("p1", 1)), pigruntimetest.Text("unreached")})
+	id := a.launch(t, "worker", "probe it", "go")
+	req := receiveEvent(t, approvals)
+	resumed, err := a.c.message(t.Context(), id, "also check b")
+	require.NoError(t, err)
+	assert.False(t, resumed)
+
+	assert.True(t, a.c.Answer(req.Token, policy.Decision{Answer: policy.Reject}))
+	a.untilStatus(t, id, tool.TaskStopped)
+	a.until(t, func() bool { return a.live() == 0 })
+
+	queued := a.queuedNotices()
+	require.Len(t, queued, 1)
+	assert.True(t, strings.HasPrefix(queued[0].Text, fmt.Sprintf("Agent %s (worker) stopped by the user: probe it", id)), queued[0].Text)
+	assert.True(t, strings.HasSuffix(queued[0].Text, "\nUndelivered messages:\nalso check b"), queued[0].Text)
+}
+
+func TestStopTaskOnAChildQueuesOneNoticeListingItsUnreadMessages(t *testing.T) {
+	started := make(chan struct{}, 1)
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{Wake: true, AgentTools: []tool.Tool{blockingTool(started)}}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1"))})
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, started)
+	resumed, err := a.c.message(t.Context(), id, "also check b")
+	require.NoError(t, err)
+	assert.False(t, resumed)
+
+	require.NoError(t, a.c.StopTask(id))
+	a.until(t, func() bool { return a.live() == 0 })
+
+	queued := a.queuedNotices()
+	require.Len(t, queued, 1)
+	assert.True(t, strings.HasPrefix(queued[0].Text, fmt.Sprintf("Agent %s (explorer) stopped by the user: find it", id)), queued[0].Text)
+	assert.True(t, strings.HasSuffix(queued[0].Text, "\nUndelivered messages:\nalso check b"), queued[0].Text)
+	assert.True(t, a.idle(), "a human stop does not wake the model")
+	assert.Zero(t, a.faux.CallCount())
+}
+
+func TestStopTaskOnAChildReturnsOnlyOnceItHasStopped(t *testing.T) {
+	started := make(chan struct{}, 1)
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{blockingTool(started)}}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1"))})
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, started)
+
+	require.NoError(t, a.c.StopTask(id))
+
+	assert.Equal(t, tool.TaskStopped, a.info(t, id).Status)
+	assert.Zero(t, a.live())
 }
 
 func TestUnpinnedChildFollowsTheHumansModeMidRun(t *testing.T) {
@@ -855,7 +908,7 @@ func TestRootEditsGrantCoversAnUnpinnedChildButNotAPlanPinnedOne(t *testing.T) {
 	a.c.EnterExecute()
 	approvals := subscribeTo[event.ApprovalRequested](a.c)
 	a.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(editCall("r1", "a.txt")), pigruntimetest.Text("granted"), pigruntimetest.Text("ack"), pigruntimetest.Text("ack")})
-	w, err := a.c.Submit(t.Context(), "edit a")
+	w, err := a.c.Submit(t.Context(), Main, "edit a")
 	require.NoError(t, err)
 	req := receiveEvent(t, approvals)
 	require.True(t, a.c.Answer(req.Token, policy.Decision{Answer: policy.AllowEdits}))
@@ -886,7 +939,7 @@ func TestDelayedChildStopDoesNotCancelReplacement(t *testing.T) {
 	id := a.launch(t, "explorer", "find it", "go")
 	receiveChild(t, requests)
 	ch := a.childOf(id)
-	selectedStop := ch.cancel
+	selectedStop := ch.stopper(a.workOf(ch))
 	close(firstGate)
 	a.until(t, func() bool { return a.live() == 0 })
 	resumed, err := a.c.message(t.Context(), id, "again")
@@ -894,10 +947,321 @@ func TestDelayedChildStopDoesNotCancelReplacement(t *testing.T) {
 	require.True(t, resumed)
 	receiveChild(t, requests)
 	selectedStop()
+	second := a.workOf(ch)
 	a.c.queue.Lock()
-	assert.NoError(t, ch.runCtx.Err(), "a delayed stop belongs to the old run")
+	assert.False(t, second.stopped, "a delayed stop belongs to the old run")
+	assert.NoError(t, second.sendCtx.Err())
 	a.c.queue.Unlock()
 	close(secondGate)
 	a.untilStatus(t, id, tool.TaskCompleted)
 	assert.Equal(t, "second", a.info(t, id).Result)
+}
+
+// recordEvents delivers every event, untimed, to a channel with room for a
+// test's worth.
+func recordEvents(c *Controller) <-chan event.Event {
+	evs := make(chan event.Event, 512)
+	c.Subscribe(func(ev event.Event) { evs <- ev })
+	return evs
+}
+
+// untilSessionEnd returns the events received up to and including the TurnEnd
+// of session id.
+func untilSessionEnd(t *testing.T, evs <-chan event.Event, id string) []event.Event {
+	t.Helper()
+	var got []event.Event
+	for {
+		select {
+		case ev := <-evs:
+			got = append(got, ev)
+			if s, ok := ev.(event.Session); ok && s.ID == id {
+				if _, ok := s.Event.(event.TurnEnd); ok {
+					return got
+				}
+			}
+		case <-time.After(waitLimit):
+			t.Fatalf("timed out waiting for the end of session %s", id)
+		}
+	}
+}
+
+// sessionOf returns the events wrapped for id, unwrapped, in order.
+func sessionOf(evs []event.Event, id string) []event.Event {
+	var out []event.Event
+	for _, ev := range evs {
+		if s, ok := ev.(event.Session); ok && s.ID == id {
+			out = append(out, s.Event)
+		}
+	}
+	return out
+}
+
+func TestChildEventsArriveWrappedWithItsIDAndApprovalsBareAndLabelled(t *testing.T) {
+	a, _ := askingChildren(t, Config{})
+	evs := recordEvents(a.c)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("p1", 1)), pigruntimetest.Text("the answer")})
+
+	id := a.launch(t, "worker", "probe it", "go")
+	var got []event.Event
+	for ended := false; !ended; {
+		select {
+		case ev := <-evs:
+			got = append(got, ev)
+			switch e := ev.(type) {
+			case event.ApprovalRequested:
+				assert.True(t, a.c.Answer(e.Token, policy.Decision{Answer: policy.Allow}))
+			case event.Session:
+				_, ended = e.Event.(event.TurnEnd)
+			}
+		case <-time.After(waitLimit):
+			t.Fatal("timed out waiting for the child's TurnEnd")
+		}
+	}
+
+	own := sessionOf(got, id)
+	require.NotEmpty(t, own)
+	assert.Equal(t, event.TurnStart{WorkID: own[0].(event.TurnStart).WorkID, Prompt: "go"}, own[0])
+	var titles []string
+	for _, ev := range own {
+		if start, ok := ev.(event.ToolStart); ok {
+			titles = append(titles, start.Title)
+		}
+	}
+	assert.Equal(t, []string{"Probe"}, titles)
+	end, ok := own[len(own)-1].(event.TurnEnd)
+	require.True(t, ok)
+	assert.Equal(t, event.Completed, end.Outcome.Status)
+
+	var approvals int
+	for _, ev := range got {
+		switch e := ev.(type) {
+		case event.ApprovalRequested:
+			approvals++
+			assert.Equal(t, "worker", e.Agent)
+			assert.Equal(t, id, e.TaskID)
+		case event.ToolStart, event.ToolEnd, event.UserMessage, event.QueueChanged, event.ThinkingDelta:
+			t.Errorf("a subagent's %T arrived bare", e)
+		case event.TurnStart:
+			assert.Empty(t, e.Prompt, "only the root's wake turn starts bare")
+		case event.TextDelta:
+			assert.Equal(t, "ack", e.Text, "only the root's wake turn speaks bare")
+		case event.Session:
+			assert.Equal(t, id, e.ID)
+			switch e.Event.(type) {
+			case event.ApprovalRequested, event.ApprovalEnded:
+				t.Errorf("an approval arrived wrapped: %T", e.Event)
+			}
+		}
+	}
+	assert.Equal(t, 1, approvals)
+}
+
+func TestNoEventOfAnOldSessionsChildIsDeliveredAfterASwitch(t *testing.T) {
+	started := make(chan struct{}, 1)
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{blockingTool(started)}}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1"))})
+	evs := recordEvents(a.c)
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, started)
+	running := a.workOf(a.childOf(id))
+	require.NoError(t, a.c.NewSession(t.Context()))
+	wait(t, running.Done())
+
+	var afterSwitch bool
+	for len(evs) > 0 {
+		switch ev := (<-evs).(type) {
+		case event.SessionChanged:
+			afterSwitch = true
+		case event.Session:
+			assert.False(t, afterSwitch, "%T of the old session's child was delivered after the switch", ev.Event)
+		}
+	}
+	assert.True(t, afterSwitch)
+}
+
+func TestSubmitToARunningChildQueuesAndItReadsTheInput(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{releaseTool(started, release)}}, agentDef("explorer"))
+	requests := make(chan pigruntimetest.Request, 1)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "c1")), pigruntimetest.Capture(t, requests, "done")})
+	a.rootAcks(1)
+	evs := recordEvents(a.c)
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, started)
+
+	w, err := a.c.Submit(t.Context(), id, "also check b")
+	require.NoError(t, err)
+	assert.Nil(t, w)
+	close(release)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	assert.Equal(t, []string{"go", "also check b"}, receive(t, requests).UserTexts)
+	own := sessionOf(untilSessionEnd(t, evs, id), id)
+	assert.Contains(t, own, event.QueueChanged{Pending: []string{"also check b"}})
+	assert.Contains(t, own, event.UserMessage{Text: "also check b"})
+}
+
+func TestSubmitToAnEndedChildStartsItsNextRunAndReportsItsEnd(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
+	childRequests := make(chan pigruntimetest.Request, 1)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first"), pigruntimetest.Capture(t, childRequests, "second")})
+	rootRequests := make(chan pigruntimetest.Request, 2)
+	a.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, rootRequests, "ack"), pigruntimetest.Capture(t, rootRequests, "ack")})
+	id := a.launch(t, "explorer", "find it", "go")
+	a.untilStatus(t, id, tool.TaskCompleted)
+	receive(t, rootRequests)
+	a.until(t, func() bool { return a.workOf(a.childOf(id)) == nil })
+
+	w, err := a.c.Submit(t.Context(), id, "again")
+	require.NoError(t, err)
+	require.NotNil(t, w)
+	wait(t, w.Done())
+
+	assert.Equal(t, []string{"go", "again"}, receive(t, childRequests).UserTexts)
+	assert.Contains(t, receive(t, rootRequests).UserTexts, fmt.Sprintf("Agent %s (explorer) completed: find it\nsecond", id))
+	assert.Equal(t, "second", a.info(t, id).Result)
+}
+
+func TestSendNowToARunningChildContinuesItWithTheQueuedInput(t *testing.T) {
+	started := make(chan struct{}, 2)
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{blockingTool(started)}}, agentDef("explorer"))
+	requests := make(chan pigruntimetest.Request, 1)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1")), pigruntimetest.Capture(t, requests, "done")})
+	a.rootAcks(1)
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, started)
+
+	require.NoError(t, a.c.SendNow(t.Context(), id, "instead, check b"))
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	assert.Contains(t, receive(t, requests).UserTexts, "instead, check b")
+	assert.Len(t, a.tasks.List(), 1, "the same run continued")
+}
+
+func TestSendNowToAChildWithAPendingApprovalMakesItStale(t *testing.T) {
+	a, ran := askingChildren(t, Config{})
+	approvals := subscribeTo[event.ApprovalRequested](a.c)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("p1", 1)), pigruntimetest.ToolCalls(probeCall("p2", 2)), pigruntimetest.Text("done")})
+	id := a.launch(t, "worker", "probe it", "go")
+	first := receiveEvent(t, approvals)
+
+	require.NoError(t, a.c.SendNow(t.Context(), id, "probe again"))
+	assert.False(t, a.c.Answer(first.Token, policy.Decision{Answer: policy.Allow}))
+
+	second := receiveEvent(t, approvals)
+	assert.Equal(t, "p2", second.CallID)
+	assert.Greater(t, second.Token, first.Token)
+	require.True(t, a.c.Answer(second.Token, policy.Decision{Answer: policy.Allow}))
+	a.untilStatus(t, id, tool.TaskCompleted)
+	assert.Equal(t, int32(1), ran.Load())
+}
+
+func TestTakeQueuedFromAChildLeavesAnAgentMessage(t *testing.T) {
+	started := make(chan struct{}, 1)
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{blockingTool(started)}}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1"))})
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, started)
+	_, err := a.c.Submit(t.Context(), id, "mine")
+	require.NoError(t, err)
+	_, err = a.c.message(t.Context(), id, "from the agent")
+	require.NoError(t, err)
+
+	assert.Equal(t, []event.Input{{Text: "mine"}}, a.c.TakeQueued(id))
+
+	ch := a.childOf(id)
+	a.c.queue.Lock()
+	assert.Equal(t, []pigruntime.Prompt{{Text: "from the agent", FromAgent: true}}, ch.pending)
+	a.c.queue.Unlock()
+	assert.Empty(t, a.c.TakeQueued(Main))
+}
+
+func TestInterruptOfAChildStopsOnlyItAndHandsBackItsInput(t *testing.T) {
+	rootStarted, childStarted := make(chan struct{}), make(chan struct{}, 1)
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{Tools: []tool.Tool{blockTool(rootStarted)}, AgentTools: []tool.Tool{blockingTool(childStarted)}}, agentDef("explorer"))
+	a.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "r1"))})
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1"))})
+	evs := recordEvents(a.c)
+	rootWork, err := a.c.Submit(t.Context(), Main, "go")
+	require.NoError(t, err)
+	wait(t, rootStarted)
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, childStarted)
+	_, err = a.c.Submit(t.Context(), id, "unread")
+	require.NoError(t, err)
+	childWork := a.workOf(a.childOf(id))
+
+	require.True(t, a.c.Interrupt(id))
+	wait(t, childWork.Done())
+	a.untilStatus(t, id, tool.TaskStopped)
+
+	assert.False(t, a.idle(), "the root's turn keeps running")
+	queued := a.queuedNotices()
+	require.Len(t, queued, 1)
+	assert.True(t, strings.HasPrefix(queued[0].Text, fmt.Sprintf("Agent %s (explorer) stopped by the user: find it", id)), queued[0].Text)
+	var end event.TurnEnd
+	for _, ev := range sessionOf(untilSessionEnd(t, evs, id), id) {
+		if e, ok := ev.(event.TurnEnd); ok {
+			end = e
+		}
+	}
+	assert.Equal(t, event.Interrupted, end.Outcome.Status)
+	assert.Equal(t, []event.Input{{Text: "unread"}}, end.Unsent)
+
+	assert.False(t, a.c.Interrupt(id), "nothing is running")
+	require.True(t, a.c.Interrupt(Main))
+	wait(t, rootWork.Done())
+	assert.Equal(t, 1, a.faux.CallCount(), "the stop woke nobody")
+}
+
+func TestSlashCommandSubmittedToAChildActsOnTheMainSession(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("done")})
+	a.rootAcks(1)
+	id := a.launch(t, "explorer", "find it", "go")
+	a.untilStatus(t, id, tool.TaskCompleted)
+	changed := subscribeTo[event.SessionChanged](a.c)
+
+	_, err := a.c.Submit(t.Context(), id, "/tasks")
+	assert.ErrorIs(t, err, ErrShowTasks)
+	_, err = a.c.Submit(t.Context(), id, "/new")
+	require.NoError(t, err)
+	assert.NotEmpty(t, receiveEvent(t, changed).SessionID)
+}
+
+func TestUnknownSessionIsRefused(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
+
+	_, err := a.c.Submit(t.Context(), "t99", "hello")
+	assert.ErrorIs(t, err, tool.ErrUnknownTask)
+	assert.ErrorIs(t, a.c.SendNow(t.Context(), "t99", "hello"), tool.ErrUnknownTask)
+	assert.Nil(t, a.c.TakeQueued("t99"))
+	assert.False(t, a.c.Interrupt("t99"))
+}
+
+func TestAgentsListsMainThenEverySubagentInTaskOrder(t *testing.T) {
+	started := make(chan struct{}, 1)
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{blockingTool(started)}}, agentDef("explorer"), agentDef("worker"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("done"), pigruntimetest.ToolCalls(call("Block", "c1"))})
+	a.rootAcks(1)
+	ends := turnEnds(a.c)
+	first := a.launch(t, "explorer", "first job", "go")
+	a.untilStatus(t, first, tool.TaskCompleted)
+	receiveEnd(t, ends)
+	a.until(t, func() bool { return a.workOf(a.childOf(first)) == nil })
+	second := a.launch(t, "worker", "second job", "go")
+	wait(t, started)
+
+	got := a.c.Agents()
+
+	require.Len(t, got, 3)
+	model := childProvider + "/faux-1"
+	for i, want := range []AgentStatus{
+		{ID: Main, Model: a.c.Model()},
+		{ID: first, Agent: "explorer", Description: "first job", Model: model, State: tool.TaskCompleted},
+		{ID: second, Agent: "worker", Description: "second job", Model: model, State: tool.TaskRunning},
+	} {
+		got[i].ContextTokens, got[i].ContextWindow = 0, 0
+		assert.Equal(t, want, got[i])
+	}
 }

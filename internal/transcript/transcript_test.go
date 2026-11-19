@@ -137,3 +137,23 @@ func TestRestore(t *testing.T) {
 		})
 	}
 }
+
+func TestRunningIsTheLatestRunningCallsTitle(t *testing.T) {
+	var tr Transcript
+	_, ok := tr.Running()
+	assert.False(t, ok)
+
+	tr.Apply(start("a"))
+	tr.Apply(start("b"))
+	title, ok := tr.Running()
+	assert.True(t, ok)
+	assert.Equal(t, "Read b", title)
+
+	tr.Apply(end("b"))
+	title, _ = tr.Running()
+	assert.Equal(t, "Read a", title)
+
+	tr.Apply(event.TurnEnd{})
+	_, ok = tr.Running()
+	assert.False(t, ok, "an unfinished call is not running")
+}

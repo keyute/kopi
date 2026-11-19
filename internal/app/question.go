@@ -30,14 +30,14 @@ func (c *Controller) askQuestion(ctx context.Context, qs []tool.Question) ([]too
 		c.queue.Unlock()
 		return nil, err
 	}
-	if c.turn == nil || c.turn.stopped || c.turn.sendCtx.Err() != nil {
+	if c.main.work == nil || c.main.work.stopped || c.main.work.sendCtx.Err() != nil {
 		c.mu.Unlock()
 		c.queue.Unlock()
 		return nil, context.Canceled
 	}
 	c.questionSeq++
 	p.token = c.questionSeq
-	p.work, p.ctx, p.sendCtx, p.emit = c.turn, ctx, c.turn.sendCtx, c.emit
+	p.work, p.ctx, p.sendCtx, p.emit = c.main.work, ctx, c.main.work.sendCtx, c.main.emit
 	c.question = p
 	emit := p.emit
 	c.mu.Unlock()
@@ -94,7 +94,7 @@ func (c *Controller) AnswerQuestion(token uint64, answers []tool.Answer) bool {
 	c.mu.Unlock()
 	dismissed := answers == nil
 	if dismissed {
-		c.stop(p.work, p.emit)
+		c.main.stop(p.work, p.emit)
 	}
 	c.queue.Unlock()
 	if dismissed {

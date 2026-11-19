@@ -64,7 +64,8 @@
 ## Agent and SendMessage
 
 - `Agent` starts a [subagent](subagents.md) on a prompt and returns its task id at once; the subagent runs in the background.
-- `SendMessage` sends a further message to a subagent by task id.
+- `SendMessage` sends a further message to a subagent by task id. A running subagent reads it when its current step ends; one that has ended, or whose run is being stopped, starts again with its earlier context, and the call does not wait for the stopping run to end.
+- The notice the agent receives when a subagent's run completes or fails, or when you stop it, lists the messages queued for it that it never read as undelivered. When the agent stops a subagent with `TaskStop` it receives no notice, and those messages are dropped.
 - Both exist only when a subagent is defined.
 
 ## AskUserQuestion

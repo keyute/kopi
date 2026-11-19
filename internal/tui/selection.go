@@ -14,7 +14,7 @@ import (
 const multiClick = 400 * time.Millisecond
 
 // point is a place in the text. In the transcript it is an index into
-// model.lines and a cell column; indices rather than screen rows keep a
+// the shown view's lines and a cell column; indices rather than screen rows keep a
 // selection on its text while the view scrolls. In the lower rows it is an
 // index into model.below and a cell column. In the composer it is a logical
 // line and a rune index into it.

@@ -28,6 +28,7 @@ func withDefaults(c Config) Config {
 	c.Keys = DefaultKeys()
 	c.StatusLine = DefaultStatusLine()
 	c.StatusLine.Segments = map[string]StatusSegment{}
+	c.AgentLine = DefaultAgentLine()
 	c.Theme = DefaultTheme()
 	c.Permissions = Permissions{Allow: []string{}, Ask: []string{}, Deny: []string{}}
 	c.Sandbox = Sandbox{AllowWrite: []string{}, DenyRead: []string{}}
@@ -45,6 +46,7 @@ func TestResolveDefaultsOnly(t *testing.T) {
 	assert.Equal(t, "default", r.Origins["keys.submit"])
 	assert.Equal(t, "default", r.Origins["statusline.left"])
 	assert.Equal(t, "default", r.Origins["mode"])
+	assert.Equal(t, DefaultAgentLine(), r.Config.AgentLine)
 	assert.NotContains(t, r.Origins, "model")
 }
 
@@ -252,6 +254,27 @@ func TestResolveOverridesOneStatusLineSide(t *testing.T) {
 	assert.Equal(t, "default", r.Origins["statusline.right"])
 }
 
+func TestResolveOverridesOneAgentLineSide(t *testing.T) {
+	global := globalLayer(t, `{"agentline": {"left": ["state"]}}`)
+	r, err := Resolve(Defaults(), global)
+	require.NoError(t, err)
+	want := DefaultAgentLine()
+	want.Left = []string{"state"}
+	assert.Equal(t, want, r.Config.AgentLine)
+	assert.Equal(t, global.Name, r.Origins["agentline.left"])
+	assert.Equal(t, "default", r.Origins["agentline.right"])
+}
+
+func TestResolveRejectsUnknownAgentSegmentNamingLayer(t *testing.T) {
+	for _, side := range []string{"left", "right"} {
+		global := globalLayer(t, `{"agentline": {"`+side+`": ["agent", "weather"]}}`)
+		_, err := Resolve(Defaults(), global)
+		require.ErrorIs(t, err, ErrInvalidValue)
+		assert.Contains(t, err.Error(), global.Name)
+		assert.Contains(t, err.Error(), `agentline.`+side+`: unknown segment "weather"`)
+	}
+}
+
 func TestResolveAcceptsNoticeOnEitherSide(t *testing.T) {
 	global := globalLayer(t, `{"statusline": {"left": ["notice", "model"], "right": ["mode", "notice"]}}`)
 	r, err := Resolve(Defaults(), global)
@@ -263,6 +286,8 @@ func TestResolveAcceptsNoticeOnEitherSide(t *testing.T) {
 func TestBackgroundActionAndTasksSegment(t *testing.T) {
 	assert.Contains(t, KeyActions, "background")
 	assert.Equal(t, []string{"ctrl+b"}, DefaultKeys()["background"])
+	assert.Contains(t, KeyActions, "stop-agent")
+	assert.Equal(t, []string{"x"}, DefaultKeys()["stop-agent"])
 	assert.Equal(t, []string{"notice", "sandbox", "tasks", "mode"}, DefaultStatusLine().Right)
 
 	global := globalLayer(t, `{"keys": {"background": ["ctrl+g"]}, "statusline": {"left": ["tasks"]}}`)
@@ -405,12 +430,14 @@ func TestResolveRejectsInvalidStatusSegment(t *testing.T) {
 }
 
 func TestResolveRejectsControlCharacterInSeparator(t *testing.T) {
-	for _, sep := range []string{`\n`, `\t`, ` \u001b[0m `} {
-		global := globalLayer(t, `{"statusline": {"separator": "`+sep+`"}}`)
-		_, err := Resolve(Defaults(), global)
-		require.ErrorIs(t, err, ErrInvalidValue)
-		assert.Contains(t, err.Error(), global.Name)
-		assert.Contains(t, err.Error(), "statusline.separator")
+	for _, line := range []string{"statusline", "agentline"} {
+		for _, sep := range []string{`\n`, `\t`, ` \u001b[0m `} {
+			global := globalLayer(t, `{"`+line+`": {"separator": "`+sep+`"}}`)
+			_, err := Resolve(Defaults(), global)
+			require.ErrorIs(t, err, ErrInvalidValue)
+			assert.Contains(t, err.Error(), global.Name)
+			assert.Contains(t, err.Error(), line+".separator")
+		}
 	}
 }
 
@@ -678,7 +705,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	r, err := Resolve(Defaults())
 	require.NoError(t, err)
 	entries := r.Entries()
-	assert.Len(t, entries, 21+len(KeyActions))
+	assert.Len(t, entries, 24+len(KeyActions))
 	assert.IsIncreasing(t, entryKeys(entries))
 	assert.Contains(t, entries, Entry{Key: "model", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "smallModel", Value: "", Origin: "unset"})

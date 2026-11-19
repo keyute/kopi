@@ -20,6 +20,7 @@ var KeyActions = []string{
 	"send-now",
 	"toggle-mode",
 	"background",
+	"stop-agent",
 	"expand-all",
 	"page-up",
 	"page-down",
@@ -36,6 +37,9 @@ var KeyActions = []string{
 // StatusSegments lists every segment the status line can show.
 var StatusSegments = []string{"model", "context", "branch", "mode", "notice", "sandbox", "tasks", "cwd"}
 
+// AgentSegments lists every segment an agent row can show.
+var AgentSegments = []string{"agent", "tokens", "model", "elapsed", "state", "activity", "id"}
+
 // ThemeRoles lists every colour role a theme defines.
 var ThemeRoles = []string{"accent", "success", "error", "warning", "muted", "dim", "text", "userMessageBg", "heading", "link", "code", "frame"}
 
@@ -45,6 +49,13 @@ type StatusLine struct {
 	// Separator is drawn between segments; "" is a valid choice.
 	Separator string                   `koanf:"separator"`
 	Segments  map[string]StatusSegment `koanf:"segments"`
+}
+
+type AgentLine struct {
+	Left  []string `koanf:"left"`
+	Right []string `koanf:"right"`
+	// Separator is drawn between segments; "" is a valid choice.
+	Separator string `koanf:"separator"`
 }
 
 // StatusSegment is a user-defined segment with either static Text or the
@@ -76,6 +87,7 @@ func DefaultKeys() map[string][]string {
 		"send-now":     {"ctrl+enter"},
 		"toggle-mode":  {"shift+tab"},
 		"background":   {"ctrl+b"},
+		"stop-agent":   {"x"},
 		"expand-all":   {"ctrl+o"},
 		"page-up":      {"pgup"},
 		"page-down":    {"pgdown"},
@@ -94,6 +106,10 @@ func DefaultStatusLine() StatusLine {
 	return StatusLine{Left: []string{"model", "context", "branch"}, Right: []string{"notice", "sandbox", "tasks", "mode"}, Separator: " · "}
 }
 
+func DefaultAgentLine() AgentLine {
+	return AgentLine{Left: []string{"agent", "tokens", "model"}, Right: []string{}, Separator: " · "}
+}
+
 // uiDefaults is the default layer's share of the UI blocks. Nested values must
 // be map[string]any: koanf flattens and merges only that type, so any other map
 // would become one leaf that a layer can only replace whole.
@@ -103,10 +119,12 @@ func uiDefaults() map[string]any {
 		keys[action] = ks
 	}
 	s := DefaultStatusLine()
+	a := DefaultAgentLine()
 	t := DefaultTheme()
 	return map[string]any{
 		"keys":       keys,
 		"statusline": map[string]any{"left": s.Left, "right": s.Right, "separator": s.Separator, "segments": map[string]any{}},
+		"agentline":  map[string]any{"left": a.Left, "right": a.Right, "separator": a.Separator},
 		"theme":      map[string]any{"dark": t.Dark, "light": t.Light},
 	}
 }
@@ -129,6 +147,9 @@ func validateUI(c Config) error {
 	}
 	if strings.ContainsFunc(c.StatusLine.Separator, unicode.IsControl) {
 		return fmt.Errorf("%w: statusline.separator: control character", ErrInvalidValue)
+	}
+	if strings.ContainsFunc(c.AgentLine.Separator, unicode.IsControl) {
+		return fmt.Errorf("%w: agentline.separator: control character", ErrInvalidValue)
 	}
 	return validateSegments(c.StatusLine.Segments)
 }
@@ -172,6 +193,23 @@ func validateSegmentRefs(s StatusLine, origins map[string]string) error {
 		for _, name := range side.segs {
 			if _, user := s.Segments[name]; !user && !slices.Contains(StatusSegments, name) {
 				key := "statusline." + side.name
+				return fmt.Errorf("config layer %s: %w: %s: unknown segment %q", originOf(origins, key), ErrInvalidValue, key, name)
+			}
+		}
+	}
+	return nil
+}
+
+// validateAgentSegmentRefs checks the merged agentline lists against
+// AgentSegments, naming the layer that set each list.
+func validateAgentSegmentRefs(a AgentLine, origins map[string]string) error {
+	for _, side := range []struct {
+		name string
+		segs []string
+	}{{"left", a.Left}, {"right", a.Right}} {
+		for _, name := range side.segs {
+			if !slices.Contains(AgentSegments, name) {
+				key := "agentline." + side.name
 				return fmt.Errorf("config layer %s: %w: %s: unknown segment %q", originOf(origins, key), ErrInvalidValue, key, name)
 			}
 		}

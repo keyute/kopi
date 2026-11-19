@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/spinner"
+
+	"github.com/keyute/kopi/internal/app"
 )
 
 // newSpinner uses MiniDot, whose frames are one column wide, so the text
@@ -25,15 +27,18 @@ func workingRow(sp *spinner.Model, text, hint string, th theme) string {
 }
 
 // workingText is the working row's text, false when it is not shown. A
-// pending approval wins, then a running turn, then the Controller's
-// activity, then idle waiting on background work. The waiting clock runs
-// underneath the others.
+// pending approval wins, then the shown view's running turn, then, in the
+// main view only, the Controller's activity, then idle waiting on background
+// work. The waiting clock runs underneath the others.
 func (m *model) workingText() (string, bool) {
+	v := m.view()
 	switch {
 	case m.approval != nil || m.question != nil:
 		return "Waiting for you…", true
-	case m.busy:
-		return m.verb.ing + "… " + formatDuration(time.Since(m.turnStart)), true
+	case v.busy:
+		return v.verb.ing + "… " + formatDuration(time.Since(v.turnStart)), true
+	case m.shown != app.Main:
+		return "", false
 	case m.activity != "":
 		return m.activity, true
 	case m.waiting():
@@ -43,7 +48,7 @@ func (m *model) workingText() (string, bool) {
 }
 
 // waiting reports whether the root is idle while background work runs.
-func (m *model) waiting() bool { return !m.busy && m.status.Agents+m.status.Shells > 0 }
+func (m *model) waiting() bool { return !m.views[app.Main].busy && m.status.Agents+m.status.Shells > 0 }
 
 // waitingOn is the running work as "2 agents, 1 shell".
 func (m *model) waitingOn() string { return taskCounts(m.status.Agents, m.status.Shells) }
@@ -78,11 +83,11 @@ func (m *model) syncWaiting() {
 	}
 }
 
-// workingHint names the background key while the turn's foreground command
-// can be moved to the background, "" otherwise.
+// workingHint names the background key while the main turn's foreground
+// command can be moved to the background, "" otherwise.
 func (m *model) workingHint() string {
 	ks := m.keys.background.Keys()
-	if !m.busy || m.approval != nil || m.question != nil || m.tasks != nil || !m.status.Foreground || len(ks) == 0 {
+	if m.shown != app.Main || !m.view().busy || m.approval != nil || m.question != nil || m.tasks != nil || !m.status.Foreground || len(ks) == 0 {
 		return ""
 	}
 	return " · " + ks[0] + " to background"

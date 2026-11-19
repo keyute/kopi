@@ -147,6 +147,13 @@ type StatusCommandResult struct {
 
 type Error struct{ Err error }
 
+// Session carries an event of a session other than the main one; ID is that
+// session's id.
+type Session struct {
+	ID    string
+	Event Event
+}
+
 func (TurnStart) isEvent()           {}
 func (QueueChanged) isEvent()        {}
 func (UserMessage) isEvent()         {}
@@ -169,6 +176,7 @@ func (ModeChanged) isEvent()         {}
 func (SessionChanged) isEvent()      {}
 func (StatusCommandResult) isEvent() {}
 func (Error) isEvent()               {}
+func (Session) isEvent()             {}
 
 type Status int
 

@@ -89,7 +89,7 @@ func TestTaskRow(t *testing.T) {
 			m, _ := newTestModel(t, 60, 20)
 			send(m, event.TaskEnded{ID: "t1", Command: "make build\nmake test", Status: tc.status, Elapsed: 12 * time.Second})
 			assert.Equal(t, []string{"", tc.want}, body(m))
-			got := m.lines[len(m.lines)-1].text
+			got := m.view().lines[len(m.view().lines)-1].text
 			assert.Equal(t, tc.bullet.Render("• ")+tc.text.Render(strings.TrimPrefix(tc.want, "• ")), got)
 		})
 	}
@@ -109,7 +109,7 @@ func TestAgentTaskRow(t *testing.T) {
 			m, _ := newTestModel(t, 60, 20)
 			send(m, event.TaskEnded{ID: "t3", Agent: "explore", Command: "look around\nmore", Status: tc.status, Elapsed: 134 * time.Second})
 			assert.Equal(t, []string{"", tc.want}, body(m))
-			got := m.lines[len(m.lines)-1].text
+			got := m.view().lines[len(m.view().lines)-1].text
 			assert.Equal(t, tc.bullet.Render("• ")+tc.text.Render(strings.TrimPrefix(tc.want, "• ")), got)
 		})
 	}

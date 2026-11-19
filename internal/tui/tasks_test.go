@@ -110,7 +110,7 @@ func TestTasksListNamesAnAgentTask(t *testing.T) {
 	})
 }
 
-func TestTasksOpenAgentShowsItsOutputAndOptions(t *testing.T) {
+func TestTasksOpenAgentWithoutASessionShowsItsOutputAndOptions(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, c := tasksModel(t)
 		c.tasks[0].Agent = "explore"
@@ -122,6 +122,23 @@ func TestTasksOpenAgentShowsItsOutputAndOptions(t *testing.T) {
 		rule := strings.Repeat("─", 60)
 		want := []string{rule, "  t1 · running · 1m 2s · explore › look around", "    one", "    two", "", "❭ 1. Stop", "  2. Back", rule}
 		assert.Equal(t, want, dialogRows(t, m))
+	})
+}
+
+func TestTasksOpenAgentWithASessionShowsItsView(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		c.tasks[0].Agent = "explore"
+		c.agents = []app.AgentStatus{{ID: app.Main}, {ID: "t1", Agent: "explore"}}
+		send(m, event.TasksChanged{}, event.Session{ID: "t1", Event: event.TurnStart{Prompt: "dig"}})
+		submitText(m, "/tasks")
+		require.NotNil(t, m.tasks)
+
+		press(m, enter)
+
+		assert.Nil(t, m.tasks)
+		assert.Equal(t, "t1", m.shown)
+		assert.Contains(t, body(m), "❯ dig")
 	})
 }
 

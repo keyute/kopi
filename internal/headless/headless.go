@@ -68,7 +68,7 @@ func (f *Frontend) await(ctx context.Context, interrupts <-chan os.Signal, w *ap
 		case <-ctx.Done():
 			return fmt.Errorf("failed to finish the turn: %w", ctx.Err())
 		case <-interrupts:
-			f.c.Interrupt()
+			f.c.Interrupt(app.Main)
 		case <-w.Done():
 			return nil
 		}

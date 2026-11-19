@@ -16,12 +16,12 @@ import (
 // together, first in first out.
 type pendingApproval struct {
 	token uint64
-	// work is the root turn that asked; child is the subagent that asked when
-	// work is nil.
-	work  *Work
-	child *child
-	ctx   context.Context
-	emit  func(event.Event)
+	// work is the run that asked, on runner's session.
+	work   *Work
+	runner *runner
+	ctx    context.Context
+	// emit is the runner's, as it was when the ask began.
+	emit func(event.Event)
 	// PiG forwards send cancellation asynchronously; retain the originating
 	// send even when the Work continues with a new context.
 	sendCtx context.Context
@@ -33,24 +33,24 @@ type pendingApproval struct {
 // stale reports that the send the ask belongs to is stopping; it must be
 // called with queue and mu held.
 func (p *pendingApproval) stale() bool {
-	return p.work != nil && p.work.stopped || p.sendCtx.Err() != nil || p.ctx.Err() != nil
+	return p.work.stopped || p.sendCtx.Err() != nil || p.ctx.Err() != nil
 }
 
-// approver returns the Approver for the session displayed by d, which is the
-// subagent ch or, when ch is nil, the root; nil when no human can answer.
-func (c *Controller) approver(d *display, ch *child) policy.Approver {
+// approver returns the Approver for the session of run, displayed by d; nil
+// when no human can answer.
+func (c *Controller) approver(d *display, run *runner) policy.Approver {
 	if c.cfg.Unattended {
 		return nil
 	}
-	return func(ctx context.Context, r policy.Request) (policy.Decision, error) {
-		return c.ask(ctx, d, r, ch)
+	return func(ctx context.Context, call policy.Request) (policy.Decision, error) {
+		return c.ask(ctx, d, call, run)
 	}
 }
 
-// ask registers r, reports it and waits for its answer. The root's call needs a
-// running root turn; a subagent's only an open controller and a live run.
-func (c *Controller) ask(ctx context.Context, d *display, r policy.Request, ch *child) (policy.Decision, error) {
-	p := &pendingApproval{answer: make(chan policy.Decision, 1), child: ch, ctx: ctx}
+// ask registers call, reports it and waits for its answer. It needs a running,
+// unstopped run on run's session.
+func (c *Controller) ask(ctx context.Context, d *display, call policy.Request, run *runner) (policy.Decision, error) {
+	p := &pendingApproval{answer: make(chan policy.Decision, 1), runner: run, ctx: ctx}
 	c.queue.Lock()
 	c.mu.Lock()
 	if err := ctx.Err(); err != nil {
@@ -58,34 +58,22 @@ func (c *Controller) ask(ctx context.Context, d *display, r policy.Request, ch *
 		c.queue.Unlock()
 		return policy.Decision{}, err
 	}
-	var emit func(event.Event)
-	if ch == nil {
-		if c.turn == nil || c.turn.stopped || c.turn.sendCtx.Err() != nil {
-			c.mu.Unlock()
-			c.queue.Unlock()
-			return policy.Decision{}, context.Canceled
-		}
-		// The approver runs only during a send on the current session.
-		p.work, p.sendCtx, emit = c.turn, c.turn.sendCtx, c.emit
-	} else {
-		if c.closed || !ch.running || ch.runCtx.Err() != nil {
-			c.mu.Unlock()
-			c.queue.Unlock()
-			return policy.Decision{}, context.Canceled
-		}
-		// A subagent's events never go through the root session's bound emit.
-		p.sendCtx, emit = ch.runCtx, c.relay.emit
+	w := run.work
+	if c.closed || w == nil || w.stopped || w.sendCtx.Err() != nil {
+		c.mu.Unlock()
+		c.queue.Unlock()
+		return policy.Decision{}, context.Canceled
 	}
+	// The approver runs only during a send on run's session.
+	p.work, p.sendCtx, p.emit = w, w.sendCtx, run.emit
+	emit := run.bound
 	c.approvalSeq++
 	p.token = c.approvalSeq
-	p.emit = emit
 	c.approvals = append(c.approvals, p)
 	c.mu.Unlock()
-	req := d.approval(r)
+	req := d.approval(call)
 	req.Token = p.token
-	if ch != nil {
-		req.Agent, req.TaskID = ch.spec.def.Name, ch.task.ID()
-	}
+	req.Agent, req.TaskID = run.name, run.id
 	emit(req)
 	c.queue.Unlock()
 	defer emit(event.ApprovalEnded{Token: p.token})
@@ -146,12 +134,8 @@ func (c *Controller) Answer(token uint64, d policy.Decision) bool {
 	p.claimed = true
 	c.mu.Unlock()
 	if stop {
-		if p.child != nil {
-			p.child.userStopped = true
-			p.child.cancel()
-		} else {
-			c.stop(p.work, p.emit)
-		}
+		p.work.byHuman = true
+		p.runner.stop(p.work, p.emit)
 	}
 	c.queue.Unlock()
 	if stop {

@@ -43,6 +43,7 @@ type Config struct {
 	// Keys maps an action from KeyActions to the keys bound to it.
 	Keys        map[string][]string  `koanf:"keys"`
 	StatusLine  StatusLine           `koanf:"statusline"`
+	AgentLine   AgentLine            `koanf:"agentline"`
 	Theme       Theme                `koanf:"theme"`
 	Permissions Permissions          `koanf:"permissions"`
 	Sandbox     Sandbox              `koanf:"sandbox"`
@@ -228,6 +229,9 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 	if err := validateSegmentRefs(c.StatusLine, origins); err != nil {
 		return nil, err
 	}
+	if err := validateAgentSegmentRefs(c.AgentLine, origins); err != nil {
+		return nil, err
+	}
 	return &Resolved{Config: c, Origins: origins}, nil
 }
 
@@ -411,6 +415,9 @@ func (r *Resolved) Entries() []Entry {
 		"statusline.left":         c.StatusLine.Left,
 		"statusline.right":        c.StatusLine.Right,
 		"statusline.separator":    c.StatusLine.Separator,
+		"agentline.left":          c.AgentLine.Left,
+		"agentline.right":         c.AgentLine.Right,
+		"agentline.separator":     c.AgentLine.Separator,
 		"theme.dark":              c.Theme.Dark,
 		"theme.light":             c.Theme.Light,
 		"permissions.allow":       c.Permissions.Allow,

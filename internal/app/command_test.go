@@ -61,16 +61,16 @@ func TestTasksCommandShowsTasksIdleAndMidTurn(t *testing.T) {
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("done")})
 
-	_, err := h.c.Submit(t.Context(), "/tasks")
+	_, err := h.c.Submit(t.Context(), Main, "/tasks")
 	assert.ErrorIs(t, err, ErrShowTasks)
 
-	w, err := h.c.Submit(t.Context(), "hold")
+	w, err := h.c.Submit(t.Context(), Main, "hold")
 	require.NoError(t, err)
 	wait(t, started)
-	got, err := h.c.Submit(t.Context(), "/tasks")
+	got, err := h.c.Submit(t.Context(), Main, "/tasks")
 	assert.ErrorIs(t, err, ErrShowTasks)
 	assert.Nil(t, got)
-	assert.Empty(t, h.c.TakeQueued())
+	assert.Empty(t, h.c.TakeQueued(Main))
 	close(release)
 	wait(t, w.Done())
 }

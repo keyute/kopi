@@ -84,85 +84,111 @@ func (l agentLauncher) Message(ctx context.Context, id, message string) (bool, e
 	return l.c.message(ctx, id, message)
 }
 
-// child is a running or ended subagent of the current session. Its session
-// lives until the root session is replaced or closed, so a later view can use
-// its Subscribe, History and Send.
-type child struct {
-	spec        agentSpec
-	parent      *pigruntime.Session
-	d           *display
-	rec         *classifier.Record
-	sess        *pigruntime.Session
-	unsubscribe func()
-	task        *tool.AgentTask
+// subagentRole is the role of a subagent's session. The session lives until
+// the root session is replaced or closed, so a later view can use its Subscribe,
+// History and Send.
+type subagentRole struct {
+	c *Controller
+	r *runner
+	// task is set by launch before the first run starts.
+	task *tool.AgentTask
+	// report receives the end of a run the task registry reported: the task as
+	// it then is, whether the human stopped the run, and the messages it never
+	// read. It is called with queue held.
+	report func(info tool.TaskInfo, byHuman bool, unread []string)
 
 	outMu   sync.Mutex
 	midLine bool
+}
 
-	// The fields below are guarded by Controller.queue.
+// begin counts the run in and marks the task running. The first run of a task
+// is neither: its launch reserved the slot and started the task.
+func (s *subagentRole) begin(w *Work) error {
+	c := s.c
+	if c.live >= maxAgents {
+		return ErrTooManyAgents
+	}
+	c.live++
+	if !s.task.Run(s.r.stopper(w)) {
+		c.live--
+		return tool.ErrUnknownTask
+	}
+	c.relay.emit(event.TasksChanged{})
+	return nil
+}
 
-	running bool
-	// ending is set once the run has decided to end and until it has: a
-	// message then waits for the end instead of joining the inbox.
-	ending bool
-	// inbox holds the messages queued for the running run.
-	inbox []string
-	// runCtx and cancel belong to the current run and are independent of the
-	// root's turn.
-	runCtx context.Context
-	cancel context.CancelFunc
-	// userStopped is set when the human rejected an ask without a reason.
-	userStopped bool
-	// endDone closes when the current run has ended.
-	endDone chan struct{}
+// end counts the run out and reports it in the queue section that deregisters
+// it, so no observer sees neither a running subagent nor its notice.
+func (s *subagentRole) end(w *Work, unread []pigruntime.Prompt) {
+	c := s.c
+	status, reason := tool.TaskCompleted, ""
+	switch w.outcome.Status {
+	case event.Interrupted:
+		status = tool.TaskStopped
+	case event.Failed:
+		status, reason = tool.TaskFailed, w.outcome.Message
+	}
+	info, reported := s.task.End(status, reason, w.reply)
+	c.live--
+	c.signalLocked()
+	if reported {
+		texts := make([]string, 0, len(unread))
+		for _, p := range unread {
+			texts = append(texts, p.Text)
+		}
+		s.report(info, w.byHuman, texts)
+	}
+	c.relay.emit(event.TasksChanged{})
+}
+
+// emit feeds the classifier record, applies the display, writes the task's text
+// log and reports the displayed event to the frontends as a session event. It
+// is called from the session's subscriber and from the runner, so it must not
+// block.
+func (s *subagentRole) emit(ev event.Event) {
+	s.r.rec.Observe(ev)
+	ev = s.r.d.apply(ev)
+	switch e := ev.(type) {
+	case event.TurnStart:
+		if e.Prompt != "" {
+			s.writeLine("› ", e.Prompt)
+		}
+	case event.UserMessage:
+		s.writeLine("› ", e.Text)
+	case event.ToolStart:
+		s.writeLine("• ", e.Title)
+	case event.TextDelta:
+		s.writeText(e.Text)
+	}
+	s.r.bound(event.Session{ID: s.r.id, Event: ev})
 }
 
 // writeLine puts a line of its own in the task's output.
-func (ch *child) writeLine(prefix, text string) {
-	ch.outMu.Lock()
-	defer ch.outMu.Unlock()
-	if ch.midLine {
-		_, _ = ch.task.Write([]byte("\n"))
+func (s *subagentRole) writeLine(prefix, text string) {
+	s.outMu.Lock()
+	defer s.outMu.Unlock()
+	if s.midLine {
+		_, _ = s.task.Write([]byte("\n"))
 	}
-	_, _ = ch.task.Write([]byte(prefix + text + "\n"))
-	ch.midLine = false
+	_, _ = s.task.Write([]byte(prefix + text + "\n"))
+	s.midLine = false
 }
 
-func (ch *child) writeText(text string) {
+func (s *subagentRole) writeText(text string) {
 	if text == "" {
 		return
 	}
-	ch.outMu.Lock()
-	defer ch.outMu.Unlock()
-	_, _ = ch.task.Write([]byte(text))
-	ch.midLine = !strings.HasSuffix(text, "\n")
-}
-
-// observe is the child session's subscriber.
-func (ch *child) observe(ev event.Event) {
-	ch.rec.Observe(ev)
-	switch e := ch.d.apply(ev).(type) {
-	case event.UserMessage:
-		ch.writeLine("› ", e.Text)
-	case event.ToolStart:
-		ch.writeLine("• ", e.Title)
-	case event.TextDelta:
-		ch.writeText(e.Text)
-	}
-}
-
-// givePrompt records a prompt the session does not emit, which is the first of
-// each send.
-func (ch *child) givePrompt(text string) {
-	ch.writeLine("› ", text)
-	ch.rec.Observe(event.TurnStart{Prompt: text})
+	s.outMu.Lock()
+	defer s.outMu.Unlock()
+	_, _ = s.task.Write([]byte(text))
+	s.midLine = !strings.HasSuffix(text, "\n")
 }
 
 // admitLocked fails unless a subagent may start or run; it must be called with
 // queue and mu held.
 func (c *Controller) admitLocked() error {
 	switch {
-	case c.closed || c.sess == nil:
+	case c.closed || c.main.sess == nil:
 		return ErrNoSession
 	case c.switching != nil:
 		return ErrBusy
@@ -184,7 +210,7 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 	c.queue.Lock()
 	c.mu.Lock()
 	err := c.admitLocked()
-	parent := c.sess
+	parent := c.main.sess
 	c.mu.Unlock()
 	if err == nil && c.live >= maxAgents {
 		err = ErrTooManyAgents
@@ -196,18 +222,19 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 	c.live++
 	c.queue.Unlock()
 
-	ch := &child{spec: spec, parent: parent, d: newDisplay(spec.tools)}
-	ch.runCtx, ch.cancel = context.WithCancel(context.Background())
+	model := spec.def.Model
+	if model == "" {
+		model = c.Model()
+	}
+	r := &runner{c: c, name: spec.def.Name, d: newDisplay(spec.tools), model: model}
+	role := &subagentRole{c: c, r: r, report: c.endReporter(parent)}
+	r.role = role
 	if c.cfg.Classifier != nil {
-		ch.rec = &classifier.Record{}
+		r.rec = &classifier.Record{}
 	}
 	authority := c.authority
 	if spec.def.Plan {
 		authority = policy.NewAuthority()
-	}
-	model := spec.def.Model
-	if model == "" {
-		model = c.Model()
 	}
 	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
 		Model:        model,
@@ -217,17 +244,16 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 		Tools:        spec.tools,
 		Authority:    authority,
 		Rules:        c.cfg.Rules,
-		Approve:      c.approver(ch.d, ch),
-		Review:       c.reviewer(ch.rec),
+		Approve:      c.approver(r.d, r),
+		Review:       c.reviewer(r.rec),
 	})
 	if err != nil {
-		ch.cancel()
 		c.queue.Lock()
 		c.live--
 		c.queue.Unlock()
 		return "", fmt.Errorf("failed to start subagent %s: %w", agent, err)
 	}
-	ch.sess = sess
+	r.sess = sess
 
 	// A switch or Close that began meanwhile has run, or will run, StopAll
 	// without a child to stop; it must not be left running. One that begins
@@ -235,177 +261,70 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 	c.queue.Lock()
 	c.mu.Lock()
 	err = c.admitLocked()
-	if err == nil && c.sess != parent {
+	if err == nil && c.main.sess != parent {
 		err = ErrNoSession
 	}
 	if err != nil {
 		c.live--
 		c.mu.Unlock()
 		c.queue.Unlock()
-		ch.cancel()
-		c.closeChild(ch)
+		c.closeChild(r)
 		return "", fmt.Errorf("failed to start subagent %s: %w", agent, err)
 	}
+	r.work = r.newWork(context.Background())
+	w := r.work
 	c.mu.Unlock()
-	ch.task = c.cfg.Tasks.StartAgent(spec.def.Name, description, ch.cancel)
-	ch.unsubscribe = sess.Subscribe(ch.observe)
-	ch.givePrompt(prompt)
+	role.task = c.cfg.Tasks.StartAgent(spec.def.Name, description, r.stopper(w))
+	r.id, r.bound, r.emit = role.task.ID(), c.relay.bind(), role.emit
+	r.unsubscribe = sess.Subscribe(role.emit)
 	if c.children == nil {
-		c.children = map[string]*child{}
+		c.children = map[string]*runner{}
 	}
-	c.children[ch.task.ID()] = ch
-	ch.running = true
-	ch.endDone = make(chan struct{})
-	c.wg.Go(func() { c.runChild(ch, ch.runCtx, prompt) })
+	c.children[r.id] = r
+	r.start(w, []pigruntime.Prompt{{Text: prompt}})
 	c.queue.Unlock()
 	c.relay.emit(event.TasksChanged{})
-	return ch.task.ID(), nil
+	return r.id, nil
 }
 
-// message delivers message to the subagent task id.
+// message delivers message to the subagent task id: it joins the running run
+// at its next boundary, or starts the next run, which follows a run that is
+// being stopped. It reports whether the subagent runs again because of it.
 func (c *Controller) message(ctx context.Context, id, message string) (bool, error) {
-	for {
-		c.queue.Lock()
-		ch := c.children[id]
-		if ch == nil {
-			c.queue.Unlock()
-			return false, fmt.Errorf("failed to find task %q: %w", id, tool.ErrUnknownTask)
-		}
+	c.queue.Lock()
+	defer c.queue.Unlock()
+	r := c.children[id]
+	if r == nil {
+		return false, fmt.Errorf("failed to find task %q: %w", id, tool.ErrUnknownTask)
+	}
+	w, err := r.submitLocked(ctx, pigruntime.Prompt{Text: message, FromAgent: true}, false)
+	if err != nil {
+		return false, fmt.Errorf("failed to message subagent %s: %w", id, err)
+	}
+	c.mu.Lock()
+	running := r.work
+	c.mu.Unlock()
+	return w != nil || running != nil && running.stopped, nil
+}
+
+// endReporter returns the report function of a subagent launched under parent.
+// It queues the end notice on the main runner, only while parent is still the
+// current session: a switch that installed another session after the run ended
+// must not receive it. It must be called with queue held.
+func (c *Controller) endReporter(parent *pigruntime.Session) func(tool.TaskInfo, bool, []string) {
+	return func(info tool.TaskInfo, byHuman bool, unread []string) {
 		c.mu.Lock()
-		err := c.admitLocked()
+		current := c.main.sess == parent
 		c.mu.Unlock()
-		if err != nil {
-			c.queue.Unlock()
-			return false, fmt.Errorf("failed to message subagent %s: %w", id, err)
+		if !current {
+			return
 		}
 		switch {
-		case ch.running && !ch.ending && ch.runCtx.Err() == nil:
-			ch.inbox = append(ch.inbox, message)
-			c.queue.Unlock()
-			return false, nil
-		case ch.running:
-			// The run is ending or being stopped: a message for it would be dropped.
-			done := ch.endDone
-			c.queue.Unlock()
-			select {
-			case <-done:
-				continue
-			case <-ctx.Done():
-				return false, fmt.Errorf("failed to message subagent %s: %w", id, ctx.Err())
-			}
+		case info.Status == tool.TaskCompleted || info.Status == tool.TaskFailed:
+			c.main.queueNoticeLocked(agentNotice(info, unread))
+		case info.Status == tool.TaskStopped && byHuman:
+			c.main.queueNoticeLocked(withUndelivered(notice(info, agentStoppedHead(info)), unread))
 		}
-		if c.live >= maxAgents {
-			c.queue.Unlock()
-			return false, fmt.Errorf("failed to message subagent %s: %w", id, ErrTooManyAgents)
-		}
-		c.live++
-		runCtx, cancel := context.WithCancel(context.Background())
-		ch.running, ch.userStopped, ch.runCtx, ch.cancel, ch.endDone = true, false, runCtx, cancel, make(chan struct{})
-		c.wg.Add(1)
-		c.queue.Unlock()
-
-		if !ch.task.Run(cancel) {
-			c.queue.Lock()
-			ch.running = false
-			c.live--
-			close(ch.endDone)
-			c.queue.Unlock()
-			cancel()
-			c.wg.Done()
-			return false, fmt.Errorf("failed to find task %q: %w", id, tool.ErrUnknownTask)
-		}
-		ch.givePrompt(message)
-		go func() {
-			defer c.wg.Done()
-			c.runChild(ch, runCtx, message)
-		}()
-		c.relay.emit(event.TasksChanged{})
-		return true, nil
-	}
-}
-
-// runChild sends prompt and then whatever was messaged meanwhile, until
-// nothing is left, and ends the run. ctx is the run's own, never the root's.
-func (c *Controller) runChild(ch *child, ctx context.Context, prompt string) {
-	for {
-		res, err := ch.sess.Send(ctx, pigruntime.Prompt{Text: prompt}, nil, func() ([]pigruntime.Prompt, []pigruntime.Notice) {
-			c.queue.Lock()
-			defer c.queue.Unlock()
-			if ctx.Err() != nil {
-				return nil, nil
-			}
-			prompts := make([]pigruntime.Prompt, 0, len(ch.inbox))
-			for _, m := range ch.inbox {
-				prompts = append(prompts, pigruntime.Prompt{Text: m})
-			}
-			ch.inbox = nil
-			return prompts, nil
-		})
-		if err != nil {
-			res.Outcome = event.Outcome{Status: event.Failed, Message: err.Error()}
-		}
-
-		c.queue.Lock()
-		if ctx.Err() == nil && res.Outcome.Status == event.Completed {
-			var texts []string
-			for _, p := range res.Undelivered {
-				texts = append(texts, p.Text)
-			}
-			texts = append(texts, ch.inbox...)
-			ch.inbox = nil
-			if len(texts) > 0 {
-				c.queue.Unlock()
-				prompt = strings.Join(texts, "\n\n")
-				ch.givePrompt(prompt)
-				continue
-			}
-		}
-		ch.ending = true
-		c.queue.Unlock()
-
-		status, reason := tool.TaskCompleted, ""
-		switch res.Outcome.Status {
-		case event.Interrupted:
-			status = tool.TaskStopped
-		case event.Failed:
-			status, reason = tool.TaskFailed, res.Outcome.Message
-		}
-		info, reported := ch.task.End(status, reason, res.Reply)
-
-		// Counting the run out and queueing its notice are one section, so no
-		// observer sees neither a running child nor the notice.
-		c.queue.Lock()
-		ch.running, ch.ending = false, false
-		unread := ch.inbox
-		ch.inbox = nil
-		c.live--
-		close(ch.endDone)
-		if reported {
-			c.queueEndNoticeLocked(ch, info, unread)
-		}
-		c.signalLocked()
-		c.queue.Unlock()
-		c.relay.emit(event.TasksChanged{})
-		return
-	}
-}
-
-// queueEndNoticeLocked queues the notice for a run that ended, only while the
-// session the child belongs to is still the current one: a switch that
-// installed another session after End must not receive it. It must be called
-// with queue held.
-func (c *Controller) queueEndNoticeLocked(ch *child, info tool.TaskInfo, unread []string) {
-	c.mu.Lock()
-	current := c.sess == ch.parent
-	c.mu.Unlock()
-	if !current {
-		return
-	}
-	switch {
-	case info.Status == tool.TaskCompleted || info.Status == tool.TaskFailed:
-		c.queueNoticeLocked(agentNotice(info, unread))
-	case info.Status == tool.TaskStopped && ch.userStopped:
-		c.queueNoticeLocked(withUndelivered(notice(info, agentStoppedHead(info)), unread))
 	}
 }
 
@@ -441,24 +360,29 @@ func (c *Controller) closeChildren() {
 	children := c.children
 	c.children = nil
 	c.mu.Lock()
-	c.approvals = slices.DeleteFunc(c.approvals, func(p *pendingApproval) bool { return p.child != nil })
+	c.approvals = slices.DeleteFunc(c.approvals, func(p *pendingApproval) bool { return p.runner != c.main })
 	c.mu.Unlock()
-	for _, ch := range children {
-		ch.cancel()
+	for _, r := range children {
+		c.mu.Lock()
+		w, emit := r.work, r.emit
+		c.mu.Unlock()
+		if w != nil {
+			r.stop(w, emit)
+		}
 	}
 	c.queue.Unlock()
-	for _, ch := range children {
-		c.closeChild(ch)
+	for _, r := range children {
+		c.closeChild(r)
 	}
 }
 
-func (c *Controller) closeChild(ch *child) {
-	if ch.unsubscribe != nil {
-		ch.unsubscribe()
+func (c *Controller) closeChild(r *runner) {
+	if r.unsubscribe != nil {
+		r.unsubscribe()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), c.cfg.JoinTimeout)
 	defer cancel()
-	if err := ch.sess.Close(ctx); err != nil {
-		slog.Warn("failed to close subagent session", "agent", ch.spec.def.Name, "err", err)
+	if err := r.sess.Close(ctx); err != nil {
+		slog.Warn("failed to close subagent session", "agent", r.name, "err", err)
 	}
 }

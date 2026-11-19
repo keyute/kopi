@@ -32,7 +32,7 @@ type quitController struct {
 	ctx chan context.Context
 }
 
-func (c *quitController) Submit(ctx context.Context, _ string, _ ...string) (*app.Work, error) {
+func (c *quitController) Submit(ctx context.Context, _, _ string, _ ...string) (*app.Work, error) {
 	c.ctx <- ctx
 	return nil, app.ErrQuit
 }

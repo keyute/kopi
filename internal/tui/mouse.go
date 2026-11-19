@@ -75,7 +75,7 @@ func (m *model) space(r region) (lines []line, shift int) {
 	if r == regionRows {
 		return m.below, m.geo.transcript
 	}
-	return m.lines, -m.top()
+	return m.view().lines, -m.top()
 }
 
 // area is where field c is drawn, if it is on screen.
@@ -250,7 +250,7 @@ func (m *model) release() tea.Cmd {
 		if m.sel.empty() {
 			return nil
 		}
-		return m.copy(m.sel.text(m.lines))
+		return m.copy(m.sel.text(m.view().lines))
 	case regionRows:
 		if d.count == 1 && !d.moved {
 			m.clearSelection()
@@ -294,13 +294,14 @@ func (m *model) click(mo tea.Mouse) {
 	if mo.Button != tea.MouseLeft || mo.Y < 0 || mo.Y >= m.transcriptHeight() {
 		return
 	}
+	v := m.view()
 	i := m.top() + mo.Y
-	if i >= len(m.lines) {
+	if i >= len(v.lines) {
 		return
 	}
-	h := m.lines[i].hit
-	if h.kind == hitNone || m.folds.all {
+	h := v.lines[i].hit
+	if h.kind == hitNone || v.folds.all {
 		return
 	}
-	m.holdTop(func() { m.folds.click(h) })
+	m.holdTop(func() { v.folds.click(h) })
 }
