@@ -63,7 +63,7 @@ var agentSegments = map[string]agentSegment{
 		}
 		return string(e.State), e.State != ""
 	},
-	"activity": func(e entry) (string, bool) { return e.activity, e.activity != "" },
+	"activity": func(e entry) (string, bool) { return oneLine(e.activity), e.activity != "" },
 	"id":       func(e entry) (string, bool) { return e.ID, e.ID != app.Main },
 }
 

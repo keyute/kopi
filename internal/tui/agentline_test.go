@@ -179,6 +179,47 @@ func TestElapsedAndActivitySegmentsFollowTheirSession(t *testing.T) {
 	})
 }
 
+func TestActivitySegment(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		title string
+		want  string
+		ok    bool
+	}{
+		{"empty", "", "", false},
+		{"multiline", "Grep foo\nbar", "Grep foo bar", true},
+		{"control characters", "Grep foo\x00bar", "Grep foobar", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := agentSegments["activity"](entry{activity: tc.title})
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.ok, ok)
+		})
+	}
+}
+
+func TestMultilineActivityStaysOnOneAgentRow(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		line config.AgentLine
+	}{
+		{"left", lineOf([]string{"activity"})},
+		{"right", lineOf(nil, "activity")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := agentLineModel(t, 60, tc.line, explorer("t1"))
+			send(m, sub("t1", event.ToolStart{CallID: "a", Title: "Grep foo\nbar"}))
+
+			r := m.agentRow(m.entries()[1])
+			assert.NotContains(t, r, "\n")
+			assert.Contains(t, r, "Grep foo bar")
+			assert.Equal(t, 2, m.geo.agents)
+			assert.Len(t, screen(m), m.height)
+			assert.Contains(t, lastRows(m, 2)[1], "Grep foo bar")
+		})
+	}
+}
+
 func TestMainRowShowsRunningFromTurnStartToTurnEnd(t *testing.T) {
 	m, _ := agentLineModel(t, 60, lineOf([]string{"agent", "state"}), explorer("t1"))
 	assert.Equal(t, "  ● main", lastRows(m, 2)[0])
