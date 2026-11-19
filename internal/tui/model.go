@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"os/exec"
 	"slices"
@@ -592,10 +593,17 @@ func (m *model) apply(ev event.Event) *view {
 		old := m.views[app.Main]
 		main.busy, main.turnStart, main.verb = old.busy, old.turnStart, old.verb
 		unsent := old.unsent
+		delete(m.views, app.Main)
 		for _, a := range m.agents {
-			if v := m.views[a.ID]; v != nil && a.ID != app.Main {
+			if v := m.views[a.ID]; v != nil {
 				unsent = append(unsent, v.unsent...)
+				delete(m.views, a.ID)
 			}
+		}
+		// m.agents is the controller's list now: a switch has already dropped its
+		// subagents when an earlier batch refreshed it.
+		for _, id := range slices.Sorted(maps.Keys(m.views)) {
+			unsent = append(unsent, m.views[id].unsent...)
 		}
 		m.views, m.shown = map[string]*view{app.Main: main}, app.Main
 		m.composer.restore(unsent)

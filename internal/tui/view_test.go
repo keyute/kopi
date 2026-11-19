@@ -128,6 +128,23 @@ func TestSessionChangedRestoresAHiddenSubagentsHeldInput(t *testing.T) {
 	assert.Equal(t, "unsent\n\nheld", m.composer.value())
 }
 
+func TestSessionChangedRestoresHeldInputOfASubagentTheControllerNoLongerLists(t *testing.T) {
+	m, c := agentsModel(t)
+	c.agents = append(c.agents, app.AgentStatus{ID: "t2", Agent: "explore"})
+	send(m, event.TasksChanged{})
+	send(m, sub("t2", event.TurnStart{Prompt: "dig"}), sub("t2", event.TurnEnd{Unsent: []event.Input{{Text: "held"}}}))
+	send(m, event.TurnStart{Prompt: "go"})
+	display(m, "t1")
+	send(m, event.TurnEnd{Unsent: []event.Input{{Text: "unsent"}}})
+	typeText(m, "draft")
+
+	c.agents = c.agents[:1]
+	send(m, event.TasksChanged{})
+	send(m, event.SessionChanged{SessionID: "s2"})
+
+	assert.Equal(t, "unsent\n\nheld\n\ndraft", m.composer.value())
+}
+
 func TestInputActsOnTheShownView(t *testing.T) {
 	m, c := agentsModel(t)
 	send(m, sub("t1", event.TurnStart{Prompt: "dig"}), sub("t1", event.QueueChanged{Pending: []string{"q"}}))
