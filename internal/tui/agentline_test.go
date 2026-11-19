@@ -79,14 +79,14 @@ func TestAgentRowsFollowTheStatusLine(t *testing.T) {
 }
 
 func TestAgentRowsMarkTheShownView(t *testing.T) {
-	m, _ := agentLineModel(t, 60, lineOf([]string{"agent"}), explorer("t1"))
+	m, _ := agentLineModel(t, 60, lineOf([]string{"$agent"}), explorer("t1"))
 
 	display(m, "t1")
 	assert.Equal(t, []string{"  ○ main", "  ● explorer › Find the config loader"}, lastRows(m, 2))
 }
 
 func TestAgentRowsDropAnEndedSubagentUnlessShown(t *testing.T) {
-	m, c := agentLineModel(t, 60, lineOf([]string{"agent"}), explorer("t1"))
+	m, c := agentLineModel(t, 60, lineOf([]string{"$agent"}), explorer("t1"))
 	ended := explorer("t1")
 	ended.State = "completed"
 	c.agents[1] = ended
@@ -161,7 +161,7 @@ func TestEffortContextToolsAndCostSegments(t *testing.T) {
 func TestCursorRowKeepsTheAccentAfterAWarningContext(t *testing.T) {
 	warn := explorer("t1")
 	warn.ContextWindow, warn.ContextTokens = 100, 95
-	m, _ := agentLineModel(t, 60, lineOf([]string{"context", "id"}), warn)
+	m, _ := agentLineModel(t, 60, lineOf([]string{"$context", "$id"}), warn)
 	press(m, down)
 	press(m, down)
 	require.Equal(t, "t1", m.focus.id)
@@ -170,6 +170,21 @@ func TestCursorRowKeepsTheAccentAfterAWarningContext(t *testing.T) {
 	accent, warning := fg(m.th.accent), fg(m.th.warning)
 	assert.Equal(t, accent.Render(cursorMark+"○ ")+warning.Render("95.0%")+accent.Render(" · ")+accent.Render("t1"), row)
 	assert.Equal(t, "❭ ○ 95.0% · t1", ansi.Strip(row))
+}
+
+func TestAgentRowDrawsFormatEntries(t *testing.T) {
+	m, _ := agentLineModel(t, 60, lineOf([]string{"$state( $id)", "$tokens"}, "(at $model)"), explorer("t1"))
+	assert.Equal(t, []string{"  ● 850 tokens" + strings.Repeat(" ", 34) + "at model-1", "  ○ running t1 · 22.1k tokens" + strings.Repeat(" ", 19) + "at gpt-5.6"}, lastRows(m, 2))
+}
+
+func TestCursorRowPaintsLiteralText(t *testing.T) {
+	m, _ := agentLineModel(t, 60, lineOf([]string{"at $id"}), explorer("t1"))
+	press(m, down)
+	press(m, down)
+	require.Equal(t, "t1", m.focus.id)
+
+	accent := fg(m.th.accent)
+	assert.Equal(t, accent.Render(cursorMark+"○ ")+accent.Render("at ")+accent.Render("t1"), m.agentRows(10)[1])
 }
 
 func TestStateAndIDSegments(t *testing.T) {
@@ -194,7 +209,7 @@ func TestStateAndIDSegments(t *testing.T) {
 
 func TestElapsedAndActivitySegmentsFollowTheirSession(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		m, _ := agentLineModel(t, 60, lineOf([]string{"state", "elapsed", "activity", "id"}), explorer("t1"))
+		m, _ := agentLineModel(t, 60, lineOf([]string{"$state", "$elapsed", "$activity", "$id"}), explorer("t1"))
 		assert.Equal(t, []string{"  ●", "  ○ running · t1"}, lastRows(m, 2))
 
 		send(m, sub("t1", event.TurnStart{Prompt: "dig"}), sub("t1", event.ToolStart{CallID: "a", Title: "Read a.go"}))
@@ -233,8 +248,8 @@ func TestMultilineActivityStaysOnOneAgentRow(t *testing.T) {
 		name string
 		line config.AgentLine
 	}{
-		{"left", lineOf([]string{"activity"})},
-		{"right", lineOf(nil, "activity")},
+		{"left", lineOf([]string{"$activity"})},
+		{"right", lineOf(nil, "$activity")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _ := agentLineModel(t, 60, tc.line, explorer("t1"))
@@ -251,7 +266,7 @@ func TestMultilineActivityStaysOnOneAgentRow(t *testing.T) {
 }
 
 func TestMainRowShowsRunningFromTurnStartToTurnEnd(t *testing.T) {
-	m, _ := agentLineModel(t, 60, lineOf([]string{"agent", "state"}), explorer("t1"))
+	m, _ := agentLineModel(t, 60, lineOf([]string{"$agent", "$state"}), explorer("t1"))
 	assert.Equal(t, "  ● main", lastRows(m, 2)[0])
 
 	send(m, event.TurnStart{Prompt: "go"})
@@ -269,7 +284,7 @@ func TestAgentRowsShrinkToTheHeightThatIsLeft(t *testing.T) {
 	// short is a screen with room for free agent row lines under the working row.
 	short := func(free int) *model {
 		opts := testOptions()
-		opts.AgentLine = lineOf([]string{"id"})
+		opts.AgentLine = lineOf([]string{"$id"})
 		probe, _ := newTestModelWith(t, 40, 20, opts)
 		height := chromeRows + probe.composer.height() + busyRows + free
 		m, c := newTestModelWith(t, 40, height, opts)
@@ -311,7 +326,7 @@ func TestAgentRowsTakeSpaceOnlyFromTheTranscript(t *testing.T) {
 	}
 	build := func(height int, agents []app.AgentStatus, events ...event.Event) *model {
 		opts := testOptions()
-		opts.AgentLine = lineOf([]string{"id"})
+		opts.AgentLine = lineOf([]string{"$id"})
 		m, c := newTestModelWith(t, 40, height, opts)
 		c.agents = append([]app.AgentStatus{mainAgent}, agents...)
 		for _, a := range agents {
@@ -343,7 +358,7 @@ func TestAgentRowsWindowFollowsTheShownRow(t *testing.T) {
 	for _, id := range []string{"t1", "t2", "t3", "t4", "t5", "t6", "t7"} {
 		agents = append(agents, explorer(id))
 	}
-	m, _ := agentLineModel(t, 40, lineOf([]string{"id"}), agents...)
+	m, _ := agentLineModel(t, 40, lineOf([]string{"$id"}), agents...)
 
 	assert.Equal(t, []string{"  ●", "  ○ t1", "  ○ t2", "  ○ t3", "  ○ t4", "  ↓ 3 more"}, lastRows(m, 6))
 
@@ -356,7 +371,7 @@ func TestAgentRowsWindowFollowsTheCursor(t *testing.T) {
 	for _, id := range []string{"t1", "t2", "t3", "t4", "t5", "t6", "t7"} {
 		agents = append(agents, explorer(id))
 	}
-	m, _ := agentLineModel(t, 40, lineOf([]string{"id"}), agents...)
+	m, _ := agentLineModel(t, 40, lineOf([]string{"$id"}), agents...)
 	press(m, down)
 	for range 4 {
 		press(m, down)
@@ -371,7 +386,7 @@ func TestAgentRowsWindowScrollsOnlyAtItsEdges(t *testing.T) {
 	for _, id := range []string{"t1", "t2", "t3", "t4", "t5", "t6", "t7"} {
 		agents = append(agents, explorer(id))
 	}
-	m, _ := agentLineModel(t, 40, lineOf([]string{"id"}), agents...)
+	m, _ := agentLineModel(t, 40, lineOf([]string{"$id"}), agents...)
 	press(m, down)
 	for range 4 {
 		press(m, down)
@@ -398,9 +413,9 @@ func TestAgentRowFitsTheWidth(t *testing.T) {
 	}{
 		{"drops left segments from the right end", 40, config.DefaultAgentLine(), []string{"  ● main · 850 tokens · model-1", "  ○ explorer › Find the config loader"}},
 		{"keeps what fits", 60, config.DefaultAgentLine(), []string{"  ● main · 850 tokens · model-1", "  ○ explorer › Find the config loader · 22.1k tokens"}},
-		{"aligns the right segments", 60, lineOf([]string{"agent"}, "model"), []string{"  ● main" + strings.Repeat(" ", 43) + "model-1", "  ○ explorer › Find the config loader" + strings.Repeat(" ", 14) + "gpt-5.6"}},
-		{"drops left segments for the right ones", 28, lineOf([]string{"agent", "tokens"}, "model"), []string{"  ● main" + strings.Repeat(" ", 11) + "model-1", "  ○" + strings.Repeat(" ", 16) + "gpt-5.6"}},
-		{"truncates to the width", 10, lineOf([]string{"agent"}, "model"), []string{"  ●  model", "  ○  gpt-5"}},
+		{"aligns the right segments", 60, lineOf([]string{"$agent"}, "$model"), []string{"  ● main" + strings.Repeat(" ", 43) + "model-1", "  ○ explorer › Find the config loader" + strings.Repeat(" ", 14) + "gpt-5.6"}},
+		{"drops left segments for the right ones", 28, lineOf([]string{"$agent", "$tokens"}, "$model"), []string{"  ● main" + strings.Repeat(" ", 11) + "model-1", "  ○" + strings.Repeat(" ", 16) + "gpt-5.6"}},
+		{"truncates to the width", 10, lineOf([]string{"$agent"}, "$model"), []string{"  ●  model", "  ○  gpt-5"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _ := agentLineModel(t, tc.width, tc.line, explorer("t1"))
@@ -416,7 +431,7 @@ func TestAgentRowFitsTheWidth(t *testing.T) {
 // focused has the rows focused with the cursor on main.
 func focused(t *testing.T, agents ...app.AgentStatus) (*model, *fakeController) {
 	t.Helper()
-	m, c := agentLineModel(t, 60, lineOf([]string{"agent"}), agents...)
+	m, c := agentLineModel(t, 60, lineOf([]string{"$agent"}), agents...)
 	press(m, down)
 	require.True(t, m.focus.on)
 	return m, c
@@ -431,7 +446,7 @@ func TestDownAtTheBottomEntersTheRowsAtMain(t *testing.T) {
 }
 
 func TestDownDoesNotEnterWhileItCanStillMove(t *testing.T) {
-	m, _ := agentLineModel(t, 60, lineOf([]string{"agent"}), explorer("t1"))
+	m, _ := agentLineModel(t, 60, lineOf([]string{"$agent"}), explorer("t1"))
 	typeText(m, "a\nb")
 	press(m, up)
 	press(m, down)
@@ -441,7 +456,7 @@ func TestDownDoesNotEnterWhileItCanStillMove(t *testing.T) {
 }
 
 func TestDownDoesNotEnterWhileANewerHistoryEntryExists(t *testing.T) {
-	m, _ := agentLineModel(t, 60, lineOf([]string{"agent"}), explorer("t1"))
+	m, _ := agentLineModel(t, 60, lineOf([]string{"$agent"}), explorer("t1"))
 	m.composer.setHistory([]string{"old"})
 	press(m, up)
 	require.Equal(t, "old", m.composer.value())
@@ -623,7 +638,7 @@ func TestFocusMovesToTheNearestEntryWhenItsOwnVanishes(t *testing.T) {
 
 func TestElapsedKeepsTheTickRunningInAnIdleView(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		m, _ := agentLineModel(t, 60, lineOf([]string{"agent", "elapsed"}), explorer("t1"))
+		m, _ := agentLineModel(t, 60, lineOf([]string{"$agent", "$elapsed"}), explorer("t1"))
 		send(m, sub("t1", event.TurnStart{Prompt: "dig"}))
 
 		_, cmd := m.Update(m.spinner.Tick())
@@ -637,7 +652,7 @@ func TestElapsedKeepsTheTickRunningInAnIdleView(t *testing.T) {
 
 func TestWithoutElapsedAnIdleViewDoesNotTick(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		m, _ := agentLineModel(t, 60, lineOf([]string{"agent"}), explorer("t1"))
+		m, _ := agentLineModel(t, 60, lineOf([]string{"$agent"}), explorer("t1"))
 		send(m, sub("t1", event.TurnStart{Prompt: "dig"}))
 
 		_, cmd := m.Update(m.spinner.Tick())
@@ -647,7 +662,7 @@ func TestWithoutElapsedAnIdleViewDoesNotTick(t *testing.T) {
 
 func TestElapsedStartsTheTickWhenAClockAppears(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		m, _ := agentLineModel(t, 60, lineOf([]string{"agent", "elapsed"}), explorer("t1"))
+		m, _ := agentLineModel(t, 60, lineOf([]string{"$agent", "$elapsed"}), explorer("t1"))
 
 		cmd := m.applyBatch(eventsMsg{sub("t1", event.TurnStart{Prompt: "dig"})})
 

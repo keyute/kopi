@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/app"
+	"github.com/keyute/kopi/internal/config"
 )
 
 const (
@@ -35,6 +36,17 @@ type entry struct {
 	activity string
 }
 
+// agentLayout holds the parsed entries on each side of an agent row and the
+// separator between them.
+type agentLayout struct {
+	left, right []config.Format
+	separator   string
+}
+
+func newAgentLayout(line config.AgentLine) agentLayout {
+	return agentLayout{left: parseFormats(line.Left), right: parseFormats(line.Right), separator: line.Separator}
+}
+
 // agentSegment renders one part of an agent row; false draws nothing.
 type agentSegment func(entry, theme) (string, bool)
 
@@ -50,10 +62,8 @@ var agentSegments = map[string]agentSegment{
 		}
 		return name + " › " + cutWords(desc, descriptionWidth), true
 	},
-	"tokens": func(e entry, _ theme) (string, bool) {
-		return compactCount(e.ContextTokens) + " tokens", e.ContextTokens > 0
-	},
-	"model": func(e entry, _ theme) (string, bool) { return modelID(e.Model), e.Model != "" },
+	"tokens": func(e entry, _ theme) (string, bool) { return tokensText(e.ContextTokens), e.ContextTokens > 0 },
+	"model":  func(e entry, _ theme) (string, bool) { return modelID(e.Model), e.Model != "" },
 	"elapsed": func(e entry, _ theme) (string, bool) {
 		return formatDuration(time.Since(e.since)), !e.since.IsZero()
 	},
@@ -100,6 +110,9 @@ func cutWords(text string, width int) string {
 	}
 	return strings.TrimRight(cut, " ") + "…"
 }
+
+// tokensText is the context size as "22.1k tokens".
+func tokensText(n int) string { return compactCount(n) + " tokens" }
 
 // compactCount is n with one decimal and a lowercase unit: "850", "22.1k", "1.2m".
 func compactCount(n int) string {
@@ -220,22 +233,18 @@ func (m *model) agentRow(e entry) string {
 		}
 		return fg(m.th.accent).Render(s)
 	}
-	render := func(names []string) []string {
-		var parts []string
-		for _, n := range names {
-			if text, ok := agentSegments[n](e, m.th); ok {
-				parts = append(parts, paint(text))
-			}
-		}
-		return parts
+	lookup := func(name string) (string, bool) {
+		text, ok := agentSegments[name](e, m.th)
+		return paint(text), ok
 	}
-	sep := paint(m.agentLine.Separator)
+	render := func(fs []config.Format) []string { return renderEntries(fs, lookup, paint) }
+	sep := paint(m.agentLine.separator)
 	var right string
-	if parts := render(m.agentLine.Right); len(parts) > 0 {
+	if parts := render(m.agentLine.right); len(parts) > 0 {
 		right = strings.Join(parts, sep) + "  "
 	}
 	var left string
-	parts := render(m.agentLine.Left)
+	parts := render(m.agentLine.left)
 	for n := len(parts); n >= 0; n-- {
 		left = paint(gutter+glyph+" ") + strings.Join(parts[:n], sep)
 		if lipgloss.Width(left)+1+lipgloss.Width(right) <= m.width {

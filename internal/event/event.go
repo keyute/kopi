@@ -156,6 +156,10 @@ type StatusCommandResult struct {
 	Err          error
 }
 
+// Changes is ephemeral footer data, not session history: the lines changed
+// against HEAD.
+type Changes struct{ Added, Removed int }
+
 type Error struct{ Err error }
 
 // Session carries an event of a session other than the main one; ID is that
@@ -188,6 +192,7 @@ func (TasksChanged) isEvent()        {}
 func (ModeChanged) isEvent()         {}
 func (SessionChanged) isEvent()      {}
 func (StatusCommandResult) isEvent() {}
+func (Changes) isEvent()             {}
 func (Error) isEvent()               {}
 func (Session) isEvent()             {}
 

@@ -24,7 +24,9 @@ type statusRunner interface {
 type shellRunner struct{}
 
 type statusCommand struct {
-	name, command    string
+	name, command string
+	// changes publishes the parsed line counts as event.Changes.
+	changes          bool
 	interval         time.Duration
 	running, failing bool
 }
@@ -46,7 +48,7 @@ type StatusCommands struct {
 func NewStatusCommands(workspace string, line config.StatusLine) *StatusCommands {
 	s := &StatusCommands{workspace: workspace, runner: shellRunner{}}
 	seen := map[string]bool{}
-	for _, name := range slices.Concat(line.Left, line.Right) {
+	for _, name := range config.SegmentNames(line.Left, line.Right) {
 		def := line.Segments[name]
 		if slices.Contains(config.StatusSegments, name) || seen[name] || def.Command == "" {
 			continue
@@ -54,6 +56,9 @@ func NewStatusCommands(workspace string, line config.StatusLine) *StatusCommands
 		seen[name] = true
 		interval, _ := time.ParseDuration(def.Interval)
 		s.commands = append(s.commands, &statusCommand{name: name, command: def.Command, interval: interval})
+	}
+	if gitBranch(workspace) != "" && slices.Contains(config.SegmentNames(line.Left, line.Right), "changes") {
+		s.commands = append(s.commands, &statusCommand{name: "changes", command: changesCommand, changes: true})
 	}
 	return s
 }
@@ -118,14 +123,22 @@ func (s *StatusCommands) launch(command *statusCommand) {
 		}
 		command.failing = err != nil
 		command.running = false
-		s.publish(event.StatusCommandResult{Name: command.name, Output: out, Err: err})
+		if command.changes {
+			var changed event.Changes
+			if err == nil {
+				changed.Added, changed.Removed = parseShortstat(out)
+			}
+			s.publish(changed)
+		} else {
+			s.publish(event.StatusCommandResult{Name: command.name, Output: out, Err: err})
+		}
 		s.mu.Unlock()
 	}()
 }
 
 func (s *StatusCommands) Observe(ev event.Event) {
 	switch ev.(type) {
-	case event.SessionChanged, event.ModeChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged:
+	case event.TurnStart, event.SessionChanged, event.ModeChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged:
 	default:
 		return
 	}

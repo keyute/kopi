@@ -56,20 +56,22 @@ func (m *model) waitingOn() string { return taskCounts(m.status.Agents, m.status
 // taskCounts joins the nonzero counts as "2 agents, 1 shell", "" when both are zero.
 func taskCounts(agents, shells int) string {
 	var parts []string
-	for _, p := range []struct {
-		n    int
-		noun string
-	}{{agents, "agent"}, {shells, "shell"}} {
-		if p.n == 0 {
-			continue
-		}
-		s := strconv.Itoa(p.n) + " " + p.noun
-		if p.n > 1 {
-			s += "s"
-		}
-		parts = append(parts, s)
+	if agents > 0 {
+		parts = append(parts, countText(agents, "agent"))
+	}
+	if shells > 0 {
+		parts = append(parts, countText(shells, "shell"))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// countText is n and noun, pluralised: "1 shell", "2 shells".
+func countText(n int, noun string) string {
+	s := strconv.Itoa(n) + " " + noun
+	if n > 1 {
+		s += "s"
+	}
+	return s
 }
 
 // syncWaiting starts the waiting clock when the waiting state begins and

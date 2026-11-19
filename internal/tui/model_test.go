@@ -1548,7 +1548,7 @@ func TestRowsFillTheScreenStatusLast(t *testing.T) {
 
 func TestCommandSegmentResultsRenderAndRecover(t *testing.T) {
 	opts := testOptions()
-	opts.StatusLine = config.StatusLine{Left: []string{"git"}, Right: []string{"mode"}, Separator: " ", Segments: map[string]config.StatusSegment{"git": {Command: "git-info"}}}
+	opts.StatusLine = config.StatusLine{Left: []string{"$git"}, Right: []string{"$mode"}, Separator: " ", Segments: map[string]config.StatusSegment{"git": {Command: "git-info"}}}
 	m, _ := newTestModelWith(t, 40, 20, opts)
 	assert.NotContains(t, statusText(m), "ok")
 	send(m, event.StatusCommandResult{Name: "git", Output: "\x1b[32mok\x1b[0m\nsecond line"})
@@ -1559,4 +1559,14 @@ func TestCommandSegmentResultsRenderAndRecover(t *testing.T) {
 	send(m, event.StatusCommandResult{Name: "git", Output: "back"})
 	assert.Contains(t, statusText(m), "back")
 	assert.Empty(t, body(m), "footer results are not transcript events")
+}
+
+func TestChangesEventRendersInStatusLine(t *testing.T) {
+	m, c := newTestModel(t, 60, 20)
+	c.status.Branch = "main"
+	send(m, event.ModeChanged{}, event.Changes{Added: 12, Removed: 3})
+	assert.Contains(t, ansi.Strip(statusText(m)), "main +12 -3")
+	send(m, event.Changes{})
+	assert.NotContains(t, statusText(m), "+12")
+	assert.Empty(t, body(m), "footer counts are not transcript events")
 }
