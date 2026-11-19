@@ -364,6 +364,49 @@ func TestDownDoesNotEnterWithoutRows(t *testing.T) {
 	assert.False(t, m.focus.on)
 }
 
+func TestAgentRowsCannotTakeFocusWhenTheTerminalIsShort(t *testing.T) {
+	for _, shrinkFocused := range []bool{false, true} {
+		t.Run(fmt.Sprintf("shrink focused %t", shrinkFocused), func(t *testing.T) {
+			var m *model
+			var c *fakeController
+			if shrinkFocused {
+				m, c = focused(t, explorer("t1"))
+				press(m, down)
+				require.Equal(t, "t1", m.focus.id)
+				m.Update(tea.WindowSizeMsg{Width: 60, Height: chromeRows + m.composer.height()})
+			} else {
+				opts := testOptions()
+				m, c = newTestModelWith(t, 60, chromeRows+1, opts)
+				c.agents = []app.AgentStatus{mainAgent, explorer("t1")}
+				m.viewOf("t1").busy = true
+				send(m, event.TasksChanged{})
+			}
+			require.Zero(t, m.geo.agents)
+			assert.False(t, m.focus.on)
+
+			press(m, down)
+			press(m, down)
+			press(m, keyX)
+			assert.False(t, m.focus.on)
+			assert.Equal(t, "x", m.composer.value(), "hidden rows do not take typing")
+			assert.Empty(t, c.calls, "hidden rows cannot stop an agent")
+			assert.Empty(t, c.stops)
+			assert.Equal(t, app.Main, m.shown)
+
+			m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+			require.Positive(t, m.geo.agents)
+			assert.False(t, m.focus.on, "resizing does not restore hidden focus")
+			press(m, down)
+			assert.Equal(t, app.Main, m.focus.id)
+			press(m, down)
+			assert.Equal(t, "t1", m.focus.id)
+			press(m, enter)
+			assert.Equal(t, "t1", m.shown)
+			assert.False(t, m.focus.on)
+		})
+	}
+}
+
 func TestFocusedKeysMoveAndClamp(t *testing.T) {
 	m, _ := focused(t, explorer("t1"))
 

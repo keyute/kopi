@@ -122,10 +122,10 @@ func (s *subagentRole) begin(w *Work) error {
 func (s *subagentRole) end(w *Work, unread []pigruntime.Prompt) {
 	c := s.c
 	status, reason := tool.TaskCompleted, ""
-	switch w.outcome.Status {
-	case event.Interrupted:
+	switch {
+	case w.stopped || w.outcome.Status == event.Interrupted:
 		status = tool.TaskStopped
-	case event.Failed:
+	case w.outcome.Status == event.Failed:
 		status, reason = tool.TaskFailed, w.outcome.Message
 	}
 	info, reported := s.task.End(status, reason, w.reply)

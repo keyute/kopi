@@ -227,7 +227,7 @@ func (m *model) syncFocus() {
 		return
 	}
 	es := m.entries()
-	if len(es) == 0 || m.dialog != nil || m.tasks != nil {
+	if m.geo.agents == 0 || len(es) == 0 || m.dialog != nil || m.tasks != nil {
 		m.focus = agentFocus{}
 		return
 	}
@@ -242,7 +242,7 @@ func (m *model) syncFocus() {
 // when no rows show.
 func (m *model) focusRows() bool {
 	es := m.entries()
-	if len(es) == 0 {
+	if m.geo.agents == 0 || len(es) == 0 {
 		return false
 	}
 	m.focus = agentFocus{on: true, id: es[0].ID}

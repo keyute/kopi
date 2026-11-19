@@ -176,6 +176,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmd = tea.Batch(cmd, m.syncInput(held))
 	m.syncFocus()
 	m.arrange()
+	m.syncFocus()
 	return m, cmd
 }
 
@@ -740,7 +741,7 @@ func (m *model) place() {
 		m.prompt = loginRows(m.dialog, m.width, max(2, m.height/3), free+2, m.th)
 		input = len(m.prompt) - 2
 	case m.tasks != nil:
-		m.prompt = m.tasks.rows(m.width, max(2, m.height/3), free+2, m.th)
+		m.prompt = m.tasks.rows(m.width, max(2, m.height/3), free+2, &m.keys, m.th)
 		input = len(m.prompt) - 2
 	default:
 		m.geo.menu = max(0, min(m.menu.want(), free-input))

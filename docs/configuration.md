@@ -86,7 +86,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `quit` | `ctrl+d` |
 | `toggle-mode` | `shift+tab` |
 | `background` | `ctrl+b` |
-| `stop-agent` | `x` (stops the subagent on the selected [agent row](subagents.md#agent-rows)) |
+| `stop-agent` | `x` (stops the running subagent selected in the [agent rows](subagents.md#agent-rows) or the `/tasks` list) |
 | `paste` | `ctrl+v` |
 | `history-prev`, `history-next` | `up`, `down` |
 | `queue-edit` | `up` |

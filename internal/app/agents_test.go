@@ -464,6 +464,47 @@ func TestRegistryStopQueuesNoNoticeButStopTaskQueuesANonWakingOne(t *testing.T) 
 	assert.Zero(t, a.faux.CallCount(), "a stop wakes nobody")
 }
 
+func TestStoppedChildFinalizationOverridesTheSendOutcome(t *testing.T) {
+	for _, status := range []event.Status{event.Completed, event.Failed} {
+		for _, byHuman := range []bool{false, true} {
+			t.Run(fmt.Sprintf("status=%s/human=%t", status, byHuman), func(t *testing.T) {
+				a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{Wake: true}, agentDef("explorer"))
+				a.rootAcks(1)
+				task := a.tasks.StartAgent("explorer", "find it", nil)
+				role := &subagentRole{c: a.c, task: task, report: a.c.endReporter(a.c.main.sess)}
+				w := &Work{
+					stopped: true,
+					byHuman: byHuman,
+					outcome: event.Outcome{Status: status, Message: "late failure"},
+					reply:   "late reply",
+				}
+
+				// The send returned before a stop won the queue; the registry has not been stopped.
+				a.c.queue.Lock()
+				a.c.live++
+				role.end(w, []pigruntime.Prompt{{Text: "also check b", FromAgent: true}})
+				a.c.queue.Unlock()
+
+				info := a.info(t, task.ID())
+				assert.Equal(t, tool.TaskStopped, info.Status)
+				assert.Empty(t, info.Reason)
+				assert.Zero(t, a.live())
+				queued := a.queuedNotices()
+				if byHuman {
+					require.Len(t, queued, 1)
+					assert.Contains(t, queued[0].Text, "stopped by the user: find it")
+					assert.Contains(t, queued[0].Text, "\nUndelivered messages:\nalso check b")
+					assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.Status)
+				} else {
+					assert.Empty(t, queued, "the model's stop remains silent")
+				}
+				assert.True(t, a.idle(), "a stop wakes nobody")
+				assert.Zero(t, a.faux.CallCount())
+			})
+		}
+	}
+}
+
 func TestRootInterruptLeavesChildrenRunning(t *testing.T) {
 	rootStarted, childStarted, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{Tools: []tool.Tool{blockTool(rootStarted)}, AgentTools: []tool.Tool{releaseTool(childStarted, release)}}, agentDef("explorer"))

@@ -54,6 +54,16 @@ func (m *model) tasksKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	}
+	if t.open == "" && key.Matches(msg, m.keys.stopAgent) {
+		info := t.list[t.d.sel]
+		if info.Agent != "" && info.Status == tool.TaskRunning {
+			if err := m.c.StopTask(info.ID); err != nil {
+				m.showError(err)
+			}
+			m.taskList(info.ID)
+		}
+		return nil
+	}
 	picked, cmd := t.d.key(msg, &m.keys)
 	if !picked {
 		return cmd
@@ -152,11 +162,17 @@ func (t *taskDialog) setOptions(width int) {
 
 // rows draws the dialog within maxRows; an open task's output fills what
 // the other rows leave, at most maxBody rows, from its end.
-func (t *taskDialog) rows(width, maxBody, maxRows int, th theme) []string {
+func (t *taskDialog) rows(width, maxBody, maxRows int, km *keyMap, th theme) []string {
 	if maxRows <= 0 {
 		return nil
 	}
 	t.setOptions(width)
+	t.d.note = ""
+	if t.open == "" {
+		if info := t.list[t.d.sel]; info.Agent != "" && info.Status == tool.TaskRunning {
+			t.d.note = binding(km.stopAgent, "stop agent")
+		}
+	}
 	t.d.body = nil
 	if t.open != "" {
 		t.d.body = t.tail(min(maxBody, maxRows-len(t.d.rows(width, maxRows, 1, th))), width-2, th)

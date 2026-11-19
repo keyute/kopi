@@ -50,7 +50,7 @@ Report file paths and line numbers.
 - When a subagent ends, the agent is told with its final message and continues.
 - `SendMessage` sends a further message to a subagent by task id. A running subagent reads it when its current step ends; one that has ended, or whose run is being stopped, starts again with its earlier context and reports again. The call does not wait for the stopping run to end.
 - The notice the agent receives when a subagent's run completes or fails, or when you stop it, lists the messages queued for it that it never read as undelivered. When the agent stops a subagent with `TaskStop` it receives no notice, and those messages are dropped.
-- `TaskOutput` shows a subagent's activity so far and `TaskStop` stops it. `/tasks` lists subagents next to background commands, opens a subagent's view with Enter and can stop them.
+- `TaskOutput` shows a subagent's activity so far and `TaskStop` stops it. `/tasks` lists subagents next to background commands, opens a subagent's view with Enter and stops the selected running subagent with `x` (`stop-agent`) from the list.
 
 ## What a subagent gets
 
