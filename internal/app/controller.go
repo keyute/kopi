@@ -719,6 +719,8 @@ func (c *Controller) Status() Status {
 		if tokens, window, ok := sess.ContextUsage(); ok {
 			s.ContextTokens, s.ContextWindow = tokens, window
 		}
+		s.Effort = sess.Effort()
+		s.ToolCalls, s.Cost = sess.Usage()
 	}
 	for _, t := range c.cfg.Tools {
 		if t.Capability == policy.Exec {
@@ -762,12 +764,14 @@ func (c *Controller) Agents() []AgentStatus {
 	return out
 }
 
-// agentStatus adds the context usage of sess to a.
+// agentStatus adds the context usage, effort and usage of sess to a.
 func (c *Controller) agentStatus(a AgentStatus, sess *pigruntime.Session) AgentStatus {
 	if sess != nil {
 		if tokens, window, ok := sess.ContextUsage(); ok {
 			a.ContextTokens, a.ContextWindow = tokens, window
 		}
+		a.Effort = sess.Effort()
+		a.ToolCalls, a.Cost = sess.Usage()
 	}
 	return a
 }

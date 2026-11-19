@@ -25,6 +25,11 @@ type Status struct {
 	// which Background can move.
 	Shells, Agents int
 	Foreground     bool
+	// Effort is empty when the model does not reason.
+	Effort    string
+	ToolCalls int
+	// Cost is in dollars, estimated from the model's price.
+	Cost float64
 }
 
 // AgentStatus describes one session for a frontend: the main session or a subagent's.
@@ -36,4 +41,9 @@ type AgentStatus struct {
 	State       tool.TaskStatus // a subagent's task status; "" for the main session
 	// ContextTokens and ContextWindow are zero while the usage is unknown.
 	ContextTokens, ContextWindow int
+	// Effort is empty when the model does not reason.
+	Effort    string
+	ToolCalls int
+	// Cost is in dollars, estimated from the model's price.
+	Cost float64
 }

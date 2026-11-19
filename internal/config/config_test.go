@@ -275,6 +275,14 @@ func TestResolveRejectsUnknownAgentSegmentNamingLayer(t *testing.T) {
 	}
 }
 
+func TestResolveAcceptsTheEffortContextToolsAndCostSegments(t *testing.T) {
+	global := globalLayer(t, `{"statusline": {"right": ["effort", "tools", "cost"]}, "agentline": {"right": ["effort", "context", "tools", "cost"]}}`)
+	r, err := Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"effort", "tools", "cost"}, r.Config.StatusLine.Right)
+	assert.Equal(t, []string{"effort", "context", "tools", "cost"}, r.Config.AgentLine.Right)
+}
+
 func TestResolveAcceptsNoticeOnEitherSide(t *testing.T) {
 	global := globalLayer(t, `{"statusline": {"left": ["notice", "model"], "right": ["mode", "notice"]}}`)
 	r, err := Resolve(Defaults(), global)

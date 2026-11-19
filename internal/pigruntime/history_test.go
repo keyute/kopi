@@ -624,6 +624,31 @@ func TestContextUsageMirrorsPiG(t *testing.T) {
 	assert.Greater(t, mirrors(), before)
 }
 
+func TestEffortNamesTheLevelOnlyForAReasoningModel(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	assert.Empty(t, openTestSession(t, r).Effort(), "faux-1 does not reason")
+
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "faux-thinker", Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, r.RegisterProvider(thinker.Provider()))
+	sess, err := r.Open(t.Context(), OpenOptions{Model: "faux-thinker/thinker", Effort: LowEffort, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+	assert.Equal(t, "low", sess.Effort())
+}
+
+func TestUsageMirrorsPiGsSessionStats(t *testing.T) {
+	r, faux := newTestRuntime(t, newSandbox(t))
+	faux.SetResponses([]ai.FauxResponseStep{reply("counted")})
+	sess := openTestSession(t, r)
+	_, err := sess.Send(t.Context(), Prompt{Text: "count me"}, nil, nil)
+	require.NoError(t, err)
+
+	toolCalls, cost := sess.Usage()
+	want := sess.inner.GetSessionStats()
+	assert.Equal(t, want.ToolCalls, toolCalls)
+	assert.Equal(t, want.Cost, cost)
+}
+
 func TestHistoryAndSessionListOmitSkills(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)

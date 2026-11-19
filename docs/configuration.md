@@ -109,10 +109,16 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 
 | Segment | Shows |
 | --- | --- |
+| `effort` | The reasoning level in use (`high`); absent when the model does not reason |
+| `tools` | The tool calls the session has made (`12 tools`); absent until the first |
+| `cost` | The session's cost (`$0.42`); absent while zero |
 | `cwd` | The workspace, with your home directory as `~` |
 | `notice` | Transient hints such as `Copied` |
 | `sandbox` | `sandboxed` or `unsandboxed` when `Bash` is available |
 | `tasks` | Running background work, such as `2 agents, 1 shell` |
+
+- `model`, `effort`, `context`, `tools` and `cost` show the session whose view is open.
+- `cost` is an estimate computed from the model's listed price; on a subscription sign-in it is not what you are billed.
 
 A segment in `segments`:
 
@@ -150,6 +156,10 @@ Segments:
 | `agent` | The subagent's name and what it was started for, the description cut to 36 columns (`explorer › Find the config loader`); `main` on the main row |
 | `tokens` | The session's context size (`22.1k tokens`); absent until known |
 | `model` | The session's model, in the form of the status line's `model` |
+| `effort` | The reasoning level in use (`high`); absent when the model does not reason |
+| `context` | The share of the context window in use (`18.0%`), as in the status line; absent until known |
+| `tools` | The tool calls the session has made (`12 tools`); absent until the first |
+| `cost` | The session's estimated cost (`$0.42`), as in the status line; absent while zero |
 | `elapsed` | How long the current turn has been running; absent while idle |
 | `state` | `running`, `completed`, `failed` or `stopped`; on the main row `running` while a turn runs, else absent |
 | `activity` | The tool call running now; absent when none |

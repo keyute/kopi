@@ -1303,6 +1303,7 @@ func TestAgentsListsMainThenEverySubagentInTaskOrder(t *testing.T) {
 		{ID: second, Agent: "worker", Description: "second job", Model: model, State: tool.TaskRunning},
 	} {
 		got[i].ContextTokens, got[i].ContextWindow = 0, 0
+		got[i].Effort, got[i].ToolCalls, got[i].Cost = "", 0, 0
 		assert.Equal(t, want, got[i])
 	}
 }

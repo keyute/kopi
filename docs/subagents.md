@@ -80,8 +80,9 @@ Report file paths and line numbers.
 - `●` marks the row of the session whose view is open, `○` the others.
 - A subagent that has ended leaves the rows, unless its view is the one open; then `main` and that row stay until you switch away. With no running subagent and the main view open there are no rows.
 - At most five rows show; with more, `↑ N more` and `↓ N more` lines mark what is hidden. On a narrow terminal a row drops segments from the right end, then is cut.
-- Down from the last line of the input, with no newer history entry, moves into the rows, starting at `main`; `❭` marks the cursor row.
-  - Up and Down (`menu-up`, `menu-down`) move; Enter (`submit`) opens that session's view.
+  - The window of five scrolls only when the cursor, or with no cursor the open view's row, would leave it, so rows keep their place as the cursor moves.
+- Down from the last line of the input, with no newer history entry, moves into the rows, starting at `main`; `❭` marks the cursor row, in the two columns left of `●`/`○`, and the row is drawn in the accent colour.
+  - Up and Down (`menu-up`, `menu-down`) move; Enter (`submit`) opens that session's view and leaves the cursor on that row.
   - `x` (`stop-agent`) on a running subagent's row stops it; on the `main` row and on the open view's row it types an `x`.
   - Esc, Up on `main` or typing returns to the input; typing also types. Esc there interrupts nothing.
   - A dialog (approval, question, login, `/tasks`) takes keys first.

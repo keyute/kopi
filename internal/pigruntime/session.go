@@ -132,6 +132,22 @@ func (s *Session) ContextUsage() (tokens, window int, ok bool) {
 	return *u.Tokens, u.ContextWindow, true
 }
 
+// Effort reports the reasoning level the session runs at, in the names
+// ParseEffort takes. It is "" when the model does not reason.
+func (s *Session) Effort() string {
+	if m := s.inner.Model(); m == nil || !m.ProviderMeta.Reasoning {
+		return ""
+	}
+	return string(s.inner.ThinkingLevel())
+}
+
+// Usage reports the tool calls the session has made and the cost of its
+// requests in dollars, computed from the model's price.
+func (s *Session) Usage() (toolCalls int, cost float64) {
+	st := s.inner.GetSessionStats()
+	return st.ToolCalls, st.Cost
+}
+
 // Subscribe registers fn to run synchronously on PiG's event executor. A slow
 // fn stalls the turn, and fn must not call back into the Session. Every call
 // for a turn has run when Send returns.

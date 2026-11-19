@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -117,7 +118,7 @@ func TestAgentSegment(t *testing.T) {
 		{"cut without a word boundary", entry{AgentStatus: app.AgentStatus{ID: "t1", Agent: "x", Description: strings.Repeat("a", 40)}}, "x › " + strings.Repeat("a", 35) + "…", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := agentSegments["agent"](tc.e)
+			got, ok := agentSegments["agent"](tc.e, testThemes.dark)
 			assert.Equal(t, tc.want, got)
 			assert.Equal(t, tc.ok, ok)
 		})
@@ -126,39 +127,67 @@ func TestAgentSegment(t *testing.T) {
 
 func TestTokensSegment(t *testing.T) {
 	for tokens, want := range map[int]string{850: "850 tokens", 999: "999 tokens", 1000: "1.0k tokens", 22_100: "22.1k tokens", 999_949: "999.9k tokens", 999_950: "1.0m tokens", 1_200_000: "1.2m tokens"} {
-		got, ok := agentSegments["tokens"](entry{AgentStatus: app.AgentStatus{ContextTokens: tokens}})
+		got, ok := agentSegments["tokens"](entry{AgentStatus: app.AgentStatus{ContextTokens: tokens}}, testThemes.dark)
 		assert.True(t, ok)
 		assert.Equal(t, want, got)
 	}
-	_, ok := agentSegments["tokens"](entry{})
+	_, ok := agentSegments["tokens"](entry{}, testThemes.dark)
 	assert.False(t, ok, "unknown")
 }
 
 func TestModelSegmentMatchesTheStatusLine(t *testing.T) {
-	got, ok := agentSegments["model"](entry{AgentStatus: app.AgentStatus{Model: "mock/gpt-5.6"}})
+	got, ok := agentSegments["model"](entry{AgentStatus: app.AgentStatus{Model: "mock/gpt-5.6"}}, testThemes.dark)
 	assert.True(t, ok)
 	assert.Equal(t, modelID("mock/gpt-5.6"), got)
-	_, ok = agentSegments["model"](entry{})
+	_, ok = agentSegments["model"](entry{}, testThemes.dark)
 	assert.False(t, ok)
+}
+
+func TestEffortContextToolsAndCostSegments(t *testing.T) {
+	th := testThemes.dark
+	full := entry{AgentStatus: app.AgentStatus{Effort: "high", ContextTokens: 18_000, ContextWindow: 100_000, ToolCalls: 12, Cost: 0.424}}
+	for name, want := range map[string]string{"effort": "high", "context": "18.0%", "tools": "12 tools", "cost": "$0.42"} {
+		got, ok := agentSegments[name](full, th)
+		assert.True(t, ok, name)
+		assert.Equal(t, want, ansi.Strip(got), name)
+		_, ok = agentSegments[name](entry{}, th)
+		assert.False(t, ok, "%s absent when empty", name)
+	}
+	got, _ := agentSegments["tools"](entry{AgentStatus: app.AgentStatus{ToolCalls: 1}}, th)
+	assert.Equal(t, "1 tool", got)
+}
+
+func TestCursorRowKeepsTheAccentAfterAWarningContext(t *testing.T) {
+	warn := explorer("t1")
+	warn.ContextWindow, warn.ContextTokens = 100, 95
+	m, _ := agentLineModel(t, 60, lineOf([]string{"context", "id"}), warn)
+	press(m, down)
+	press(m, down)
+	require.Equal(t, "t1", m.focus.id)
+
+	row := m.agentRows(10)[1]
+	accent, warning := fg(m.th.accent), fg(m.th.warning)
+	assert.Equal(t, accent.Render(cursorMark+"○ ")+warning.Render("95.0%")+accent.Render(" · ")+accent.Render("t1"), row)
+	assert.Equal(t, "❭ ○ 95.0% · t1", ansi.Strip(row))
 }
 
 func TestStateAndIDSegments(t *testing.T) {
 	state := agentSegments["state"]
-	got, ok := state(entry{AgentStatus: app.AgentStatus{ID: "t1", State: "failed"}})
+	got, ok := state(entry{AgentStatus: app.AgentStatus{ID: "t1", State: "failed"}}, testThemes.dark)
 	assert.True(t, ok)
 	assert.Equal(t, "failed", got)
-	_, ok = state(entry{AgentStatus: app.AgentStatus{ID: "t1"}})
+	_, ok = state(entry{AgentStatus: app.AgentStatus{ID: "t1"}}, testThemes.dark)
 	assert.False(t, ok)
-	got, ok = state(entry{AgentStatus: app.AgentStatus{ID: app.Main}, busy: true})
+	got, ok = state(entry{AgentStatus: app.AgentStatus{ID: app.Main}, busy: true}, testThemes.dark)
 	assert.True(t, ok)
 	assert.Equal(t, "running", got)
-	_, ok = state(entry{AgentStatus: app.AgentStatus{ID: app.Main}})
+	_, ok = state(entry{AgentStatus: app.AgentStatus{ID: app.Main}}, testThemes.dark)
 	assert.False(t, ok, "main idle")
 
-	got, ok = agentSegments["id"](entry{AgentStatus: app.AgentStatus{ID: "t1"}})
+	got, ok = agentSegments["id"](entry{AgentStatus: app.AgentStatus{ID: "t1"}}, testThemes.dark)
 	assert.True(t, ok)
 	assert.Equal(t, "t1", got)
-	_, ok = agentSegments["id"](entry{AgentStatus: app.AgentStatus{ID: app.Main}})
+	_, ok = agentSegments["id"](entry{AgentStatus: app.AgentStatus{ID: app.Main}}, testThemes.dark)
 	assert.False(t, ok, "main has no id")
 }
 
@@ -191,7 +220,7 @@ func TestActivitySegment(t *testing.T) {
 		{"control characters", "Grep foo\x00bar", "Grep foobar", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := agentSegments["activity"](entry{activity: tc.title})
+			got, ok := agentSegments["activity"](entry{activity: tc.title}, testThemes.dark)
 			assert.Equal(t, tc.want, got)
 			assert.Equal(t, tc.ok, ok)
 		})
@@ -258,7 +287,7 @@ func TestAgentRowsShrinkToTheHeightThatIsLeft(t *testing.T) {
 
 	display(m, "t6")
 	assert.Len(t, screen(m), m.height)
-	assert.Equal(t, []string{"  ↑ 5 more", "  ○ t5", "  ● t6", "  ○ t7"}, lastRows(m, 4))
+	assert.Equal(t, []string{"  ↑ 5 more", "  ○ t5", "  ● t6", "  ↓ 1 more"}, lastRows(m, 4))
 
 	m = short(0)
 	assert.Zero(t, m.geo.agents)
@@ -333,7 +362,30 @@ func TestAgentRowsWindowFollowsTheCursor(t *testing.T) {
 	}
 
 	assert.Equal(t, "t4", m.focus.id)
-	assert.Equal(t, []string{"  ↑ 2 more", "  ○ t2", "  ○ t3", "  ❭ t4", "  ○ t5", "  ○ t6", "  ↓ 1 more"}, lastRows(m, 7))
+	assert.Equal(t, []string{"  ●", "  ○ t1", "  ○ t2", "  ○ t3", "❭ ○ t4", "  ↓ 3 more"}, lastRows(m, 6))
+}
+
+func TestAgentRowsWindowScrollsOnlyAtItsEdges(t *testing.T) {
+	var agents []app.AgentStatus
+	for _, id := range []string{"t1", "t2", "t3", "t4", "t5", "t6", "t7"} {
+		agents = append(agents, explorer(id))
+	}
+	m, _ := agentLineModel(t, 40, lineOf([]string{"id"}), agents...)
+	press(m, down)
+	for range 4 {
+		press(m, down)
+	}
+	require.Equal(t, "t4", m.focus.id)
+	require.Zero(t, m.agentFrom)
+
+	press(m, down)
+	assert.Equal(t, 1, m.agentFrom, "past the bottom scrolls by one")
+	press(m, down)
+	assert.Equal(t, 2, m.agentFrom)
+	press(m, up)
+	press(m, up)
+	assert.Equal(t, 2, m.agentFrom, "within the window stays")
+	assert.Equal(t, []string{"  ↑ 2 more", "  ○ t2", "  ○ t3", "❭ ○ t4", "  ○ t5", "  ○ t6", "  ↓ 1 more"}, lastRows(m, 7))
 }
 
 func TestAgentRowFitsTheWidth(t *testing.T) {
@@ -374,7 +426,7 @@ var keyX = tea.KeyPressMsg{Code: 'x', Text: "x"}
 func TestDownAtTheBottomEntersTheRowsAtMain(t *testing.T) {
 	m, _ := focused(t, explorer("t1"))
 	assert.Equal(t, app.Main, m.focus.id)
-	assert.Equal(t, []string{"  ❭ main", "  ○ explorer › Find the config loader"}, lastRows(m, 2))
+	assert.Equal(t, []string{"❭ ● main", "  ○ explorer › Find the config loader"}, lastRows(m, 2))
 }
 
 func TestDownDoesNotEnterWhileItCanStillMove(t *testing.T) {
@@ -443,7 +495,7 @@ func TestAgentRowsCannotTakeFocusWhenTheTerminalIsShort(t *testing.T) {
 			assert.Equal(t, "t1", m.focus.id)
 			press(m, enter)
 			assert.Equal(t, "t1", m.shown)
-			assert.False(t, m.focus.on)
+			assert.True(t, m.focus.on)
 		})
 	}
 }
@@ -469,9 +521,27 @@ func TestFocusedSubmitShowsTheEntry(t *testing.T) {
 	press(m, enter)
 
 	assert.Equal(t, "t1", m.shown)
-	assert.False(t, m.focus.on)
+	assert.True(t, m.focus.on)
+	assert.Equal(t, "t1", m.focus.id)
 	assert.Empty(t, c.submitted)
-	assert.Equal(t, []string{"  ○ main", "  ● explorer › Find the config loader"}, lastRows(m, 2))
+	assert.Equal(t, []string{"  ○ main", "❭ ● explorer › Find the config loader"}, lastRows(m, 2))
+}
+
+func TestFocusEndsWhenEnterOnMainDropsTheRows(t *testing.T) {
+	m, c := focused(t, explorer("t1"))
+	display(m, "t1")
+	ended := explorer("t1")
+	ended.State = "completed"
+	c.agents[1] = ended
+	m.views["t1"].busy = false
+	send(m, event.TasksChanged{})
+	require.True(t, m.focus.on)
+	require.Equal(t, app.Main, m.focus.id)
+
+	press(m, enter)
+
+	assert.Equal(t, app.Main, m.shown)
+	assert.False(t, m.focus.on)
 }
 
 func TestFocusedStopInterruptsABusyRowThatIsNotShown(t *testing.T) {

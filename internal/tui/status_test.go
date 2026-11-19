@@ -60,6 +60,28 @@ func TestStatusLine(t *testing.T) {
 	}
 }
 
+func TestStatusLineShowsEffortToolsAndCost(t *testing.T) {
+	layout := statusLayout{right: []string{"effort", "tools", "cost"}, separator: " · "}
+	s := app.Status{Effort: "high", ToolCalls: 12, Cost: 0.424}
+	assert.Equal(t, strings.Repeat(" ", 5)+"high · 12 tools · $0.42  ", ansi.Strip(statusLine(statusInput{Status: s}, layout, 30, mocha())))
+	assert.Equal(t, "  ", ansi.Strip(statusLine(statusInput{}, layout, 2, mocha())))
+}
+
+func TestStatusInputTakesTheOpenSubagentsEffortToolsAndCost(t *testing.T) {
+	sub := explorer("t1")
+	sub.Effort, sub.ToolCalls, sub.Cost = "low", 3, 0.5
+	m, c := agentLineModel(t, 60, config.DefaultAgentLine(), sub)
+	c.status.Effort, c.status.ToolCalls, c.status.Cost = "high", 12, 2
+	m.status = c.status
+
+	in := m.statusInput()
+	assert.Equal(t, []any{"high", 12, 2.0}, []any{in.Effort, in.ToolCalls, in.Cost})
+
+	display(m, "t1")
+	in = m.statusInput()
+	assert.Equal(t, []any{"low", 3, 0.5}, []any{in.Effort, in.ToolCalls, in.Cost})
+}
+
 func TestStatusLineFitsNarrowWidthsAndKeepsMode(t *testing.T) {
 	for _, layout := range []statusLayout{
 		defaultLayout,

@@ -2405,6 +2405,23 @@ func TestStatusReportsContextUsageAndBranch(t *testing.T) {
 	assert.Equal(t, "feature/status", status.Branch)
 }
 
+func TestStatusAndAgentsReportEffortAndUsage(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("counted")})
+	h.turn(t, "count me")
+
+	sess := h.c.main.sess
+	toolCalls, cost := sess.Usage()
+	status := h.c.Status()
+	assert.Equal(t, sess.Effort(), status.Effort)
+	assert.Equal(t, toolCalls, status.ToolCalls)
+	assert.Equal(t, cost, status.Cost)
+	main := h.c.Agents()[0]
+	assert.Equal(t, sess.Effort(), main.Effort)
+	assert.Equal(t, toolCalls, main.ToolCalls)
+	assert.Equal(t, cost, main.Cost)
+}
+
 func TestQuitReturnsErrQuit(t *testing.T) {
 	h, _ := openHarness(t, Config{})
 	_, err := h.c.Submit(t.Context(), Main, "/quit")

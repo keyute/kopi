@@ -96,6 +96,8 @@ type model struct {
 	agents []app.AgentStatus
 	// focus is the agent rows' key focus.
 	focus agentFocus
+	// agentFrom is the index of the first entry the agent rows' window shows.
+	agentFrom int
 	// activity is the Controller's latest event.Activity text.
 	activity string
 	// pending is the shown view's queued rows.
@@ -166,6 +168,7 @@ func (m *model) statusInput() statusInput {
 	in := statusInput{Status: m.status, notice: m.flashText, home: m.home, commands: m.commandOut}
 	if a, ok := m.agent(m.shown); ok && m.shown != app.Main {
 		in.Model, in.ContextTokens, in.ContextWindow = a.Model, a.ContextTokens, a.ContextWindow
+		in.Effort, in.ToolCalls, in.Cost = a.Effort, a.ToolCalls, a.Cost
 	}
 	return in
 }

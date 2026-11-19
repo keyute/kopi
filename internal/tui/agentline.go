@@ -36,11 +36,11 @@ type entry struct {
 }
 
 // agentSegment renders one part of an agent row; false draws nothing.
-type agentSegment func(entry) (string, bool)
+type agentSegment func(entry, theme) (string, bool)
 
 // agentSegments is keyed by the config's agent segment names.
 var agentSegments = map[string]agentSegment{
-	"agent": func(e entry) (string, bool) {
+	"agent": func(e entry, _ theme) (string, bool) {
 		if e.ID == app.Main {
 			return "main", true
 		}
@@ -50,21 +50,31 @@ var agentSegments = map[string]agentSegment{
 		}
 		return e.Agent + " › " + cutWords(desc, descriptionWidth), true
 	},
-	"tokens": func(e entry) (string, bool) {
+	"tokens": func(e entry, _ theme) (string, bool) {
 		return compactCount(e.ContextTokens) + " tokens", e.ContextTokens > 0
 	},
-	"model": func(e entry) (string, bool) { return modelID(e.Model), e.Model != "" },
-	"elapsed": func(e entry) (string, bool) {
+	"model": func(e entry, _ theme) (string, bool) { return modelID(e.Model), e.Model != "" },
+	"elapsed": func(e entry, _ theme) (string, bool) {
 		return formatDuration(time.Since(e.since)), !e.since.IsZero()
 	},
-	"state": func(e entry) (string, bool) {
+	"state": func(e entry, _ theme) (string, bool) {
 		if e.ID == app.Main {
 			return "running", e.busy
 		}
 		return string(e.State), e.State != ""
 	},
-	"activity": func(e entry) (string, bool) { return oneLine(e.activity), e.activity != "" },
-	"id":       func(e entry) (string, bool) { return e.ID, e.ID != app.Main },
+	"activity": func(e entry, _ theme) (string, bool) { return oneLine(e.activity), e.activity != "" },
+	"id":       func(e entry, _ theme) (string, bool) { return e.ID, e.ID != app.Main },
+	"effort":   func(e entry, _ theme) (string, bool) { return e.Effort, e.Effort != "" },
+	"context": func(e entry, th theme) (string, bool) {
+		text, warn, ok := contextText(e.ContextTokens, e.ContextWindow)
+		if warn {
+			text = fg(th.warning).Render(text)
+		}
+		return text, ok
+	},
+	"tools": func(e entry, _ theme) (string, bool) { t := toolsText(e.ToolCalls); return t, t != "" },
+	"cost":  func(e entry, _ theme) (string, bool) { t := costText(e.Cost); return t, t != "" },
 }
 
 // agentFocus is whether the agent rows have the keys and the session id of the
@@ -142,8 +152,9 @@ func (m *model) tickWanted() bool {
 }
 
 // agentRows draws the entries, a window of at most maxAgentRows of them. The
-// window shrinks to limit lines, more rows included, and no rows draw when not
-// even one entry fits.
+// window moves only when the cursor, or without one the shown entry, would
+// leave it, so rows keep their place as the cursor moves. It shrinks to limit
+// lines, more rows included, and no rows draw when not even one entry fits.
 func (m *model) agentRows(limit int) []string {
 	es := m.entries()
 	if len(es) == 0 {
@@ -154,7 +165,10 @@ func (m *model) agentRows(limit int) []string {
 		at = slices.IndexFunc(es, func(e entry) bool { return e.ID == m.focus.id })
 	}
 	for size := min(maxAgentRows, len(es)); size > 0; size-- {
-		from := min(max(0, at-size/2), len(es)-size)
+		from := min(max(m.agentFrom, 0), len(es)-size)
+		if at >= 0 {
+			from = min(max(from, at-size+1), at)
+		}
 		to := from + size
 		lines := size
 		if from > 0 {
@@ -176,6 +190,7 @@ func (m *model) agentRows(limit int) []string {
 		if to < len(es) {
 			rows = append(rows, fg(m.th.dim).Render(fmt.Sprintf("  ↓ %d more", len(es)-to)))
 		}
+		m.agentFrom = from
 		return rows
 	}
 	return nil
@@ -185,30 +200,40 @@ func (m *model) agentRows(limit int) []string {
 // dropped from their right end, then the row is truncated.
 func (m *model) agentRow(e entry) string {
 	glyph := "○"
-	switch {
-	case m.focus.on && e.ID == m.focus.id:
-		glyph = fg(m.th.accent).Render("❭")
-	case e.ID == m.shown:
+	if e.ID == m.shown {
 		glyph = "●"
+	}
+	cursor := m.focus.on && e.ID == m.focus.id
+	gutter := "  "
+	if cursor {
+		gutter = cursorMark
+	}
+	// paint colours plain text in the accent on the cursor row; a part that
+	// carries its own colour keeps it.
+	paint := func(s string) string {
+		if !cursor || s == "" || strings.Contains(s, "\x1b") {
+			return s
+		}
+		return fg(m.th.accent).Render(s)
 	}
 	render := func(names []string) []string {
 		var parts []string
 		for _, n := range names {
-			if text, ok := agentSegments[n](e); ok {
-				parts = append(parts, text)
+			if text, ok := agentSegments[n](e, m.th); ok {
+				parts = append(parts, paint(text))
 			}
 		}
 		return parts
 	}
-	sep := m.agentLine.Separator
+	sep := paint(m.agentLine.Separator)
 	var right string
 	if parts := render(m.agentLine.Right); len(parts) > 0 {
 		right = strings.Join(parts, sep) + "  "
 	}
-	left := "  " + glyph + " "
+	var left string
 	parts := render(m.agentLine.Left)
 	for n := len(parts); n >= 0; n-- {
-		left = "  " + glyph + " " + strings.Join(parts[:n], sep)
+		left = paint(gutter+glyph+" ") + strings.Join(parts[:n], sep)
 		if lipgloss.Width(left)+1+lipgloss.Width(right) <= m.width {
 			break
 		}
@@ -273,7 +298,7 @@ func (m *model) agentKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		m.focus.id = es[at-1].ID
 		return nil, true
 	case key.Matches(msg, km.submit):
-		m.focus = agentFocus{}
+		m.focus.at = at
 		return m.show(es[at].ID), true
 	case key.Matches(msg, km.stopAgent):
 		if e := es[at]; e.ID != app.Main && e.busy && e.ID != m.shown {

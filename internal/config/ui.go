@@ -35,10 +35,10 @@ var KeyActions = []string{
 }
 
 // StatusSegments lists every segment the status line can show.
-var StatusSegments = []string{"model", "context", "branch", "mode", "notice", "sandbox", "tasks", "cwd"}
+var StatusSegments = []string{"model", "effort", "context", "tools", "cost", "branch", "mode", "notice", "sandbox", "tasks", "cwd"}
 
 // AgentSegments lists every segment an agent row can show.
-var AgentSegments = []string{"agent", "tokens", "model", "elapsed", "state", "activity", "id"}
+var AgentSegments = []string{"agent", "tokens", "model", "effort", "context", "tools", "cost", "elapsed", "state", "activity", "id"}
 
 // ThemeRoles lists every colour role a theme defines.
 var ThemeRoles = []string{"accent", "success", "error", "warning", "muted", "dim", "text", "userMessageBg", "heading", "link", "code", "frame"}
