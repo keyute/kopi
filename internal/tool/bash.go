@@ -69,15 +69,15 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 			"and, in execute mode, the workspace; it may block reading some paths and the network. " +
 			"A blocked operation fails, typically with \"Operation not permitted\" or \"Read-only file system\". " +
 			"A directory it blocks reading may instead appear empty."
-	}
-	if sh.Sandboxed() && allowUnsandboxed {
-		description += " unsandboxed runs one command outside it; that call asks for approval unless a rule allows it."
-		properties["unsandboxed"] = map[string]any{
-			"type":        "boolean",
-			"description": "Run this command outside the OS sandbox; plan mode refuses such a call.",
+		if allowUnsandboxed {
+			description += " unsandboxed runs one command outside it; that call asks for approval unless a rule allows it."
+			properties["unsandboxed"] = map[string]any{
+				"type":        "boolean",
+				"description": "Run this command outside the OS sandbox; plan mode refuses such a call.",
+			}
+			open = NewShell(sh.dir, nil)
+			unsandboxedHook = bashUnsandboxed
 		}
-		open = NewShell(sh.dir, nil)
-		unsandboxedHook = bashUnsandboxed
 	}
 	planSandboxed := plan.Sandboxed()
 	return Tool{
@@ -102,6 +102,9 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 			if args.RunInBackground && tasks == nil {
 				return Result{}, fmt.Errorf("%w: run_in_background is not available", ErrInvalidArgs)
 			}
+			if args.Unsandboxed && unsandboxedHook == nil {
+				return Result{}, fmt.Errorf("%w: unsandboxed is not available", ErrInvalidArgs)
+			}
 			if err := ctx.Err(); err != nil {
 				return Result{}, err
 			}
@@ -112,7 +115,7 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 			// The shell is chosen from the admitted mode only: a later read of
 			// the mode could run a plan-admitted call with a writable workspace.
 			run := sh
-			if unsandboxedHook != nil && unsandboxedHook(raw) {
+			if args.Unsandboxed {
 				if mode != policy.Execute {
 					return Result{}, fmt.Errorf("failed to run command: an unsandboxed command runs only in execute mode: %w", policy.ErrDenied)
 				}
@@ -150,7 +153,7 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 			}
 		},
 		Display: Display{
-			Title: bashTitle,
+			Title: func(raw json.RawMessage) string { return bashTitle(raw, unsandboxedHook != nil) },
 			Summary: func(output string) string {
 				if m := backgroundResult.FindStringSubmatch(output); m != nil {
 					return "task " + m[1] + " · running"
@@ -209,8 +212,7 @@ func bashCommand(raw json.RawMessage) string {
 	return args.Command
 }
 
-// bashUnsandboxed decodes leniently for the same reason as bashCommand; the
-// gate and Run both decide with it, on the same bytes.
+// bashUnsandboxed decodes leniently for the same reason as bashCommand.
 func bashUnsandboxed(raw json.RawMessage) bool {
 	var args struct {
 		Unsandboxed bool `json:"unsandboxed"`
@@ -219,9 +221,9 @@ func bashUnsandboxed(raw json.RawMessage) bool {
 	return args.Unsandboxed
 }
 
-func bashTitle(raw json.RawMessage) string {
+func bashTitle(raw json.RawMessage, unsandboxedOffered bool) string {
 	name := "Bash"
-	if bashUnsandboxed(raw) {
+	if unsandboxedOffered && bashUnsandboxed(raw) {
 		name = "Bash (unsandboxed)"
 	}
 	command := bashCommand(raw)

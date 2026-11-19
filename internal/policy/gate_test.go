@@ -880,6 +880,7 @@ func TestUnsandboxedCallWithoutApproverIsDenied(t *testing.T) {
 }
 
 func TestUnsandboxedGrantIsRevokedOnModeChange(t *testing.T) {
+	// Exec's generation check alone revokes these; forCall in Admit is defence in depth.
 	a, g := sandboxedGate(t, optOutSpec, nil, Source{Name: "config", Allow: []string{"Shell"}})
 	a.EnterExecute()
 	require.NoError(t, g.Before(t.Context(), "c1", "Shell", optOutCall))

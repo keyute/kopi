@@ -160,12 +160,12 @@ func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMes
 	default:
 		if !planFile && (spec.Ask || spec.Capability != Read && !spec.Sandboxed && (spec.Capability != Write || !g.authority.EditsGranted())) {
 			req.Edits = spec.Capability == Write
-			allow := tool
-			if target != nil {
-				allow += "(" + escape(filepath.ToSlash(target.Path)) + ")"
-			}
-			if optOut {
-				allow = ""
+			allow := ""
+			if !optOut {
+				allow = tool
+				if target != nil {
+					allow += "(" + escape(filepath.ToSlash(target.Path)) + ")"
+				}
 			}
 			switch {
 			case g.review == nil:
@@ -193,10 +193,7 @@ func (g *Gate) ask(ctx context.Context, r Request, allow string) error {
 		if r.Rule != "" {
 			return fmt.Errorf("rule %s requires approval for tool %q and this run cannot ask for it: %w", r.Rule, r.Tool, ErrDenied)
 		}
-		if allow == "" {
-			return fmt.Errorf("tool %q needs approval and this run cannot ask for it: %w", r.Tool, ErrDenied)
-		}
-		return fmt.Errorf("tool %q needs approval and this run cannot ask for it; add an allow rule to permissions.allow in config.json or pass --allowed-tools, such as %s: %w", r.Tool, allow, ErrDenied)
+		return fmt.Errorf("tool %q needs approval and this run cannot ask for it%s: %w", r.Tool, allowHint(allow), ErrDenied)
 	}
 	d, err := g.approve(ctx, r)
 	if err != nil {
@@ -219,6 +216,14 @@ func (g *Gate) ask(ctx context.Context, r Request, allow string) error {
 	default:
 		return fmt.Errorf("tool %q: the user rejected this call; stop and wait for their instructions: %w", r.Tool, ErrRejected)
 	}
+}
+
+// allowHint is the suffix suggesting the rule that would allow the call.
+func allowHint(allow string) string {
+	if allow == "" {
+		return ""
+	}
+	return "; add an allow rule to permissions.allow in config.json or pass --allowed-tools, such as " + allow
 }
 
 // reviewed has the reviewer decide r, and asks the human only when it cannot
@@ -255,10 +260,7 @@ func (g *Gate) reviewed(ctx context.Context, r Request, allow string) error {
 		}
 	default:
 		if g.approve == nil {
-			if allow == "" {
-				return fmt.Errorf("tool %q needs approval, the approval classifier could not decide and this run cannot ask for it: %w", r.Tool, ErrDenied)
-			}
-			return fmt.Errorf("tool %q needs approval, the approval classifier could not decide and this run cannot ask for it; add an allow rule to permissions.allow in config.json or pass --allowed-tools, such as %s: %w", r.Tool, allow, ErrDenied)
+			return fmt.Errorf("tool %q needs approval, the approval classifier could not decide and this run cannot ask for it%s: %w", r.Tool, allowHint(allow), ErrDenied)
 		}
 	}
 	r.Review = &rev

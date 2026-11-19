@@ -373,22 +373,29 @@ func TestBashUnsandboxedIsDeniedOutsideExecute(t *testing.T) {
 	}
 }
 
-func TestBashUnsandboxedWithoutTheSandboxChangesNothing(t *testing.T) {
-	tool, _ := newBashTool(t)
+func TestBashUnsandboxedIsInvalidWhenNotOffered(t *testing.T) {
+	execute := func(policy.Target) (policy.Mode, error) { return policy.Execute, nil }
+	dir := t.TempDir()
+	noSandbox, _ := newBashTool(t)
+	notAllowed := NewBash(NewShell(dir, &sandbox.Sandbox{}), NewShell(dir, &sandbox.Sandbox{}), NewTasks(), false)
 
-	out, err := tool.Run(t.Context(), json.RawMessage(`{"command":"echo hi","unsandboxed":true}`), func(policy.Target) (policy.Mode, error) {
-		return policy.Execute, nil
-	})
+	for name, tool := range map[string]Tool{"no sandbox": noSandbox, "not allowed": notAllowed} {
+		t.Run(name, func(t *testing.T) {
+			_, err := tool.Run(t.Context(), json.RawMessage(`{"command":"true","unsandboxed":true}`), execute)
 
-	require.NoError(t, err)
-	assert.Equal(t, "hi\n", out.Text)
+			require.ErrorIs(t, err, ErrInvalidArgs)
+		})
+	}
 }
 
-func TestBashDisplayTitleMarksUnsandboxed(t *testing.T) {
-	tool, _ := newBashTool(t)
+func TestBashDisplayTitleMarksUnsandboxedOnlyWhenOffered(t *testing.T) {
+	dir := t.TempDir()
+	offered := NewBash(NewShell(dir, &sandbox.Sandbox{}), NewShell(dir, &sandbox.Sandbox{}), NewTasks(), true)
+	notOffered := NewBash(NewShell(dir, &sandbox.Sandbox{}), NewShell(dir, &sandbox.Sandbox{}), NewTasks(), false)
 
-	assert.Equal(t, "Bash (unsandboxed) git config -l", tool.Display.Title(json.RawMessage(`{"command":"git config -l","unsandboxed":true}`)))
-	assert.Equal(t, "Bash (unsandboxed) cd a …", tool.Display.Title(json.RawMessage(`{"command":"cd a\nls","unsandboxed":true}`)))
-	assert.Equal(t, "Bash (unsandboxed)", tool.Display.Title(json.RawMessage(`{"unsandboxed":true}`)))
-	assert.Equal(t, "Bash git config -l", tool.Display.Title(json.RawMessage(`{"command":"git config -l","unsandboxed":false}`)))
+	assert.Equal(t, "Bash (unsandboxed) git config -l", offered.Display.Title(json.RawMessage(`{"command":"git config -l","unsandboxed":true}`)))
+	assert.Equal(t, "Bash (unsandboxed) cd a …", offered.Display.Title(json.RawMessage(`{"command":"cd a\nls","unsandboxed":true}`)))
+	assert.Equal(t, "Bash (unsandboxed)", offered.Display.Title(json.RawMessage(`{"unsandboxed":true}`)))
+	assert.Equal(t, "Bash git config -l", offered.Display.Title(json.RawMessage(`{"command":"git config -l","unsandboxed":false}`)))
+	assert.Equal(t, "Bash git config -l", notOffered.Display.Title(json.RawMessage(`{"command":"git config -l","unsandboxed":true}`)))
 }

@@ -1592,7 +1592,9 @@ func TestRootSandboxedBashUnsandboxedIsRefusedWhenNotAllowed(t *testing.T) {
 	result, _ := printBashArgs(t, e, map[string]any{"command": command, "unsandboxed": true}, "--mode", "execute", "--allowed-tools", "Bash")
 
 	assert.NotContains(t, result, sentinel)
-	assert.Contains(t, result, "unsandboxed")
+	// PiG validates the arguments against the schema before Run, and the schema omits unsandboxed here.
+	assert.Contains(t, result, `Validation failed for tool "Bash"`)
+	assert.Contains(t, result, "unsandboxed: unknown field")
 }
 
 func TestRootSandboxedBashUnsandboxedIsRefusedInPlan(t *testing.T) {
