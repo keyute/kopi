@@ -103,6 +103,7 @@ func NewStructuredOutput(schema map[string]any, record func(json.RawMessage)) To
 		Description: "Returns your result: the arguments of your last call are returned as the result of your task, in place of your final message.",
 		Parameters:  schema,
 		Capability:  policy.Read,
+		Exclusive:   true,
 		Run: func(_ context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (Result, error) {
 			if _, err := admit(policy.Target{}); err != nil {
 				return Result{}, err

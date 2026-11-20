@@ -132,6 +132,7 @@ func TestStructuredOutputRecordsLastCall(t *testing.T) {
 	assert.Equal(t, "StructuredOutput", tool.Name)
 	assert.Equal(t, schema, tool.Parameters)
 	assert.Equal(t, policy.Read, tool.Capability)
+	assert.True(t, tool.Exclusive)
 	assert.False(t, tool.Deferred)
 	for _, raw := range []string{`{"a":1}`, `{"a":2}`} {
 		out, err := tool.Run(t.Context(), json.RawMessage(raw), allowTarget)

@@ -186,6 +186,25 @@ return await agent("go", {schema: S})`)
 	assert.Contains(t, receiveChild(t, requests).tools, "StructuredOutput")
 }
 
+func TestWorkflowSchemaReturnsTheLastCallInOneResponse(t *testing.T) {
+	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
+	a.child.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(
+			pigruntimetest.Call{Name: "StructuredOutput", ID: "s1", Args: map[string]any{"claims": []any{"first"}}},
+			pigruntimetest.Call{Name: "StructuredOutput", ID: "s2", Args: map[string]any{"claims": []any{"last"}}},
+		),
+		pigruntimetest.Text("done"),
+	})
+	a.rootAcks(1)
+
+	id := a.startWorkflow(t, "audit", `
+const S = {type: "object", properties: {claims: {type: "array", items: {type: "string"}}}, required: ["claims"]}
+return await agent("go", {schema: S})`)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	assert.JSONEq(t, `{"claims":["last"]}`, a.info(t, id).Result)
+}
+
 func TestWorkflowSchemaWithoutACallRejects(t *testing.T) {
 	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
 	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("no call")})
