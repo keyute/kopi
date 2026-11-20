@@ -55,7 +55,7 @@ Defaults; change them with [`keys`](configuration.md#keys).
 - Down from the last line of the input, with no newer history entry, moves into the [agent rows](subagents.md#agent-rows) under the status line: Up and Down move, Enter opens that session's view, `x` stops the selected subagent, Esc or typing returns to the input.
 - Esc interrupts the running turn of the session whose view is open: the main agent's in the main view, only that subagent's run in a [subagent's view](subagents.md#views). It never acts on another session.
 - While the turn is idle and background tasks, subagents or [workflows](workflows.md) run, the row above the input reads `Waiting on 2 agents, 1 workflow, 1 shell… 1m 5s`.
-- Ctrl+C interrupts the open view's running turn as Esc does, else clears the draft, else a second press within two seconds exits.
+- Ctrl+C with a dialog open dismisses it as Esc does. Otherwise it interrupts the open view's running turn as Esc does, else clears the draft, else a second press within two seconds exits.
 - After an interrupt, queued messages return to the input; `/new`, `/resume` and exiting discard them.
 - Ctrl+D exits when the input is empty.
 - Shift+Tab switches between plan and execute.
@@ -64,7 +64,7 @@ Defaults; change them with [`keys`](configuration.md#keys).
   - With none running, Ctrl+B keeps its meaning in the input.
 - Ctrl+G, while an [`ExitPlanMode`](tools.md#exitplanmode) plan is open, opens the plan file in `$VISUAL`, else `$EDITOR`.
 - Ctrl+V pastes text or an image from the clipboard.
-- Mouse wheel or PgUp/PgDn scrolls the transcript; while an [`AskUserQuestion`](tools.md#askuserquestion) dialog is open PgUp/PgDn scroll its cut preview or review instead, and while an [approval](permissions.md#approval-dialog) preview or a `/tasks` output is cut, they scroll that. PgUp/PgDn never move the cursor in a dialog's text field.
+- Mouse wheel or PgUp/PgDn scrolls the transcript; while the open dialog's body is cut (an [approval](permissions.md#approval-dialog) preview, a `/tasks` output, an [`AskUserQuestion`](tools.md#askuserquestion) preview or review) they scroll that instead. PgUp/PgDn never move the cursor in a dialog's text field.
 - Keys while the model asks you a question are listed under [`AskUserQuestion`](tools.md#askuserquestion).
 - Ctrl+O opens every group and every row that opens, and every capped failure, until pressed again; see [Transcript](#transcript).
 

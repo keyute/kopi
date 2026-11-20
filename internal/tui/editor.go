@@ -44,14 +44,12 @@ func (m *model) openEditor(path string) tea.Cmd {
 	})
 }
 
-// editorDone shows a failed run, then has the Controller read the pending
-// plan again, whichever editor run it was.
+// editorDone shows a failed run, then tells the prompts, whichever editor run
+// it was.
 func (m *model) editorDone(msg editorDoneMsg) {
 	if msg.err != nil {
 		m.view().tr.Apply(event.Error{Err: fmt.Errorf("failed to run the editor: %w", msg.err)})
 		m.relayout()
 	}
-	if m.plan != nil {
-		m.c.RefreshPlan(m.plan.token)
-	}
+	m.sweep("", msg)
 }

@@ -17,9 +17,10 @@ import (
 
 func plainLoginRows(ev event.LoginRequested, sel int) []string {
 	km := newKeyMap(config.DefaultKeys())
-	d := newLoginDialog(ev, &km, mocha())
+	l := newLoginDialog(ev, &km, mocha())
+	d := l.d
 	d.sel = sel
-	return plainRows(loginRows(d, 40, 3, 100, mocha()))
+	return plainRows(l.dialog(40, mocha()).rows(40, 100, 3, mocha()))
 }
 
 func TestLoginRowsListOptionsWithDescriptions(t *testing.T) {
@@ -45,20 +46,22 @@ func TestLoginRowsShowATextFieldWithItsPlaceholder(t *testing.T) {
 
 func TestLoginRowsMaskASecret(t *testing.T) {
 	km := newKeyMap(config.DefaultKeys())
-	d := newLoginDialog(event.LoginRequested{Message: "API key", Placeholder: "key", Secret: true}, &km, mocha())
-	assert.Equal(t, "❭ key", plainRows(loginRows(d, 40, 3, 100, mocha()))[3])
+	l := newLoginDialog(event.LoginRequested{Message: "API key", Placeholder: "key", Secret: true}, &km, mocha())
+	d := l.d
+	assert.Equal(t, "❭ key", plainRows(l.dialog(40, mocha()).rows(40, 100, 3, mocha()))[3])
 
 	d.paste("sk-secret")
-	rows := plainRows(loginRows(d, 40, 3, 100, mocha()))
+	rows := plainRows(l.dialog(40, mocha()).rows(40, 100, 3, mocha()))
 	assert.Equal(t, "❭ •••••••••", rows[3])
 	assert.NotContains(t, strings.Join(rows, "\n"), "secret")
 }
 
 func TestLoginRowsIndentLaterRowsOfAMultiLineDraft(t *testing.T) {
 	km := newKeyMap(config.DefaultKeys())
-	d := newLoginDialog(event.LoginRequested{Message: "Code"}, &km, mocha())
+	l := newLoginDialog(event.LoginRequested{Message: "Code"}, &km, mocha())
+	d := l.d
 	d.paste("first\nsecond")
-	rows := plainRows(loginRows(d, 40, 3, 100, mocha()))
+	rows := plainRows(l.dialog(40, mocha()).rows(40, 100, 3, mocha()))
 	assert.Equal(t, []string{"❭ first", "  second"}, rows[3:5])
 	require.Len(t, d.areas, 1)
 	assert.Equal(t, 2, d.areas[0].x)
@@ -71,11 +74,12 @@ func TestLoginRowsKeepTheSelectionBetweenRules(t *testing.T) {
 	for i := range 7 {
 		ev.Options = append(ev.Options, event.LoginOption{Label: fmt.Sprintf("Method %d", i+1), Description: strings.Repeat("wrapped description ", 8)})
 	}
-	d := newLoginDialog(ev, &km, mocha())
+	l := newLoginDialog(ev, &km, mocha())
+	d := l.d
 	for _, sel := range []int{0, 3, 6} {
 		d.move(sel)
 		for _, height := range []int{3, 5, 9, 4, 100} {
-			rows := plainRows(loginRows(d, 40, 3, height, mocha()))
+			rows := plainRows(l.dialog(40, mocha()).rows(40, height, 3, mocha()))
 			require.LessOrEqual(t, len(rows), height)
 			assert.Equal(t, rule40, rows[0])
 			assert.Equal(t, rule40, rows[len(rows)-1])
@@ -84,7 +88,7 @@ func TestLoginRowsKeepTheSelectionBetweenRules(t *testing.T) {
 	}
 	for _, key := range []tea.KeyPressMsg{up, up, up, down, down} {
 		d.key(key, &km)
-		rows := plainRows(loginRows(d, 40, 3, 5, mocha()))
+		rows := plainRows(l.dialog(40, mocha()).rows(40, 5, 3, mocha()))
 		assert.Contains(t, strings.Join(rows, "\n"), fmt.Sprintf("❭ %d. Method %d", d.sel+1, d.sel+1))
 	}
 }
@@ -95,11 +99,12 @@ func TestLoginRowsPinTheTitleAndWindowALongChoice(t *testing.T) {
 	for i := range 40 {
 		ev.Options = append(ev.Options, event.LoginOption{Label: fmt.Sprintf("Provider %d", i+1)})
 	}
-	d := newLoginDialog(ev, &km, mocha())
+	l := newLoginDialog(ev, &km, mocha())
+	d := l.d
 	for _, sel := range []int{0, 20, 39, 7} {
 		d.move(sel)
 		for _, height := range []int{3, 4, 5, 6, 9, 20} {
-			rows := plainRows(loginRows(d, 40, 3, height, mocha()))
+			rows := plainRows(l.dialog(40, mocha()).rows(40, height, 3, mocha()))
 			require.LessOrEqual(t, len(rows), height)
 			assert.Equal(t, rule40, rows[0])
 			assert.Equal(t, rule40, rows[len(rows)-1])
@@ -124,10 +129,11 @@ func TestLoginRowsWindowIsContiguousAndCentredOnTheSelection(t *testing.T) {
 	for i := range 40 {
 		ev.Options = append(ev.Options, event.LoginOption{Label: fmt.Sprintf("Provider %d", i+1)})
 	}
-	d := newLoginDialog(ev, &km, mocha())
+	l := newLoginDialog(ev, &km, mocha())
+	d := l.d
 	d.move(20)
 
-	rows := plainRows(loginRows(d, 40, 3, 9, mocha()))
+	rows := plainRows(l.dialog(40, mocha()).rows(40, 9, 3, mocha()))
 
 	assert.Equal(t, []string{
 		rule40,
@@ -148,20 +154,21 @@ func TestLoginRowsTruncatePositionRowToWidth(t *testing.T) {
 	for i := range 40 {
 		ev.Options = append(ev.Options, event.LoginOption{Label: fmt.Sprintf("Provider %d", i+1)})
 	}
-	d := newLoginDialog(ev, &km, mocha())
+	l := newLoginDialog(ev, &km, mocha())
 
-	for _, row := range loginRows(d, 5, 3, 9, mocha()) {
+	for _, row := range l.dialog(5, mocha()).rows(5, 9, 3, mocha()) {
 		assert.LessOrEqual(t, ansi.StringWidth(row), 5)
 	}
 }
 
 func TestLoginRowsTwoRowsKeepBothRulesWithoutFieldAreas(t *testing.T) {
 	km := newKeyMap(config.DefaultKeys())
-	d := newLoginDialog(event.LoginRequested{Message: "Code"}, &km, mocha())
-	loginRows(d, 40, 3, 100, mocha())
+	l := newLoginDialog(event.LoginRequested{Message: "Code"}, &km, mocha())
+	d := l.d
+	l.dialog(40, mocha()).rows(40, 100, 3, mocha())
 	require.NotEmpty(t, d.areas)
 
-	rows := plainRows(loginRows(d, 40, 3, 2, mocha()))
+	rows := plainRows(l.dialog(40, mocha()).rows(40, 2, 3, mocha()))
 	assert.Equal(t, []string{rule40, rule40}, rows)
 	assert.Empty(t, d.areas)
 }
@@ -199,7 +206,7 @@ func openLogin(t *testing.T, ev event.LoginRequested) (*model, *fakeController) 
 	t.Helper()
 	m, c := newTestModel(t, 60, 20)
 	send(m, ev)
-	require.NotNil(t, m.login)
+	require.NotNil(t, loginOf(m))
 	return m, c
 }
 
@@ -253,17 +260,16 @@ func TestLoginEscapeInterrupts(t *testing.T) {
 	press(m, escape)
 	assert.Equal(t, 1, c.interrupts)
 	assert.Empty(t, c.loginAnswers)
-	assert.NotNil(t, m.login, "the prompt stays until LoginEnded")
+	assert.NotNil(t, loginOf(m), "the prompt stays until LoginEnded")
 }
 
 func TestLoginEndedClosesTheDialog(t *testing.T) {
 	m, _ := openLogin(t, event.LoginRequested{Token: 4, Message: "Code"})
 	send(m, event.LoginEnded{Token: 5})
-	assert.NotNil(t, m.login, "another token's end is ignored")
+	assert.NotNil(t, loginOf(m), "another token's end is ignored")
 
 	send(m, event.LoginEnded{Token: 4})
-	assert.Nil(t, m.login)
-	assert.Nil(t, m.loginDialog)
+	assert.Nil(t, loginOf(m))
 	assert.NotContains(t, strings.Join(screen(m), "\n"), "Code")
 }
 
@@ -277,10 +283,10 @@ func TestLoginEndedKeepsAnApprovalDialog(t *testing.T) {
 func TestLoginDialogSurvivesSessionChangeAndTurnEnd(t *testing.T) {
 	m, _ := openLogin(t, event.LoginRequested{Token: 1, Message: "Code"})
 	send(m, event.SessionChanged{})
-	assert.NotNil(t, m.login)
+	assert.NotNil(t, loginOf(m))
 	assert.NotNil(t, m.frontDialog())
 	send(m, event.TurnEnd{})
-	assert.NotNil(t, m.login)
+	assert.NotNil(t, loginOf(m))
 	assert.NotNil(t, m.frontDialog())
 }
 

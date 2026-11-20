@@ -1176,11 +1176,11 @@ func TestApprovalPasteReachesTheField(t *testing.T) {
 func TestApprovalClipboardCompletionAfterTransitionIsDiscarded(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		ev   event.Event
+		evs  []event.Event
 	}{
-		{"approval ended", event.ApprovalEnded{Token: 1}},
-		{"turn ended", event.TurnEnd{}},
-		{"session changed", event.SessionChanged{SessionID: "s2"}},
+		{"approval ended", []event.Event{event.ApprovalEnded{Token: 1}}},
+		{"turn ended", []event.Event{event.ApprovalEnded{Token: 1}, event.TurnEnd{}}},
+		{"session changed", []event.Event{event.ApprovalEnded{Token: 1}, event.SessionChanged{SessionID: "s2"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _ := newTestModel(t, 60, 30)
@@ -1193,8 +1193,8 @@ func TestApprovalClipboardCompletionAfterTransitionIsDiscarded(t *testing.T) {
 			cmd := press(m, ctrlV)
 			require.NotNil(t, cmd)
 
-			send(m, tc.ev)
-			if m.approval != nil {
+			send(m, tc.evs...)
+			if approvalOf(m) != nil {
 				press(m, digit('3'))
 				keys(m, "replacement feedback")
 			}
@@ -1202,7 +1202,7 @@ func TestApprovalClipboardCompletionAfterTransitionIsDiscarded(t *testing.T) {
 
 			assert.Equal(t, "composer draft", m.composer.value())
 			assert.Equal(t, "feedback", oldField.value())
-			if m.approval != nil {
+			if approvalOf(m) != nil {
 				assert.Equal(t, "replacement feedback", m.frontDialog().text())
 			}
 		})
@@ -1220,7 +1220,7 @@ func TestApprovalClipboardCompletionAfterPromotionIsDiscarded(t *testing.T) {
 	require.NotNil(t, cmd)
 
 	send(m, event.ApprovalEnded{Token: 1})
-	require.Equal(t, uint64(2), m.approval.Token)
+	require.Equal(t, uint64(2), approvalOf(m).req.Token)
 	press(m, digit('3'))
 	m.Update(cmd())
 
@@ -1235,20 +1235,19 @@ func subagentAsk(token uint64, agent string) event.ApprovalRequested {
 func TestApprovalQueuePromotesInOrder(t *testing.T) {
 	m, c := newTestModel(t, 60, 30)
 	send(m, editApproval(), subagentAsk(2, "explore"), subagentAsk(3, "review"))
-	assert.Equal(t, uint64(1), m.approval.Token)
+	assert.Equal(t, uint64(1), approvalOf(m).req.Token)
 	assert.Contains(t, strings.Join(screen(m), "\n"), "Edit a.go")
 
 	send(m, event.ApprovalEnded{Token: 1})
-	assert.Equal(t, uint64(2), m.approval.Token)
+	assert.Equal(t, uint64(2), approvalOf(m).req.Token)
 	assert.Contains(t, strings.Join(screen(m), "\n"), "explore t2 › Edit explore.go")
 	press(m, enter)
 	assert.Equal(t, []answer{{2, policy.Decision{Answer: policy.Allow}}}, c.answers, "answers use the shown ask's token")
 
 	send(m, event.ApprovalEnded{Token: 2})
-	assert.Equal(t, uint64(3), m.approval.Token)
+	assert.Equal(t, uint64(3), approvalOf(m).req.Token)
 	send(m, event.ApprovalEnded{Token: 3})
-	assert.Nil(t, m.approval)
-	assert.Nil(t, m.approvalDialog)
+	assert.Nil(t, approvalOf(m))
 }
 
 func TestApprovalQueueEndOfAQueuedAskRemovesIt(t *testing.T) {
@@ -1256,36 +1255,35 @@ func TestApprovalQueueEndOfAQueuedAskRemovesIt(t *testing.T) {
 	send(m, editApproval(), subagentAsk(2, "explore"), subagentAsk(3, "review"))
 
 	send(m, event.ApprovalEnded{Token: 2})
-	assert.Equal(t, uint64(1), m.approval.Token)
+	assert.Equal(t, uint64(1), approvalOf(m).req.Token)
 	send(m, event.ApprovalEnded{Token: 1})
-	assert.Equal(t, uint64(3), m.approval.Token)
+	assert.Equal(t, uint64(3), approvalOf(m).req.Token)
 }
 
 func TestApprovalQueueRootTurnEndKeepsSubagentAsks(t *testing.T) {
 	m, _ := newTestModel(t, 60, 30)
 	send(m, editApproval(), subagentAsk(2, "explore"))
-	send(m, event.TurnEnd{})
-	assert.Equal(t, uint64(2), m.approval.Token, "the root's ask is dropped and the subagent's is shown")
+	send(m, event.ApprovalEnded{Token: 1}, event.TurnEnd{})
+	assert.Equal(t, uint64(2), approvalOf(m).req.Token, "the root's ask is ended and the subagent's is shown")
 	assert.Contains(t, strings.Join(screen(m), "\n"), "explore t2 › Edit explore.go")
 
 	send(m, event.TurnEnd{})
-	assert.Equal(t, uint64(2), m.approval.Token)
+	assert.Equal(t, uint64(2), approvalOf(m).req.Token)
 
 	m, _ = newTestModel(t, 60, 30)
 	send(m, subagentAsk(2, "explore"), editApproval())
-	send(m, event.TurnEnd{})
-	assert.Equal(t, uint64(2), m.approval.Token)
+	send(m, event.ApprovalEnded{Token: 1}, event.TurnEnd{})
+	assert.Equal(t, uint64(2), approvalOf(m).req.Token)
 	send(m, event.ApprovalEnded{Token: 2})
-	assert.Nil(t, m.approval, "the queued root ask was dropped")
+	assert.Nil(t, approvalOf(m), "the queued root ask was ended")
 }
 
 func TestApprovalQueueSessionChangeClearsAll(t *testing.T) {
 	m, _ := newTestModel(t, 60, 30)
 	send(m, editApproval(), subagentAsk(2, "explore"))
-	send(m, event.SessionChanged{SessionID: "s2"})
-	assert.Nil(t, m.approval)
-	assert.Nil(t, m.approvalDialog)
-	assert.Empty(t, m.approvalQueue)
+	send(m, event.ApprovalEnded{Token: 1}, event.ApprovalEnded{Token: 2}, event.SessionChanged{SessionID: "s2"})
+	assert.Nil(t, approvalOf(m))
+	assert.Empty(t, queuedOf(m))
 }
 
 func TestApprovalClipboardCompletionAfterLeavingFieldIsDiscarded(t *testing.T) {
@@ -1404,21 +1402,21 @@ func TestStaleApprovalEndedCannotDismissReusedCallID(t *testing.T) {
 	second.Title = "Edit b.go"
 	send(m, second, event.ApprovalEnded{Token: first.Token})
 
-	require.NotNil(t, m.approval)
-	assert.Equal(t, second, *m.approval)
+	require.NotNil(t, approvalOf(m))
+	assert.Equal(t, second, *approvalOf(m).req)
 	assert.Contains(t, screen(m), "  Edit b.go")
 	press(m, enter)
 	assert.Equal(t, []answer{{second.Token, policy.Decision{Answer: policy.Allow}}}, c.answers)
 	send(m, event.ApprovalEnded{Token: second.Token})
-	assert.Nil(t, m.approval)
+	assert.Nil(t, approvalOf(m))
 }
 
-func TestTurnEndAndSessionChangedClearTheApproval(t *testing.T) {
+func TestTurnEndAndSessionChangedAfterTheApprovalEndedLeaveTheComposer(t *testing.T) {
 	for _, ev := range []event.Event{event.TurnEnd{}, event.SessionChanged{SessionID: "s2"}} {
 		m, _ := newTestModel(t, 60, 30)
 		send(m, editApproval())
-		send(m, ev)
-		assert.Nil(t, m.approval)
+		send(m, event.ApprovalEnded{Token: 1}, ev)
+		assert.Nil(t, approvalOf(m))
 		assert.Contains(t, screen(m), "❯")
 		assert.NotContains(t, screen(m), "❭ 1. Yes")
 	}
@@ -1438,15 +1436,15 @@ func TestWorkingRowWaitsDuringApproval(t *testing.T) {
 	})
 }
 
-func TestCancelInterruptsDuringApproval(t *testing.T) {
+func TestCancelRejectsDuringApproval(t *testing.T) {
 	m, c := newTestModel(t, 60, 30)
 	c.running = true
 	send(m, event.TurnStart{}, editApproval())
 
 	assert.Nil(t, press(m, ctrlC))
 
-	assert.Equal(t, 1, c.interrupts)
-	assert.Empty(t, c.answers)
+	assert.Zero(t, c.interrupts)
+	assert.Equal(t, []answer{{1, policy.Decision{}}}, c.answers)
 }
 
 func TestApprovalSurvivesTinyTerminalResizes(t *testing.T) {
@@ -1460,7 +1458,7 @@ func TestApprovalSurvivesTinyTerminalResizes(t *testing.T) {
 			m.Update(tea.WindowSizeMsg{Width: 60, Height: height})
 			m.View()
 		}, "height %d", height)
-		assert.NotNil(t, m.approval)
+		assert.NotNil(t, approvalOf(m))
 		assert.Empty(t, m.prompt)
 	}
 
@@ -1546,7 +1544,7 @@ func TestRowsFillTheScreenStatusLast(t *testing.T) {
 			assert.Equal(t, m.height, m.transcriptHeight()+len(m.below))
 			status := strings.TrimRight(ansi.Strip(statusLine(m.statusInput(), m.layout, m.width, m.th)), " ")
 			assert.Equal(t, status, s[m.height-1])
-			if m.approval == nil && m.tasks == nil {
+			if approvalOf(m) == nil && tasksOf(m) == nil {
 				assert.True(t, strings.HasPrefix(s[m.composerTop()], "❯"), "row %d: %q", m.composerTop(), s[m.composerTop()])
 			}
 		})

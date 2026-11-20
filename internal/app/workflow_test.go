@@ -434,6 +434,31 @@ func TestWorkflowLimitIsFreedBySessionSwitch(t *testing.T) {
 	a.untilStatus(t, second, tool.TaskCompleted)
 }
 
+func TestWorkflowAgentsPendingApprovalEndsOnceBeforeSessionChangedOnASwitch(t *testing.T) {
+	ran := new(atomic.Int32)
+	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{probeTool(ran)}})
+	approvals := subscribeTo[event.ApprovalRequested](a.c)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("p1", 1)), pigruntimetest.Text("unreached")})
+	a.rootAcks(1)
+	oldID := a.c.Status().SessionID
+	a.startWorkflow(t, "audit", `return await agent("go")`)
+	req := receiveEvent(t, approvals)
+
+	require.NoError(t, a.c.NewSession(t.Context()))
+
+	evs := a.rec.all()
+	changedAt := slices.IndexFunc(evs, func(ev event.Event) bool {
+		changed, ok := ev.(event.SessionChanged)
+		return ok && changed.SessionID != oldID
+	})
+	require.GreaterOrEqual(t, changedAt, 0)
+	ended := event.Event(event.ApprovalEnded{Token: req.Token})
+	assert.Len(t, slices.DeleteFunc(slices.Clone(evs), func(ev event.Event) bool { return ev != ended }), 1)
+	assert.Less(t, slices.Index(evs, ended), changedAt)
+	assert.False(t, a.c.Answer(req.Token, policy.Decision{Answer: policy.Allow}))
+	assert.Zero(t, ran.Load())
+}
+
 func TestWorkflowEndAfterASwitchReportsNothingToTheNewSession(t *testing.T) {
 	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
 	a.c.mu.Lock()

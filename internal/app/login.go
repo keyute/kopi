@@ -74,8 +74,8 @@ func (c *Controller) askLogin(ctx context.Context, provider string, p pigruntime
 		c.mu.Unlock()
 		return "", err
 	}
-	c.loginSeq++
-	pl.token = c.loginSeq
+	token, end := c.openRequestLocked(func(token uint64) { c.relay.emit(event.LoginEnded{Token: token}) })
+	pl.token = token
 	c.login.prompt = pl
 	c.mu.Unlock()
 
@@ -84,7 +84,7 @@ func (c *Controller) askLogin(ctx context.Context, provider string, p pigruntime
 		req.Options = append(req.Options, event.LoginOption{ID: o.ID, Label: o.Label, Description: o.Description})
 	}
 	c.relay.emit(req)
-	defer c.relay.emit(event.LoginEnded{Token: pl.token})
+	defer end()
 	select {
 	case a := <-pl.answer:
 		return a, nil

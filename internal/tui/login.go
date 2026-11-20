@@ -1,12 +1,14 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 	"unicode/utf8"
 
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/event"
 )
 
@@ -16,8 +18,9 @@ const secretMark = "•"
 // newLoginDialog is the prompt for ev: its message as the title and its
 // provider as the note. Options become one numbered choice each; otherwise
 // the one option is an unlabelled text field, masked when ev asks for a secret.
-func newLoginDialog(ev event.LoginRequested, km *keyMap, th theme) *dialog {
+func newLoginDialog(ev event.LoginRequested, km *keyMap, th theme) *loginDialog {
 	d := &dialog{title: ev.Message, note: ev.Provider}
+	l := &loginDialog{req: &ev, d: d}
 	if len(ev.Options) > 0 {
 		for _, o := range ev.Options {
 			label := o.Label
@@ -26,58 +29,54 @@ func newLoginDialog(ev event.LoginRequested, km *keyMap, th theme) *dialog {
 			}
 			d.options = append(d.options, option{label: label})
 		}
-		return d
+		return l
 	}
 	f := newField(th, km.newline, ev.Placeholder)
 	f.secret = ev.Secret
 	f.ta.Focus()
 	d.options = []option{{field: &f}}
-	return d
+	return l
 }
 
-// loginRows draws d in place of the composer, within maxRows. On overflow,
-// both rules surround a window of the interior containing the selected label;
-// a dialog of plain options keeps its title and shows a position row.
-func loginRows(d *dialog, width, maxFieldRows, maxRows int, th theme) []string {
-	if maxRows <= 0 {
-		return nil
-	}
-	rows := d.rows(width, maxRows, max(1, maxFieldRows), th)
-	if len(rows) <= maxRows {
-		return rows
-	}
-	if maxRows < 3 {
-		return squeeze(d, rows, maxRows)
-	}
-	if d.options[0].field == nil {
-		return pinnedRows(d, rows, width, maxRows, th)
-	}
-	room := maxRows - 2
-	start := min(d.optionStarts[d.sel], len(rows)-1-room)
-	return clip(d, rows, 1, start, start+room)
+// loginDialog is the prompt for a pending login question.
+type loginDialog struct {
+	req *event.LoginRequested
+	d   *dialog
 }
 
-// pinnedRows is rows for a dialog of plain options within maxRows (3 or more):
-// the rows above the first option stay, then a window of option rows centred on
-// the selection, a dim position row as the menu draws one, and the bottom rule.
-// Fewer rows above the options stay, and no position row is drawn, when
-// maxRows leaves no room for them.
-func pinnedRows(d *dialog, rows []string, width, maxRows int, th theme) []string {
-	d.areas = nil
-	last := len(rows) - 1
-	pos := 0
-	if maxRows >= 4 {
-		pos = 1
+// dialog is the login's own, which has nothing that depends on width.
+func (l *loginDialog) dialog(int, theme) *dialog { return l.d }
+
+// key answers when an option is picked: with the chosen option's ID or the
+// typed text. Dismiss cancels the login. The prompt stays until its
+// LoginEnded arrives.
+func (l *loginDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	if key.Matches(msg, m.keys.dismiss) {
+		m.c.Interrupt(app.Main)
+		return nil, true
 	}
-	head := rows[:max(1, min(d.optionStarts[0], maxRows-2-pos))]
-	room := maxRows - len(head) - 1 - pos
-	first := d.optionStarts[0]
-	start := min(max(d.optionStarts[d.sel]-room/2, first), max(first, last-room))
-	out := append(append([]string{}, head...), rows[start:min(start+room, last)]...)
-	if pos == 1 {
-		out = append(out, fg(th.dim).Render(ansi.Truncate(fmt.Sprintf("  %d of %d", d.sel+1, len(d.options)), width, "")))
+	picked, cmd := l.d.key(msg, &m.keys)
+	if picked {
+		answer := l.d.text()
+		if f := l.d.field(); f != nil && f.secret {
+			answer = strings.NewReplacer("\r", "", "\n", "").Replace(answer)
+		}
+		if len(l.req.Options) > 0 {
+			answer = l.req.Options[l.d.sel].ID
+		}
+		m.c.AnswerLogin(l.req.Token, answer)
+		l.d.clear()
 	}
-	return append(out, rows[last])
+	return cmd, true
+}
+
+// seen ends the prompt with its LoginEnded, which empties its fields.
+func (l *loginDialog) seen(_ *model, _ string, msg tea.Msg) bool {
+	if ev, ended := msg.(event.LoginEnded); ended && ev.Token == l.req.Token {
+		l.d.clear()
+		return false
+	}
+	return true
 }
 
 // clear empties every field, so an answered or ended prompt keeps no text.

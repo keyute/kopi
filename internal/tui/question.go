@@ -38,15 +38,14 @@ type questionDialog struct {
 	km     *keyMap
 	// tab is the shown page; len(qs) is the review page.
 	tab int
-	// notice is a warning row, cleared by the next key.
-	notice string
-	// scroll is the offset into a cut preview or review body, reset when the
-	// tab or the focused option changes; scrollAt is what it was last reset for.
-	scroll   scroller
+	// scrollAt is the tab and option the shown dialog's scroll was last reset
+	// for; a change of either resets it.
 	scrollAt [2]int
 	// previews are rendered previews by tab and option, for previewWidth and
-	// previewTheme.
+	// previewTheme; sizes are by tab the widest line and the most lines among
+	// them.
 	previews     map[[2]int][]string
+	sizes        map[int][2]int
 	previewWidth int
 	previewTheme theme
 }
@@ -77,7 +76,7 @@ func newQuestionDialog(ev event.QuestionRequested, km *keyMap, th theme) *questi
 		q.pages = append(q.pages, p)
 	}
 	if len(q.qs) > 1 {
-		q.review = &dialog{options: make([]option, 1)}
+		q.review = &dialog{}
 	}
 	return q
 }
@@ -182,8 +181,8 @@ func binding(b key.Binding, verb string) string {
 	return ""
 }
 
-// hint is the key hints row; cut adds the scroll hint, which the note editor's row omits.
-func (q *questionDialog) hint(cut bool) string {
+// keys is the key hints row.
+func (q *questionDialog) keys() string {
 	km := q.km
 	var parts []string
 	switch {
@@ -201,9 +200,6 @@ func (q *questionDialog) hint(cut bool) string {
 	if len(q.qs) > 1 && q.tab < len(q.qs) {
 		parts = append([]string{"←/→ to switch questions"}, parts...)
 	}
-	if cut {
-		parts = append([]string{scrollHint(km)}, parts...)
-	}
 	return strings.Join(slices.DeleteFunc(parts, isEmpty), " · ")
 }
 
@@ -216,15 +212,6 @@ func scrollHint(km *keyMap) string {
 }
 
 func isEmpty(s string) bool { return s == "" }
-
-// footer is the notice, or else the hint, below the options.
-func (q *questionDialog) footer(width int, cut bool, th theme) []string {
-	none := lipgloss.NewStyle()
-	if q.notice != "" {
-		return hang("  ", none, q.notice, fg(th.warning), width)
-	}
-	return hang("  ", none, q.hint(cut), fg(th.dim), width)
-}
 
 // strip is the row of tabs, "" for a single question. When it is wider than
 // the dialog it starts at the active tab.
@@ -257,60 +244,34 @@ func (q *questionDialog) strip(width int, th theme) string {
 	return "  " + ansi.Truncate(b.String(), max(0, width-2), "…")
 }
 
-// rows draws the shown page within maxRows, its preview or review body at
-// most maxPreview rows. Past maxRows both rules and the tab strip surround a
-// window of the interior containing the selected option.
-func (q *questionDialog) rows(width, maxPreview, maxRows int, th theme) []string {
-	if maxRows <= 0 {
-		return nil
-	}
+// dialog is the shown page with its tab strip, key hints and preview or
+// review body for width.
+func (q *questionDialog) dialog(width int, th theme) *dialog {
 	d := q.current()
 	if at := [2]int{q.tab, d.sel}; at != q.scrollAt {
-		q.scroll.off, q.scrollAt = 0, at
+		d.scroll.off, q.scrollAt = 0, at
 	}
-	strip := q.strip(width, th)
-	head, avail := 1, maxRows
-	if strip != "" {
-		head, avail = 2, maxRows-2
+	d.head = nil
+	if strip := q.strip(width, th); strip != "" {
+		d.head = []string{strip, ""}
 	}
-	var rows []string
+	d.hint = scrollHint(q.km)
 	if q.tab == len(q.qs) {
-		rows = q.reviewRows(width, maxPreview, avail, th)
+		q.fillReview(width, th)
 	} else {
-		rows = q.pageRows(width, maxPreview, avail, th)
+		q.fillPage(width, th)
 	}
-	if strip != "" {
-		rows = slices.Insert(rows, 1, strip, "")
-		for i := range d.areas {
-			d.areas[i].y += 2
-		}
-		for i := range d.optionStarts {
-			d.optionStarts[i] += 2
-		}
-	}
-	if len(rows) <= maxRows {
-		return rows
-	}
-	if maxRows < head+2 {
-		d.areas = nil
-		if maxRows >= 2 {
-			return []string{rows[0], rows[len(rows)-1]}
-		}
-		return rows[:maxRows]
-	}
-	room := maxRows - head - 1
-	start := max(head, min(d.optionStarts[d.sel], len(rows)-1-room))
-	return clip(d, rows, head, start, start+room)
+	d.foot = q.keys()
+	return d
 }
 
-// pageRows is the shown question's page within avail rows, without the strip:
-// the title, the options with a preview beside or below them, then the notice
-// or the hint.
-func (q *questionDialog) pageRows(width, maxPreview, avail int, th theme) []string {
+// fillPage sets the shown question's title and preview pane for width: the
+// options go beside the preview when it fits.
+func (q *questionDialog) fillPage(width int, th theme) {
 	qu, p := q.qs[q.tab], q.pages[q.tab]
 	p.settle()
 	d := p.d
-	d.title, d.note, d.body = qu.Question, "", nil
+	d.title, d.note, d.body, d.pane = qu.Question, "", nil, nil
 	preview := !qu.MultiSelect && slices.ContainsFunc(qu.Options, func(o tool.QuestionOption) bool { return o.Preview != "" })
 	beside := preview && width >= besideWidth
 	listWidth := width
@@ -319,103 +280,31 @@ func (q *questionDialog) pageRows(width, maxPreview, avail int, th theme) []stri
 		listWidth = min(naturalWidth(d), (width-previewGap)/2)
 	}
 	q.label(p, qu, listWidth, th)
-	fieldCap := max(1, maxPreview)
-	lines := func(width int) []string {
-		if !preview {
-			return nil
-		}
-		return q.previewLines(d.sel, width, th)
-	}
-
-	build := func(cut bool) ([]string, bool) {
-		var cuts bool
-		foot := q.footer(width, cut, th)
-		budget := avail - 1 - len(foot)
-		if !beside {
-			rows := d.rows(width, budget, fieldCap, th)
-			last := len(rows) - 1
-			out := slices.Clone(rows[:last])
-			if lines := lines(width - 6); len(lines) > 0 {
-				room := min(maxPreview, budget-len(rows)-3)
-				if room >= 1 {
-					cuts = len(lines) > room
-					out = append(append(out, ""), q.previewBox(lines, width-2, room, 2, th)...)
+	switch {
+	case beside:
+		textWidth := width - listWidth - previewGap - 4
+		d.pane = &pane{lines: q.previewLines(d.sel, textWidth, th), list: listWidth}
+		// Every option's preview is measured so the box keeps its width as focus moves.
+		if len(d.pane.lines) > 0 {
+			size, ok := q.sizes[q.tab]
+			if !ok {
+				for i := range qu.Options {
+					ol := q.previewLines(i, textWidth, th)
+					size[1] = max(size[1], len(ol))
+					for _, l := range ol {
+						size[0] = max(size[0], ansi.StringWidth(l))
+					}
 				}
+				q.sizes[q.tab] = size
 			}
-			out = append(append(out, ""), foot...)
-			return append(out, rows[last]), cuts
+			d.pane.width, d.pane.most = size[0], size[1]
 		}
-
-		// The title is drawn across the whole width, the options and their
-		// fields in the left column.
-		head := d.rows(width, budget, fieldCap, th)
-		head = head[:d.optionStarts[0]]
-		list := d.rows(listWidth, budget, fieldCap, th)
-		opts := list[d.optionStarts[0] : len(list)-1]
-		delta := len(head) - d.optionStarts[0]
-		for i := range d.areas {
-			d.areas[i].y += delta
-		}
-		for i := range d.optionStarts {
-			d.optionStarts[i] += delta
-		}
-		var box []string
-		space := width - listWidth - previewGap
-		if lines := lines(space - 4); len(lines) > 0 {
-			room := min(maxPreview, budget-len(head)-3)
-			// Every option's preview is measured so the box keeps its width as
-			// focus moves.
-			cw := 0
-			for i := range qu.Options {
-				ol := q.previewLines(i, space-4, th)
-				for _, l := range ol {
-					cw = max(cw, ansi.StringWidth(l))
-				}
-				if len(ol) > room {
-					cw = max(cw, ansi.StringWidth(elided(len(ol), "earlier")))
-				}
-			}
-			bw := min(max(cw+4, minPreviewBox), space)
-			if room >= 1 {
-				cuts = len(lines) > room
-				box = q.previewBox(lines, bw, room, previewGap, th)
-			}
-		}
-		rows := slices.Clone(head)
-		for i := range max(len(opts), len(box)) {
-			var left string
-			if i < len(opts) {
-				left = opts[i]
-			}
-			if i < len(box) {
-				left += strings.Repeat(" ", max(0, listWidth-ansi.StringWidth(left))) + box[i]
-			}
-			rows = append(rows, left)
-		}
-		rows = append(append(rows, ""), foot...)
-		return append(rows, head[0]), cuts
+	case preview:
+		d.pane = &pane{lines: q.previewLines(d.sel, width-6, th)}
 	}
-	rows, cuts := build(false)
-	if cuts {
-		rows, _ = build(true)
+	if p.noting >= 0 {
+		d.hint = ""
 	}
-	return rows
-}
-
-// previewBox is lines in a frame bw wide, a column of padding inside each
-// side, with at most room rows of content, the markers of what is cut inside
-// it; every row is indented by indent.
-func (q *questionDialog) previewBox(lines []string, bw, room, indent int, th theme) []string {
-	inner := bw - 2
-	text := inner - 2
-	frame, pad := fg(th.frame), strings.Repeat(" ", indent)
-	bar := strings.Repeat("─", inner)
-	out := []string{pad + frame.Render("┌"+bar+"┐")}
-	for _, l := range q.scroll.window(lines, room, th) {
-		l = ansi.Truncate(l, text, "")
-		out = append(out, pad+frame.Render("│")+" "+l+strings.Repeat(" ", text-ansi.StringWidth(l)+1)+frame.Render("│"))
-	}
-	return append(out, pad+frame.Render("└"+bar+"┘"))
 }
 
 // naturalWidth is the width d's option rows take unwrapped, as drawn.
@@ -454,7 +343,7 @@ func (q *questionDialog) previewLines(i, width int, th theme) []string {
 		return nil
 	}
 	if q.previews == nil || q.previewWidth != width || q.previewTheme != th {
-		q.previews, q.previewWidth, q.previewTheme = map[[2]int][]string{}, width, th
+		q.previews, q.sizes, q.previewWidth, q.previewTheme = map[[2]int][]string{}, map[int][2]int{}, width, th
 	}
 	at := [2]int{q.tab, i}
 	if _, ok := q.previews[at]; !ok {
@@ -501,34 +390,19 @@ func (q *questionDialog) label(p *questionPage, qu tool.Question, width int, th 
 	}
 }
 
-// reviewRows is the review page within avail rows, without the strip: every
-// question with its answer, then the notice or the hint.
-func (q *questionDialog) reviewRows(width, maxPreview, avail int, th theme) []string {
+// fillReview sets the review body: every question with its answer.
+func (q *questionDialog) fillReview(width int, th theme) {
 	d := q.review
-	var body []string
+	d.body = nil
 	none, muted := lipgloss.NewStyle(), fg(th.muted)
 	for i, qu := range q.qs {
-		body = append(body, hang("", none, fmt.Sprintf("%d. %s", i+1, qu.Question), none.Bold(true), width-2)...)
+		d.body = append(d.body, hang("", none, fmt.Sprintf("%d. %s", i+1, qu.Question), none.Bold(true), width-2)...)
 		if !q.answered(i) {
-			body = append(body, hang("", fg(th.warning), "↳ Answer required", fg(th.warning), width-2)...)
+			d.body = append(d.body, hang("", fg(th.warning), "↳ Answer required", fg(th.warning), width-2)...)
 			continue
 		}
-		body = append(body, hang("", muted, "↳ "+q.pages[i].summary(qu), muted, width-2)...)
+		d.body = append(d.body, hang("", muted, "↳ "+q.pages[i].summary(qu), muted, width-2)...)
 	}
-	// The rows around the body: both rules, a blank row and the footer.
-	foot := q.footer(width, false, th)
-	room := min(maxPreview, avail-3-len(foot))
-	if room >= 1 && len(body) > room {
-		foot = q.footer(width, true, th)
-		room = min(maxPreview, avail-3-len(foot))
-	}
-	rows := []string{fg(th.frame).Render(strings.Repeat("─", width))}
-	for _, r := range q.scroll.window(body, room, th) {
-		rows = append(rows, "  "+r)
-	}
-	d.optionStarts = []int{1, len(rows)}
-	rows = append(append(rows, ""), foot...)
-	return append(rows, rows[0])
 }
 
 // summary is the answer as the review shows it.
@@ -563,32 +437,36 @@ func plainKey(msg tea.KeyPressMsg, code rune) bool {
 	return k.Code == code && k.Mod == 0
 }
 
-// questionKey goes to the dialog: it answers when the questions are, and
-// interrupt dismisses them. Keys it has no use for are swallowed. The dialog
-// stays until its QuestionEnded arrives.
-func (m *model) questionKey(msg tea.KeyPressMsg) tea.Cmd {
-	q := m.question
-	q.notice = ""
+// key answers when the questions are, and dismiss dismisses them. Keys it
+// has no use for are swallowed. The dialog stays until its QuestionEnded
+// arrives.
+func (q *questionDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	if q.tab == len(q.qs) {
-		return m.reviewKey(msg)
+		return q.reviewKey(m, msg), true
 	}
 	if q.pages[q.tab].settle(); q.pages[q.tab].noting >= 0 {
-		return m.noteKey(msg)
+		return q.noteKey(m, msg), true
 	}
-	return m.pageKey(msg)
+	return q.pageKey(m, msg), true
 }
 
-func (m *model) dismissQuestion() { m.c.AnswerQuestion(m.question.token, nil) }
+// seen ends the dialog with its QuestionEnded.
+func (q *questionDialog) seen(_ *model, _ string, msg tea.Msg) bool {
+	ev, ended := msg.(event.QuestionEnded)
+	return !ended || ev.Token != q.token
+}
 
-func (m *model) reviewKey(msg tea.KeyPressMsg) tea.Cmd {
-	q, km := m.question, &m.keys
+func (q *questionDialog) dismiss(m *model) { m.c.AnswerQuestion(q.token, nil) }
+
+func (q *questionDialog) reviewKey(m *model, msg tea.KeyPressMsg) tea.Cmd {
+	km := &m.keys
 	switch {
-	case key.Matches(msg, km.interrupt):
-		m.dismissQuestion()
+	case key.Matches(msg, km.dismiss):
+		q.dismiss(m)
 	case key.Matches(msg, km.submit):
 		if i := q.firstUnanswered(); i >= 0 {
 			cmd := q.goTo(i)
-			q.notice = unansweredNote
+			q.current().warn = unansweredNote
 			return cmd
 		}
 		m.c.AnswerQuestion(q.token, q.answers())
@@ -598,28 +476,26 @@ func (m *model) reviewKey(msg tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-func (m *model) noteKey(msg tea.KeyPressMsg) tea.Cmd {
-	p, km := m.question.pages[m.question.tab], &m.keys
+func (q *questionDialog) noteKey(m *model, msg tea.KeyPressMsg) tea.Cmd {
+	p, km := q.pages[q.tab], &m.keys
 	switch {
 	case key.Matches(msg, km.submit) || key.Matches(msg, km.complete):
 		p.closeNote(true)
-	case key.Matches(msg, km.interrupt):
+	case key.Matches(msg, km.dismiss):
 		p.closeNote(false)
-	case key.Matches(msg, km.paste):
-		return readClipboardText(m.clip, p.note)
 	default:
 		return p.note.update(msg)
 	}
 	return nil
 }
 
-func (m *model) pageKey(msg tea.KeyPressMsg) tea.Cmd {
-	q, km := m.question, &m.keys
+func (q *questionDialog) pageKey(m *model, msg tea.KeyPressMsg) tea.Cmd {
+	km := &m.keys
 	p, qu := q.pages[q.tab], q.qs[q.tab]
 	d, n := p.d, len(qu.Options)
 	several := len(q.qs) > 1
-	if key.Matches(msg, km.interrupt) {
-		m.dismissQuestion()
+	if key.Matches(msg, km.dismiss) {
+		q.dismiss(m)
 		return nil
 	}
 	if p.onCustom() {
@@ -634,10 +510,8 @@ func (m *model) pageKey(msg tea.KeyPressMsg) tea.Cmd {
 			case qu.MultiSelect && p.anyPicked():
 				return q.advance(m)
 			}
-			q.notice = chooseNotice
+			d.warn = chooseNotice
 			return nil
-		case key.Matches(msg, km.paste):
-			return readClipboardText(m.clip, d.field())
 		case several && p.custom().empty() && plainKey(msg, tea.KeyLeft):
 			return q.goTo(q.tab - 1)
 		case several && p.custom().empty() && plainKey(msg, tea.KeyRight):
@@ -679,7 +553,7 @@ func (m *model) pageKey(msg tea.KeyPressMsg) tea.Cmd {
 // else the next page opens, review after the last.
 func (q *questionDialog) advance(m *model) tea.Cmd {
 	if !q.answered(q.tab) {
-		q.notice = chooseNotice
+		q.current().warn = chooseNotice
 		return nil
 	}
 	if len(q.qs) == 1 {
