@@ -1325,6 +1325,19 @@ func printBash(t *testing.T, e testEnv, command string, flags ...string) (result
 	return printBashArgs(t, e, map[string]any{"command": command}, flags...)
 }
 
+// kopiSecret is the text writeKopiSecret stores.
+const kopiSecret = "synthetic kopi Bash secret"
+
+// writeKopiSecret writes kopiSecret to a file named name in Kopi's home and
+// returns a shell command that prints it.
+func writeKopiSecret(t *testing.T, e testEnv, name string) string {
+	t.Helper()
+	path := filepath.Join(e.kopiHome, name)
+	e.writeFile(t, path, kopiSecret+"\n")
+	quoted := "'" + strings.ReplaceAll(path, "'", "'\"'\"'") + "'"
+	return `IFS= read -r secret < ` + quoted + ` && printf '%s\n' "$secret"`
+}
+
 // printBashArgs is printBash for a Bash call with args.
 func printBashArgs(t *testing.T, e testEnv, args map[string]any, flags ...string) (result, stderr string) {
 	t.Helper()
@@ -1566,15 +1579,11 @@ func TestRootSandboxedBashUnsandboxedRunsOutsideTheSandbox(t *testing.T) {
 		t.Skip("the sandbox is unavailable here")
 	}
 	e := newSandboxedEnv(t)
-	secret := filepath.Join(e.kopiHome, "secret.txt")
-	e.writeFile(t, secret, "synthetic kopi Bash secret\n")
-	quoted := "'" + strings.ReplaceAll(secret, "'", "'\"'\"'") + "'"
-
-	command := `IFS= read -r secret < ` + quoted + ` && printf '%s\n' "$secret"`
+	command := writeKopiSecret(t, e, "secret.txt")
 
 	result, _ := printBashArgs(t, e, map[string]any{"command": command, "unsandboxed": true}, "--mode", "execute", "--allowed-tools", "Bash")
 
-	assert.Equal(t, "synthetic kopi Bash secret\n", result)
+	assert.Equal(t, kopiSecret+"\n", result)
 }
 
 func TestRootSandboxedBashUnsandboxedIsRefusedWhenNotAllowed(t *testing.T) {
@@ -1583,18 +1592,67 @@ func TestRootSandboxedBashUnsandboxedIsRefusedWhenNotAllowed(t *testing.T) {
 	}
 	e := newSandboxedEnv(t)
 	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"sandbox":{"allowUnsandboxed":false}}`)
-	secret := filepath.Join(e.kopiHome, "secret.txt")
-	const sentinel = "synthetic kopi Bash secret"
-	e.writeFile(t, secret, sentinel+"\n")
-	quoted := "'" + strings.ReplaceAll(secret, "'", "'\"'\"'") + "'"
-	command := `IFS= read -r secret < ` + quoted + ` && printf '%s\n' "$secret"`
+	command := writeKopiSecret(t, e, "secret.txt")
 
 	result, _ := printBashArgs(t, e, map[string]any{"command": command, "unsandboxed": true}, "--mode", "execute", "--allowed-tools", "Bash")
 
-	assert.NotContains(t, result, sentinel)
+	assert.NotContains(t, result, kopiSecret)
 	// PiG validates the arguments against the schema before Run, and the schema omits unsandboxed here.
 	assert.Contains(t, result, `Validation failed for tool "Bash"`)
 	assert.Contains(t, result, "unsandboxed: unknown field")
+}
+
+func TestSubagentBashUnsandboxedIsRefusedWhenNotAllowed(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	e := newSandboxedEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"sandbox":{"allowUnsandboxed":false}}`)
+	e.writeAgent(t, "")
+	command := writeKopiSecret(t, e, "secret.txt")
+
+	// The subagent is told apart from the root by its system prompt.
+	server := &mockServer{requests: make(chan mockRequest, 16)}
+	server.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("failed to decode request: %v", err)
+		}
+		server.requests <- mockRequest{path: r.URL.Path, authorization: r.Header.Get("Authorization"), body: body}
+		messages := body["messages"].([]any)
+		child := strings.Contains(fmt.Sprint(messages[0].(map[string]any)["content"]), "You are the subagent scout")
+		answered := slices.ContainsFunc(messages, func(m any) bool { return m.(map[string]any)["role"] == "tool" })
+		switch {
+		case answered:
+			streamText(w, "done")
+		case child:
+			streamBashArgs(w, map[string]any{"command": command, "unsandboxed": true})
+		default:
+			streamAgentCall(w)
+		}
+	}))
+	t.Cleanup(server.Close)
+	e.writeMockModels(t, server.URL)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "run it", "--mode", "execute", "--allowed-tools", "Bash")
+
+	require.NoError(t, err)
+	var results []string
+	for range 4 {
+		req := server.next(t)
+		if !strings.Contains(fmt.Sprint(req.body["messages"].([]any)[0].(map[string]any)["content"]), "You are the subagent scout") {
+			continue
+		}
+		for _, m := range req.body["messages"].([]any) {
+			if msg := m.(map[string]any); msg["role"] == "tool" {
+				results = append(results, fmt.Sprint(msg["content"]))
+			}
+		}
+	}
+	require.Len(t, results, 1, "the subagent's Bash call got no result")
+	assert.NotContains(t, results[0], kopiSecret)
+	assert.Contains(t, results[0], `Validation failed for tool "Bash"`)
+	assert.Contains(t, results[0], "unsandboxed: unknown field")
 }
 
 func TestRootSandboxedBashUnsandboxedIsRefusedInPlan(t *testing.T) {
@@ -1613,18 +1671,14 @@ func TestRootSandboxedBashRefusesKopiHomeRead(t *testing.T) {
 		t.Skip("the sandbox is unavailable here")
 	}
 	e := newSandboxedEnv(t)
-	secret := filepath.Join(e.kopiHome, "secret's.txt")
-	const sentinel = "synthetic kopi Bash secret"
-	e.writeFile(t, secret, sentinel+"\n")
-	quoted := "'" + strings.ReplaceAll(secret, "'", "'\"'\"'") + "'"
-	command := `IFS= read -r secret < ` + quoted + ` && printf '%s\n' "$secret"`
+	command := writeKopiSecret(t, e, "secret's.txt")
 
 	result, stderr := printBash(t, e, command, "--mode", "execute")
 
 	assert.Contains(t, result, tool.ErrExitStatus.Error())
 	assert.Contains(t, result, "exit code")
 	assert.NotContains(t, result, "needs approval")
-	assert.NotContains(t, result+stderr, sentinel)
+	assert.NotContains(t, result+stderr, kopiSecret)
 }
 
 func TestRootSandboxedBashRefusesKopiHomeWrite(t *testing.T) {

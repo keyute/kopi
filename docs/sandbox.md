@@ -71,7 +71,7 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
 
 ## Limitations
 
-- A command the sandbox blocks can be run with `unsandboxed`, unless `sandbox.allowUnsandboxed` is false.
+- A command the sandbox blocks can be run with `unsandboxed` in execute mode, unless `sandbox.allowUnsandboxed` is false.
 
 ### macOS
 

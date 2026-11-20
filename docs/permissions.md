@@ -36,7 +36,7 @@ Permission rules in `config.json` allow, ask about or deny calls:
 - Deny beats ask, and ask beats allow.
 - With no rule matching:
   - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `Agent`, `SendMessage`, `TaskOutput`, `TaskStop`, `AskUserQuestion`, `ExitPlanMode` and sandboxed `Bash` without `unsandboxed` are allowed.
-  - Any other call asks, including every `WebFetch` and `WebSearch` call and every `Bash` command without the sandbox and every `Bash` call that sets `unsandboxed`.
+  - Any other call asks, including every `WebFetch` and `WebSearch` call and every `Bash` command without the sandbox and every `Bash` call that sets [`unsandboxed`](sandbox.md#outside-the-sandbox) where it is offered.
 - Built in: `Edit` and `Write` under any `.git` directory, and of any file named `.mcp.json` or the file the start directory's `.mcp.json` resolves to when it is a symlink, always ask unless a deny rule refuses them.
 
 ### Rules per tool
@@ -113,7 +113,7 @@ Behaviour with `classifier.enabled`:
 - A call an ask rule matches, including the [built-in asks](#precedence), still asks you.
 - A call an allow rule matches runs without review.
 - With no rule matching, `Write` and `Edit` run without asking.
-- With no rule matching, any other call that would ask is reviewed instead: every `WebFetch` and `WebSearch` call, every MCP tool call, every `Bash` command without the sandbox, every `Bash` call that sets `unsandboxed`.
+- With no rule matching, any other call that would ask is reviewed instead: every `WebFetch` and `WebSearch` call, every MCP tool call, every `Bash` command without the sandbox, every `Bash` call that sets [`unsandboxed`](sandbox.md#outside-the-sandbox) where it is offered.
   - The classifier allows it, denies it with a one-line reason the model gets while the turn goes on, or leaves it to you.
   - A review that fails, times out or returns anything else is left to you too.
   - Sandboxed `Bash` without `unsandboxed` never asks, so it is never reviewed.

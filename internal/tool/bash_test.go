@@ -337,11 +337,12 @@ func TestSpecsCarryTheUnsandboxedHook(t *testing.T) {
 }
 
 func TestBashUnsandboxedRunsInTheUnsandboxedShell(t *testing.T) {
-	dir := t.TempDir()
-	sh := NewShell(dir, &sandbox.Sandbox{})
-	// A command that starts in the sandboxed shell must fail differently from one that runs.
+	dir, planDir := t.TempDir(), t.TempDir()
+	sh, plan := NewShell(dir, &sandbox.Sandbox{}), NewShell(planDir, &sandbox.Sandbox{})
+	// A command that starts in the sandboxed or the plan shell must fail differently from one that runs.
 	sh.shell = filepath.Join(dir, "missing-shell")
-	tool := NewBash(sh, NewShell(dir, &sandbox.Sandbox{}), NewTasks(), true)
+	plan.shell = filepath.Join(planDir, "missing-shell")
+	tool := NewBash(sh, plan, NewTasks(), true)
 	execute := func(policy.Target) (policy.Mode, error) { return policy.Execute, nil }
 
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"command":"echo outside","unsandboxed":true}`), execute)

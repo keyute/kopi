@@ -15,11 +15,7 @@ var reviewSpecs = map[string]ToolSpec{
 	"Edit":  {Capability: Write, Target: pathTarget},
 	"Bash":  {Capability: Exec},
 	"Fetch": {Capability: Read, Ask: true},
-	"Shell": {Capability: Exec, Sandboxed: true, Unsandboxed: func(args json.RawMessage) bool {
-		var a struct{ Unsandboxed bool }
-		_ = json.Unmarshal(args, &a)
-		return a.Unsandboxed
-	}},
+	"Shell": {Capability: Exec, Sandboxed: true, Unsandboxed: optOutSpec.Unsandboxed},
 }
 
 // reviewer returns the scripted reviews in order, then the last one forever,

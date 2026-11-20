@@ -880,7 +880,7 @@ func TestUnsandboxedCallWithoutApproverIsDenied(t *testing.T) {
 }
 
 func TestUnsandboxedGrantIsRevokedOnModeChange(t *testing.T) {
-	// Exec's generation check alone revokes these; forCall in Admit is defence in depth.
+	// Exec's generation check alone revokes these; TestAdmitRefusesAnUnsandboxedGrantInPlanWithAMatchingGeneration covers forCall in Admit.
 	a, g := sandboxedGate(t, optOutSpec, nil, Source{Name: "config", Allow: []string{"Shell"}})
 	a.EnterExecute()
 	require.NoError(t, g.Before(t.Context(), "c1", "Shell", optOutCall))
@@ -895,6 +895,17 @@ func TestUnsandboxedGrantIsRevokedOnModeChange(t *testing.T) {
 	b.EnterExecute()
 	require.NoError(t, g.Before(t.Context(), "c1", "Shell", optOutCall))
 	mode, err := g.Admit("c1", "Shell", optOutCall, nil)
+	assert.ErrorIs(t, err, ErrRevoked)
+	assert.Equal(t, Plan, mode)
+}
+
+func TestAdmitRefusesAnUnsandboxedGrantInPlanWithAMatchingGeneration(t *testing.T) {
+	a, g := sandboxedGate(t, optOutSpec, nil, Source{Name: "config"})
+	_, gen, _ := a.Permits(optOutSpec)
+	g.grants["c1"] = grant{tool: "Shell", generation: gen, args: optOutCall}
+
+	mode, err := g.Admit("c1", "Shell", optOutCall, nil)
+
 	assert.ErrorIs(t, err, ErrRevoked)
 	assert.Equal(t, Plan, mode)
 }
