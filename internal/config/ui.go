@@ -80,15 +80,15 @@ func DefaultTheme() Theme {
 	return Theme{Dark: "catppuccin-mocha", Light: "catppuccin-latte"}
 }
 
-// NotificationModes lists the values terminal.notifications takes.
-var NotificationModes = []string{"auto", "osc9", "bell", "off"}
+// notificationModes lists the values terminal.notifications takes.
+var notificationModes = []string{"auto", "osc9", "bell", "off"}
 
 // Terminal says what Kopi tells the terminal about the session.
 type Terminal struct {
 	// Title sets the terminal title to the session name, which the small model writes.
 	Title    bool `koanf:"title"`
 	Progress bool `koanf:"progress"`
-	// Notifications is one of NotificationModes.
+	// Notifications is one of notificationModes.
 	Notifications string `koanf:"notifications"`
 }
 
@@ -386,8 +386,10 @@ func validateThemeName(key, name string) error {
 }
 
 func validateNotifications(value string) error {
-	if !slices.Contains(NotificationModes, value) {
-		return fmt.Errorf("%w: terminal.notifications: %q is not auto, osc9, bell or off", ErrInvalidValue, value)
+	if !slices.Contains(notificationModes, value) {
+		last := len(notificationModes) - 1
+		return fmt.Errorf("%w: terminal.notifications: %q is not %s or %s", ErrInvalidValue, value,
+			strings.Join(notificationModes[:last], ", "), notificationModes[last])
 	}
 	return nil
 }

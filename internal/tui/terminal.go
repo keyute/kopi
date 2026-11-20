@@ -61,7 +61,6 @@ func (m *model) terminalLabel() string {
 	return label
 }
 
-// terminalTitle is the state's glyph and the label.
 func (m *model) terminalTitle(state tea.ProgramState) string {
 	glyph := "κ"
 	switch state {
@@ -87,11 +86,10 @@ func (m *model) attend(msg tea.Msg, was tea.ProgramStatus) tea.Cmd {
 	case tea.FocusMsg:
 		m.away = false
 	}
-	working := m.working()
-	switch {
-	case !m.away || working:
+	switch front := m.front(); {
+	case !m.away || m.working():
 		m.unseen = ""
-	case was.State == tea.ProgramStateWorking && m.programStatus().State != tea.ProgramStateBlocked:
+	case was.State == tea.ProgramStateWorking && (front == promptTasks || front == promptNone):
 		switch m.ended {
 		case event.Completed:
 			m.unseen = tea.ProgramStateDone
@@ -117,7 +115,6 @@ func (m *model) attend(msg tea.Msg, was tea.ProgramStatus) tea.Cmd {
 	return m.notify(text + m.terminalLabel())
 }
 
-// notify writes text through the configured channel.
 func (m *model) notify(text string) tea.Cmd {
 	switch m.terminal.Notifications {
 	case "off":

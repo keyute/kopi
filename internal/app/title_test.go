@@ -3,6 +3,7 @@ package app
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MichaelKinsy/PiG/ai"
 	"github.com/stretchr/testify/assert"
@@ -140,4 +141,67 @@ func TestCleanTitle(t *testing.T) {
 			assert.Equal(t, tc.want, cleanTitle(tc.reply))
 		})
 	}
+}
+
+// blockedTitle scripts a title reply that signals entered, then waits for
+// unblock, which is also closed when the test ends.
+func blockedTitle(t *testing.T, title *ai.FauxProviderHandle, reply string, unblock <-chan struct{}) (entered chan struct{}) {
+	t.Helper()
+	entered = make(chan struct{})
+	title.SetResponses([]ai.FauxResponseStep{
+		ai.FauxFactoryStep(func(ai.TranscriptContext, ai.StreamOptions, *ai.FauxProviderState, *ai.Model) (ai.AssistantMessage, error) {
+			close(entered)
+			<-unblock
+			return ai.FauxAssistantMessage(ai.FauxContentString(reply), ai.FauxAssistantMessageOptions{}), nil
+		}),
+	})
+	return entered
+}
+
+func TestTitleAnsweredAfterSessionSwitchIsDropped(t *testing.T) {
+	h, title := titleHarness(t, Config{Title: true})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("one")})
+	release := make(chan struct{})
+	entered := blockedTitle(t, title, "Stale", release)
+	named := subscribeTo[event.SessionNamed](h.c)
+	h.c.mu.Lock()
+	old := h.c.main.sess
+	h.c.mu.Unlock()
+
+	h.turn(t, "fix the build")
+	wait(t, entered)
+	require.NoError(t, h.c.NewSession(t.Context()))
+	close(release)
+	h.c.wg.Wait()
+
+	assert.Empty(t, old.Name())
+	assert.Empty(t, h.sessionName())
+	assert.Empty(t, named)
+	assert.Empty(t, ofType[event.SessionNamed](h.rec.all()))
+}
+
+func TestCloseStopsTitleRequest(t *testing.T) {
+	h, title := titleHarness(t, Config{Title: true})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("one")})
+	// The faux provider cannot see the request's context, so the reply waits on
+	// the controller's own title context.
+	named := subscribeTo[event.SessionNamed](h.c)
+	h.c.mu.Lock()
+	sess := h.c.main.sess
+	h.c.mu.Unlock()
+	entered := blockedTitle(t, title, "Late", h.c.titleCtx.Done())
+
+	h.turn(t, "fix the build")
+	wait(t, entered)
+	closed := make(chan error, 1)
+	go func() { closed <- h.c.Close(t.Context()) }()
+
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for Close")
+	}
+	assert.Empty(t, sess.Name())
+	assert.Empty(t, named)
 }

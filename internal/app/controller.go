@@ -857,7 +857,7 @@ func (c *Controller) Close(ctx context.Context) error {
 	c.life.Lock()
 	defer c.life.Unlock()
 	defer c.relay.shut()
-	c.titleStop()
+	//c.titleStop()
 
 	c.queue.Lock()
 	c.mu.Lock()
