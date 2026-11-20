@@ -49,6 +49,10 @@ type dialog struct {
 	areas []fieldArea
 	// optionStarts includes the row after the last option.
 	optionStarts []int
+	// scroll is the offset scrollRows windows the body from; scrolled is set
+	// when the human moves it.
+	scroll   scroller
+	scrolled bool
 }
 
 // rows draws d between two rules: the title, body and note two in, a blank
@@ -131,6 +135,25 @@ func (d *dialog) rows(width, budget, fieldCap int, th theme) []string {
 			}
 		}
 	}
+	return rows
+}
+
+// scrollRows is rows with d.body windowed from d.scroll into the rows left
+// within budget, at most maxBody. When the window cuts the body, hint joins the
+// note. d.body and d.note are restored before it returns.
+func (d *dialog) scrollRows(width, budget, fieldCap, maxBody int, hint string, th theme) []string {
+	body, note, off := d.body, d.note, d.scroll.off
+	fit := func() { // the hint can take a row, so the offset asked for is fitted again
+		d.body, d.scroll.off = nil, off
+		d.body = d.scroll.window(body, min(maxBody, budget-len(d.rows(width, budget, fieldCap, th))), th)
+	}
+	fit()
+	if d.scroll.cut() && hint != "" {
+		d.note = strings.Join(slices.DeleteFunc([]string{note, hint}, isEmpty), " · ")
+		fit()
+	}
+	rows := d.rows(width, budget, fieldCap, th)
+	d.body, d.note = body, note
 	return rows
 }
 

@@ -182,7 +182,7 @@ func binding(b key.Binding, verb string) string {
 	return ""
 }
 
-// hint is the key hints row; cut adds scrolling, which the note editor lacks.
+// hint is the key hints row; cut adds the scroll hint, which the note editor's row omits.
 func (q *questionDialog) hint(cut bool) string {
 	km := q.km
 	var parts []string
@@ -594,10 +594,6 @@ func (m *model) reviewKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.c.AnswerQuestion(q.token, q.answers())
 	case plainKey(msg, tea.KeyLeft):
 		return q.goTo(len(q.qs) - 1)
-	case key.Matches(msg, km.pageUp):
-		m.pageFront(-1)
-	case key.Matches(msg, km.pageDown):
-		m.pageFront(1)
 	}
 	return nil
 }
@@ -672,10 +668,6 @@ func (m *model) pageKey(msg tea.KeyPressMsg) tea.Cmd {
 		return q.goTo(q.tab - 1)
 	case several && plainKey(msg, tea.KeyRight):
 		return q.goTo(q.tab + 1)
-	case key.Matches(msg, km.pageUp):
-		m.pageFront(-1)
-	case key.Matches(msg, km.pageDown):
-		m.pageFront(1)
 	default:
 		_, cmd := d.key(msg, km)
 		return cmd

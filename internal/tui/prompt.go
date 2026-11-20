@@ -49,22 +49,19 @@ func (m *model) frontDialog() *dialog {
 
 // scrollFront scrolls the front prompt's cut body by n rows, or n pages when
 // pages is set, and reports whether it took the input. A question always takes
-// it; an approval and an open /tasks task only while their body is cut.
+// it; any other prompt only while its body is cut.
 func (m *model) scrollFront(n int, pages bool) bool {
+	d := m.frontDialog()
+	if m.front() == promptTasks {
+		d = m.tasks.d
+	}
 	var s *scroller
-	switch m.front() {
-	case promptApproval:
-		if s = &m.approvalPreview.scroller; !s.cut() {
-			return false
-		}
-	case promptQuestion:
+	switch {
+	case m.front() == promptQuestion:
 		s = &m.question.scroll
-	case promptTasks:
-		if m.tasks.open == "" || !m.tasks.scroll.cut() {
-			return false
-		}
-		// The next render leaves the end, and follows it again on reaching it.
-		s, m.tasks.scrolled = &m.tasks.scroll, true
+	case d != nil && d.scroll.cut():
+		// /tasks stops following its output's end, and follows it again on reaching it.
+		s, d.scrolled = &d.scroll, true
 	default:
 		return false
 	}
@@ -78,6 +75,7 @@ func (m *model) scrollFront(n int, pages bool) bool {
 // pageFront scrolls the front prompt by a page in direction dir, else the
 // transcript.
 func (m *model) pageFront(dir int) {
+	m.focus = agentFocus{} // as any key the agent rows have no use for
 	if !m.scrollFront(dir, true) {
 		m.scroll(dir * m.transcriptHeight())
 	}

@@ -27,10 +27,6 @@ type taskDialog struct {
 	out      []string
 	outWidth int
 	outTheme theme
-	// scroll is the offset into out; the view follows its end until the human
-	// scrolls up, which scrolled records.
-	scroll   scroller
-	scrolled bool
 }
 
 // showTasks opens the dialog on the task list; with no tasks it only
@@ -46,9 +42,8 @@ func (m *model) showTasks() tea.Cmd {
 }
 
 // tasksKey goes to the dialog: interrupt leaves the task for the list and
-// the list for the composer. Enter on a subagent's task shows its session. The
-// page keys scroll a cut output or else the transcript; other keys it has no
-// use for are swallowed.
+// the list for the composer. Enter on a subagent's task shows its session.
+// Other keys it has no use for are swallowed.
 func (m *model) tasksKey(msg tea.KeyPressMsg) tea.Cmd {
 	t := m.tasks
 	if key.Matches(msg, m.keys.interrupt) {
@@ -57,14 +52,6 @@ func (m *model) tasksKey(msg tea.KeyPressMsg) tea.Cmd {
 		} else {
 			m.taskList(t.open)
 		}
-		return nil
-	}
-	switch {
-	case key.Matches(msg, m.keys.pageUp):
-		m.pageFront(-1)
-		return nil
-	case key.Matches(msg, m.keys.pageDown):
-		m.pageFront(1)
 		return nil
 	}
 	if t.open == "" && key.Matches(msg, m.keys.stopAgent) {
@@ -123,7 +110,7 @@ func (m *model) openTask(id string) {
 		return
 	}
 	if id != t.open {
-		t.d.sel, t.scroll, t.scrolled = 0, scroller{}, false
+		t.d.sel, t.d.scroll, t.d.scrolled = 0, scroller{}, false
 	}
 	t.open, t.info, t.out = id, info, nil
 	t.setOptions(m.width)
@@ -140,6 +127,7 @@ func (m *model) taskList(id string) {
 	}
 	sel := slices.IndexFunc(list, func(i tool.TaskInfo) bool { return i.ID == id })
 	t.list, t.open, t.d.sel = list, "", max(0, sel)
+	t.d.scroll, t.d.scrolled = scroller{}, false
 	t.setOptions(m.width)
 }
 
@@ -189,23 +177,14 @@ func (t *taskDialog) rows(width, maxBody, maxRows int, km *keyMap, th theme) []s
 	}
 	t.d.body = nil
 	if t.open != "" {
-		out := t.wrapped(width-2, th)
-		window := func() []string {
-			if !t.scrolled {
-				t.scroll.off = len(out)
-			}
-			t.d.body = nil
-			return t.scroll.window(out, min(maxBody, maxRows-len(t.d.rows(width, maxRows, 1, th))), th)
+		t.d.body = t.wrapped(width-2, th)
+		// The view follows the end until the human scrolls up.
+		if !t.d.scrolled {
+			t.d.scroll.off = len(t.d.body)
 		}
-		body := window()
-		if hint := scrollHint(km); t.scroll.cut() && hint != "" {
-			t.d.note = hint
-			body = window()
-		}
-		t.scrolled = t.scroll.below > 0
-		t.d.body = body
 	}
-	rows := t.d.rows(width, maxRows, 1, th)
+	rows := t.d.scrollRows(width, maxRows, 1, maxBody, scrollHint(km), th)
+	t.d.scrolled = t.d.scroll.below > 0
 	if t.open == "" && len(rows) > maxRows {
 		head := len(rows) - len(t.d.options) - 1
 		room := maxRows - head - 1

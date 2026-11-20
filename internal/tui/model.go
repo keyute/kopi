@@ -130,7 +130,7 @@ type model struct {
 	// drawn in place of the composer; front says which prompt that is.
 	approval       *event.ApprovalRequested
 	approvalDialog *dialog
-	// approvalPreview is the shown approval's preview rows and scroll.
+	// approvalPreview is the shown approval's preview rows.
 	approvalPreview approvalPreview
 	// queued asks wait behind approval, in arrival order.
 	approvalQueue []event.ApprovalRequested
@@ -300,6 +300,14 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	if m.exitArmed {
 		m.exitArmed, m.flashText = false, ""
 	}
+	switch {
+	case key.Matches(msg, km.pageUp):
+		m.pageFront(-1)
+		return nil
+	case key.Matches(msg, km.pageDown):
+		m.pageFront(1)
+		return nil
+	}
 	switch m.front() {
 	case promptApproval:
 		return m.approvalKey(msg)
@@ -332,12 +340,6 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case key.Matches(msg, km.quit) && m.composer.empty():
 		return tea.Quit
-	case key.Matches(msg, km.pageUp):
-		m.scroll(-m.transcriptHeight())
-		return nil
-	case key.Matches(msg, km.pageDown):
-		m.scroll(m.transcriptHeight())
-		return nil
 	case key.Matches(msg, km.submit):
 		return m.submit()
 	case key.Matches(msg, km.sendNow):
@@ -365,19 +367,12 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 
 // approvalKey goes to the prompt, which answers when an option is picked;
 // interrupt rejects without a reason. Keys the prompt has no use for are
-// swallowed, except the page keys, which scroll a cut preview or else the
-// transcript. The prompt stays until its ApprovalEnded arrives.
+// swallowed. The prompt stays until its ApprovalEnded arrives.
 func (m *model) approvalKey(msg tea.KeyPressMsg) tea.Cmd {
 	token := m.approval.Token
 	switch {
 	case key.Matches(msg, m.keys.interrupt):
 		m.c.Answer(token, policy.Decision{})
-		return nil
-	case key.Matches(msg, m.keys.pageUp):
-		m.pageFront(-1)
-		return nil
-	case key.Matches(msg, m.keys.pageDown):
-		m.pageFront(1)
 		return nil
 	case key.Matches(msg, m.keys.paste) && m.approvalDialog.field() != nil:
 		return readClipboardText(m.clip, m.approvalDialog.field())

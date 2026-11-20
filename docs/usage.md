@@ -64,7 +64,7 @@ Defaults; change them with [`keys`](configuration.md#keys).
   - With none running, Ctrl+B keeps its meaning in the input.
 - Ctrl+G, while an [`ExitPlanMode`](tools.md#exitplanmode) plan is open, opens the plan file in `$VISUAL`, else `$EDITOR`.
 - Ctrl+V pastes text or an image from the clipboard.
-- Mouse wheel or PgUp/PgDn scrolls the transcript; while an [`AskUserQuestion`](tools.md#askuserquestion) dialog is open PgUp/PgDn scroll its cut preview or review instead, and while an [approval](permissions.md#approval-dialog) preview or a `/tasks` output is cut, they scroll that.
+- Mouse wheel or PgUp/PgDn scrolls the transcript; while an [`AskUserQuestion`](tools.md#askuserquestion) dialog is open PgUp/PgDn scroll its cut preview or review instead, and while an [approval](permissions.md#approval-dialog) preview or a `/tasks` output is cut, they scroll that. PgUp/PgDn never move the cursor in a dialog's text field.
 - Keys while the model asks you a question are listed under [`AskUserQuestion`](tools.md#askuserquestion).
 - Ctrl+O opens every group and every row that opens, and every capped failure, until pressed again; see [Transcript](#transcript).
 

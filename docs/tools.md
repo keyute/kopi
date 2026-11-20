@@ -105,7 +105,6 @@
 | Options | Enter | Single-select: choose the focused option and go on. Multi-select: go on |
 | Options | Tab | Open a note on the focused option |
 | Options | Left, Right | Previous or next question; Right from the last opens the review |
-| Options | PgUp, PgDn | Scroll a cut preview (the mouse wheel over the dialog does too) |
 | `Type something.` | Enter | Answer with the typed text and go on; blank text asks you to answer unless a multi-select question already has an option chosen, which goes on |
 | `Type something.` | Up on the first row | Back to the options |
 | `Type something.` | Left, Right | Switch questions while the field is empty, else move the cursor |
@@ -113,7 +112,7 @@
 | Note | Esc | Discard the edit and close the note |
 | Review | Enter | Submit; with a gap, jump to the first unanswered question |
 | Review | Left | Back to the last question |
-| Review | PgUp, PgDn | Scroll a cut review (the mouse wheel over the dialog does too) |
+| Any | PgUp, PgDn | Scroll a cut preview or review, in a note too (the mouse wheel over the dialog does too); they do not move the cursor in a text field |
 | Any | Esc | Dismiss the questions (in a note, close the note) |
 
 ## ExitPlanMode

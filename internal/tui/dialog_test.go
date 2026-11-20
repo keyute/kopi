@@ -327,3 +327,44 @@ func TestScrollerWindowSingularMarkers(t *testing.T) {
 	s := scroller{off: 1}
 	assert.Equal(t, []string{"… 1 earlier line", "b", "… 2 more lines"}, plainRows(s.window([]string{"a", "b", "c", "d"}, 3, mocha())))
 }
+
+func scrollDialog(n int) *dialog {
+	d := &dialog{title: "Pick", note: "why", options: []option{{label: "Yes"}}}
+	for i := range n {
+		d.body = append(d.body, fmt.Sprintf("l%d", i+1))
+	}
+	return d
+}
+
+func TestDialogScrollRowsJoinsTheHintToTheNoteWhenCut(t *testing.T) {
+	d := scrollDialog(10)
+	body := d.body
+	rows := plainRows(d.scrollRows(40, 100, 1, 4, "pgup/pgdn to scroll", mocha()))
+	assert.Contains(t, rows, "  why · pgup/pgdn to scroll")
+	assert.Contains(t, rows, "  … 7 more lines")
+	assert.Equal(t, body, d.body)
+	assert.Equal(t, "why", d.note)
+
+	d = scrollDialog(2)
+	assert.NotContains(t, strings.Join(plainRows(d.scrollRows(40, 100, 1, 4, "pgup/pgdn to scroll", mocha())), "\n"), "pgup")
+
+	d = scrollDialog(10)
+	d.note = ""
+	assert.Contains(t, plainRows(d.scrollRows(40, 100, 1, 4, "pgup/pgdn to scroll", mocha())), "  pgup/pgdn to scroll")
+	assert.Empty(t, d.note)
+}
+
+func TestDialogScrollRowsWithNoBodyIsRows(t *testing.T) {
+	d := scrollDialog(0)
+	assert.Equal(t, d.rows(40, 100, 1, mocha()), d.scrollRows(40, 100, 1, 4, "pgup/pgdn to scroll", mocha()))
+}
+
+func TestDialogScrollRowsReachesTheEndWhenTheBudgetBinds(t *testing.T) {
+	d := scrollDialog(10)
+	d.note = "" // the hint takes a row of its own
+	d.scroll.off = 100
+	rows := plainRows(d.scrollRows(40, 8, 1, 100, "pgup/pgdn to scroll", mocha()))
+	assert.LessOrEqual(t, len(rows), 8)
+	assert.Contains(t, rows, "  l10")
+	assert.Equal(t, 9, d.scroll.off)
+}

@@ -798,15 +798,15 @@ func TestWheelOverACutApprovalScrollsItsPreview(t *testing.T) {
 	top := m.top()
 
 	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: 10, Y: m.geo.composerTop})
-	assert.Equal(t, wheelStep, m.approvalPreview.off)
+	assert.Equal(t, wheelStep, m.approvalDialog.scroll.off)
 	assert.Equal(t, top, m.top(), "and not the transcript")
 
 	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, X: 10, Y: m.geo.composerTop})
-	assert.Zero(t, m.approvalPreview.off)
+	assert.Zero(t, m.approvalDialog.scroll.off)
 
 	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, X: 10, Y: 0})
 	assert.Equal(t, top-wheelStep, m.top(), "above the dialog it scrolls the transcript")
-	assert.Zero(t, m.approvalPreview.off)
+	assert.Zero(t, m.approvalDialog.scroll.off)
 }
 
 func TestWheelOverAnApprovalWhosePreviewFitsScrollsTheTranscript(t *testing.T) {
@@ -817,5 +817,5 @@ func TestWheelOverAnApprovalWhosePreviewFitsScrollsTheTranscript(t *testing.T) {
 
 	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, X: 10, Y: m.geo.composerTop})
 	assert.Equal(t, top-wheelStep, m.top())
-	assert.Zero(t, m.approvalPreview.off)
+	assert.Zero(t, m.approvalDialog.scroll.off)
 }

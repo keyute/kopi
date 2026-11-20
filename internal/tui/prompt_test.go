@@ -227,7 +227,7 @@ func TestPageKeysScrollACutApprovalNotTheTranscript(t *testing.T) {
 	notices(m, 30)
 	send(m, longApproval(50))
 	top := m.top()
-	require.True(t, m.approvalPreview.cut())
+	require.True(t, m.approvalDialog.scroll.cut())
 
 	press(m, pgDown)
 	assert.Contains(t, strings.Join(screen(m), "\n"), "earlier lines")
@@ -247,7 +247,7 @@ func TestPageKeysScrollACutApprovalFromTheNoRowAndKeepTheDraft(t *testing.T) {
 	press(m, pgDown)
 
 	assert.Equal(t, "one\ntwo\nthree", m.approvalDialog.text())
-	assert.Positive(t, m.approvalPreview.off)
+	assert.Positive(t, m.approvalDialog.scroll.off)
 	assert.Empty(t, c.answers)
 }
 
@@ -255,12 +255,12 @@ func TestPageKeysScrollTheTranscriptWhenTheApprovalPreviewFits(t *testing.T) {
 	m, _ := newTestModel(t, 40, 20)
 	notices(m, 30)
 	send(m, editApproval())
-	require.False(t, m.approvalPreview.cut())
+	require.False(t, m.approvalDialog.scroll.cut())
 	require.True(t, m.view().follow)
 
 	press(m, pgUp)
 	assert.False(t, m.view().follow)
-	assert.Zero(t, m.approvalPreview.off)
+	assert.Zero(t, m.approvalDialog.scroll.off)
 	press(m, pgDown)
 	assert.True(t, m.view().follow)
 }
@@ -269,11 +269,24 @@ func TestTheNextApprovalStartsAtTheTopOfItsPreview(t *testing.T) {
 	m, _ := newTestModel(t, 40, 20)
 	send(m, longApproval(50))
 	press(m, pgDown)
-	require.Positive(t, m.approvalPreview.off)
+	require.Positive(t, m.approvalDialog.scroll.off)
 
 	ev := longApproval(50)
 	ev.Token = 2
 	send(m, ev)
 	send(m, event.ApprovalEnded{Token: 1})
-	assert.Zero(t, m.approvalPreview.off)
+	assert.Zero(t, m.approvalDialog.scroll.off)
+}
+
+func TestPageKeysScrollTheTranscriptFromALoginPrompt(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	notices(m, 30)
+	send(m, event.LoginRequested{Token: 1, Message: "Code"})
+	typeKeys(m, "abc")
+	require.True(t, m.view().follow)
+
+	press(m, pgUp)
+
+	assert.False(t, m.view().follow)
+	assert.Equal(t, "abc", m.loginDialog.text())
 }

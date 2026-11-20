@@ -796,3 +796,19 @@ func TestQuestionRowsDrawTheNoteEditorBelowTheDetail(t *testing.T) {
 	assert.Equal(t, []string{"❭ 1. A", "  about A", "  ↳ note: a long note that goes on and"}, rows[3:6])
 	assert.True(t, strings.HasPrefix(rows[6], "          "), "continuation rows hang under the text: %q", rows[6])
 }
+
+func TestQuestionPageKeysScrollACutPreviewFromTheNoteEditor(t *testing.T) {
+	var lines []string
+	for i := range 60 {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	m, _ := openQuestion(t, previewQuestion(strings.Join(lines, "\n"))...)
+	press(m, tab)
+	typeKeys(m, "abc")
+	require.True(t, m.question.scroll.cut())
+
+	press(m, pgDown)
+
+	assert.Positive(t, m.question.scroll.off)
+	assert.Equal(t, "abc", m.question.pages[0].note.value())
+}

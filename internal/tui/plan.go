@@ -73,9 +73,8 @@ func clip(d *dialog, rows []string, head, start, end int) []string {
 }
 
 // planKey goes to the dialog: Yes approves, No answers with the typed changes,
-// which the Controller treats as a dismissal like interrupt when blank. Keys it has no use for are swallowed,
-// and the page keys scroll the transcript, which shows the plan. The dialog
-// stays until its PlanEnded arrives.
+// which the Controller treats as a dismissal like interrupt when blank. Keys it has no use for are swallowed.
+// The dialog stays until its PlanEnded arrives.
 func (m *model) planKey(msg tea.KeyPressMsg) tea.Cmd {
 	p, km := m.plan, &m.keys
 	switch {
@@ -86,12 +85,6 @@ func (m *model) planKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.openEditor(m.c.PlanFile())
 	case key.Matches(msg, km.paste) && p.d.field() != nil:
 		return readClipboardText(m.clip, p.d.field())
-	case key.Matches(msg, km.pageUp):
-		m.scroll(-m.transcriptHeight())
-		return nil
-	case key.Matches(msg, km.pageDown):
-		m.scroll(m.transcriptHeight())
-		return nil
 	}
 	picked, cmd := p.d.key(msg, km)
 	if !picked {

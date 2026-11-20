@@ -1571,3 +1571,15 @@ func TestChangesEventRendersInStatusLine(t *testing.T) {
 	assert.NotContains(t, statusText(m), "+12")
 	assert.Empty(t, body(m), "footer counts are not transcript events")
 }
+
+func TestPageKeyDropsAgentFocusAndScrollsTheTranscript(t *testing.T) {
+	m, _ := focused(t, explorer("t1"))
+	notices(m, 40)
+	require.True(t, m.focus.on)
+	require.True(t, m.view().follow)
+
+	press(m, pgUp)
+
+	assert.False(t, m.focus.on)
+	assert.False(t, m.view().follow)
+}

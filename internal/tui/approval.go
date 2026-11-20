@@ -1,9 +1,6 @@
 package tui
 
 import (
-	"slices"
-	"strings"
-
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
@@ -62,9 +59,9 @@ func approvalNote(a *event.ApprovalRequested) string {
 }
 
 // newApprovalDialog is the prompt for a: approvalOptions as its options, the
-// reject option taking a reason. approvalRows sets its note.
+// reject option taking a reason.
 func newApprovalDialog(a *event.ApprovalRequested, km *keyMap, th theme) *dialog {
-	d := &dialog{title: a.Title}
+	d := &dialog{title: a.Title, note: approvalNote(a)}
 	if a.Agent != "" {
 		d.title = a.Agent + " " + a.TaskID + " › " + a.Title
 	}
@@ -79,9 +76,8 @@ func newApprovalDialog(a *event.ApprovalRequested, km *keyMap, th theme) *dialog
 }
 
 // approvalPreview is the shown approval's preview rendered by previewLine for
-// width and th, kept across renders, and its scroll.
+// width and th, kept across renders.
 type approvalPreview struct {
-	scroller
 	rows  []string
 	width int
 	th    theme
@@ -98,7 +94,7 @@ func (p *approvalPreview) lines(preview []tool.PreviewLine, width int, th theme)
 }
 
 // approvalRows draws d, a's prompt, in place of the composer: the title, the
-// preview windowed at maxPreview rows from p's offset, the rule that asked and
+// preview windowed at maxPreview rows from d's scroll, the rule that asked and
 // the scroll hint when the preview is cut, a blank row, and the options. The
 // reason field grows to maxPreview rows within what maxRows leaves after the
 // other rows, and the preview fits into what is left after it. Past maxRows the
@@ -109,21 +105,8 @@ func approvalRows(d *dialog, p *approvalPreview, a *event.ApprovalRequested, km 
 		return nil
 	}
 	fieldCap := max(1, maxPreview)
-	lines := p.lines(a.Preview, width-2, th)
-	note := approvalNote(a)
-	d.note = note
-	// Measure the rest without a body.
-	window := func() []string {
-		d.body = nil
-		return p.window(lines, min(maxPreview, maxRows-len(d.rows(width, maxRows, fieldCap, th))), th)
-	}
-	body := window()
-	if hint := scrollHint(km); p.cut() && hint != "" {
-		d.note = strings.Join(slices.DeleteFunc([]string{note, hint}, isEmpty), " · ")
-		body = window()
-	}
-	d.body = body
-	rows := d.rows(width, maxRows, fieldCap, th)
+	d.body = p.lines(a.Preview, width-2, th)
+	rows := d.scrollRows(width, maxRows, fieldCap, maxPreview, scrollHint(km), th)
 	cut := max(0, len(rows)-maxRows)
 	var areas []fieldArea
 	for _, fa := range d.areas {
