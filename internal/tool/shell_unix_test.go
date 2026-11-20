@@ -425,6 +425,17 @@ func TestShellResultEndsWithRefusedHosts(t *testing.T) {
 	assert.True(t, strings.HasSuffix(out, refusedLine), out)
 }
 
+func TestShellErrorHoldsRefusedHostsBeforeExitReason(t *testing.T) {
+	sh := proxyShell(t, t.TempDir())
+
+	_, err := runShell(t, sh, refuseCommand+"\nexit 3")
+
+	require.ErrorIs(t, err, ErrExitStatus)
+	msg := err.Error()
+	assert.Contains(t, msg, refusedLine)
+	assert.Less(t, strings.Index(msg, refusedLine), strings.Index(msg, "exit code 3"), msg)
+}
+
 func TestTaskOutputEndsWithRefusedHosts(t *testing.T) {
 	sh := proxyShell(t, t.TempDir())
 	m, events := newTasks(t)

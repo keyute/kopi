@@ -25,9 +25,6 @@ const (
 // listens on the namespace's loopback port, gives Kopi that listener, waits
 // until Kopi serves it and then becomes the command argv.
 func ExecListening(argv []string) error {
-	if len(argv) == 0 {
-		return errors.New("failed to run the sandboxed command: no command given")
-	}
 	path, err := exec.LookPath(argv[0])
 	if err != nil {
 		return fmt.Errorf("failed to find %s: %w", argv[0], err)

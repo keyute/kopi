@@ -645,6 +645,12 @@ func TestSandboxListsReplaceAcrossLayers(t *testing.T) {
 	assert.Equal(t, "flags", r.Origins["sandbox.allowWrite"])
 	assert.Equal(t, global.Name, r.Origins["sandbox.denyRead"])
 	assert.Equal(t, global.Name, r.Origins["sandbox.network"])
+
+	global = globalLayer(t, `{"sandbox": {"allowDomains": ["a.com", "b.com"]}}`)
+	r, err = Resolve(Defaults(), global, Map("flags", map[string]any{"sandbox": map[string]any{"allowDomains": []any{"c.com"}}}))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"c.com"}, r.Config.Sandbox.AllowDomains)
+	assert.Equal(t, "flags", r.Origins["sandbox.allowDomains"])
 }
 
 func TestSandboxAllowUnsandboxed(t *testing.T) {

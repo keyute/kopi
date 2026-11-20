@@ -3,7 +3,6 @@ package sandbox
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -15,6 +14,10 @@ import (
 
 	"github.com/keyute/kopi/internal/policy"
 )
+
+// loopbackAttempts bounds how often listenLoopback picks a fresh port when the
+// IPv6 side of the first is taken.
+const loopbackAttempts = 5
 
 // Policy is what a sandboxed command may do. Paths are absolute.
 type Policy struct {
@@ -51,9 +54,6 @@ func New(ctx context.Context, dir string, policies ...Policy) ([]*Sandbox, error
 		if err := checkAbsolute(policies); err != nil {
 			return nil, err
 		}
-		if err := checkProxy(policies); err != nil {
-			return nil, err
-		}
 		if err := probe(ctx); err != nil {
 			return nil, err
 		}
@@ -64,12 +64,6 @@ func New(ctx context.Context, dir string, policies ...Policy) ([]*Sandbox, error
 		return sandboxes, nil
 	case "linux":
 		if err := checkAbsolute(policies); err != nil {
-			return nil, err
-		}
-		if err := checkProxy(policies); err != nil {
-			return nil, err
-		}
-		if err := checkHelper(policies); err != nil {
 			return nil, err
 		}
 		if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
@@ -84,6 +78,9 @@ func New(ctx context.Context, dir string, policies ...Policy) ([]*Sandbox, error
 			return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 		}
 		if err := probeBwrap(ctx, path, filter); err != nil {
+			return nil, err
+		}
+		if err := checkHelper(policies); err != nil {
 			return nil, err
 		}
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -115,24 +112,12 @@ func checkAbsolute(policies []Policy) error {
 	return nil
 }
 
-func checkProxy(policies []Policy) error {
-	for _, p := range policies {
-		if p.Network && p.Proxy != nil {
-			return errors.New("sandbox policy has both network and a proxy")
-		}
-	}
-	return nil
-}
-
 // checkHelper fails for a proxy whose helper bwrap could not run: it runs in
 // the sandbox, where a denied path is masked.
 func checkHelper(policies []Policy) error {
 	for _, p := range policies {
 		if p.Proxy == nil {
 			continue
-		}
-		if len(p.Proxy.helper) == 0 {
-			return errors.New("sandbox proxy has no helper command")
 		}
 		helper := policy.Resolve(p.Proxy.helper[0])
 		for _, d := range p.DenyRead {
@@ -160,16 +145,34 @@ func (s *Sandbox) Command(argv []string) (cmd *exec.Cmd, done func() []string, e
 		full := slices.Concat(s.prefix, argv)
 		return exec.Command(full[0], full[1:]...), func() []string { return nil }, nil
 	}
-	l, err := net.Listen("tcp4", "127.0.0.1:0")
+	l4, l6, err := listenLoopback()
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to listen for the sandbox proxy: %w", err)
+		return nil, nil, err
 	}
-	port := l.Addr().(*net.TCPAddr).Port
-	session := s.proxy.serve(l)
+	port := l4.Addr().(*net.TCPAddr).Port
+	session := s.proxy.serve(l4, l6)
 	// The profile's PROXY parameter is the last one before the trailing "--".
 	prefix := slices.Insert(slices.Clone(s.prefix), len(s.prefix)-1, "-DPROXY=localhost:"+strconv.Itoa(port))
 	full := slices.Concat(prefix, argv)
 	cmd = exec.Command(full[0], full[1:]...)
 	cmd.Env = append(os.Environ(), proxyEnv(port)...)
 	return cmd, session.close, nil
+}
+
+// listenLoopback listens on the same port on 127.0.0.1 and [::1]: Seatbelt's
+// localhost:<port> rule allows both, so the proxy must hold both or a foreign
+// service on the other address would be reachable.
+func listenLoopback() (l4, l6 net.Listener, err error) {
+	for range loopbackAttempts {
+		l4, err = net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to listen for the sandbox proxy: %w", err)
+		}
+		l6, err = net.Listen("tcp6", "[::1]:"+strconv.Itoa(l4.Addr().(*net.TCPAddr).Port))
+		if err == nil {
+			return l4, l6, nil
+		}
+		_ = l4.Close()
+	}
+	return nil, nil, fmt.Errorf("failed to listen for the sandbox proxy on [::1]: %w", err)
 }

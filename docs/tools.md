@@ -49,7 +49,7 @@
 - On interrupt a foreground command's whole process group is killed (on Windows, only the shell).
 - Returns stdout and stderr combined, keeping the first and last 15,000 bytes.
 - A non-zero exit is an error reporting the exit code.
-- Runs in the [sandbox](sandbox.md), unless the call sets `unsandboxed` (offered only when sandboxed and `sandbox.allowUnsandboxed` is true), which asks like `Bash` without the sandbox, see [outside the sandbox](sandbox.md#outside-the-sandbox). With `sandbox.allowDomains` a result ends with the hosts the proxy refused, see [network](sandbox.md#network).
+- Runs in the [sandbox](sandbox.md), unless the call sets `unsandboxed` (offered only when sandboxed and `sandbox.allowUnsandboxed` is true), which asks like `Bash` without the sandbox, see [outside the sandbox](sandbox.md#outside-the-sandbox). With `sandbox.allowDomains` the output ends with the hosts the proxy refused, see [network](sandbox.md#network).
 
 ## Background tasks
 

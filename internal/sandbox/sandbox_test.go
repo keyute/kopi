@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,19 +61,6 @@ func TestNewRejectsRelativePath(t *testing.T) {
 	}
 }
 
-func TestNewRejectsNetworkWithProxy(t *testing.T) {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
-		t.Skip("only darwin and linux build a sandbox from the policy")
-	}
-	proxy, err := NewProxy([]string{"example.com"}, nil, []string{"/helper"})
-	require.NoError(t, err)
-
-	_, err = New(t.Context(), t.TempDir(), Policy{Network: true, Proxy: proxy})
-
-	require.Error(t, err)
-	assert.NotErrorIs(t, err, ErrUnavailable)
-}
-
 func TestCheckHelper(t *testing.T) {
 	base := resolvedTemp(t)
 	secret := filepath.Join(base, "secret")
@@ -89,7 +77,6 @@ func TestCheckHelper(t *testing.T) {
 		{"under", []string{filepath.Join(secret, "kopi")}, []string{secret}, secret},
 		{"through a link", []string{filepath.Join(link, "kopi")}, []string{secret}, secret},
 		{"denied by a link", []string{filepath.Join(secret, "kopi")}, []string{link}, secret},
-		{"none", nil, nil, "no helper"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proxy, err := NewProxy([]string{"example.com"}, nil, tc.helper)
@@ -118,6 +105,12 @@ func TestFiltersNetwork(t *testing.T) {
 }
 
 func TestCommandWithProxy(t *testing.T) {
+	probe, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skip("no IPv6 loopback")
+	}
+	probe.Close()
+	t.Setenv("HTTPS_PROXY", "http://corp.example:8080")
 	proxy, err := NewProxy([]string{"example.com"}, nil, nil)
 	require.NoError(t, err)
 	s := &Sandbox{prefix: seatbeltPrefix(Policy{Write: []string{t.TempDir()}, Proxy: proxy}), proxy: proxy}
@@ -139,11 +132,21 @@ func TestCommandWithProxy(t *testing.T) {
 	for _, v := range proxyEnv(mustAtoi(t, port)) {
 		assert.Contains(t, cmd.Env, v)
 	}
+	assert.Contains(t, cmd.Environ(), "HTTPS_PROXY=http://127.0.0.1:"+port)
+	assert.NotContains(t, cmd.Environ(), "HTTPS_PROXY=http://corp.example:8080")
 	conn, err := net.Dial("tcp", "127.0.0.1:"+port)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
+	// The proxy also holds the port on IPv6 loopback, where Seatbelt's localhost rule reaches.
+	proxyURL, err := url.Parse("http://[::1]:" + port)
+	require.NoError(t, err)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), DisableKeepAlives: true}}
+	resp, err := client.Get("http://blocked.test/")
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 
-	assert.Empty(t, done())
+	assert.Equal(t, []string{"blocked.test:80"}, done())
 
 	_, err = net.Dial("tcp", "127.0.0.1:"+port)
 	assert.Error(t, err)

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,30 +99,32 @@ type session struct {
 	p      *Proxy
 	srv    *http.Server
 	cancel context.CancelFunc
-	served chan struct{} // closed when Serve has returned
+	served sync.WaitGroup // running Serve calls
 
 	mu      sync.Mutex
 	closed  bool
 	conns   map[net.Conn]struct{}
 	handles sync.WaitGroup // running handlers
 	refused []string
-	seen    map[string]struct{}
 }
 
-// serve answers proxy requests on l until the session is closed.
-func (p *Proxy) serve(l net.Listener) *session {
+// serve answers proxy requests on every listener until the session is closed.
+func (p *Proxy) serve(listeners ...net.Listener) *session {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &session{p: p, cancel: cancel, served: make(chan struct{}), conns: map[net.Conn]struct{}{}, seen: map[string]struct{}{}}
+	s := &session{p: p, cancel: cancel, conns: map[net.Conn]struct{}{}}
 	s.srv = &http.Server{
 		Handler:           s,
 		ReadHeaderTimeout: 30 * time.Second,
 		ErrorLog:          log.New(slogWriter{}, "", 0),
 		BaseContext:       func(net.Listener) context.Context { return context.WithValue(ctx, sessionKey{}, s) },
 	}
-	go func() {
-		defer close(s.served)
-		_ = s.srv.Serve(l) // always returns an error; ErrServerClosed after close
-	}()
+	for _, l := range listeners {
+		s.served.Add(1)
+		go func() {
+			defer s.served.Done()
+			_ = s.srv.Serve(l) // always returns an error; ErrServerClosed after close
+		}()
+	}
 	return s
 }
 
@@ -130,7 +133,7 @@ func (p *Proxy) serve(l net.Listener) *session {
 func (s *session) close() []string {
 	_ = s.srv.Close()
 	s.cancel()
-	<-s.served
+	s.served.Wait()
 	s.mu.Lock()
 	s.closed = true
 	for c := range s.conns {
@@ -166,13 +169,20 @@ func (s *session) track(c net.Conn) bool {
 	return true
 }
 
+func (s *session) untrack(conns ...net.Conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range conns {
+		delete(s.conns, c)
+	}
+}
+
 func (s *session) record(hostPort string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.seen[hostPort]; ok || len(s.refused) >= maxRefused {
+	if len(s.refused) >= maxRefused || slices.Contains(s.refused, hostPort) {
 		return
 	}
-	s.seen[hostPort] = struct{}{}
 	s.refused = append(s.refused, hostPort)
 }
 
@@ -226,13 +236,13 @@ func validHost(host string) bool {
 	return host != "" && len(host) <= 253 && strings.Trim(host, "abcdefghijklmnopqrstuvwxyz0123456789._-") == ""
 }
 
-// destination splits a host and port, lower-casing the host. ok is false for a
-// destination that is not well formed.
+// destination splits a host and port, lower-casing the host and dropping one
+// trailing dot. ok is false for a destination that is not well formed.
 func destination(hostname, port, defaultPort string) (host string, portNum int, ok bool) {
 	if port == "" {
 		port = defaultPort
 	}
-	host = strings.ToLower(hostname)
+	host = strings.TrimSuffix(strings.ToLower(hostname), ".")
 	n, err := strconv.Atoi(port)
 	if err != nil || n < 1 || n > 65535 || !validHost(host) {
 		return "", 0, false
@@ -275,11 +285,8 @@ func (s *session) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // forwardError answers a plain request whose upstream round trip failed.
 func (p *Proxy) forwardError(w http.ResponseWriter, r *http.Request, err error) {
 	s := r.Context().Value(sessionKey{}).(*session)
-	port := r.URL.Port()
-	if port == "" {
-		port = "80"
-	}
-	hostPort := net.JoinHostPort(strings.ToLower(r.URL.Hostname()), port)
+	host, port, _ := destination(r.URL.Hostname(), r.URL.Port(), "80")
+	hostPort := net.JoinHostPort(host, strconv.Itoa(port))
 	if errors.Is(err, ssrf.ErrProhibitedIP) {
 		s.refuse(w, "blocked-by-address", hostPort)
 		return
@@ -320,6 +327,7 @@ func (s *session) connect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer client.Close()
 	defer upstream.Close()
+	defer s.untrack(client, upstream)
 	if !s.track(client) || !s.track(upstream) {
 		return
 	}

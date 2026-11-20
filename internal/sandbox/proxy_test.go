@@ -184,6 +184,23 @@ func TestProxyIPLiteralIsNeverAllowed(t *testing.T) {
 	assert.Equal(t, []string{"1.2.3.4:80"}, rig.sess.close())
 }
 
+func TestProxyTrailingDotNamesTheSameHost(t *testing.T) {
+	rig := startProxy(t, []string{"a.test"}, []string{"bad.test"}, dialTo(echoUpstream(t)))
+
+	resp, _ := get(t, rig.client(), "http://bad.test./")
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Equal(t, "blocked-by-denylist", resp.Header.Get("X-Proxy-Error"))
+
+	conn := rawConn(t, rig)
+	_, err := io.WriteString(conn, "CONNECT A.test.:443 HTTP/1.1\r\nHost: a.test.:443\r\n\r\n")
+	require.NoError(t, err)
+	connectResp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodConnect})
+	require.NoError(t, err)
+	connectResp.Body.Close()
+	assert.Equal(t, http.StatusOK, connectResp.StatusCode)
+	assert.Equal(t, []string{"bad.test:80"}, rig.sess.close())
+}
+
 func TestProxyPortScope(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer up.Close()
@@ -282,6 +299,7 @@ func TestProxyConnectRelaysWithHalfClose(t *testing.T) {
 
 	assert.Equal(t, "ping", string(echoed))
 	assert.Empty(t, rig.sess.close())
+	assert.Empty(t, rig.sess.conns)
 }
 
 func TestProxyConnectRefused(t *testing.T) {
