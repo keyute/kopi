@@ -104,7 +104,7 @@ What each key does is in [usage](usage.md#keys).
 
 `statusline` lists the status line's `left` and `right` entries. Each entry is a [format](#formats) naming built-in segments or your own `segments`.
 
-- Defaults: left `$model`, `$context`, `$branch( $changes)`; right `$notice`, `$sandbox`, `$shells`, `$mode`.
+- Defaults: left `$model`, `$context`, `$branch( $changes)`; right `$notice`, `$shells`, `$sandbox`, `$mode`.
 - `separator` goes between entries (default ` · `, `""` for none). An entry that draws nothing is left out with its separator. Nothing is trimmed.
 - On a narrow terminal the left side drops whole entries from its right end. When the line still does not fit, the left side is cleared and the right side is cut, keeping the entry that names `mode` whole at the right end when it fits.
 
@@ -190,7 +190,7 @@ A segment in `segments`:
 
 `agentline` lists the `left` and `right` entries of the [agent rows](subagents.md#agent-rows) shown under the status line. Entries use the status line's [format syntax](#formats).
 
-- Defaults: left `$agent`, `$tokens`, `$model`; right none.
+- Defaults: left `$agent`, `$model`, `$tokens`; right none.
 - `separator` goes between entries (default ` · `, `""` for none; no control characters).
 - At most five rows show; the limit is fixed. On a short terminal fewer rows show.
 

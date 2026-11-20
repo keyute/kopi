@@ -1803,6 +1803,31 @@ func TestSandboxPolicyProtectsHEADWithConcurrentLinuxPlaceholder(t *testing.T) {
 	}
 }
 
+func TestOpenSandboxFiltersNetworkOnlyWithAllowDomains(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	e := newSandboxedEnv(t)
+	for _, tc := range []struct {
+		name string
+		cfg  config.Sandbox
+		want bool
+	}{
+		{"allow list", config.Sandbox{AllowDomains: []string{"example.com"}, DenyDomains: []string{"a.example.com"}}, true},
+		{"deny list alone", config.Sandbox{DenyDomains: []string{"example.com"}}, false},
+		{"no lists", config.Sandbox{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			execute, plan, _, err := openSandbox(t.Context(), tc.cfg, e.workspace, e.home, e.kopiHome)
+			require.NoError(t, err)
+			require.NotNil(t, execute)
+			require.NotNil(t, plan)
+			assert.Equal(t, tc.want, execute.FiltersNetwork())
+			assert.Equal(t, tc.want, plan.FiltersNetwork())
+		})
+	}
+}
+
 func TestRootSandboxedBashProtectsMCPFile(t *testing.T) {
 	if !sandboxAvailable(t) {
 		t.Skip("the sandbox is unavailable here")

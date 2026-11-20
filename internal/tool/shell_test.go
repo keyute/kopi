@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/keyute/kopi/internal/sandbox"
 )
 
 var ErrTimedOut = errors.New("command timed out")
@@ -197,4 +199,15 @@ func TestOutputBufferReadsWhileWritten(t *testing.T) {
 			_ = b.String()
 		}
 	}
+}
+
+func TestRefusedNote(t *testing.T) {
+	assert.Empty(t, refusedNote(nil))
+	assert.Equal(t, "\n[sandbox refused network access to: a.test:443]\n", refusedNote([]string{"a.test:443"}))
+	assert.Equal(t, "\n[sandbox refused network access to: a.test:443, b.test:80]\n", refusedNote([]string{"a.test:443", "b.test:80"}))
+}
+
+func TestShellFiltersNetwork(t *testing.T) {
+	assert.False(t, NewShell(t.TempDir(), nil).FiltersNetwork())
+	assert.False(t, NewShell(t.TempDir(), &sandbox.Sandbox{}).FiltersNetwork())
 }

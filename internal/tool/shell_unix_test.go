@@ -6,6 +6,8 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"flag"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -374,4 +376,78 @@ func TestShellHoldsPlaceholdersUntilCommandEnds(t *testing.T) {
 	p.stop(errors.New("stopped"))
 	waitFor(t, p.done, "the command to end")
 	assert.NoFileExists(t, placeholder)
+}
+
+// listenHelperEnv gates TestShellListenHelper, which a filtered Linux command
+// runs in the sandbox in place of Kopi.
+const listenHelperEnv = "KOPI_TEST_LISTEN_HELPER"
+
+func TestShellListenHelper(t *testing.T) {
+	if os.Getenv(listenHelperEnv) == "" {
+		return
+	}
+	fmt.Fprintln(os.Stderr, sandbox.ExecListening(flag.Args()))
+	os.Exit(1)
+}
+
+// proxyShell is a sandboxed shell whose proxy allows only allowed.test.
+func proxyShell(t *testing.T, dir string) *Shell {
+	t.Helper()
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	proxy, err := sandbox.NewProxy([]string{"allowed.test"}, nil, []string{exe, "-test.run=^TestShellListenHelper$", "--"})
+	require.NoError(t, err)
+	sbs, err := sandbox.New(t.Context(), t.TempDir(), sandbox.Policy{Write: []string{dir}, Proxy: proxy})
+	if errors.Is(err, sandbox.ErrUnavailable) {
+		t.Skip(err)
+	}
+	require.NoError(t, err)
+	t.Setenv(listenHelperEnv, "1")
+	return NewShell(dir, sbs[0])
+}
+
+// refuseCommand asks the proxy for a host it refuses, so nothing is dialled.
+const refuseCommand = `exec 3<>/dev/tcp/127.0.0.1/${HTTP_PROXY##*:}
+printf 'CONNECT blocked.test:443 HTTP/1.1\r\nHost: blocked.test:443\r\n\r\n' >&3
+read -r status <&3
+echo "$status"`
+
+const refusedLine = "\n[sandbox refused network access to: blocked.test:443]\n"
+
+func TestShellResultEndsWithRefusedHosts(t *testing.T) {
+	sh := proxyShell(t, t.TempDir())
+	assert.True(t, sh.FiltersNetwork())
+
+	out, err := runShell(t, sh, refuseCommand)
+
+	require.NoError(t, err)
+	assert.Contains(t, out, " 403 ")
+	assert.True(t, strings.HasSuffix(out, refusedLine), out)
+}
+
+func TestShellErrorHoldsRefusedHostsBeforeExitReason(t *testing.T) {
+	sh := proxyShell(t, t.TempDir())
+
+	_, err := runShell(t, sh, refuseCommand+"\nexit 3")
+
+	require.ErrorIs(t, err, ErrExitStatus)
+	msg := err.Error()
+	assert.Contains(t, msg, refusedLine)
+	assert.Less(t, strings.Index(msg, refusedLine), strings.Index(msg, "exit code 3"), msg)
+}
+
+func TestTaskOutputEndsWithRefusedHosts(t *testing.T) {
+	sh := proxyShell(t, t.TempDir())
+	m, events := newTasks(t)
+
+	_, err := m.Start(t.Context(), sh, refuseCommand)
+
+	require.NoError(t, err)
+	assert.Equal(t, TaskRunning, nextEvent(t, events).Status)
+	end := nextEvent(t, events)
+	assert.Equal(t, TaskCompleted, end.Status)
+	assert.True(t, strings.HasSuffix(end.Output, refusedLine), end.Output)
+	info, err := m.Output("t1")
+	require.NoError(t, err)
+	assert.True(t, strings.HasSuffix(info.Output, refusedLine), info.Output)
 }

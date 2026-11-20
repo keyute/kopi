@@ -51,7 +51,7 @@
 - Returns stdout and stderr combined, keeping the first and last 15,000 bytes.
 - A non-zero exit is an error reporting the exit code; its row reads `↳ exit code 1 · 84 lines`, with the output under it.
 - Its row reads `Ran <command>` once it succeeded, `Started <command> in background` for `run_in_background`, and ends ` · unsandboxed` when the call set `unsandboxed`.
-- Runs in the [sandbox](sandbox.md), unless the call sets `unsandboxed` (offered only when sandboxed and `sandbox.allowUnsandboxed` is true), which asks like `Bash` without the sandbox, see [outside the sandbox](sandbox.md#outside-the-sandbox).
+- Runs in the [sandbox](sandbox.md), unless the call sets `unsandboxed` (offered only when sandboxed and `sandbox.allowUnsandboxed` is true), which asks like `Bash` without the sandbox, see [outside the sandbox](sandbox.md#outside-the-sandbox). With `sandbox.allowDomains` the output ends with the hosts the proxy refused, see [network](sandbox.md#network).
 
 ## Background tasks
 
@@ -166,7 +166,7 @@
 - `Grep` shows only the first 2000 characters of a line; a match past that shows the line cut to that prefix.
 - Outside the Linux sandbox, a background process a command leaves running (`cmd &`) can outlive the call and its background task, and a running command or background task keeps running if Kopi is killed. In the Linux sandbox everything a command started ends when it does, or when Kopi does.
 - Background tasks and their output live only in memory and do not survive a restart.
-- `WebFetch` connects directly and ignores `HTTP_PROXY` and `HTTPS_PROXY`; `sandbox.network` does not govern it.
+- `WebFetch` connects directly and ignores `HTTP_PROXY` and `HTTPS_PROXY`; `sandbox.network` and `sandbox.allowDomains` do not govern it.
 - An approved `WebFetch` URL is requested from its host, and the call's prompt and up to 100,000 characters of the page go to `smallModel`'s provider.
 - `WebFetch` runs no JavaScript, and only the `Content-Type` header decides a page's charset; without one, the type is sniffed from the body and it is read as UTF-8 unless it starts with a UTF-16 byte-order mark.
 - `WebSearch`'s query goes to `smallModel`'s provider, which runs the search.
