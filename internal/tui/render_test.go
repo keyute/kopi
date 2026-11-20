@@ -118,6 +118,12 @@ func TestAgentTaskRow(t *testing.T) {
 	}
 }
 
+func TestWorkflowTaskRow(t *testing.T) {
+	m, _ := newTestModel(t, 60, 20)
+	send(m, event.TaskEnded{ID: "t3", Agent: "workflow", Command: "audit concurrency", Status: "completed", Elapsed: 134 * time.Second})
+	assert.Equal(t, []string{"", "• workflow finished · audit concurrency · 2m 14s"}, body(m))
+}
+
 func TestAgentTaskRowCutsALongDescription(t *testing.T) {
 	m, _ := newTestModel(t, 40, 20)
 	send(m, event.TaskEnded{ID: "t3", Agent: "explore", Command: strings.Repeat("x", 100), Status: "completed", Elapsed: time.Minute})

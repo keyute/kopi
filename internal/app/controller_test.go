@@ -124,6 +124,12 @@ func buildHarness(t *testing.T, rt *pigruntime.Runtime, faux *ai.FauxProviderHan
 	if cfg.JoinTimeout == 0 {
 		cfg.JoinTimeout = waitLimit
 	}
+	if cfg.MaxWorkflows == 0 {
+		cfg.MaxWorkflows = 4
+	}
+	if cfg.MaxAgents == 0 {
+		cfg.MaxAgents = 16
+	}
 	var tasks *fakeTasks
 	if cfg.Tasks == nil {
 		tasks = &fakeTasks{}
@@ -1784,7 +1790,7 @@ func TestBareDenyRemovesTool(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read", "AskUserQuestion"}, req.ToolNames)
-	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil)}, nil, nil, false, nil)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil)}, nil, nil, false, nil, false)), req.SystemPrompt)
 	assert.NotContains(t, req.SystemPrompt, "Exec")
 }
 
@@ -1872,12 +1878,12 @@ func searchSandbox(t *testing.T) pigruntimetest.Sandbox {
 
 func TestWebSearchIsOfferedForASearchingSmallModel(t *testing.T) {
 	h := newHarness(t, searchSandbox(t), Config{SmallModel: "kopi-search/search-1"})
-	assert.Equal(t, []string{"AskUserQuestion", "WebSearch"}, toolNames(h.c.tools))
+	assert.Equal(t, []string{"AskUserQuestion", "WebSearch", "Workflow"}, toolNames(h.c.tools))
 }
 
 func TestWebSearchIsAbsentForANonSearchingModel(t *testing.T) {
 	h := newHarness(t, searchSandbox(t), Config{})
-	assert.Equal(t, []string{"AskUserQuestion"}, toolNames(h.c.tools))
+	assert.Equal(t, []string{"AskUserQuestion", "Workflow"}, toolNames(h.c.tools))
 }
 
 func TestWebSearchIsAbsentWhenRulesRemoveIt(t *testing.T) {
@@ -1887,7 +1893,7 @@ func TestWebSearchIsAbsentWhenRulesRemoveIt(t *testing.T) {
 
 	h := newHarness(t, sb, Config{SmallModel: "kopi-search/search-1", Rules: rules})
 
-	assert.Equal(t, []string{"AskUserQuestion"}, toolNames(h.c.tools))
+	assert.Equal(t, []string{"AskUserQuestion", "Workflow"}, toolNames(h.c.tools))
 }
 
 func serverTool(name string) tool.Tool {
@@ -1924,7 +1930,7 @@ func TestOpenWaitsForServersAndAddsTheirTools(t *testing.T) {
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read", "AskUserQuestion", "ToolSearch"}, req.ToolNames)
 	search := tool.NewToolSearch(nil, nil, nil)
-	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil), search, mcp}, nil, []mcpServer{{name: "s", instructions: "use t wisely", tools: []string{mcp.Name}}}, false, nil)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil), search, mcp}, nil, []mcpServer{{name: "s", instructions: "use t wisely", tools: []string{mcp.Name}}}, false, nil, false)), req.SystemPrompt)
 	assert.Contains(t, req.SystemPrompt, "use t wisely")
 	assert.Contains(t, req.SystemPrompt, "MCP server s tools: mcp__s__t.")
 
@@ -2279,7 +2285,7 @@ func TestBareDenyRemovesServerTool(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read", "AskUserQuestion", "ToolSearch"}, req.ToolNames)
-	assert.Equal(t, []string{"Read", "AskUserQuestion", "ToolSearch", kept.Name}, toolNames(h.c.tools))
+	assert.Equal(t, []string{"Read", "AskUserQuestion", "ToolSearch", kept.Name, "Workflow"}, toolNames(h.c.tools))
 	assert.NotContains(t, req.SystemPrompt, denied.Name)
 }
 
@@ -2355,7 +2361,7 @@ func TestOpenDefersServerTools(t *testing.T) {
 		Servers: servers(pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{a, b}}),
 	})
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
-	require.Equal(t, []string{"Read", "AskUserQuestion", "ToolSearch", a.Name, b.Name}, toolNames(h.c.tools))
+	require.Equal(t, []string{"Read", "AskUserQuestion", "ToolSearch", a.Name, b.Name, "Workflow"}, toolNames(h.c.tools))
 	for i, deferred := range []bool{false, false, false, true, true} {
 		assert.Equal(t, deferred, h.c.tools[i].Deferred, h.c.tools[i].Name)
 	}
@@ -2378,7 +2384,7 @@ func TestNoToolSearchWithoutServerTools(t *testing.T) {
 	read := readTool(t, sb)
 	h := newHarness(t, sb, Config{Tools: []tool.Tool{read}})
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
-	assert.Equal(t, []string{"Read", "AskUserQuestion"}, toolNames(h.c.tools))
+	assert.Equal(t, []string{"Read", "AskUserQuestion", "Workflow"}, toolNames(h.c.tools))
 	assert.Contains(t, joinPrompt(h.c.prompt), "\nTools available: Read, AskUserQuestion.\n")
 	assert.NotContains(t, joinPrompt(h.c.prompt), "deferred")
 
@@ -2392,7 +2398,7 @@ func TestNoToolSearchWithoutServerTools(t *testing.T) {
 		Servers: servers(pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{denied}}),
 	})
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
-	assert.Equal(t, []string{"Read", "AskUserQuestion"}, toolNames(h.c.tools))
+	assert.Equal(t, []string{"Read", "AskUserQuestion", "Workflow"}, toolNames(h.c.tools))
 	assert.Contains(t, joinPrompt(h.c.prompt), "\nTools available: Read, AskUserQuestion.\n")
 	assert.NotContains(t, joinPrompt(h.c.prompt), "deferred")
 	assert.NotContains(t, joinPrompt(h.c.prompt), "MCP server s tools")
@@ -2515,7 +2521,7 @@ func TestTurnUsesNoAmbientState(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read", "AskUserQuestion"}, req.ToolNames)
-	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, append(tools, tool.NewAskUserQuestion(nil)), nil, nil, false, nil)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, append(tools, tool.NewAskUserQuestion(nil)), nil, nil, false, nil, false)), req.SystemPrompt)
 	for _, marker := range pigruntimetest.DecoyMarkers {
 		assert.NotContains(t, req.Raw, marker)
 	}
@@ -2534,7 +2540,7 @@ func TestTurnSendsConfiguredInstructions(t *testing.T) {
 	h.turn(t, "hello")
 
 	req := receive(t, requests)
-	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{tool.NewAskUserQuestion(nil)}, []instruction.Group{global, project}, nil, false, nil)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{tool.NewAskUserQuestion(nil)}, []instruction.Group{global, project}, nil, false, nil, false)), req.SystemPrompt)
 	g, p := strings.Index(req.SystemPrompt, "GLOBAL_RULE"), strings.Index(req.SystemPrompt, "PROJECT_RULE")
 	require.GreaterOrEqual(t, g, 0)
 	assert.Greater(t, p, g, "the global group comes before the project's")
@@ -2797,8 +2803,20 @@ func TestCommandsListSkillsAfterControlCommands(t *testing.T) {
 		{Name: "skill:a", Summary: "does a", Skill: true},
 		{Name: "skill:b", Summary: "does b", Skill: true},
 	}, cmds[n:])
-	assert.Equal(t, []Span{{Start: 0, End: 8, Kind: KindCommand}}, c.Spans("/skill:a"))
-	assert.Nil(t, c.Spans("/skill:z"))
+	assert.Equal(t, []Span{{Start: 0, End: 8, Kind: KindCommand}}, c.Spans(Main, "/skill:a"))
+	assert.Nil(t, c.Spans(Main, "/skill:z"))
+}
+
+func TestControllerSpansHighlightTheKeywordOnlyWhereItTriggers(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	deny, err := policy.NewRules(sb.Workspace, sb.Home, map[string]policy.ToolSpec{"Workflow": {}}, policy.Source{Name: "test", Deny: []string{"Workflow"}})
+	require.NoError(t, err)
+	want := []Span{{Start: 0, End: 9, Kind: KindCommand}}
+
+	assert.Equal(t, want, NewController(nil, Config{MaxWorkflows: 1, MaxAgents: 1}).Spans(Main, "ultracode"))
+	assert.Nil(t, NewController(nil, Config{MaxWorkflows: 1, MaxAgents: 1}).Spans("t1", "ultracode"), "a subagent's view")
+	assert.Nil(t, NewController(nil, Config{Unattended: true}).Spans(Main, "ultracode"))
+	assert.Nil(t, NewController(nil, Config{Rules: deny}).Spans(Main, "ultracode"), "removed by a rule")
 }
 
 // modeHarness opens a harness whose sessions have a plan file and tell the

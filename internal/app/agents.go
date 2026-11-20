@@ -21,9 +21,10 @@ const maxAgents = 20
 
 // neverChild are the tools a subagent never has, whatever its definition says.
 // A subagent builds its own ToolSearch.
-var neverChild = []string{"Agent", "SendMessage", "TaskOutput", "TaskStop", "ToolSearch"}
+var neverChild = []string{"Agent", "SendMessage", "TaskOutput", "TaskStop", "ToolSearch", "Workflow"}
 
-// agentSpec is what a subagent opens with, computed once per process.
+// agentSpec is what a subagent or a workflow agent opens with, computed once
+// per process.
 type agentSpec struct {
 	def    subagent.Definition
 	effort pigruntime.Effort
@@ -31,46 +32,62 @@ type agentSpec struct {
 	prompt []pigruntime.PromptPart
 }
 
-// buildAgents computes the tools and prompt of each definition, in order.
-// extra are built-in tools created with the root's session tools rather than
-// in Config.AgentTools; serverTools and servers are the root's. All are
-// already filtered by the rules.
-func (c *Controller) buildAgents(extra, serverTools []tool.Tool, servers []mcpServer) []agentSpec {
+// buildAgents computes the tools and prompt of each definition, in order, as
+// subagents, and as workflow agents: those follow the default workflow agent,
+// whose spec has no definition (and so an empty name) and exists even with no
+// definitions. extra are built-in tools created with the root's session tools
+// rather than in Config.AgentTools; serverTools and servers are the root's. All
+// are already filtered by the rules.
+func (c *Controller) buildAgents(extra, serverTools []tool.Tool, servers []mcpServer) (subagents, workflows []agentSpec) {
 	base := slices.DeleteFunc(slices.Concat(c.cfg.AgentTools, extra), func(t tool.Tool) bool {
 		return c.cfg.Rules.Removes(t.Name) || slices.Contains(neverChild, t.Name)
 	})
-	var specs []agentSpec
-	for _, def := range c.cfg.Agents {
-		effort := pigruntime.DefaultEffort
+	workflows = append(workflows, c.buildSpec(base, serverTools, servers, nil, true))
+	for i := range c.cfg.Agents {
+		subagents = append(subagents, c.buildSpec(base, serverTools, servers, &c.cfg.Agents[i], false))
+		workflows = append(workflows, c.buildSpec(base, serverTools, servers, &c.cfg.Agents[i], true))
+	}
+	return subagents, workflows
+}
+
+// buildSpec is def's spec; nil def is the default workflow agent, which has
+// every tool, the instruction files and the default effort.
+func (c *Controller) buildSpec(base, serverTools []tool.Tool, servers []mcpServer, def *subagent.Definition, workflow bool) agentSpec {
+	spec := agentSpec{effort: pigruntime.DefaultEffort}
+	named := func(tool.Tool) bool { return true }
+	groups := c.cfg.Instructions
+	if def != nil {
+		spec.def = *def
 		if def.Effort != "" {
 			// The definition's effort was validated when it was loaded.
-			effort, _ = pigruntime.ParseEffort(def.Effort)
+			spec.effort, _ = pigruntime.ParseEffort(def.Effort)
 		}
-		named := func(t tool.Tool) bool { return def.Tools == nil || slices.Contains(def.Tools, t.Name) }
-		tools := slices.DeleteFunc(slices.Clone(base), func(t tool.Tool) bool { return !named(t) })
-		mcp := slices.DeleteFunc(slices.Clone(serverTools), func(t tool.Tool) bool { return !named(t) })
-		if deferred := slices.DeleteFunc(slices.Clone(mcp), func(t tool.Tool) bool { return !t.Deferred }); len(deferred) > 0 {
-			tools = append(tools, tool.NewToolSearch(deferred, pigruntime.RankTools, pigruntime.LoadTools))
+		if def.Tools != nil {
+			named = func(t tool.Tool) bool { return slices.Contains(def.Tools, t.Name) }
 		}
-		tools = append(tools, mcp...)
-
-		var childServers []mcpServer
-		for _, s := range servers {
-			own := slices.DeleteFunc(slices.Clone(s.tools), func(name string) bool {
-				return !slices.ContainsFunc(mcp, func(t tool.Tool) bool { return t.Name == name })
-			})
-			if len(own) > 0 {
-				childServers = append(childServers, mcpServer{name: s.name, instructions: s.instructions, tools: own})
-			}
-		}
-		groups := c.cfg.Instructions
 		if !def.Instructions {
 			groups = nil
 		}
-		prompt := buildPrompt(c.cfg.Workspace, tools, groups, childServers, c.cfg.Classifier != nil, &def)
-		specs = append(specs, agentSpec{def: def, effort: effort, tools: tools, prompt: prompt})
 	}
-	return specs
+	tools := slices.DeleteFunc(slices.Clone(base), func(t tool.Tool) bool { return !named(t) })
+	mcp := slices.DeleteFunc(slices.Clone(serverTools), func(t tool.Tool) bool { return !named(t) })
+	if deferred := slices.DeleteFunc(slices.Clone(mcp), func(t tool.Tool) bool { return !t.Deferred }); len(deferred) > 0 {
+		tools = append(tools, tool.NewToolSearch(deferred, pigruntime.RankTools, pigruntime.LoadTools))
+	}
+	tools = append(tools, mcp...)
+
+	var childServers []mcpServer
+	for _, s := range servers {
+		own := slices.DeleteFunc(slices.Clone(s.tools), func(name string) bool {
+			return !slices.ContainsFunc(mcp, func(t tool.Tool) bool { return t.Name == name })
+		})
+		if len(own) > 0 {
+			childServers = append(childServers, mcpServer{name: s.name, instructions: s.instructions, tools: own})
+		}
+	}
+	spec.tools = tools
+	spec.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, c.cfg.Classifier != nil, def, workflow)
+	return spec
 }
 
 // agentLauncher is the tool.Agents over the Controller, kept off its exported API.

@@ -3,6 +3,8 @@ package app
 import (
 	"errors"
 	"fmt"
+
+	"github.com/keyute/kopi/internal/tool"
 )
 
 var (
@@ -18,4 +20,14 @@ var (
 	ErrMissingArgument  = errors.New("missing argument")
 	ErrLoggingIn        = errors.New("a login is under way")
 	ErrTooManyAgents    = fmt.Errorf("%d subagents are already running", maxAgents)
+
+	// ErrTooManyWorkflows is wrapped with the configured limit as "%d workflows are already running".
+	ErrTooManyWorkflows = errors.New("workflows are already running")
+
+	ErrTooManyWorkflowCalls   = fmt.Errorf("a workflow may make at most %d agent() calls", tool.WorkflowCalls)
+	ErrAgentStopped           = errors.New("the agent was stopped")
+	ErrNoStructuredOutput     = errors.New("the agent ended without calling StructuredOutput")
+	ErrUnknownAgentType       = errors.New("unknown agent type")
+	ErrStructuredOutputDenied = errors.New("the StructuredOutput tool is denied by a rule")
+	ErrBadSchema              = errors.New("schema must be a JSON Schema of type object")
 )

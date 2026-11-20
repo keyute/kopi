@@ -194,3 +194,39 @@ func TestResumedSessionStartsWithDeferredToolsUnloaded(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Load"}, declared(<-requests))
 }
+
+func TestPromptToolsDeclareTheToolInTheSameRequest(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 2)
+	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "with"), captureRequest(requests, "without")})
+
+	var ran atomic.Bool
+	sess := openTestSession(t, r, deferredTool(&ran))
+
+	_, err := sess.Send(t.Context(), Prompt{Text: "a", Tools: []string{"Deferred", "Missing"}}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Deferred"}, declared(<-requests))
+
+	// The tool stays active in the session, so a fresh session is the one without it.
+	sess = openTestSession(t, r, deferredTool(&ran))
+	_, err = sess.Send(t.Context(), Prompt{Text: "b"}, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, declared(<-requests))
+}
+
+func TestHandedOverPromptToolsDeclareTheToolInTheNextRequest(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done")})
+
+	var ran atomic.Bool
+	sess := openTestSession(t, r, probeTool(okProbe), deferredTool(&ran))
+	more, _ := moreOnce(Prompt{Text: "x", Tools: []string{"Deferred"}})
+
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
+	require.NoError(t, err)
+	require.Equal(t, "done", res.Reply)
+	assert.ElementsMatch(t, []string{"Probe", "Deferred"}, declared(<-requests))
+}

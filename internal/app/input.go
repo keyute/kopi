@@ -29,9 +29,10 @@ type Span struct {
 }
 
 // Spans returns the input's highlighted runs in line and rune-offset order.
-// A control command is highlighted alone; any other input gets its @ references
-// and the skill commands skills types, unless it opens with an unknown command.
-func Spans(text string, skills *skill.Set) []Span {
+// A control command is highlighted alone; any other input gets its @ references,
+// the skill commands skills types and, when ultracode is set, the keyword that
+// turns it on, unless it opens with an unknown command.
+func Spans(text string, skills *skill.Set, ultracode bool) []Span {
 	if line, col, ok := commandAt(text); ok {
 		name, _, _ := parse(text)
 		if isControl(name) {
@@ -55,7 +56,36 @@ func Spans(text string, skills *skill.Set) []Span {
 			spans = append(spans, Span{Line: tok.Line, Start: tok.Start, End: tok.End, Kind: KindCommand})
 		}
 	}
+	if ultracode {
+		spans = append(spans, keywordSpans(text)...)
+	}
 	slices.SortStableFunc(spans, func(a, b Span) int { return cmp.Or(cmp.Compare(a.Line, b.Line), cmp.Compare(a.Start, b.Start)) })
+	return spans
+}
+
+// keyword is the word that makes the Workflow tool callable.
+const keyword = "ultracode"
+
+// keywordSpans returns the runs of the whole word keyword, ignoring case, outside
+// @ references.
+func keywordSpans(text string) []Span {
+	var spans []Span
+	for i, l := range strings.Split(text, "\n") {
+		line := []rune(l)
+		refs := references(line)
+		word := func(j int) bool {
+			return j >= 0 && j < len(line) && (unicode.IsLetter(line[j]) || unicode.IsDigit(line[j]) || line[j] == '_')
+		}
+		for start := 0; start+len(keyword) <= len(line); start++ {
+			end := start + len(keyword)
+			if !strings.EqualFold(string(line[start:end]), keyword) || word(start-1) || word(end) {
+				continue
+			}
+			if !slices.ContainsFunc(refs, func(r [2]int) bool { return r[0] <= start && start < r[1] }) {
+				spans = append(spans, Span{Line: i, Start: start, End: end, Kind: KindCommand})
+			}
+		}
+	}
 	return spans
 }
 

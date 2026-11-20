@@ -327,6 +327,18 @@ func TestRootAcceptsExitPlanModeRuleWithoutTheTool(t *testing.T) {
 	assert.Equal(t, "ok\n", stdout)
 }
 
+func TestRootAcceptsWorkflowRulesWithoutTheTools(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+
+	stdout, _, err := execute(t, "", "--model", mockModel, "--disallowed-tools", "Workflow,StructuredOutput", "-p", "hi")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok\n", stdout)
+	assert.NotContains(t, toolNames(server.next(t)), "Workflow", "print mode never offers it")
+}
+
 func TestRootOffersWebSearchForSearchingSmallModel(t *testing.T) {
 	e := newTestEnv(t)
 	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })

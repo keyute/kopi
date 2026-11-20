@@ -150,3 +150,13 @@ func TestHighlightMarksSkillCommands(t *testing.T) {
 
 	assert.Equal(t, []string{"/skill:a", "@x", "/skill:b"}, pieces(m))
 }
+
+func TestHighlightMarksTheKeywordOnlyInTheMainView(t *testing.T) {
+	m, _ := agentsModel(t)
+	pasteText(m, "ultracode now")
+	assert.Equal(t, []string{"ultracode"}, pieces(m))
+
+	display(m, "t1")
+	pasteText(m, "ultracode now")
+	assert.Nil(t, pieces(m))
+}

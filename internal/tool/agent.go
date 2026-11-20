@@ -112,8 +112,13 @@ func agentDescription(defs []subagent.Definition) string {
 	}
 	var b strings.Builder
 	b.WriteString(desc + " Subagents:")
+	writeDefinitions(&b, defs)
+	return b.String()
+}
+
+// writeDefinitions writes one "name: description" line per definition, in the order given.
+func writeDefinitions(b *strings.Builder, defs []subagent.Definition) {
 	for _, d := range defs {
 		b.WriteString("\n" + d.Name + ": " + d.Description)
 	}
-	return b.String()
 }
