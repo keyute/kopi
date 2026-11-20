@@ -131,15 +131,12 @@ func (d *dialog) rows(width, maxRows, limit int, th theme) []string {
 }
 
 // shape is a dialog's title and options rendered for one width, before a
-// height is applied; note and foot are the rows of the pass being fitted.
+// height is applied.
 type shape struct {
 	width, col int
 	rule       string
 	title      []string
-	note, foot []string
-	// gap is 1 when a blank row separates the options from the foot.
-	gap  int
-	opts []optionBlock
+	opts       []optionBlock
 }
 
 // optionBlock is an option's rows without its field's, which go in at slot.at.
@@ -204,22 +201,24 @@ func (d *dialog) blocks(col int, th theme) []optionBlock {
 func (d *dialog) fit(s *shape, note, foot string, maxRows, limit int, th theme) ([]string, bool) {
 	none := lipgloss.NewStyle()
 	d.areas, d.optionStarts = nil, nil
-	s.note, s.foot, s.gap = nil, nil, 0
+	var noteRows, footRows []string
+	// gap is 1 when a blank row separates the options from the foot.
+	gap := 0
 	if note != "" {
-		s.note = hang("  ", none, note, fg(th.dim), s.width)
+		noteRows = hang("  ", none, note, fg(th.dim), s.width)
 	}
 	switch {
 	case d.warn != "":
-		s.foot = hang("  ", none, d.warn, fg(th.warning), s.width)
+		footRows = hang("  ", none, d.warn, fg(th.warning), s.width)
 	case foot != "":
-		s.foot = hang("  ", none, foot, fg(th.dim), s.width)
+		footRows = hang("  ", none, foot, fg(th.dim), s.width)
 	}
 	// Without options the blank row after the body already separates the foot.
-	if len(s.foot) > 0 && len(s.opts) > 0 {
-		s.gap = 1
+	if len(footRows) > 0 && len(s.opts) > 0 {
+		gap = 1
 	}
-	above := 1 + len(d.head) + len(s.title) + len(s.note) + 1
-	fixed := above + s.gap + len(s.foot) + 1
+	above := 1 + len(d.head) + len(s.title) + len(noteRows) + 1
+	fixed := above + gap + len(footRows) + 1
 	smallest, plain := fixed, 0
 	for _, o := range s.opts {
 		plain += len(o.rows)
@@ -228,7 +227,7 @@ func (d *dialog) fit(s *shape, note, foot string, maxRows, limit int, th theme) 
 		}
 	}
 	if smallest+plain > maxRows {
-		return d.squeeze(s, maxRows, th), false
+		return d.squeeze(s, noteRows, footRows, gap, maxRows, th), false
 	}
 
 	all, areas, starts := d.expand(s, min(limit, maxRows-fixed-plain), th)
@@ -253,9 +252,9 @@ func (d *dialog) fit(s *shape, note, foot string, maxRows, limit int, th theme) 
 	var under []string
 	if p := d.pane; p != nil && len(p.lines) > 0 {
 		beside := p.list > 0
-		room := min(limit, maxRows-first-n-s.gap-len(s.foot)-1-3)
+		room := min(limit, maxRows-first-n-gap-len(footRows)-1-3)
 		if beside {
-			room = min(limit, maxRows-first-len(s.foot)-4)
+			room = min(limit, maxRows-first-len(footRows)-4)
 		}
 		if room >= 1 {
 			cut, windowed = len(p.lines) > room, true
@@ -281,14 +280,14 @@ func (d *dialog) fit(s *shape, note, foot string, maxRows, limit int, th theme) 
 		// A stale offset or cut would take page keys the transcript should get.
 		d.scroll = scroller{}
 	}
-	rows := make([]string, 0, first+len(all)+len(under)+s.gap+len(s.foot)+1)
+	rows := make([]string, 0, first+len(all)+len(under)+gap+len(footRows)+1)
 	rows = append(append(append(append(rows, s.rule), d.head...), s.title...), body...)
-	rows = append(append(rows, s.note...), "")
+	rows = append(append(rows, noteRows...), "")
 	rows = append(append(rows, all...), under...)
-	if s.gap == 1 {
+	if gap == 1 {
 		rows = append(rows, "")
 	}
-	rows = append(append(rows, s.foot...), s.rule)
+	rows = append(append(rows, footRows...), s.rule)
 	for _, a := range areas {
 		a.y += first
 		d.areas = append(d.areas, a)
@@ -335,7 +334,7 @@ func (d *dialog) previewBox(lines []string, bw, room, indent int, th theme) []st
 }
 
 // squeeze draws d within maxRows of 3 or more when its fixed rows do not fit.
-func (d *dialog) squeeze(s *shape, maxRows int, th theme) []string {
+func (d *dialog) squeeze(s *shape, noteRows, footRows []string, gap, maxRows int, th theme) []string {
 	d.scroll = scroller{}
 	all, areas, starts := d.expand(s, 0, th)
 	room := maxRows - 2
@@ -361,13 +360,13 @@ func (d *dialog) squeeze(s *shape, maxRows int, th theme) []string {
 			pos = take(1)
 		}
 	}
-	kt, kn := take(len(s.title)), take(len(s.note))
+	kt, kn := take(len(s.title)), take(len(noteRows))
 	// The foot is drawn whole or left out, so key hints are never cut mid-sentence.
 	kf := 0
-	if len(s.foot) <= room {
-		kf = take(len(s.foot))
+	if len(footRows) <= room {
+		kf = take(len(footRows))
 	}
-	blank, gap := take(1), take(s.gap)
+	blank, kg := take(1), take(gap)
 	start := 0
 	if overflow {
 		w += room
@@ -375,7 +374,7 @@ func (d *dialog) squeeze(s *shape, maxRows int, th theme) []string {
 	}
 
 	rows := append([]string{s.rule}, d.head[:kh]...)
-	rows = append(append(rows, s.title[:kt]...), s.note[:kn]...)
+	rows = append(append(rows, s.title[:kt]...), noteRows[:kn]...)
 	if blank == 1 {
 		rows = append(rows, "")
 	}
@@ -384,10 +383,10 @@ func (d *dialog) squeeze(s *shape, maxRows int, th theme) []string {
 	if pos == 1 {
 		rows = append(rows, positionRow(d.sel, len(d.options), s.width, th))
 	}
-	if gap == 1 {
+	if kg == 1 {
 		rows = append(rows, "")
 	}
-	rows = append(append(rows, s.foot[:kf]...), s.rule)
+	rows = append(append(rows, footRows[:kf]...), s.rule)
 
 	for _, a := range areas {
 		if top, bottom := max(a.y, start), min(a.y+a.h, start+w); top < bottom {

@@ -174,6 +174,27 @@ func TestTrustRowsScrollBack(t *testing.T) {
 	assert.Equal(t, top, trustScreen(m))
 }
 
+func TestTrustRowsWithNoRoomForTheBodyShowOnlyTheOptions(t *testing.T) {
+	m := newTrustTestModel(trustReq)
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 8})
+	rule := strings.Repeat("─", 60)
+	want := []string{
+		rule,
+		"  Do you trust this folder?",
+		"",
+		"❭ 1. Yes, trust this folder",
+		"  2. Yes, trust the parent folder (/w)",
+		"  3. No, don't trust",
+		rule,
+		"  enter to choose · esc to decide later",
+	}
+	assert.Equal(t, want, trustScreen(m))
+
+	trustPress(m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+
+	assert.Equal(t, want, trustScreen(m))
+}
+
 func TestTrustRowsShowTheScrollHintOnlyWhileCut(t *testing.T) {
 	m := newTrustTestModel(trustReq)
 	assert.NotContains(t, strings.Join(trustScreen(m), "\n"), "to scroll")

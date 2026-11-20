@@ -394,6 +394,37 @@ func TestTasksChangedRefreshesKeepingTheSelection(t *testing.T) {
 	})
 }
 
+func TestTasksChangedWhileCoveredRefreshesTheListBehindThePrompt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		submitText(m, "/tasks")
+		press(m, down)
+		send(m, approvalCase.open)
+
+		c.tasks = c.tasks[1:]
+		send(m, event.TasksChanged{})
+		send(m, approvalCase.end)
+
+		require.NotNil(t, m.front())
+		assert.Equal(t, promptTasks, m.front().kind)
+		assert.Equal(t, []string{"❭ 1. t2 · completed · 5s · make build"}, dialogRows(t, m)[3:4])
+	})
+}
+
+func TestTasksChangedWhileCoveredClosesTheListWhenNoTasksRemain(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		submitText(m, "/tasks")
+		send(m, approvalCase.open)
+
+		c.tasks = nil
+		send(m, event.TasksChanged{})
+		send(m, approvalCase.end)
+
+		assert.Nil(t, m.front())
+	})
+}
+
 func TestTasksOverflowKeepsTheSelectedOptionVisible(t *testing.T) {
 	for _, size := range []struct{ width, height int }{{60, 30}, {40, 15}, {40, 10}} {
 		t.Run(fmt.Sprintf("%dx%d", size.width, size.height), func(t *testing.T) {

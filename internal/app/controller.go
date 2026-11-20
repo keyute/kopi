@@ -1060,10 +1060,13 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		c.releaseSwitch(w, oldEmit, true)
 	}
 	// A child's emitter stays bound to the old epoch, so its pending asks end
-	// before the advance drops them. One queue section keeps a child's ask from
-	// registering in between.
+	// before the advance drops them, and an ended ask is no longer answerable.
+	// One queue section keeps a child's ask from registering in between.
 	c.queue.Lock()
 	c.endRequests()
+	c.mu.Lock()
+	c.approvals = nil
+	c.mu.Unlock()
 	c.relay.advance()
 	c.queue.Unlock()
 	if old != nil {

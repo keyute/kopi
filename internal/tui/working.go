@@ -33,7 +33,7 @@ func workingRow(sp *spinner.Model, text, hint string, th theme) string {
 func (m *model) workingText() (string, bool) {
 	v, front := m.view(), m.front()
 	switch {
-	case front != nil && front.waits:
+	case front != nil && front.kind.waits():
 		return "Waiting for you…", true
 	case v.busy:
 		return v.verb.ing + "… " + formatDuration(time.Since(v.turnStart)), true

@@ -115,7 +115,7 @@
 | `Type something.` | Up on the first row | Back to the options |
 | `Type something.` | Left, Right | Switch questions while the field is empty, else move the cursor |
 | Note | Enter or Tab | Save the note; a blank note removes it |
-| Note | Esc | Discard the edit and close the note |
+| Note | Esc or Ctrl+C | Discard the edit and close the note; the questions stay open |
 | Review | Enter | Submit; with a gap, jump to the first unanswered question |
 | Review | Left | Back to the last question |
 | Any | PgUp, PgDn | Scroll a cut preview or review, in a note too (the mouse wheel over the dialog does too); they do not move the cursor in a text field |

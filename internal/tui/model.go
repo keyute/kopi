@@ -245,9 +245,6 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		}
 		return m.paste(msg.Content)
 	case imagePastedMsg:
-		if m.front() != nil {
-			return nil
-		}
 		m.focus = agentFocus{}
 		return m.composer.insertImage(msg.path)
 	case pasteFailedMsg:
@@ -526,22 +523,22 @@ func (m *model) apply(ev event.Event) *view {
 		m.activity = ev.Text
 		return nil
 	case event.ApprovalRequested:
-		m.open(promptApproval, true, newApprovalDialog(&ev, &m.keys, m.th))
+		m.open(promptApproval, newApprovalDialog(&ev, &m.keys, m.th))
 		return nil
 	case event.QuestionRequested:
-		m.open(promptQuestion, true, newQuestionDialog(ev, &m.keys, m.th))
+		m.open(promptQuestion, newQuestionDialog(ev, &m.keys, m.th))
 		return nil
 	case event.PlanRequested:
 		// A repeat after an edit keeps the dialog and what was typed in it.
 		if !m.owned(ev) {
-			m.open(promptPlan, true, newPlanDialog(ev, &m.keys, m.th))
+			m.open(promptPlan, newPlanDialog(ev, &m.keys, m.th))
 			// The plan is a block in the main transcript and the dialog takes every key.
 			if m.shown != app.Main {
 				m.show(app.Main)
 			}
 		}
 	case event.LoginRequested:
-		m.open(promptLogin, false, newLoginDialog(ev, &m.keys, m.th))
+		m.open(promptLogin, newLoginDialog(ev, &m.keys, m.th))
 		return nil
 	case event.QuestionEnded, event.PlanEnded, event.LoginEnded, event.ApprovalEnded:
 		return nil

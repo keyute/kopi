@@ -113,8 +113,8 @@ func TestOpenOrdersByKindThenArrival(t *testing.T) {
 		event.ApprovalRequested{Token: 4, Title: "Edit b.go"},
 		event.ApprovalRequested{Token: 5, Title: "Edit c.go"},
 	)
-	m.open(promptTasks, false, &taskDialog{d: &dialog{}, km: &m.keys})
-	m.open(promptQuestion, true, newQuestionDialog(event.QuestionRequested{Token: 6, Questions: []tool.Question{choice("one", false, "A")}}, &m.keys, m.th))
+	m.open(promptTasks, &taskDialog{d: &dialog{}, km: &m.keys})
+	m.open(promptQuestion, newQuestionDialog(event.QuestionRequested{Token: 6, Questions: []tool.Question{choice("one", false, "A")}}, &m.keys, m.th))
 
 	var kinds []promptKind
 	for _, h := range m.prompts {
@@ -393,6 +393,21 @@ func TestCancelDismissesTheFrontPromptAsEscDoes(t *testing.T) {
 	}
 }
 
+func TestCancelInATaskOutputReturnsToTheList(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := tasksModel(t)
+		submitText(m, "/tasks")
+		press(m, enter)
+		require.Equal(t, "t1", tasksOf(m).open)
+
+		press(m, ctrlC)
+
+		require.NotNil(t, tasksOf(m))
+		assert.Empty(t, tasksOf(m).open)
+		assert.Equal(t, promptTasks, m.front().kind)
+	})
+}
+
 func TestCancelCancelsALoginAndLeavesTheTasksList(t *testing.T) {
 	m, c := newTestModel(t, 70, 30)
 	send(m, loginCase.open)
@@ -416,18 +431,29 @@ func TestClipboardTextIsDroppedWhileAPromptIsInFront(t *testing.T) {
 
 		assert.Empty(t, m.composer.value())
 	}
+
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := tasksModel(t)
+		submitText(m, "/tasks")
+
+		m.Update(clipboardTextMsg{text: "stray"})
+
+		assert.Empty(t, m.composer.value())
+		assert.NotNil(t, tasksOf(m))
+	})
 }
 
-func TestPastedImageIsDroppedWhileAPromptIsInFront(t *testing.T) {
+func TestPastedImageGoesToTheDraftWhileAPromptIsInFront(t *testing.T) {
 	for _, pc := range []promptCase{approvalCase, questionCase, planCase, loginCase} {
 		m, _ := newTestModel(t, 70, 30)
 		send(m, pc.open)
 
 		m.Update(imagePastedMsg{path: writeImage(t, t.TempDir(), "a.png")})
 
-		text, images := m.composer.expanded()
-		assert.Empty(t, text)
-		assert.Empty(t, images)
+		_, images := m.composer.expanded()
+		assert.Len(t, images, 1)
+		require.NotNil(t, m.front())
+		assert.Equal(t, pc.kind, m.front().kind)
 	}
 }
 

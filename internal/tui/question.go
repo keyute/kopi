@@ -48,13 +48,6 @@ type questionDialog struct {
 	sizes        map[int][2]int
 	previewWidth int
 	previewTheme theme
-	// stripText is the tab strip for stripWidth, stripTheme, stripTab and the
-	// answered tabs in stripMarks.
-	stripText  string
-	stripWidth int
-	stripTheme theme
-	stripTab   int
-	stripMarks []bool
 	// reviewWidth and reviewTheme are what review.body was made for; a key
 	// clears the body, as it may change an answer.
 	reviewWidth int
@@ -230,18 +223,11 @@ func (q *questionDialog) strip(width int, th theme) string {
 	if len(q.qs) < 2 {
 		return ""
 	}
-	marks := make([]bool, len(q.qs))
-	for i := range marks {
-		marks[i] = q.answered(i)
-	}
-	if q.stripMarks != nil && q.stripWidth == width && q.stripTheme == th && q.stripTab == q.tab && slices.Equal(q.stripMarks, marks) {
-		return q.stripText
-	}
 	cells := make([]string, len(q.qs)+1)
 	styles := make([]lipgloss.Style, len(cells))
 	for i, qu := range q.qs {
 		mark, st := "☐", fg(th.muted)
-		if marks[i] {
+		if q.answered(i) {
 			mark, st = "☑", fg(th.success)
 		}
 		cells[i], styles[i] = " "+mark+" "+cut(qu.Header, headerWidth)+" ", st
@@ -259,9 +245,7 @@ func (q *questionDialog) strip(width int, th theme) string {
 	for i := start; i < len(cells); i++ {
 		b.WriteString(styles[i].Render(cells[i]))
 	}
-	q.stripText = "  " + ansi.Truncate(b.String(), max(0, width-2), "…")
-	q.stripMarks, q.stripWidth, q.stripTheme, q.stripTab = marks, width, th, q.tab
-	return q.stripText
+	return "  " + ansi.Truncate(b.String(), max(0, width-2), "…")
 }
 
 // dialog is the shown page with its tab strip, key hints and preview or

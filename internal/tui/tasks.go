@@ -39,7 +39,7 @@ func (m *model) showTasks() tea.Cmd {
 	}
 	t := &taskDialog{d: &dialog{}, km: &m.keys, list: list}
 	t.setOptions(m.width)
-	m.open(promptTasks, false, t)
+	m.open(promptTasks, t)
 	return nil
 }
 

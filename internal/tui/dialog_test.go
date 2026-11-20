@@ -540,6 +540,26 @@ func TestDialogRowsNeverPassTheHeightAndRecordWhatIsDrawn(t *testing.T) {
 	}
 }
 
+func TestDialogRowsWithAPaneNeverPassTheHeight(t *testing.T) {
+	th := mocha()
+	rule := strings.Repeat("─", 30)
+	lines := make([]string, 30)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("p%d", i+1)
+	}
+	for _, list := range []int{0, 12} {
+		d := fieldDialog("Later", "More")
+		d.head, d.foot = []string{"tabs"}, "enter to choose"
+		d.pane = &pane{lines: lines, width: 10, most: 30, list: list}
+		for height := 2; height < 40; height++ {
+			rows := plainRows(d.rows(30, height, 5, th))
+			require.LessOrEqual(t, len(rows), height, "list %d at %d", list, height)
+			assert.Equal(t, rule, rows[0], "list %d at %d", list, height)
+			assert.Equal(t, rule, rows[len(rows)-1], "list %d at %d", list, height)
+		}
+	}
+}
+
 func TestDialogTailFollowsTheEndUntilScrolledOffIt(t *testing.T) {
 	th := mocha()
 	d := scrollDialog(30)

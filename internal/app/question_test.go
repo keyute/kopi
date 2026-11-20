@@ -160,7 +160,9 @@ func TestQuestionCancelledBySessionSwitchEnds(t *testing.T) {
 
 	wait(t, w.Done())
 	evs := h.rec.all()
-	endedAt := slices.Index(evs, event.Event(event.QuestionEnded{Token: req.Token}))
+	ended := event.Event(event.QuestionEnded{Token: req.Token})
+	assert.Len(t, slices.DeleteFunc(slices.Clone(evs), func(ev event.Event) bool { return ev != ended }), 1)
+	endedAt := slices.Index(evs, ended)
 	changedAt := slices.IndexFunc(evs, func(ev event.Event) bool {
 		changed, ok := ev.(event.SessionChanged)
 		return ok && changed.SessionID != oldID

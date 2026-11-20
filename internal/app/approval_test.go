@@ -477,7 +477,9 @@ func TestApprovalCancelledBySessionSwitchEnds(t *testing.T) {
 
 	wait(t, w.Done())
 	evs := h.rec.all()
-	endedAt := slices.Index(evs, event.Event(event.ApprovalEnded{Token: req.Token}))
+	ended := event.Event(event.ApprovalEnded{Token: req.Token})
+	assert.Len(t, slices.DeleteFunc(slices.Clone(evs), func(ev event.Event) bool { return ev != ended }), 1)
+	endedAt := slices.Index(evs, ended)
 	changedAt := slices.IndexFunc(evs, func(ev event.Event) bool {
 		changed, ok := ev.(event.SessionChanged)
 		return ok && changed.SessionID != oldID
@@ -1049,6 +1051,7 @@ func TestSessionSwitchEndsAChildsPendingAskOnceBeforeSessionChanged(t *testing.T
 	assert.Len(t, slices.DeleteFunc(slices.Clone(evs), func(ev event.Event) bool { return ev != ended }), 1)
 	assert.Less(t, slices.Index(evs, ended), changedAt)
 	assert.False(t, a.c.Answer(req.Token, policy.Decision{Answer: policy.Allow}))
+	assert.Empty(t, a.c.approvals)
 	assert.Zero(t, ran.Load())
 }
 
