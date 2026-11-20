@@ -38,7 +38,7 @@ var KeyActions = []string{
 }
 
 // StatusSegments lists every segment the status line can show.
-var StatusSegments = []string{"model", "effort", "context", "tools", "cost", "branch", "mode", "notice", "sandbox", "agents", "shells", "tokens", "changes", "cwd"}
+var StatusSegments = []string{"model", "effort", "context", "tools", "cost", "branch", "mode", "notice", "sandbox", "agents", "shells", "workflows", "tokens", "changes", "cwd"}
 
 // AgentSegments lists every segment an agent row can show.
 var AgentSegments = []string{"agent", "tokens", "model", "effort", "context", "tools", "cost", "elapsed", "state", "activity", "id"}
@@ -107,7 +107,7 @@ func DefaultKeys() map[string][]string {
 }
 
 func DefaultStatusLine() StatusLine {
-	return StatusLine{Left: []string{"$model", "$context", "$branch( $changes)"}, Right: []string{"$notice", "$shells", "$sandbox", "$mode"}, Separator: " · "}
+	return StatusLine{Left: []string{"$model", "$context", "$branch( $changes)"}, Right: []string{"$notice", "$shells", "$workflows", "$sandbox", "$mode"}, Separator: " · "}
 }
 
 func DefaultAgentLine() AgentLine {

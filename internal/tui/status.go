@@ -88,6 +88,9 @@ var segments = map[string]segment{
 	"shells": func(s statusInput, th theme) (string, bool) {
 		return fg(th.dim).Render(countText(s.Shells, "shell")), s.Shells > 0
 	},
+	"workflows": func(s statusInput, th theme) (string, bool) {
+		return fg(th.dim).Render(countText(s.Workflows, "workflow")), s.Workflows > 0
+	},
 	"tokens": func(s statusInput, th theme) (string, bool) {
 		return fg(th.text).Render(tokensText(s.ContextTokens)), s.ContextTokens > 0
 	},

@@ -112,7 +112,7 @@ What each key does is in [usage](usage.md#keys).
 
 `statusline` lists the status line's `left` and `right` entries. Each entry is a [format](#formats) naming built-in segments or your own `segments`.
 
-- Defaults: left `$model`, `$context`, `$branch( $changes)`; right `$notice`, `$shells`, `$sandbox`, `$mode`.
+- Defaults: left `$model`, `$context`, `$branch( $changes)`; right `$notice`, `$shells`, `$workflows`, `$sandbox`, `$mode`.
 - `separator` goes between entries (default ` · `, `""` for none). An entry that draws nothing is left out with its separator. Nothing is trimmed.
 - On a narrow terminal the left side drops whole entries from its right end. When the line still does not fit, the left side is cleared and the right side is cut, keeping the entry that names `mode` whole at the right end when it fits.
 
@@ -159,6 +159,7 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 | `sandbox` | `sandboxed` or `unsandboxed` when `Bash` is available; shows the default, not a call that sets `unsandboxed` |
 | `agents` | Running subagents (`2 agents`); absent at none |
 | `shells` | Running background shells (`1 shell`); absent at none |
+| `workflows` | Running workflows (`1 workflow`); absent at none |
 | `changes` | Lines added and removed against `HEAD` in tracked files, staged or not (`+12 -3`; only the non-zero side shows, `+12` or `-3`); absent when there are none, outside a git repository and in a repository with no commit |
 
 - `model`, `effort`, `context`, `tokens`, `tools` and `cost` show the session whose view is open.

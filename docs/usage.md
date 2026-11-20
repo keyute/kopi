@@ -54,7 +54,10 @@ Defaults; change them with [`keys`](configuration.md#keys).
 - Up at the top of the input pulls queued messages back into it for editing; with nothing queued it browses input history, and Down goes back.
 - Down from the last line of the input, with no newer history entry, moves into the [agent rows](subagents.md#agent-rows) under the status line: Up and Down move, Enter opens that session's view, `x` stops the selected subagent, Esc or typing returns to the input.
 - Esc interrupts the running turn of the session whose view is open: the main agent's in the main view, only that subagent's run in a [subagent's view](subagents.md#views). It never acts on another session.
-- While the turn is idle and background tasks, subagents or [workflows](workflows.md) run, the row above the input reads `Waiting on 2 agents, 1 workflow, 1 shell… 1m 5s`.
+- The row above the input, in priority order: `Waiting for you…` while an approval, question or plan dialog is open; `<Verb>… <elapsed>` (`Brewing… 12s`) while the open view's turn runs; in the main view, Kopi's own activity such as `Connecting to MCP servers…` or `Logging in to <provider>…`; `2 agents, 1 workflow, 1 shell still running` in the main view while the main agent is idle and background tasks, subagents or [workflows](workflows.md) run.
+- A turn ends with `κ Brewed for 41s`, `κ Interrupted after 12s` or `κ Failed after 12s` followed by the error.
+- Each turn has its own row and time, including a turn started by a task's end. The time is wall time and includes time spent waiting on an approval.
+- After an interrupt, a task's end starts no turn until the next prompt; see [background tasks](tools.md#background-tasks).
 - Ctrl+C interrupts the open view's running turn as Esc does, else clears the draft, else a second press within two seconds exits.
 - After an interrupt, queued messages return to the input; `/new`, `/resume` and exiting discard them.
 - Ctrl+D exits when the input is empty.

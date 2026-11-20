@@ -69,7 +69,7 @@ Report file paths and line numbers.
 ## What you see
 
 - In the transcript a call shows as `• explorer › <description>` with `↳ launched` (the row does not open), and its end as `• explorer finished · <description> · 2m 14s` (`failed` or `stopped` in the error colour).
-- While the main agent is idle and work is running, the row above the input reads `Waiting on 2 agents, 1 shell… <elapsed>`. The status line's [`agents` and `shells`](configuration.md#segments) segments show the same counts.
+- While the main agent is idle and work is running, the row above the input reads `2 agents, 1 shell still running`. The status line's [`agents`, `workflows` and `shells`](configuration.md#segments) segments show the same counts.
 - `/new`, `/resume` and exit stop them.
 - `kopi -p` waits for running subagents and prints the reply that follows their results.
 - Subagent transcripts are saved under the session's own directory and do not appear in `/resume`.
@@ -96,7 +96,7 @@ Report file paths and line numbers.
 - Slash commands always act on the main session. Ctrl+B (`background`) moves nothing to the background in a subagent's view.
 - Esc and Ctrl+C act on the session whose view is open, never on another: in a subagent's view they stop that subagent's run only. The main agent is told at its next request that you stopped the subagent, and is not woken for it.
 - Input still queued for a stopped session returns to the input box; if its view is not open, when the view is next opened. A stopped subagent continues when you type in its view or the main agent uses `SendMessage`.
-- The status line keeps its layout; `model`, `effort`, `context`, `tokens`, `tools` and `cost` show the viewed subagent's own. The row above the input shows the viewed session's activity; `Waiting on 2 agents, 1 shell…` shows only in the main view.
+- The status line keeps its layout; `model`, `effort`, `context`, `tokens`, `tools` and `cost` show the viewed subagent's own. The row above the input shows the viewed session's activity; `2 agents, 1 shell still running` shows only in the main view.
 - Approvals are unchanged: a subagent's request shows as a dialog naming the subagent and its task whatever view is open.
 
 ## Workflows
