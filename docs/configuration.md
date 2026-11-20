@@ -237,7 +237,7 @@ Segments:
 ## Theme
 
 - `theme.dark` and `theme.light` name the theme used on a dark or light terminal (defaults `catppuccin-mocha`, `catppuccin-latte`).
-- Built-in names: `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`, `gruvbox-light`, `tokyonight-night`, `tokyonight-day`, `rose-pine`, `rose-pine-dawn`, `solarized-dark`, `solarized-light`, `dracula`, `ansi-dark` and `ansi-light`; the last two use the terminal's own 16 colours.
+- Built-in names: `catppuccin-mocha`, `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `gruvbox-dark`, `gruvbox-light`, `tokyonight-night`, `tokyonight-day`, `rose-pine`, `rose-pine-dawn`, `solarized-dark`, `solarized-light`, `dracula`, `ansi-dark` and `ansi-light`; the last two use the terminal's own 16 colours.
 - Any other name reads `themes/<name>.json` in Kopi's home:
   - `base`: required, a built-in theme.
   - `colors`: optional overrides by role: `accent`, `success`, `error`, `warning`, `muted`, `dim`, `text`, `userMessageBg`, `heading`, `link`, `code`, `frame`.

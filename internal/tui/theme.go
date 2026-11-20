@@ -92,6 +92,13 @@ func ansiTheme(codeTheme, muted, dim, userBg string) theme {
 var builtinThemes = map[string]func() theme{
 	"catppuccin-mocha": mocha,
 	"catppuccin-latte": latte,
+	// Catppuccin: mauve, green, red, yellow, subtext0, overlay0, text, surface0, peach, blue, teal.
+	"catppuccin-frappe": func() theme {
+		return hexTheme("catppuccin-frappe", "#ca9ee6", "#a6d189", "#e78284", "#e5c890", "#a5adce", "#737994", "#c6d0f5", "#414559", "#ef9f76", "#8caaee", "#81c8be", "#8caaee")
+	},
+	"catppuccin-macchiato": func() theme {
+		return hexTheme("catppuccin-macchiato", "#c6a0f6", "#a6da95", "#ed8796", "#eed49f", "#a5adcb", "#6e738d", "#cad3f5", "#363a4f", "#f5a97f", "#8aadf4", "#8bd5ca", "#8aadf4")
+	},
 	// Gruvbox: bg1, fg, fg4/gray, red, green, yellow, purple, aqua, orange, blue.
 	"gruvbox-dark": func() theme {
 		return hexTheme("gruvbox", "#d3869b", "#b8bb26", "#fb4934", "#fabd2f", "#a89984", "#928374", "#ebdbb2", "#3c3836", "#fe8019", "#83a598", "#8ec07c", "#83a598")
