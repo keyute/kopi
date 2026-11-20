@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -71,7 +73,7 @@ func (r *contextRunner) run(ctx context.Context, _, _ string) (string, error) {
 }
 
 func newTestStatusCommands(segment config.StatusSegment) (*StatusCommands, *fakeRunner, chan event.StatusCommandResult) {
-	s := NewStatusCommands("/work", config.StatusLine{Left: []string{"git", "git", "mode"}, Right: []string{"git"}, Segments: map[string]config.StatusSegment{"git": segment, "unused": {Command: "never"}, "mode": {Command: "never"}}})
+	s := NewStatusCommands("/work", config.StatusLine{Left: []string{"$git", "$git", "$mode"}, Right: []string{"(: $git)"}, Segments: map[string]config.StatusSegment{"git": segment, "unused": {Command: "never"}, "mode": {Command: "never"}}})
 	r := &fakeRunner{release: make(chan runResult)}
 	s.runner = r
 	return s, r, make(chan event.StatusCommandResult, 16)
@@ -99,7 +101,7 @@ func TestStatusCommandsStartAndRefresh(t *testing.T) {
 		assert.Equal(t, "raw\nsecond line", (<-results).Output)
 		synctest.Wait()
 		assert.Len(t, r.started(), 1, "busy refresh does not queue catchup")
-		for i, ev := range []event.Event{event.SessionChanged{}, event.ModeChanged{}, event.ToolEnd{}, event.TurnEnd{}, event.TasksChanged{}} {
+		for i, ev := range []event.Event{event.TurnStart{}, event.SessionChanged{}, event.ModeChanged{}, event.ToolEnd{}, event.TurnEnd{}, event.TasksChanged{}, event.Session{ID: "child", Event: event.ToolEnd{}}} {
 			s.Observe(event.Notice{})
 			s.Observe(event.TextDelta{})
 			synctest.Wait()
@@ -116,7 +118,7 @@ func TestStatusCommandsStartAndRefresh(t *testing.T) {
 func TestStatusCommandsCompleteIndependently(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s := NewStatusCommands("/work", config.StatusLine{
-			Left: []string{"first", "second"},
+			Left: []string{"$first", "$second"},
 			Segments: map[string]config.StatusSegment{
 				"first":  {Command: "first-command"},
 				"second": {Command: "second-command"},
@@ -289,4 +291,109 @@ func TestStatusCommandsRejectsQueuedExecutionAfterClose(t *testing.T) {
 	s.mu.Unlock()
 	s.Close()
 	assert.Empty(t, r.started())
+}
+
+func newChangesStatusCommands(t *testing.T, repo, head bool, left ...string) (*StatusCommands, *fakeRunner) {
+	t.Helper()
+	dir := t.TempDir()
+	if repo {
+		require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+	}
+	if head {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600))
+	}
+	s := NewStatusCommands(dir, config.StatusLine{Left: left})
+	r := &fakeRunner{release: make(chan runResult)}
+	s.runner = r
+	return s, r
+}
+
+func TestStatusCommandsChangesRegistration(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		repo, head bool
+		left       []string
+		want       bool
+	}{
+		{"named in a repository", true, true, []string{"$branch( $changes)"}, true},
+		{"outside a repository", false, false, []string{"$branch( $changes)"}, false},
+		{"git directory without HEAD", true, false, []string{"$branch( $changes)"}, false},
+		{"not named", true, true, []string{"$branch"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newChangesStatusCommands(t, tc.repo, tc.head, tc.left...)
+			if !tc.want {
+				assert.Empty(t, s.commands)
+				return
+			}
+			require.Len(t, s.commands, 1)
+			assert.Equal(t, changesCommand, s.commands[0].command)
+		})
+	}
+}
+
+func TestStatusCommandsChangesPublishAndTurnStart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var logs bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+		defer slog.SetDefault(previous)
+		s, r := newChangesStatusCommands(t, true, true, "$branch( $changes)")
+		published := make(chan event.Event, 4)
+		s.Start(t.Context(), func(ev event.Event) { published <- ev })
+		t.Cleanup(s.Close)
+		synctest.Wait()
+		require.Len(t, r.started(), 1)
+		r.release <- runResult{out: " 2 files changed, 12 insertions(+), 3 deletions(-)\n"}
+		assert.Equal(t, event.Changes{Added: 12, Removed: 3}, <-published)
+
+		s.Observe(event.TurnStart{})
+		synctest.Wait()
+		require.Len(t, r.started(), 2, "a turn start refreshes")
+		r.release <- runResult{err: errors.New("fatal: bad revision HEAD")}
+		assert.Equal(t, event.Changes{}, <-published, "a failed run publishes zero counts")
+		synctest.Wait()
+		assert.Empty(t, logs.String(), "a failing changes run is not logged")
+	})
+}
+
+func TestStatusCommandsChangesRefreshDuringRunReruns(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, r := newChangesStatusCommands(t, true, true, "$branch( $changes)")
+		published := make(chan event.Event, 4)
+		s.Start(t.Context(), func(ev event.Event) { published <- ev })
+		t.Cleanup(s.Close)
+		synctest.Wait()
+		require.Len(t, r.started(), 1)
+		s.Observe(event.TurnEnd{})
+		s.Observe(event.ToolEnd{})
+		synctest.Wait()
+		require.Len(t, r.started(), 1, "a refresh does not start a second run")
+		r.release <- runResult{out: " 1 file changed, 1 insertion(+)\n"}
+		assert.Equal(t, event.Changes{Added: 1}, <-published)
+		synctest.Wait()
+		require.Len(t, r.started(), 2, "the refreshes collapse into one rerun")
+		r.release <- runResult{out: " 1 file changed, 2 insertions(+)\n"}
+		assert.Equal(t, event.Changes{Added: 2}, <-published)
+		synctest.Wait()
+		assert.Len(t, r.started(), 2)
+	})
+}
+
+func TestStatusCommandsChangesTimeoutKeepsLastCounts(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, _ := newChangesStatusCommands(t, true, true, "$branch( $changes)")
+		r := &contextRunner{started: make(chan context.Context, 1)}
+		s.runner = r
+		published := make(chan event.Event, 4)
+		s.Start(t.Context(), func(ev event.Event) { published <- ev })
+		t.Cleanup(s.Close)
+		<-r.started
+		<-time.After(statusCommandTimeout + time.Second)
+		synctest.Wait()
+		assert.Empty(t, published, "a timed out run publishes nothing")
+		s.mu.Lock()
+		assert.False(t, s.commands[0].running)
+		s.mu.Unlock()
+	})
 }

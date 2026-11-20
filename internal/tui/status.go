@@ -26,9 +26,11 @@ type statusInput struct {
 	Effort    string
 	ToolCalls int
 	Cost      float64
-	notice    string
-	home      string
-	commands  map[string]string
+	// added and removed are the lines changed against HEAD.
+	added, removed int
+	notice         string
+	home           string
+	commands       map[string]string
 }
 
 // segment renders one part of the status line; false draws nothing.
@@ -80,9 +82,24 @@ var segments = map[string]segment{
 	"cwd": func(s statusInput, th theme) (string, bool) {
 		return fg(th.muted).Render(tildePath(s.Workspace, s.home)), s.Workspace != ""
 	},
-	"tasks": func(s statusInput, th theme) (string, bool) {
-		text := taskCounts(s.Agents, s.Shells)
-		return fg(th.dim).Render(text), text != ""
+	"agents": func(s statusInput, th theme) (string, bool) {
+		return fg(th.dim).Render(countText(s.Agents, "agent")), s.Agents > 0
+	},
+	"shells": func(s statusInput, th theme) (string, bool) {
+		return fg(th.dim).Render(countText(s.Shells, "shell")), s.Shells > 0
+	},
+	"tokens": func(s statusInput, th theme) (string, bool) {
+		return fg(th.text).Render(tokensText(s.ContextTokens)), s.ContextTokens > 0
+	},
+	"changes": func(s statusInput, th theme) (string, bool) {
+		var parts []string
+		if s.added > 0 {
+			parts = append(parts, fg(th.success).Render(fmt.Sprintf("+%d", s.added)))
+		}
+		if s.removed > 0 {
+			parts = append(parts, fg(th.error).Render(fmt.Sprintf("-%d", s.removed)))
+		}
+		return strings.Join(parts, " "), len(parts) > 0
 	},
 }
 
@@ -115,29 +132,91 @@ func costText(cost float64) string {
 	return fmt.Sprintf("$%.2f", cost)
 }
 
-// statusLayout names the segments on each side of the status line, the
+// statusLayout holds the parsed entries on each side of the status line, the
 // separator between them and the user's segments.
 type statusLayout struct {
-	left, right []string
+	left, right []config.Format
 	separator   string
 	segments    map[string]config.StatusSegment
+	// mode is the entry that names the mode segment, the right side's first
+	// else the left side's first; nil when none does.
+	mode config.Format
 }
 
-func renderSegments(names []string, in statusInput, layout statusLayout, th theme) []string {
-	var parts []string
-	for _, n := range names {
-		var text string
-		var ok bool
-		if seg, builtin := segments[n]; builtin {
-			text, ok = seg(in, th)
-		} else if def, user := layout.segments[n]; user {
-			text, ok = renderUserSegment(n, def, in, th)
+func namesMode(f config.Format) bool { return slices.Contains(f.Segments(), "mode") }
+
+func newStatusLayout(line config.StatusLine) statusLayout {
+	l := statusLayout{
+		left: parseFormats(line.Left), right: parseFormats(line.Right),
+		separator: line.Separator, segments: line.Segments,
+	}
+	for _, side := range [][]config.Format{l.right, l.left} {
+		if i := slices.IndexFunc(side, namesMode); i >= 0 {
+			l.mode = side[i]
+			break
 		}
-		if ok {
+	}
+	return l
+}
+
+// parseFormats parses entries the config has already validated.
+func parseFormats(entries []string) []config.Format {
+	fs := make([]config.Format, len(entries))
+	for i, e := range entries {
+		fs[i], _ = config.ParseFormat(e)
+	}
+	return fs
+}
+
+// renderParts draws f: lookup gives a segment's text, literal styles literal
+// text. A group draws only when a segment inside it does.
+func renderParts(f config.Format, lookup func(string) (string, bool), literal func(string) string) (string, bool) {
+	var b strings.Builder
+	shown := false
+	for _, p := range f {
+		switch p.Kind {
+		case config.Literal:
+			b.WriteString(literal(p.Text))
+		case config.Segment:
+			if text, ok := lookup(p.Text); ok {
+				b.WriteString(text)
+				shown = true
+			}
+		case config.Group:
+			if text, ok := renderParts(p.Parts, lookup, literal); ok {
+				b.WriteString(text)
+				shown = true
+			}
+		}
+	}
+	return b.String(), shown
+}
+
+// renderEntries draws each entry, leaving out those that draw nothing.
+func renderEntries(fs []config.Format, lookup func(string) (string, bool), literal func(string) string) []string {
+	var parts []string
+	for _, f := range fs {
+		if text, _ := renderParts(f, lookup, literal); text != "" {
 			parts = append(parts, text)
 		}
 	}
 	return parts
+}
+
+func (l statusLayout) lookup(in statusInput, th theme) func(string) (string, bool) {
+	return func(name string) (string, bool) {
+		if seg, builtin := segments[name]; builtin {
+			return seg(in, th)
+		}
+		if def, user := l.segments[name]; user {
+			return renderUserSegment(name, def, in, th)
+		}
+		return "", false
+	}
+}
+
+func (l statusLayout) render(fs []config.Format, in statusInput, th theme) []string {
+	return renderEntries(fs, l.lookup(in, th), func(s string) string { return fg(th.text).Render(s) })
 }
 
 func renderUserSegment(name string, def config.StatusSegment, in statusInput, th theme) (string, bool) {
@@ -233,17 +312,17 @@ func isSGR(params string) bool {
 	return !strings.ContainsFunc(params, func(r rune) bool { return (r < '0' || r > '9') && r != ';' && r != ':' })
 }
 
-// statusLine sits two in from both edges. Left segments that do not fit
+// statusLine sits two in from both edges. Left entries that do not fit
 // are dropped from its right end. At narrow widths the right side is
-// truncated, preserving the configured mode when it fits.
+// truncated, preserving the entry that names the mode when it fits.
 func statusLine(in statusInput, layout statusLayout, width int, th theme) string {
 	if width <= 0 {
 		return ""
 	}
 	sep := fg(th.dim).Render(layout.separator)
-	right := strings.Join(renderSegments(layout.right, in, layout, th), sep) + "  "
+	right := strings.Join(layout.render(layout.right, in, th), sep) + "  "
 
-	parts := renderSegments(layout.left, in, layout, th)
+	parts := layout.render(layout.left, in, th)
 	var left string
 	for n := len(parts); n >= 0; n-- {
 		left = ""
@@ -254,14 +333,17 @@ func statusLine(in statusInput, layout statusLayout, width int, th theme) string
 			break
 		}
 	}
-	mode, _ := segments["mode"](in, th)
-	configuredMode := slices.Contains(layout.left, "mode") || slices.Contains(layout.right, "mode")
+	configuredMode := layout.mode != nil
+	var mode string
+	if configuredMode {
+		mode = strings.Join(layout.render([]config.Format{layout.mode}, in, th), "")
+	}
 	if lipgloss.Width(right)+1 > width || (configuredMode && !strings.Contains(left+right, mode)) {
 		left = ""
 		right = ansi.Truncate(strings.TrimRight(right, " "), width, "")
 		if configuredMode && lipgloss.Width(mode) <= width {
-			names := slices.DeleteFunc(slices.Clone(layout.right), func(name string) bool { return name == "mode" })
-			other := strings.Join(renderSegments(names, in, layout, th), sep)
+			others := slices.DeleteFunc(slices.Clone(layout.right), namesMode)
+			other := strings.Join(layout.render(others, in, th), sep)
 			budget := width - lipgloss.Width(mode) - lipgloss.Width(sep)
 			right = mode
 			if budget > 0 && other != "" {

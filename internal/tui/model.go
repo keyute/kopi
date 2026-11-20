@@ -18,7 +18,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/app"
-	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
 )
@@ -74,12 +73,13 @@ type model struct {
 	composer      composer
 	spinner       spinner.Model
 	layout        statusLayout
-	agentLine     config.AgentLine
+	agentLine     agentLayout
 	// usesActivity and usesElapsed report whether agentLine shows those segments.
 	usesActivity, usesElapsed bool
 	home                      string
 	commands                  statusCommands
 	commandOut                map[string]string
+	added, removed            int
 	geo                       geometry
 	clip                      clipboard
 	imageDir                  string
@@ -152,16 +152,18 @@ type model struct {
 
 func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model {
 	th, km := opts.Themes.dark, newKeyMap(opts.Keys)
+	agentLine := newAgentLayout(opts.AgentLine)
+	var agentNames []string
+	for _, f := range slices.Concat(agentLine.left, agentLine.right) {
+		agentNames = append(agentNames, f.Segments()...)
+	}
 	m := &model{
 		ctx: ctx, c: c, bridge: b, version: opts.Version,
 		th: th, themes: opts.Themes, keys: km, composer: newComposer(th, km.newline), spinner: newSpinner(th),
-		layout: statusLayout{
-			left: opts.StatusLine.Left, right: opts.StatusLine.Right,
-			separator: opts.StatusLine.Separator, segments: opts.StatusLine.Segments,
-		},
-		agentLine:    opts.AgentLine,
-		usesActivity: slices.Contains(opts.AgentLine.Left, "activity") || slices.Contains(opts.AgentLine.Right, "activity"),
-		usesElapsed:  slices.Contains(opts.AgentLine.Left, "elapsed") || slices.Contains(opts.AgentLine.Right, "elapsed"),
+		layout:       newStatusLayout(opts.StatusLine),
+		agentLine:    agentLine,
+		usesActivity: slices.Contains(agentNames, "activity"),
+		usesElapsed:  slices.Contains(agentNames, "elapsed"),
 		commandOut:   map[string]string{},
 		clip:         systemClipboard{},
 		imageDir:     opts.ImageDir,
@@ -183,7 +185,7 @@ func (m *model) Init() tea.Cmd {
 }
 
 func (m *model) statusInput() statusInput {
-	in := statusInput{Status: m.status, notice: m.flashText, home: m.home, commands: m.commandOut}
+	in := statusInput{Status: m.status, notice: m.flashText, home: m.home, commands: m.commandOut, added: m.added, removed: m.removed}
 	if a, ok := m.agent(m.shown); ok {
 		in.Model, in.ContextTokens, in.ContextWindow = a.Model, a.ContextTokens, a.ContextWindow
 		in.Effort, in.ToolCalls, in.Cost = a.Effort, a.ToolCalls, a.Cost
@@ -578,6 +580,9 @@ func (m *model) apply(ev event.Event) *view {
 		} else {
 			m.commandOut[ev.Name] = cleanStatusOutput(ev.Output)
 		}
+		return nil
+	case event.Changes:
+		m.added, m.removed = ev.Added, ev.Removed
 		return nil
 	case event.SessionChanged:
 		// A turn running across the switch keeps its working row.

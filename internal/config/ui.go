@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 // KeyActions lists every bindable action in display order.
@@ -36,7 +38,7 @@ var KeyActions = []string{
 }
 
 // StatusSegments lists every segment the status line can show.
-var StatusSegments = []string{"model", "effort", "context", "tools", "cost", "branch", "mode", "notice", "sandbox", "tasks", "cwd"}
+var StatusSegments = []string{"model", "effort", "context", "tools", "cost", "branch", "mode", "notice", "sandbox", "agents", "shells", "tokens", "changes", "cwd"}
 
 // AgentSegments lists every segment an agent row can show.
 var AgentSegments = []string{"agent", "tokens", "model", "effort", "context", "tools", "cost", "elapsed", "state", "activity", "id"}
@@ -105,11 +107,11 @@ func DefaultKeys() map[string][]string {
 }
 
 func DefaultStatusLine() StatusLine {
-	return StatusLine{Left: []string{"model", "context", "branch"}, Right: []string{"notice", "sandbox", "tasks", "mode"}, Separator: " · "}
+	return StatusLine{Left: []string{"$model", "$context", "$branch( $changes)"}, Right: []string{"$notice", "$sandbox", "$shells", "$mode"}, Separator: " · "}
 }
 
 func DefaultAgentLine() AgentLine {
-	return AgentLine{Left: []string{"agent", "tokens", "model"}, Right: []string{}, Separator: " · "}
+	return AgentLine{Left: []string{"$agent", "$tokens", "$model"}, Right: []string{}, Separator: " · "}
 }
 
 // uiDefaults is the default layer's share of the UI blocks. Nested values must
@@ -161,6 +163,8 @@ func validateSegments(segments map[string]StatusSegment) error {
 		seg := segments[name]
 		key := "statusline.segments." + name
 		switch {
+		case !validSegmentName(name):
+			return fmt.Errorf("%w: %s: name must be letters, digits or _", ErrInvalidValue, key)
 		case slices.Contains(StatusSegments, name):
 			return fmt.Errorf("%w: %s: name is a built-in segment", ErrInvalidValue, key)
 		case strings.ContainsFunc(seg.Text, unicode.IsControl):
@@ -185,22 +189,176 @@ func validateSegments(segments map[string]StatusSegment) error {
 	return nil
 }
 
-// validateSegmentRefs checks the merged lists of the bar named by prefix
+// validateSegmentRefs checks the merged entries of the bar named by prefix
 // against its known segments, naming the layer that set each list.
 func validateSegmentRefs(prefix string, left, right []string, known func(string) bool, origins map[string]string) error {
 	for _, side := range []struct {
 		name string
 		segs []string
 	}{{"left", left}, {"right", right}} {
-		for _, name := range side.segs {
-			if !known(name) {
-				key := prefix + "." + side.name
-				return fmt.Errorf("config layer %s: %w: %s: unknown segment %q", originOf(origins, key), ErrInvalidValue, key, name)
+		key := prefix + "." + side.name
+		for _, entry := range side.segs {
+			if err := validateEntry(entry, known); err != nil {
+				return fmt.Errorf("config layer %s: %w: %s: %w", originOf(origins, key), ErrInvalidValue, key, err)
 			}
 		}
 	}
 	return nil
 }
+
+func validateEntry(entry string, known func(string) bool) error {
+	if strings.ContainsFunc(entry, unicode.IsControl) {
+		return fmt.Errorf("%q: control character", entry)
+	}
+	f, err := ParseFormat(entry)
+	if err != nil {
+		return fmt.Errorf("%q: %w", entry, err)
+	}
+	names := f.Segments()
+	for _, name := range names {
+		if !known(name) {
+			return fmt.Errorf("unknown segment %q", name)
+		}
+	}
+	if len(names) == 0 {
+		if known(entry) {
+			return fmt.Errorf("%q names no segment; write %q", entry, "$"+entry)
+		}
+		return fmt.Errorf("%q names no segment", entry)
+	}
+	if hasEmptyGroup(f) {
+		return fmt.Errorf("%q: a group names no segment", entry)
+	}
+	return nil
+}
+
+func hasEmptyGroup(f Format) bool {
+	return slices.ContainsFunc(f, func(p Part) bool {
+		return p.Kind == Group && (len(Format(p.Parts).Segments()) == 0 || hasEmptyGroup(p.Parts))
+	})
+}
+
+// PartKind says what a Part of a Format is.
+type PartKind int
+
+const (
+	// Literal is text drawn as written.
+	Literal PartKind = iota
+	// Segment names a segment in Text.
+	Segment
+	// Group holds Parts, drawn only when a segment inside has something to show.
+	Group
+)
+
+// Part is one piece of a Format.
+type Part struct {
+	Kind  PartKind
+	Text  string
+	Parts []Part
+}
+
+// Format is a parsed status line or agent row entry.
+type Format []Part
+
+// SegmentNames lists the segments named by every entry of sides, which must
+// already be validated.
+func SegmentNames(sides ...[]string) []string {
+	var names []string
+	for _, entry := range slices.Concat(sides...) {
+		f, _ := ParseFormat(entry)
+		names = append(names, f.Segments()...)
+	}
+	return names
+}
+
+// Segments lists every segment the format names, in order, at any depth.
+func (f Format) Segments() []string {
+	var names []string
+	for _, p := range f {
+		switch p.Kind {
+		case Segment:
+			names = append(names, p.Text)
+		case Group:
+			names = append(names, Format(p.Parts).Segments()...)
+		}
+	}
+	return names
+}
+
+// ParseFormat parses an entry: "$name" is a segment, "(...)" a group, "\x"
+// the character x, and anything else literal text.
+func ParseFormat(s string) (Format, error) {
+	f, _, err := parseParts(s, false)
+	return f, err
+}
+
+// parseParts reads parts up to the ")" that closes a group, or to the end of s,
+// and returns what follows.
+func parseParts(s string, inGroup bool) (Format, string, error) {
+	var f Format
+	var lit strings.Builder
+	flush := func() {
+		if lit.Len() > 0 {
+			f = append(f, Part{Kind: Literal, Text: lit.String()})
+			lit.Reset()
+		}
+	}
+	for s != "" {
+		r, size := utf8.DecodeRuneInString(s)
+		switch r {
+		case '\\':
+			if size == len(s) {
+				return nil, "", errors.New(`trailing "\"`)
+			}
+			next, n := utf8.DecodeRuneInString(s[size:])
+			lit.WriteRune(next)
+			s = s[size+n:]
+		case '$':
+			name := leadingName(s[size:])
+			if name == "" {
+				return nil, "", errors.New(`"$" not followed by a segment name`)
+			}
+			flush()
+			f = append(f, Part{Kind: Segment, Text: name})
+			s = s[size+len(name):]
+		case '(':
+			flush()
+			inner, rest, err := parseParts(s[size:], true)
+			if err != nil {
+				return nil, "", err
+			}
+			f = append(f, Part{Kind: Group, Parts: inner})
+			s = rest
+		case ')':
+			if !inGroup {
+				return nil, "", errors.New(`")" without "("`)
+			}
+			flush()
+			return f, s[size:], nil
+		default:
+			lit.WriteRune(r)
+			s = s[size:]
+		}
+	}
+	if inGroup {
+		return nil, "", errors.New(`unclosed "("`)
+	}
+	flush()
+	return f, "", nil
+}
+
+func isNameRune(r rune) bool { return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) }
+
+// leadingName is the longest prefix of s made of name characters.
+func leadingName(s string) string {
+	end := strings.IndexFunc(s, func(r rune) bool { return !isNameRune(r) })
+	if end < 0 {
+		return s
+	}
+	return s[:end]
+}
+
+func validSegmentName(name string) bool { return name != "" && leadingName(name) == name }
 
 func validateThemeName(key, name string) error {
 	if name == "" || strings.ContainsAny(name, `/\`) || strings.HasPrefix(name, ".") {

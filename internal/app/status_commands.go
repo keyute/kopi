@@ -24,9 +24,13 @@ type statusRunner interface {
 type shellRunner struct{}
 
 type statusCommand struct {
-	name, command    string
+	name, command string
+	// changes publishes the parsed line counts as event.Changes.
+	changes          bool
 	interval         time.Duration
 	running, failing bool
+	// pending marks a refresh refused while the changes command ran.
+	pending bool
 }
 
 // StatusCommands owns the ephemeral footer commands for one frontend run.
@@ -46,7 +50,8 @@ type StatusCommands struct {
 func NewStatusCommands(workspace string, line config.StatusLine) *StatusCommands {
 	s := &StatusCommands{workspace: workspace, runner: shellRunner{}}
 	seen := map[string]bool{}
-	for _, name := range slices.Concat(line.Left, line.Right) {
+	names := config.SegmentNames(line.Left, line.Right)
+	for _, name := range names {
 		def := line.Segments[name]
 		if slices.Contains(config.StatusSegments, name) || seen[name] || def.Command == "" {
 			continue
@@ -54,6 +59,9 @@ func NewStatusCommands(workspace string, line config.StatusLine) *StatusCommands
 		seen[name] = true
 		interval, _ := time.ParseDuration(def.Interval)
 		s.commands = append(s.commands, &statusCommand{name: name, command: def.Command, interval: interval})
+	}
+	if slices.Contains(names, "changes") && gitBranch(workspace) != "" {
+		s.commands = append(s.commands, &statusCommand{name: "changes", command: changesCommand, changes: true})
 	}
 	return s
 }
@@ -93,9 +101,14 @@ func (s *StatusCommands) tick(command *statusCommand) {
 	}
 }
 
-// launch requires mu. Busy refreshes are discarded, never queued.
+// launch requires mu. Busy refreshes are discarded, never queued, except
+// that the changes command collapses them into one rerun.
 func (s *StatusCommands) launch(command *statusCommand) {
-	if s.closed || s.ctx == nil || s.ctx.Err() != nil || command.running {
+	if s.closed || s.ctx == nil || s.ctx.Err() != nil {
+		return
+	}
+	if command.running {
+		command.pending = command.changes
 		return
 	}
 	command.running = true
@@ -113,19 +126,46 @@ func (s *StatusCommands) launch(command *statusCommand) {
 		defer cancel()
 		out, err := s.runner.run(ctx, s.workspace, command.command)
 		s.mu.Lock()
-		if err != nil && !command.failing && s.ctx.Err() == nil {
+		// A failing changes run is a documented absent state (no commit yet), not a fault.
+		if err != nil && !command.changes && !command.failing && s.ctx.Err() == nil {
 			slog.Warn("status line command failed", "segment", command.name, "error", err)
 		}
 		command.failing = err != nil
 		command.running = false
-		s.publish(event.StatusCommandResult{Name: command.name, Output: out, Err: err})
+		if command.changes {
+			if ctx.Err() == context.DeadlineExceeded {
+				// exec may report "signal: killed" instead of the deadline error; keep the last counts.
+				s.rerun(command)
+				s.mu.Unlock()
+				return
+			}
+			var changed event.Changes
+			if err == nil {
+				changed.Added, changed.Removed = parseShortstat(out)
+			}
+			s.publish(changed)
+			s.rerun(command)
+		} else {
+			s.publish(event.StatusCommandResult{Name: command.name, Output: out, Err: err})
+		}
 		s.mu.Unlock()
 	}()
 }
 
+// rerun requires mu. It launches the changes command once more when a refresh arrived during its run.
+func (s *StatusCommands) rerun(command *statusCommand) {
+	if command.pending {
+		command.pending = false
+		s.launch(command)
+	}
+}
+
 func (s *StatusCommands) Observe(ev event.Event) {
+	if wrapped, ok := ev.(event.Session); ok {
+		ev = wrapped.Event
+	}
 	switch ev.(type) {
-	case event.SessionChanged, event.ModeChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged:
+	case event.TurnStart, event.SessionChanged, event.ModeChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged:
 	default:
 		return
 	}

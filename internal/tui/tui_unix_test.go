@@ -57,7 +57,7 @@ func TestRunQuitJoinsStatusDescendantCleanup(t *testing.T) {
 	defer in.Close()
 	defer keys.Close()
 	opts := testOptions()
-	opts.StatusLine.Left = []string{"cmd"}
+	opts.StatusLine.Left = []string{"$cmd"}
 	opts.StatusLine.Segments = map[string]config.StatusSegment{
 		"cmd": {Command: `sh -c 'exec 3>ready; printf r >&3; exec sleep 60' & wait`},
 	}

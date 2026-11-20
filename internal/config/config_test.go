@@ -243,11 +243,11 @@ func TestResolveOverridesOneActionKeepingOthers(t *testing.T) {
 }
 
 func TestResolveOverridesOneStatusLineSide(t *testing.T) {
-	global := globalLayer(t, `{"statusline": {"left": ["branch"]}}`)
+	global := globalLayer(t, `{"statusline": {"left": ["$branch"]}}`)
 	r, err := Resolve(Defaults(), global)
 	require.NoError(t, err)
 	want := DefaultStatusLine()
-	want.Left = []string{"branch"}
+	want.Left = []string{"$branch"}
 	want.Segments = map[string]StatusSegment{}
 	assert.Equal(t, want, r.Config.StatusLine)
 	assert.Equal(t, global.Name, r.Origins["statusline.left"])
@@ -255,11 +255,11 @@ func TestResolveOverridesOneStatusLineSide(t *testing.T) {
 }
 
 func TestResolveOverridesOneAgentLineSide(t *testing.T) {
-	global := globalLayer(t, `{"agentline": {"left": ["state"]}}`)
+	global := globalLayer(t, `{"agentline": {"left": ["$state"]}}`)
 	r, err := Resolve(Defaults(), global)
 	require.NoError(t, err)
 	want := DefaultAgentLine()
-	want.Left = []string{"state"}
+	want.Left = []string{"$state"}
 	assert.Equal(t, want, r.Config.AgentLine)
 	assert.Equal(t, global.Name, r.Origins["agentline.left"])
 	assert.Equal(t, "default", r.Origins["agentline.right"])
@@ -267,7 +267,7 @@ func TestResolveOverridesOneAgentLineSide(t *testing.T) {
 
 func TestResolveRejectsUnknownAgentSegmentNamingLayer(t *testing.T) {
 	for _, side := range []string{"left", "right"} {
-		global := globalLayer(t, `{"agentline": {"`+side+`": ["agent", "weather"]}}`)
+		global := globalLayer(t, `{"agentline": {"`+side+`": ["$agent", "$weather"]}}`)
 		_, err := Resolve(Defaults(), global)
 		require.ErrorIs(t, err, ErrInvalidValue)
 		assert.Contains(t, err.Error(), global.Name)
@@ -275,20 +275,75 @@ func TestResolveRejectsUnknownAgentSegmentNamingLayer(t *testing.T) {
 	}
 }
 
-func TestResolveAcceptsTheEffortContextToolsAndCostSegments(t *testing.T) {
-	global := globalLayer(t, `{"statusline": {"right": ["effort", "tools", "cost"]}, "agentline": {"right": ["effort", "context", "tools", "cost"]}}`)
+func TestResolveAcceptsTheCountTokensAndChangesSegments(t *testing.T) {
+	global := globalLayer(t, `{"statusline": {"left": ["$agents", "$shells", "$tokens", "$changes"]}}`)
 	r, err := Resolve(Defaults(), global)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"effort", "tools", "cost"}, r.Config.StatusLine.Right)
-	assert.Equal(t, []string{"effort", "context", "tools", "cost"}, r.Config.AgentLine.Right)
+	assert.Equal(t, []string{"$agents", "$shells", "$tokens", "$changes"}, r.Config.StatusLine.Left)
+}
+
+func TestResolveRejectsTheTasksSegment(t *testing.T) {
+	_, err := Resolve(Defaults(), globalLayer(t, `{"statusline": {"right": ["$tasks"]}}`))
+	require.ErrorIs(t, err, ErrInvalidValue)
+	assert.Contains(t, err.Error(), `statusline.right: unknown segment "tasks"`)
+}
+
+func TestResolveRejectsInvalidEntries(t *testing.T) {
+	for _, tc := range []struct{ name, entry, want string }{
+		{"unknown segment", `$weather`, `unknown segment "weather"`},
+		{"unknown segment in a group", `($model( $weather))`, `unknown segment "weather"`},
+		{"unclosed group", `($model`, `"($model": unclosed "("`},
+		{"unclosed nested group", `(($model)`, `"(($model)": unclosed "("`},
+		{"stray close", `$model)`, `"$model)": ")" without "("`},
+		{"bare dollar", `$model $`, `"$model $": "$" not followed by a segment name`},
+		{"dollar before a space", `$ model`, `"$ model": "$" not followed by a segment name`},
+		{"trailing backslash", `$model\\`, `"$model\\": trailing "\"`},
+		{"escaped dollar names no segment", `\\$model`, `"\\$model" names no segment`},
+		{"bare segment name", `model`, `"model" names no segment; write "$model"`},
+		{"literal only", `at home`, `"at home" names no segment`},
+		{"empty", ``, `"" names no segment`},
+		{"empty group", `()`, `"()" names no segment`},
+		{"group without a segment", `$model(at home)`, `"$model(at home)": a group names no segment`},
+		{"empty group after a segment", `$model()`, `"$model()": a group names no segment`},
+		{"nested group without a segment", `($model(at home))`, `"($model(at home))": a group names no segment`},
+		{"control character", `$model\u001b[0m`, `"$model\x1b[0m": control character`},
+	} {
+		for _, bar := range []string{"statusline", "agentline"} {
+			for _, side := range []string{"left", "right"} {
+				t.Run(tc.name+" "+bar+" "+side, func(t *testing.T) {
+					global := globalLayer(t, `{"`+bar+`": {"`+side+`": ["$model", "`+tc.entry+`"]}}`)
+					_, err := Resolve(Defaults(), global)
+					require.ErrorIs(t, err, ErrInvalidValue)
+					assert.Contains(t, err.Error(), global.Name)
+					assert.Contains(t, err.Error(), bar+"."+side+": "+tc.want)
+				})
+			}
+		}
+	}
+}
+
+func TestResolveRejectsAUserSegmentNameThatCannotBeReferenced(t *testing.T) {
+	global := globalLayer(t, `{"statusline": {"segments": {"my-host": {"text": "w"}}}}`)
+	_, err := Resolve(Defaults(), global)
+	require.ErrorIs(t, err, ErrInvalidValue)
+	assert.Contains(t, err.Error(), global.Name)
+	assert.Contains(t, err.Error(), "statusline.segments.my-host: name must be letters, digits or _")
+}
+
+func TestResolveAcceptsTheEffortContextToolsAndCostSegments(t *testing.T) {
+	global := globalLayer(t, `{"statusline": {"right": ["$effort", "$tools", "$cost"]}, "agentline": {"right": ["$effort", "$context", "$tools", "$cost"]}}`)
+	r, err := Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"$effort", "$tools", "$cost"}, r.Config.StatusLine.Right)
+	assert.Equal(t, []string{"$effort", "$context", "$tools", "$cost"}, r.Config.AgentLine.Right)
 }
 
 func TestResolveAcceptsNoticeOnEitherSide(t *testing.T) {
-	global := globalLayer(t, `{"statusline": {"left": ["notice", "model"], "right": ["mode", "notice"]}}`)
+	global := globalLayer(t, `{"statusline": {"left": ["$notice", "$model"], "right": ["$mode", "$notice"]}}`)
 	r, err := Resolve(Defaults(), global)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"notice", "model"}, r.Config.StatusLine.Left)
-	assert.Equal(t, []string{"mode", "notice"}, r.Config.StatusLine.Right)
+	assert.Equal(t, []string{"$notice", "$model"}, r.Config.StatusLine.Left)
+	assert.Equal(t, []string{"$mode", "$notice"}, r.Config.StatusLine.Right)
 }
 
 func TestEditPlanActionDefaultsToCtrlG(t *testing.T) {
@@ -308,13 +363,13 @@ func TestBackgroundActionAndTasksSegment(t *testing.T) {
 	assert.Equal(t, []string{"ctrl+b"}, DefaultKeys()["background"])
 	assert.Contains(t, KeyActions, "stop-agent")
 	assert.Equal(t, []string{"x"}, DefaultKeys()["stop-agent"])
-	assert.Equal(t, []string{"notice", "sandbox", "tasks", "mode"}, DefaultStatusLine().Right)
+	assert.Equal(t, []string{"$notice", "$sandbox", "$shells", "$mode"}, DefaultStatusLine().Right)
 
-	global := globalLayer(t, `{"keys": {"background": ["ctrl+g"]}, "statusline": {"left": ["tasks"]}}`)
+	global := globalLayer(t, `{"keys": {"background": ["ctrl+g"]}, "statusline": {"left": ["$agents", "$shells"]}}`)
 	r, err := Resolve(Defaults(), global)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"ctrl+g"}, r.Config.Keys["background"])
-	assert.Equal(t, []string{"tasks"}, r.Config.StatusLine.Left)
+	assert.Equal(t, []string{"$agents", "$shells"}, r.Config.StatusLine.Left)
 
 	_, err = Resolve(Defaults(), globalLayer(t, `{"keys": {"background": []}}`))
 	require.ErrorIs(t, err, ErrInvalidValue)
@@ -359,7 +414,7 @@ func TestResolveRejectsInvalidUIValueNamingLayer(t *testing.T) {
 		{"null keys", `{"keys": null}`},
 		{"side not a list", `{"statusline": {"left": "model"}}`},
 		{"statusline not an object", `{"statusline": ["model"]}`},
-		{"unknown segment", `{"statusline": {"right": ["mode", "weather"]}}`},
+		{"unknown segment", `{"statusline": {"right": ["$mode", "$weather"]}}`},
 		{"rule list not a list", `{"permissions": {"allow": "Read"}}`},
 		{"null rule list", `{"permissions": {"deny": null}}`},
 		{"non-string rule", `{"permissions": {"ask": [5]}}`},
@@ -413,7 +468,7 @@ func TestResolveSeparatorHonoursExplicitEmpty(t *testing.T) {
 
 func TestResolveStatusSegments(t *testing.T) {
 	global := globalLayer(t, `{"statusline": {
-		"right": ["k8s", "host", "mode"],
+		"right": ["$k8s", "$host", "$mode"],
 		"segments": {
 			"k8s": {"command": "kubectl config current-context", "interval": "10s", "color": "dim"},
 			"host": {"text": "work", "color": "#89B4FA"},
@@ -464,10 +519,10 @@ func TestResolveRejectsControlCharacterInSeparator(t *testing.T) {
 
 func TestResolveChecksSegmentNamesOnMergedConfig(t *testing.T) {
 	defining := Map("defining", map[string]any{"statusline": map[string]any{"segments": map[string]any{"host": map[string]any{"text": "w"}}}})
-	using := Map("using", map[string]any{"statusline": map[string]any{"left": []any{"host"}}})
+	using := Map("using", map[string]any{"statusline": map[string]any{"left": []any{"$host"}}})
 	r, err := Resolve(Defaults(), defining, using)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"host"}, r.Config.StatusLine.Left)
+	assert.Equal(t, []string{"$host"}, r.Config.StatusLine.Left)
 
 	_, err = Resolve(Defaults(), using)
 	require.ErrorIs(t, err, ErrInvalidValue)
@@ -747,8 +802,8 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "instructionFallbacks", Value: `["CLAUDE.md"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "keys.submit", Value: `["enter"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "keys.newline", Value: `["shift+enter","alt+enter","ctrl+j"]`, Origin: "default"})
-	assert.Contains(t, entries, Entry{Key: "statusline.left", Value: `["model","context","branch"]`, Origin: "default"})
-	assert.Contains(t, entries, Entry{Key: "statusline.right", Value: `["notice","sandbox","tasks","mode"]`, Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "statusline.left", Value: `["$model","$context","$branch( $changes)"]`, Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "statusline.right", Value: `["$notice","$sandbox","$shells","$mode"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "permissions.allow", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "permissions.ask", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "permissions.deny", Value: "[]", Origin: "default"})

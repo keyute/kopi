@@ -16,7 +16,12 @@ import (
 	"github.com/keyute/kopi/internal/policy"
 )
 
-var defaultLayout = statusLayout{left: config.DefaultStatusLine().Left, right: config.DefaultStatusLine().Right, separator: " · "}
+var defaultLayout = newStatusLayout(config.DefaultStatusLine())
+
+// layoutOf is a layout of the given entries with the " · " separator.
+func layoutOf(left, right []string) statusLayout {
+	return newStatusLayout(config.StatusLine{Left: left, Right: right, Separator: " · "})
+}
 
 func TestSegmentsMatchConfig(t *testing.T) {
 	assert.ElementsMatch(t, config.StatusSegments, slices.Collect(maps.Keys(segments)))
@@ -24,8 +29,9 @@ func TestSegmentsMatchConfig(t *testing.T) {
 
 func TestStatusLine(t *testing.T) {
 	full := app.Status{Model: "anthropic/claude-x", ContextTokens: 18_000, ContextWindow: 100_000, Branch: "main"}
-	custom := statusLayout{left: []string{"branch"}, right: []string{"context", "mode"}, separator: " · "}
-	noticeLeft := statusLayout{left: []string{"notice", "branch"}, right: []string{"mode"}, separator: " · "}
+	custom := layoutOf([]string{"$branch"}, []string{"$context", "$mode"})
+	agentsShells := layoutOf([]string{"$model"}, []string{"$agents", "$shells", "$mode"})
+	noticeLeft := layoutOf([]string{"$notice", "$branch"}, []string{"$mode"})
 	for _, tc := range []struct {
 		name   string
 		s      app.Status
@@ -51,9 +57,12 @@ func TestStatusLine(t *testing.T) {
 		{"no shell", app.Status{Model: "a/b", Sandboxed: true}, defaultLayout, "", 30, "  b" + strings.Repeat(" ", 21) + "plan  "},
 		{"one background shell", app.Status{Model: "a/b", Shells: 1}, defaultLayout, "", 30, "  b" + strings.Repeat(" ", 11) + "1 shell · plan  "},
 		{"background shells", app.Status{Model: "a/b", Shells: 3}, defaultLayout, "", 30, "  b" + strings.Repeat(" ", 10) + "3 shells · plan  "},
-		{"background agents", app.Status{Model: "a/b", Agents: 2}, defaultLayout, "", 40, "  b" + strings.Repeat(" ", 20) + "2 agents · plan  "},
-		{"agents then shells", app.Status{Model: "a/b", Agents: 2, Shells: 1}, defaultLayout, "", 40, "  b" + strings.Repeat(" ", 11) + "2 agents, 1 shell · plan  "},
-		{"singular agent and shell", app.Status{Model: "a/b", Agents: 1, Shells: 1}, defaultLayout, "", 40, "  b" + strings.Repeat(" ", 12) + "1 agent, 1 shell · plan  "},
+		{"agents are not in the default layout", app.Status{Model: "a/b", Agents: 2, Shells: 1}, defaultLayout, "", 40, "  b" + strings.Repeat(" ", 21) + "1 shell · plan  "},
+		{"agents and shells", app.Status{Model: "a/b", Agents: 2, Shells: 1}, agentsShells, "", 40, "  b" + strings.Repeat(" ", 10) + "2 agents · 1 shell · plan  "},
+		{"singular agent", app.Status{Model: "a/b", Agents: 1}, agentsShells, "", 40, "  b" + strings.Repeat(" ", 21) + "1 agent · plan  "},
+		{"no counts at zero", app.Status{Model: "a/b"}, agentsShells, "", 20, "  b" + strings.Repeat(" ", 11) + "plan  "},
+		{"tokens", app.Status{Model: "a/b", ContextTokens: 22_100}, layoutOf([]string{"$tokens"}, nil), "", 20, "  22.1k tokens" + strings.Repeat(" ", 6)},
+		{"no tokens while unknown", app.Status{Model: "a/b"}, layoutOf([]string{"$tokens", "$model"}, nil), "", 20, "  b" + strings.Repeat(" ", 17)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, ansi.Strip(statusLine(statusInput{Status: tc.s, notice: tc.notice}, tc.layout, tc.width, mocha())))
@@ -62,7 +71,7 @@ func TestStatusLine(t *testing.T) {
 }
 
 func TestStatusLineShowsEffortToolsAndCost(t *testing.T) {
-	layout := statusLayout{right: []string{"effort", "tools", "cost"}, separator: " · "}
+	layout := layoutOf(nil, []string{"$effort", "$tools", "$cost"})
 	in := statusInput{Effort: "high", ToolCalls: 12, Cost: 0.424}
 	assert.Equal(t, strings.Repeat(" ", 5)+"high · 12 tools · $0.42  ", ansi.Strip(statusLine(in, layout, 30, mocha())))
 	assert.Equal(t, "  ", ansi.Strip(statusLine(statusInput{}, layout, 2, mocha())))
@@ -86,8 +95,9 @@ func TestStatusInputTakesTheOpenSubagentsEffortToolsAndCost(t *testing.T) {
 func TestStatusLineFitsNarrowWidthsAndKeepsMode(t *testing.T) {
 	for _, layout := range []statusLayout{
 		defaultLayout,
-		{right: []string{"branch", "mode", "notice"}, separator: " · "},
-		{left: []string{"mode"}, right: []string{"branch"}, separator: " · "},
+		layoutOf(nil, []string{"$branch", "$mode", "$notice"}),
+		layoutOf([]string{"$mode"}, []string{"$branch"}),
+		layoutOf(nil, []string{"$branch", "($sandbox )$mode"}),
 	} {
 		for width := 0; width <= 30; width++ {
 			s := app.Status{Branch: "\x1b[31m" + strings.Repeat("界", 30) + "\x1b[0m", Mode: policy.Execute}
@@ -101,6 +111,76 @@ func TestStatusLineFitsNarrowWidthsAndKeepsMode(t *testing.T) {
 	got := statusLine(statusInput{notice: "ctrl+c again to exit"}, defaultLayout, 20, mocha())
 	assert.Equal(t, 20, ansi.StringWidth(got))
 	assert.Contains(t, ansi.Strip(got), "plan")
+}
+
+func TestStatusLineKeepsTheWholeModeEntryAtNarrowWidths(t *testing.T) {
+	layout := layoutOf([]string{"$model"}, []string{"$branch", "$sandbox $mode"})
+	s := app.Status{Model: "a/b", Branch: strings.Repeat("x", 30), Shell: true, Sandboxed: true, Mode: policy.Execute}
+	for _, tc := range []struct {
+		width int
+		want  string
+	}{
+		{40, strings.Repeat("x", 20) + " · sandboxed execute"},
+		{25, strings.Repeat("x", 5) + " · sandboxed execute"},
+		{20, "   sandboxed execute"},
+		{17, "sandboxed execute"},
+		{10, strings.Repeat("x", 10)},
+	} {
+		got := ansi.Strip(statusLine(statusInput{Status: s}, layout, tc.width, mocha()))
+		assert.Equal(t, tc.want, got, "width %d", tc.width)
+	}
+}
+
+func TestStatusLineKeepsTheRightModeEntryWhenModeIsOnBothSides(t *testing.T) {
+	layout := layoutOf([]string{"$mode"}, []string{"$branch", "$sandbox $mode"})
+	s := app.Status{Branch: strings.Repeat("x", 30), Shell: true, Sandboxed: true, Mode: policy.Execute}
+	got := ansi.Strip(statusLine(statusInput{Status: s}, layout, 25, mocha()))
+	assert.Equal(t, strings.Repeat("x", 5)+" · sandboxed execute", got)
+}
+
+func TestStatusLineFormats(t *testing.T) {
+	branchUnit := layoutOf([]string{"$branch( $changes)"}, nil)
+	for _, tc := range []struct {
+		name   string
+		layout statusLayout
+		s      statusInput
+		want   string
+	}{
+		{"branch with changes", branchUnit, statusInput{Status: app.Status{Branch: "main"}, added: 12, removed: 3}, "  main +12 -3"},
+		{"branch clean", branchUnit, statusInput{Status: app.Status{Branch: "main"}}, "  main"},
+		{"no branch", layoutOf([]string{"$branch( $changes)", "$model"}, nil), statusInput{Status: app.Status{Model: "a/b"}}, "  b"},
+		{"only added", layoutOf([]string{"$changes"}, nil), statusInput{added: 12}, "  +12"},
+		{"only removed", layoutOf([]string{"$changes"}, nil), statusInput{removed: 3}, "  -3"},
+		{"label in parentheses hides with its value", layoutOf([]string{"(ctx $context)", "$model"}, nil), statusInput{Status: app.Status{Model: "a/b"}}, "  b"},
+		{"label in parentheses shows with its value", layoutOf([]string{"(ctx $context)"}, nil), statusInput{Status: app.Status{ContextTokens: 1, ContextWindow: 4}}, "  ctx 25.0%"},
+		{"label outside parentheses always shows", layoutOf([]string{"ctx $context"}, nil), statusInput{}, "  ctx"},
+		{"adjacent segments", layoutOf([]string{"$model$branch"}, nil), statusInput{Status: app.Status{Model: "a/b", Branch: "main"}}, "  bmain"},
+		{"nested groups", layoutOf([]string{"((a$model)$branch)"}, nil), statusInput{Status: app.Status{Branch: "main"}}, "  main"},
+		{"escapes", layoutOf([]string{`\$\(\)\\$model`}, nil), statusInput{Status: app.Status{Model: "a/b"}}, `  $()\b`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, strings.TrimRight(ansi.Strip(statusLine(tc.s, tc.layout, 40, mocha())), " "))
+		})
+	}
+}
+
+func TestStatusLineColoursChanges(t *testing.T) {
+	th := mocha()
+	got := statusLine(statusInput{added: 12, removed: 3}, layoutOf([]string{"$changes"}, nil), 40, th)
+	assert.Contains(t, got, fg(th.success).Render("+12")+" "+fg(th.error).Render("-3"))
+}
+
+func TestStatusLineColoursLiteralText(t *testing.T) {
+	th := mocha()
+	got := statusLine(statusInput{Status: app.Status{Model: "a/b"}}, layoutOf([]string{"at $model"}, nil), 40, th)
+	assert.Contains(t, got, fg(th.text).Render("at "))
+}
+
+func TestStatusLineDropsAnEntryWholeAtANarrowWidth(t *testing.T) {
+	layout := layoutOf([]string{"$model", "$branch( $changes)"}, nil)
+	in := statusInput{Status: app.Status{Model: "a/b", Branch: "main"}, added: 12, removed: 3}
+	assert.Equal(t, "  b · main +12 -3", strings.TrimRight(ansi.Strip(statusLine(in, layout, 20, mocha())), " "))
+	assert.Equal(t, "  b", strings.TrimRight(ansi.Strip(statusLine(in, layout, 15, mocha())), " "))
 }
 
 func TestStatusLineWarnsFromNinetyPercent(t *testing.T) {
@@ -121,14 +201,17 @@ func TestStatusLineWarnsWhenUnsandboxed(t *testing.T) {
 	assert.Contains(t, statusLine(statusInput{Status: s}, defaultLayout, 40, th), fg(th.warning).Render("unsandboxed"))
 }
 
-func TestStatusLineDimsTheTaskCount(t *testing.T) {
+func TestStatusLineDimsTheTaskCounts(t *testing.T) {
 	th := mocha()
-	assert.Contains(t, statusLine(statusInput{Status: app.Status{Shells: 1}}, defaultLayout, 40, th), fg(th.dim).Render("1 shell"))
+	layout := layoutOf(nil, []string{"$agents", "$shells"})
+	got := statusLine(statusInput{Status: app.Status{Agents: 2, Shells: 1}}, layout, 40, th)
+	assert.Contains(t, got, fg(th.dim).Render("2 agents"))
+	assert.Contains(t, got, fg(th.dim).Render("1 shell"))
 }
 
 func TestStatusLineShowsCwdUnderHome(t *testing.T) {
 	th := mocha()
-	layout := statusLayout{left: []string{"cwd"}, separator: " · "}
+	layout := layoutOf([]string{"$cwd"}, nil)
 	for _, tc := range []struct{ workspace, home, want string }{
 		{"/home/u/src/kopi", "/home/u", "~/src/kopi"},
 		{"/home/u", "/home/u", "~"},
@@ -144,25 +227,25 @@ func TestStatusLineShowsCwdUnderHome(t *testing.T) {
 
 func TestStatusLineHidesAnEmptyModel(t *testing.T) {
 	th := mocha()
-	got := statusLine(statusInput{Status: app.Status{Branch: "main"}}, statusLayout{left: []string{"model", "branch"}, separator: " | "}, 20, th)
+	got := statusLine(statusInput{Status: app.Status{Branch: "main"}}, newStatusLayout(config.StatusLine{Left: []string{"$model", "$branch"}, Separator: " | "}), 20, th)
 	assert.Equal(t, "  main", strings.TrimRight(ansi.Strip(got), " "))
 }
 
 func TestStatusLineSeparator(t *testing.T) {
 	th := mocha()
 	in := statusInput{Status: app.Status{Model: "a/b", Branch: "main"}}
-	got := statusLine(in, statusLayout{left: []string{"model", "branch"}, separator: " | "}, 20, th)
+	got := statusLine(in, newStatusLayout(config.StatusLine{Left: []string{"$model", "$branch"}, Separator: " | "}), 20, th)
 	assert.Equal(t, "  b | main", strings.TrimRight(ansi.Strip(got), " "))
 	assert.Contains(t, got, fg(th.dim).Render(" | "))
-	got = statusLine(in, statusLayout{left: []string{"model", "branch"}}, 20, th)
+	got = statusLine(in, newStatusLayout(config.StatusLine{Left: []string{"$model", "$branch"}}), 20, th)
 	assert.Equal(t, "  bmain", strings.TrimRight(ansi.Strip(got), " "))
 }
 
 func TestStatusLineUserSegments(t *testing.T) {
 	th := mocha()
-	layout := statusLayout{
-		left: []string{"role", "hex", "plain", "cmd", "styled", "cmdplain"}, separator: " ",
-		segments: map[string]config.StatusSegment{
+	layout := newStatusLayout(config.StatusLine{
+		Left: []string{"$role", "$hex", "$plain", "$cmd", "$styled", "$cmdplain"}, Separator: " ",
+		Segments: map[string]config.StatusSegment{
 			"role":     {Text: "A", Color: "accent"},
 			"hex":      {Text: "B", Color: "#ff0000"},
 			"plain":    {Text: "C"},
@@ -170,7 +253,7 @@ func TestStatusLineUserSegments(t *testing.T) {
 			"styled":   {Command: "x", Color: "warning"},
 			"cmdplain": {Command: "x"},
 		},
-	}
+	})
 	in := statusInput{commands: map[string]string{"cmd": "D", "cmdplain": "E"}}
 	got := statusLine(in, layout, 40, th)
 	assert.Contains(t, got, fg(th.accent).Render("A"))

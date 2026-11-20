@@ -33,8 +33,8 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `instructionFallbacks` | Fallback names for project instruction files, see [`instructionFallbacks`](#instructionfallbacks) |
 | `skills` | `skills.prefix`, see [`skills.prefix`](#skillsprefix) |
 | `keys` | Key bindings for fullscreen actions, see [Keys](#keys) |
-| `statusline` | Status line segments, see [Status line](#status-line) |
-| `agentline` | Agent row segments, see [Agent rows](#agent-rows) |
+| `statusline` | Status line entries, see [Status line](#status-line) |
+| `agentline` | Agent row entries, see [Agent rows](#agent-rows) |
 | `theme` | Colour themes, see [Theme](#theme) |
 | `permissions` | Allow, ask and deny rules, see [permissions](permissions.md#rules) |
 | `classifier` | Reviewer of calls that would ask, see [permissions](permissions.md#classifier) |
@@ -102,10 +102,41 @@ What each key does is in [usage](usage.md#keys).
 
 ## Status line
 
-`statusline` lists the status line's `left` and `right` segments, from the built-in ones or your own `segments`.
+`statusline` lists the status line's `left` and `right` entries. Each entry is a [format](#formats) naming built-in segments or your own `segments`.
 
-- Defaults: left `model, context, branch`; right `notice, sandbox, tasks, mode`.
-- `separator` goes between segments (default ` · `, `""` for none).
+- Defaults: left `$model`, `$context`, `$branch( $changes)`; right `$notice`, `$sandbox`, `$shells`, `$mode`.
+- `separator` goes between entries (default ` · `, `""` for none). An entry that draws nothing is left out with its separator. Nothing is trimmed.
+- On a narrow terminal the left side drops whole entries from its right end. When the line still does not fit, the left side is cleared and the right side is cut, keeping the entry that names `mode` whole at the right end when it fits.
+
+### Formats
+
+The entries of `statusline` and of [`agentline`](#agent-rows) use a subset of starship's format syntax:
+
+| Written | Meaning |
+| --- | --- |
+| `$name` | A segment. A name is letters, digits and `_`. Draws nothing when the segment has nothing to show |
+| `( … )` | Drawn only when a segment inside it has something to show. Groups nest |
+| `\x` | The character `x` itself: `\$`, `\(`, `\)`, `\\` (in JSON a backslash is written `\\`, so `"\\("`) |
+| anything else | Drawn as written |
+
+- Every entry, and every `( … )` group in it, must name at least one segment. A bare `"mode"` stops Kopi at start with an error that says to write `"$mode"`.
+- An unknown segment, an unclosed `(`, a `)` without `(`, a `$` without a name, a trailing `\` and a control character also stop Kopi at start with an error naming the config layer.
+
+With `branch` `main` and `changes` `+12 -3`:
+
+| Entry | In a repository with changes | Without changes | Outside a repository |
+| --- | --- | --- | --- |
+| `$branch( $changes)` | `main +12 -3` | `main` | nothing |
+| `$branch $changes` | `main +12 -3` | `main ` | ` ` |
+
+With `context` `18.0%`, and with it not yet known:
+
+| Entry | Known | Not known |
+| --- | --- | --- |
+| `(ctx $context)` | `ctx 18.0%` | nothing |
+| `ctx $context` | `ctx 18.0%` | `ctx ` |
+
+### Segments
 
 Built-in segments: `model`, `context`, `branch`, `mode`, and:
 
@@ -113,20 +144,32 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 | --- | --- |
 | `effort` | The reasoning level in use (`high`); absent when the model does not reason |
 | `tools` | The tool calls the session has made (`12 tools`); absent until the first |
+| `tokens` | The session's context size (`22.1k tokens`); absent until known |
 | `cost` | The session's cost (`$0.42`); absent while zero |
 | `cwd` | The workspace, with your home directory as `~` |
 | `notice` | Transient hints such as `Copied` |
 | `sandbox` | `sandboxed` or `unsandboxed` when `Bash` is available; shows the default, not a call that sets `unsandboxed` |
-| `tasks` | Running background work, such as `2 agents, 1 shell` |
+| `agents` | Running subagents (`2 agents`); absent at none |
+| `shells` | Running background shells (`1 shell`); absent at none |
+| `changes` | Lines added and removed against `HEAD` in tracked files, staged or not (`+12 -3`; only the non-zero side shows, `+12` or `-3`); absent when there are none, outside a git repository and in a repository with no commit |
 
-- `model`, `effort`, `context`, `tools` and `cost` show the session whose view is open.
+- `model`, `effort`, `context`, `tokens`, `tools` and `cost` show the session whose view is open.
 - `cost` is an estimate computed from the model's listed price; on a subscription sign-in it is not what you are billed.
+- `changes`:
+  - Untracked files are not counted.
+  - Kopi runs `git diff` in the workspace for it, unsandboxed, in any folder whether trusted or not, and only when an entry names `changes` and the workspace is in a repository when Kopi starts.
+  - External diff drivers, textconv and fsmonitor hooks are turned off.
+  - Git does not refresh or write the index.
+  - A bare repository found without a `.git` is not used (git 2.38 or later).
+  - A missing object in a partial clone is not fetched (git 2.45 or later).
+  - A clean or process filter defined in the repository's or your own git config still runs on files that `.gitattributes` assigns to it.
+  - It refreshes when Kopi starts, when a turn starts and on every status refresh, so a change made outside Kopi shows at the next of those. A refresh that arrives during a run reruns it once when it finishes.
 
 A segment in `segments`:
 
-- Has either `text` or `command`, and an optional `color`: a theme colour role such as `accent`, `#rgb`, `#rrggbb` or a number from 0 to 255.
+- Is named with letters, digits and `_`, and has either `text` or `command`, and an optional `color`: a theme colour role such as `accent`, `#rgb`, `#rrggbb` or a number from 0 to 255.
 - A `command` runs with `sh -c` in the workspace, unsandboxed, with a 5 second timeout.
-  - It runs at start, on every status refresh and, with an `interval` such as `"30s"` (at least 1s), on that schedule.
+  - It runs at start, when a turn starts, on every status refresh and, with an `interval` such as `"30s"` (at least 1s), on that schedule.
   - A refresh that arrives while it is still running is skipped.
   - The segment shows the first line of its stdout, keeping ANSI colours, and is hidden while the command fails or prints nothing.
 
@@ -135,8 +178,8 @@ A segment in `segments`:
   "version": 1,
   "keys": { "send-now": ["ctrl+s"] },
   "statusline": {
-    "left": ["model", "branch", "cwd"],
-    "right": ["notice", "load", "context", "mode"],
+    "left": ["$model", "$branch( $changes)", "$cwd"],
+    "right": ["$notice", "$load", "(ctx $context)", "$mode"],
     "separator": " | ",
     "segments": { "load": { "command": "uptime | awk '{print $NF}'", "interval": "30s", "color": "muted" } }
   }
@@ -145,10 +188,10 @@ A segment in `segments`:
 
 ## Agent rows
 
-`agentline` lists the `left` and `right` segments of the [agent rows](subagents.md#agent-rows) shown under the status line.
+`agentline` lists the `left` and `right` entries of the [agent rows](subagents.md#agent-rows) shown under the status line. Entries use the status line's [format syntax](#formats).
 
-- Defaults: left `agent, tokens, model`; right none.
-- `separator` goes between segments (default ` · `, `""` for none; no control characters).
+- Defaults: left `$agent`, `$tokens`, `$model`; right none.
+- `separator` goes between entries (default ` · `, `""` for none; no control characters).
 - At most five rows show; the limit is fixed. On a short terminal fewer rows show.
 
 Segments:
@@ -173,8 +216,8 @@ Segments:
 {
   "version": 1,
   "agentline": {
-    "left": ["agent", "activity"],
-    "right": ["elapsed", "id"],
+    "left": ["$agent", "$activity"],
+    "right": ["$state( $elapsed)", "$id"],
     "separator": " | "
   }
 }
