@@ -218,6 +218,46 @@ func TestBashDisplaySummary(t *testing.T) {
 	assert.Equal(t, "1 line", tool.Display.Summary("Background task t1x"))
 }
 
+func TestBashDisplayBackgroundNotifications(t *testing.T) {
+	tool, _ := newBashTool(t)
+
+	for _, tc := range []struct {
+		name, output, summary string
+	}{
+		{"started", "Background task t1 started.", "task t1"},
+		{"user moved", "Background task t12: the user moved this command to the background, where it keeps running.", "moved to background · task t12"},
+		{"timeout moved", "Background task t123: this command did not finish within its 2m0s timeout and keeps running in the background.", "moved to background · task t123"},
+		{"millisecond timeout", "Background task t1: this command did not finish within its 1ms timeout and keeps running in the background.", "moved to background · task t1"},
+		{"fractional timeout", "Background task t1: this command did not finish within its 1.001s timeout and keeps running in the background.", "moved to background · task t1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.summary, tool.Display.Summary(tc.output))
+			assert.Empty(t, tool.Display.Body(tc.output))
+			for _, suffix := range []string{" more output", "\nreal output", "\n"} {
+				output := tc.output + suffix
+				assert.Equal(t, lineCount(countLines(output)), tool.Display.Summary(output))
+				assert.Equal(t, output, tool.Display.Body(output))
+			}
+		})
+	}
+}
+
+func TestBashDisplayPreservesBackgroundLookalikes(t *testing.T) {
+	tool, _ := newBashTool(t)
+
+	for _, output := range []string{
+		"Background task t1: ordinary stdout\nreal output\n",
+		"Background task t1 started",
+		"Background task t1: something started.",
+		"Background task t1. ordinary stdout",
+		"Background task t1x started.",
+		"Background task t1: this command did not finish within its unknown timeout and keeps running in the background.",
+	} {
+		assert.Equal(t, lineCount(countLines(output)), tool.Display.Summary(output))
+		assert.Equal(t, output, tool.Display.Body(output))
+	}
+}
+
 func TestBashDisplayDone(t *testing.T) {
 	tool, _ := newBashTool(t)
 

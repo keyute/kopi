@@ -25,7 +25,7 @@ type bashArgs struct {
 	Unsandboxed     bool `json:"unsandboxed"`
 }
 
-var backgroundResult = regexp.MustCompile(`^Background task (t\d+)[ :.]`)
+var backgroundResult = regexp.MustCompile(`^Background task (t\d+)(?: started\.|: the user moved this command to the background, where it keeps running\.|: this command did not finish within its (?:\d+ms|(?:\d+m)?\d+(?:\.\d+)?s) timeout and keeps running in the background\.)$`)
 
 // NewBash runs execute-mode calls in sh and plan-mode calls in plan, which
 // must keep commands from writing the workspace; with plan unsandboxed, plan
