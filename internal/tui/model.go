@@ -120,9 +120,6 @@ type model struct {
 	// exitArmed is set by a cancel at idle with an empty draft; the next
 	// cancel quits.
 	exitArmed bool
-	// waitStart is when the root went idle with background work running,
-	// zero otherwise.
-	waitStart time.Time
 	pickVerb  func() verb
 	// approval is the call awaiting an answer, nil when none; approvalDialog is
 	// its prompt, non-nil exactly when approval is. tasks is the /tasks dialog,
@@ -554,7 +551,6 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 	if refresh {
 		m.status, m.agents = m.c.Status(), m.c.Agents()
 	}
-	m.syncWaiting()
 	if redraw && !pureThinking {
 		m.relayout()
 	}

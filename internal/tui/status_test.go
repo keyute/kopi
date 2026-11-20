@@ -57,6 +57,8 @@ func TestStatusLine(t *testing.T) {
 		{"no shell", app.Status{Model: "a/b", Sandboxed: true}, defaultLayout, "", 30, "  b" + strings.Repeat(" ", 21) + "plan  "},
 		{"one background shell", app.Status{Model: "a/b", Shells: 1}, defaultLayout, "", 30, "  b" + strings.Repeat(" ", 11) + "1 shell · plan  "},
 		{"background shells", app.Status{Model: "a/b", Shells: 3}, defaultLayout, "", 30, "  b" + strings.Repeat(" ", 10) + "3 shells · plan  "},
+		{"one workflow", app.Status{Model: "a/b", Workflows: 1}, defaultLayout, "", 30, "  b" + strings.Repeat(" ", 8) + "1 workflow · plan  "},
+		{"no workflow at zero", app.Status{Model: "a/b"}, defaultLayout, "", 20, "  b" + strings.Repeat(" ", 11) + "plan  "},
 		{"agents are not in the default layout", app.Status{Model: "a/b", Agents: 2, Shells: 1}, defaultLayout, "", 40, "  b" + strings.Repeat(" ", 21) + "1 shell · plan  "},
 		{"agents and shells", app.Status{Model: "a/b", Agents: 2, Shells: 1}, agentsShells, "", 40, "  b" + strings.Repeat(" ", 10) + "2 agents · 1 shell · plan  "},
 		{"singular agent", app.Status{Model: "a/b", Agents: 1}, agentsShells, "", 40, "  b" + strings.Repeat(" ", 21) + "1 agent · plan  "},
@@ -220,10 +222,11 @@ func TestStatusLineWarnsWhenUnsandboxed(t *testing.T) {
 
 func TestStatusLineDimsTheTaskCounts(t *testing.T) {
 	th := mocha()
-	layout := layoutOf(nil, []string{"$agents", "$shells"})
-	got := statusLine(statusInput{Status: app.Status{Agents: 2, Shells: 1}}, layout, 40, th)
+	layout := layoutOf(nil, []string{"$agents", "$shells", "$workflows"})
+	got := statusLine(statusInput{Status: app.Status{Agents: 2, Shells: 1, Workflows: 1}}, layout, 40, th)
 	assert.Contains(t, got, fg(th.dim).Render("2 agents"))
 	assert.Contains(t, got, fg(th.dim).Render("1 shell"))
+	assert.Contains(t, got, fg(th.dim).Render("1 workflow"))
 }
 
 func TestStatusLineShowsCwdUnderHome(t *testing.T) {
