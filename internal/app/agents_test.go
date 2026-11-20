@@ -287,6 +287,18 @@ func TestSubagentsAreOfferedWebSearchForASearchingSmallModel(t *testing.T) {
 	assert.Empty(t, a.c.agents[1].tools)
 }
 
+func TestStatusTotalCostKeepsAnEndedSubagent(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	def := agentDef("explorer")
+	def.Model = sb.PricedModel(t)
+	a := newAgentHarness(t, sb, Config{}, def)
+
+	id := a.launch(t, "explorer", "find it", "go")
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	assert.Equal(t, pigruntimetest.PricedModelCost, a.c.Status().TotalCost)
+}
+
 func TestChildWithoutModelRunsUnderTheResolvedDefaultModel(t *testing.T) {
 	def := agentDef("explorer")
 	def.Model = ""

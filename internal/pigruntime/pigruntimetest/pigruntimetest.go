@@ -5,7 +5,10 @@ package pigruntimetest
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -141,6 +144,68 @@ func NewRuntime(t testing.TB, sb Sandbox) *pigruntime.Runtime {
 	require.NoError(t, err)
 	t.Cleanup(r.Close)
 	return r
+}
+
+// PricedModelCost is what each request to the model PricedModel returns costs,
+// in dollars.
+const PricedModelCost = 1.0
+
+// PricedModel writes a models.json model that costs PricedModelCost per
+// request, served by an httptest server, and returns its "provider/id" ref.
+// PiG's faux provider never prices usage. Call it before NewRuntime, which
+// reads models.json.
+func (sb Sandbox) PricedModel(t testing.TB) string {
+	t.Helper()
+	return sb.pricedModel(t, nil, nil)
+}
+
+// HeldPricedModel is PricedModel whose server signals reached on each request,
+// then answers only once release is closed or receives.
+func (sb Sandbox) HeldPricedModel(t testing.TB, reached chan<- struct{}, release <-chan struct{}) string {
+	t.Helper()
+	return sb.pricedModel(t, reached, release)
+}
+
+func (sb Sandbox) pricedModel(t testing.TB, reached chan<- struct{}, release <-chan struct{}) string {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if reached != nil {
+			select {
+			case reached <- struct{}{}:
+			case <-r.Context().Done():
+				return
+			}
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		message := map[string]any{
+			"type": "message", "id": "msg_1", "role": "assistant", "status": "completed",
+			"content": []any{map[string]any{"type": "output_text", "text": "priced answer", "annotations": []any{}}},
+		}
+		events := []map[string]any{
+			{"type": "response.created", "response": map[string]any{"id": "resp_1", "status": "in_progress", "output": []any{}}},
+			{"type": "response.output_item.added", "output_index": 0, "item": map[string]any{"type": "message", "id": "msg_1", "role": "assistant", "status": "in_progress", "content": []any{}}},
+			{"type": "response.content_part.added", "item_id": "msg_1", "output_index": 0, "content_index": 0, "part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}}},
+			{"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": "priced answer"},
+			{"type": "response.output_item.done", "output_index": 0, "item": message},
+			{"type": "response.completed", "response": map[string]any{
+				"id": "resp_1", "status": "completed", "output": []any{message},
+				"usage": map[string]any{"input_tokens": 1_000_000, "output_tokens": 0, "total_tokens": 1_000_000},
+			}},
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, ev := range events {
+			b, _ := json.Marshal(ev)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev["type"], b)
+		}
+	}))
+	t.Cleanup(server.Close)
+	models := fmt.Sprintf(`{"providers":{"kopi-priced":{"baseUrl":%q,"api":"openai-responses","apiKey":"synthetic-key","models":[{"id":"priced-1","cost":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0}}]}}}`, server.URL)
+	require.NoError(t, os.WriteFile(filepath.Join(sb.AgentDir, "models.json"), []byte(models), 0o600))
+	return "kopi-priced/priced-1"
 }
 
 // RegisterFaux registers a faux provider with one model and returns it with

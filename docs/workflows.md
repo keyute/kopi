@@ -56,6 +56,7 @@ The 1000 calls and the memory limit are fixed.
 - The end shows as `• workflow finished · <description> · 6m 3s` (`failed` or `stopped` in the error colour).
 - `/tasks` lists the workflow next to other tasks as `workflow › <description>`, shows its output, one line when each agent starts and ends such as `#3 explorer › auth: completed · 41s`, and stops it with `x` (`stop-agent`) or from its dialog.
 - When the workflow completes or fails, the agent is told with the value or the error, and a new turn starts if none runs, as for a subagent. `TaskStop` by the agent gives no notice; a stop from `/tasks` is reported with the next prompt without starting a turn.
+- The agents' cost shows only in the status line's `total`, added as each agent ends.
 - `/new`, `/resume` and exit stop running workflows and their agents; `/login` is refused while one runs.
 
 ## Limitations
@@ -77,4 +78,5 @@ The 1000 calls and the memory limit are fixed.
 - Isolation between agents, such as separate working directories.
 - Nesting: an agent cannot start a workflow.
 - Budgets.
+- A cost per workflow.
 - A model or effort per call.

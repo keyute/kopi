@@ -79,6 +79,23 @@ func TestStatusLineShowsEffortToolsAndCost(t *testing.T) {
 	assert.Equal(t, "  ", ansi.Strip(statusLine(statusInput{}, layout, 2, mocha())))
 }
 
+func TestStatusLineShowsTotalAbsentAtZero(t *testing.T) {
+	layout := layoutOf(nil, []string{"$cost", "$total"})
+	in := statusInput{Status: app.Status{TotalCost: 1.874}, Cost: 0.424}
+	assert.Equal(t, strings.Repeat(" ", 9)+"$0.42 · $1.87  ", ansi.Strip(statusLine(in, layout, 24, mocha())))
+	assert.Equal(t, "  ", ansi.Strip(statusLine(statusInput{}, layout, 2, mocha())))
+}
+
+func TestStatusInputKeepsTheTotalWithASubagentOpen(t *testing.T) {
+	m, c := agentLineModel(t, 60, config.DefaultAgentLine(), explorer("t1"))
+	c.status.TotalCost = 3
+	send(m, event.TasksChanged{})
+	assert.Equal(t, 3.0, m.statusInput().TotalCost)
+
+	display(m, "t1")
+	assert.Equal(t, 3.0, m.statusInput().TotalCost)
+}
+
 func TestStatusInputTakesTheOpenSubagentsEffortToolsAndCost(t *testing.T) {
 	sub := explorer("t1")
 	sub.Effort, sub.ToolCalls, sub.Cost = "low", 3, 0.5

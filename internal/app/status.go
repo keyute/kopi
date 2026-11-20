@@ -25,6 +25,10 @@ type Status struct {
 	// foreground, which Background can move.
 	Shells, Agents, Workflows int
 	Foreground                bool
+	// TotalCost is the current session's whole estimated spend in dollars: the
+	// main session, its subagents, the workflow agents that ended, and the
+	// classifier, WebFetch and WebSearch requests.
+	TotalCost float64
 }
 
 // AgentStatus describes one session for a frontend: the main session or a subagent's.
