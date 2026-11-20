@@ -1,11 +1,18 @@
 package tui
 
-import "charm.land/bubbles/v2/key"
+import (
+	"slices"
+
+	"charm.land/bubbles/v2/key"
+)
 
 type keyMap struct {
 	submit, newline, interrupt, cancel, quit, sendNow, toggleMode, background, stopAgent, expandAll,
 	pageUp, pageDown, paste, historyPrev, historyNext, queueEdit, editPlan,
 	complete, menuUp, menuDown, menuClose key.Binding
+	// dismiss is the interrupt and cancel keys together: a prompt in front takes
+	// either as its way out. It has no action name of its own.
+	dismiss key.Binding
 }
 
 // bindings names each binding by its config action. A binding with no keys
@@ -41,5 +48,6 @@ func newKeyMap(keys map[string][]string) keyMap {
 	for name, b := range km.bindings() {
 		b.SetKeys(keys[name]...)
 	}
+	km.dismiss.SetKeys(slices.Concat(km.interrupt.Keys(), km.cancel.Keys())...)
 	return km
 }

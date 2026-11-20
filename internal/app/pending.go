@@ -31,7 +31,7 @@ func (p *pending[T]) live() bool {
 // request registers a pending call in slot, emits requested(token) and waits for
 // resolve to answer it, returning the context's error or context.Canceled when
 // the call is cancelled first.
-func request[T any](c *Controller, ctx context.Context, slot **pending[T], seq *uint64, requested, ended func(token uint64) event.Event) (answer T, err error) {
+func request[T any](c *Controller, ctx context.Context, slot **pending[T], requested, ended func(token uint64) event.Event) (answer T, err error) {
 	p := &pending[T]{answer: make(chan T, 1)}
 	c.queue.Lock()
 	c.mu.Lock()
@@ -45,15 +45,15 @@ func request[T any](c *Controller, ctx context.Context, slot **pending[T], seq *
 		c.queue.Unlock()
 		return answer, context.Canceled
 	}
-	*seq++
-	p.token = *seq
 	p.work, p.ctx, p.sendCtx, p.emit = c.main.work, ctx, c.main.work.sendCtx, c.main.emit
 	*slot = p
 	emit := p.emit
+	token, end := c.openRequestLocked(func(token uint64) { emit(ended(token)) })
+	p.token = token
 	c.mu.Unlock()
 	emit(requested(p.token))
 	c.queue.Unlock()
-	defer emit(ended(p.token))
+	defer end()
 	select {
 	case a := <-p.answer:
 		return a, nil

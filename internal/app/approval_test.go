@@ -477,7 +477,9 @@ func TestApprovalCancelledBySessionSwitchEnds(t *testing.T) {
 
 	wait(t, w.Done())
 	evs := h.rec.all()
-	endedAt := slices.Index(evs, event.Event(event.ApprovalEnded{Token: req.Token}))
+	ended := event.Event(event.ApprovalEnded{Token: req.Token})
+	assert.Len(t, slices.DeleteFunc(slices.Clone(evs), func(ev event.Event) bool { return ev != ended }), 1)
+	endedAt := slices.Index(evs, ended)
 	changedAt := slices.IndexFunc(evs, func(ev event.Event) bool {
 		changed, ok := ev.(event.SessionChanged)
 		return ok && changed.SessionID != oldID
@@ -1024,6 +1026,30 @@ func TestCloseCancelsAChildsPendingAsk(t *testing.T) {
 	require.NoError(t, a.c.Close(t.Context()))
 
 	assert.Equal(t, event.ApprovalEnded{Token: req.Token}, receiveEvent(t, ended))
+	assert.False(t, a.c.Answer(req.Token, policy.Decision{Answer: policy.Allow}))
+	assert.Empty(t, a.c.approvals)
+	assert.Zero(t, ran.Load())
+}
+
+func TestSessionSwitchEndsAChildsPendingAskOnceBeforeSessionChanged(t *testing.T) {
+	a, ran := askingChildren(t, Config{})
+	approvals := subscribeTo[event.ApprovalRequested](a.c)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("p1", 1)), pigruntimetest.Text("unreached")})
+	oldID := a.c.Status().SessionID
+	a.launch(t, "worker", "one", "go")
+	req := receiveEvent(t, approvals)
+
+	require.NoError(t, a.c.NewSession(t.Context()))
+
+	evs := a.rec.all()
+	changedAt := slices.IndexFunc(evs, func(ev event.Event) bool {
+		changed, ok := ev.(event.SessionChanged)
+		return ok && changed.SessionID != oldID
+	})
+	require.GreaterOrEqual(t, changedAt, 0)
+	ended := event.Event(event.ApprovalEnded{Token: req.Token})
+	assert.Len(t, slices.DeleteFunc(slices.Clone(evs), func(ev event.Event) bool { return ev != ended }), 1)
+	assert.Less(t, slices.Index(evs, ended), changedAt)
 	assert.False(t, a.c.Answer(req.Token, policy.Decision{Answer: policy.Allow}))
 	assert.Empty(t, a.c.approvals)
 	assert.Zero(t, ran.Load())

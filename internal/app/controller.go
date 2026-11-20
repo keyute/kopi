@@ -176,20 +176,21 @@ type Controller struct {
 	// leaves the mode alone and delivers no events.
 	closed bool
 	// approvals are the calls waiting for Answer, oldest first.
-	approvals   []*pendingApproval
-	approvalSeq uint64
+	approvals []*pendingApproval
 	// question is the AskUserQuestion call waiting for AnswerQuestion; nil when none is.
-	question    *pendingQuestion
-	questionSeq uint64
+	question *pendingQuestion
 	// plan is the ExitPlanMode call waiting for AnswerPlan; nil when none is.
-	plan    *pendingPlan
-	planSeq uint64
+	plan *pendingPlan
 	// login is the running login; nil when none is. A login and a turn or a
 	// running subagent or workflow never run together: each is refused while the other is
 	// registered. The login's questions and an approval would otherwise share
 	// the one dialog the frontend has.
-	login    *loginRun
-	loginSeq uint64
+	login *loginRun
+	// requestSeq numbers the requests of every kind, so a token names one
+	// request for the Controller's lifetime; requests holds the end of each
+	// request still open, by token. Both are guarded by mu.
+	requestSeq uint64
+	requests   map[uint64]func()
 	// deferred is the first open that Start put off for a login; cleared once
 	// any session opens.
 	deferred *OpenRequest
@@ -1071,7 +1072,16 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	if w != nil {
 		c.releaseSwitch(w, oldEmit, true)
 	}
+	// A child's emitter stays bound to the old epoch, so its pending asks end
+	// before the advance drops them, and an ended ask is no longer answerable.
+	// One queue section keeps a child's ask from registering in between.
+	c.queue.Lock()
+	c.endRequests()
+	c.mu.Lock()
+	c.approvals = nil
+	c.mu.Unlock()
 	c.relay.advance()
+	c.queue.Unlock()
 	if old != nil {
 		oldUnsubscribe()
 		// The old session is released even if the caller's ctx has ended:
@@ -1174,4 +1184,40 @@ func (c *Controller) releaseSwitch(w *Work, emit func(event.Event), committed bo
 // workflowOffered reports that the main session has the Workflow tool.
 func (c *Controller) workflowOffered() bool {
 	return !c.cfg.Unattended && !c.cfg.Rules.Removes("Workflow")
+}
+
+// openRequestLocked numbers a request and registers end, which emits its
+// *Ended event; the returned end runs it once, however often it is called and
+// whoever calls first, and deregisters the request. It must be called with mu
+// held.
+func (c *Controller) openRequestLocked(end func(token uint64)) (uint64, func()) {
+	c.requestSeq++
+	token := c.requestSeq
+	done := sync.OnceFunc(func() {
+		end(token)
+		c.mu.Lock()
+		delete(c.requests, token)
+		c.mu.Unlock()
+	})
+	if c.requests == nil {
+		c.requests = map[uint64]func(){}
+	}
+	c.requests[token] = done
+	return token, done
+}
+
+// endRequests ends every open request, oldest first. It runs the ends with mu
+// released, since an end takes it, and with queue held, so no request registers
+// meanwhile.
+func (c *Controller) endRequests() {
+	c.mu.Lock()
+	tokens := slices.Sorted(maps.Keys(c.requests))
+	ends := make([]func(), len(tokens))
+	for i, token := range tokens {
+		ends[i] = c.requests[token]
+	}
+	c.mu.Unlock()
+	for _, end := range ends {
+		end()
+	}
 }

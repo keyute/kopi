@@ -67,8 +67,8 @@ func (c *Controller) ask(ctx context.Context, d *display, call policy.Request, r
 	// The approver runs only during a send on run's session.
 	p.work, p.sendCtx, p.emit = w, w.sendCtx, run.emit
 	emit := run.bound
-	c.approvalSeq++
-	p.token = c.approvalSeq
+	token, end := c.openRequestLocked(func(token uint64) { emit(event.ApprovalEnded{Token: token}) })
+	p.token = token
 	c.approvals = append(c.approvals, p)
 	c.mu.Unlock()
 	req := d.approval(call)
@@ -76,7 +76,7 @@ func (c *Controller) ask(ctx context.Context, d *display, call policy.Request, r
 	req.Agent, req.TaskID = run.name, run.id
 	emit(req)
 	c.queue.Unlock()
-	defer emit(event.ApprovalEnded{Token: p.token})
+	defer end()
 	select {
 	case a := <-p.answer:
 		return a, nil

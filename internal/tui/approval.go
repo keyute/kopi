@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
@@ -55,9 +58,18 @@ func approvalNote(a *event.ApprovalRequested) string {
 	return ""
 }
 
+// approvalDialog is the prompt for a call awaiting an answer.
+type approvalDialog struct {
+	req *event.ApprovalRequested
+	d   *dialog
+	km  *keyMap
+	// preview is the call's preview rows.
+	preview approvalPreview
+}
+
 // newApprovalDialog is the prompt for a: approvalOptions as its options, the
 // reject option taking a reason.
-func newApprovalDialog(a *event.ApprovalRequested, km *keyMap, th theme) *dialog {
+func newApprovalDialog(a *event.ApprovalRequested, km *keyMap, th theme) *approvalDialog {
 	d := &dialog{title: a.Title, note: approvalNote(a)}
 	if a.Agent != "" {
 		d.title = a.Agent + " " + a.TaskID + " › " + a.Title
@@ -69,7 +81,36 @@ func newApprovalDialog(a *event.ApprovalRequested, km *keyMap, th theme) *dialog
 		}
 		d.options = append(d.options, opt)
 	}
-	return d
+	return &approvalDialog{req: a, d: d, km: km}
+}
+
+// dialog has the preview as its body, windowed from d's scroll, and the scroll
+// hint for when it is cut.
+func (a *approvalDialog) dialog(width int, th theme) *dialog {
+	a.d.body, a.d.hint = a.preview.lines(a.req.Preview, width-2, th), scrollHint(a.km)
+	return a.d
+}
+
+// key answers when an option is picked; dismiss rejects without a reason.
+// Keys it has no use for are swallowed. The prompt stays until its
+// ApprovalEnded arrives.
+func (a *approvalDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	if key.Matches(msg, m.keys.dismiss) {
+		m.c.Answer(a.req.Token, policy.Decision{})
+		return nil, true
+	}
+	picked, cmd := a.d.key(msg, &m.keys)
+	if picked {
+		opts := approvalOptions(a.req, &m.keys)
+		m.c.Answer(a.req.Token, policy.Decision{Answer: opts[a.d.sel].answer, Reason: a.d.text()})
+	}
+	return cmd, true
+}
+
+// seen ends the prompt with its ApprovalEnded.
+func (a *approvalDialog) seen(_ *model, msg tea.Msg) bool {
+	ev, ended := msg.(event.ApprovalEnded)
+	return !ended || ev.Token != a.req.Token
 }
 
 // approvalPreview is the shown approval's preview rendered by previewLine for
@@ -88,32 +129,6 @@ func (p *approvalPreview) lines(preview []tool.PreviewLine, width int, th theme)
 		}
 	}
 	return p.rows
-}
-
-// approvalRows draws d, a's prompt, in place of the composer: the title, the
-// preview windowed at maxPreview rows from d's scroll, the rule that asked and
-// the scroll hint when the preview is cut, a blank row, and the options. The
-// reason field grows to maxPreview rows within what maxRows leaves after the
-// other rows, and the preview fits into what is left after it. Past maxRows the
-// top is cut so the options stay visible, along with any field area the cut
-// reaches.
-func approvalRows(d *dialog, p *approvalPreview, a *event.ApprovalRequested, km *keyMap, width, maxPreview, maxRows int, th theme) []string {
-	if maxRows <= 0 {
-		return nil
-	}
-	fieldCap := max(1, maxPreview)
-	d.body = p.lines(a.Preview, width-2, th)
-	rows := d.scrollRows(width, maxRows, fieldCap, maxPreview, scrollHint(km), th)
-	cut := max(0, len(rows)-maxRows)
-	var areas []fieldArea
-	for _, fa := range d.areas {
-		if fa.y >= cut {
-			fa.y -= cut
-			areas = append(areas, fa)
-		}
-	}
-	d.areas = areas
-	return rows[cut:]
 }
 
 func previewLine(l tool.PreviewLine, width int, th theme) []string {

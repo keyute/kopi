@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -77,6 +76,10 @@ type trustModel struct {
 	// choices[i] is what option i picks.
 	choices []TrustChoice
 	choice  TrustChoice
+	// body is the lists drawn for bodyWidth and bodyTheme, kept across renders.
+	body      []string
+	bodyWidth int
+	bodyTheme theme
 }
 
 func newTrustModel(req TrustRequest, keys map[string][]string, themes Themes) *trustModel {
@@ -104,8 +107,18 @@ func (m *trustModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.th = m.themes.light
 		}
 	case tea.KeyPressMsg:
-		if key.Matches(msg, m.keys.cancel, m.keys.interrupt) {
+		if key.Matches(msg, m.keys.dismiss) {
 			return m, tea.Quit
+		}
+		if m.dialog.scroll.cut() {
+			switch {
+			case key.Matches(msg, m.keys.pageUp):
+				m.dialog.scroll.page(-1)
+				return m, nil
+			case key.Matches(msg, m.keys.pageDown):
+				m.dialog.scroll.page(1)
+				return m, nil
+			}
 		}
 		if picked, _ := m.dialog.key(msg, &m.keys); picked {
 			m.choice = m.choices[m.dialog.sel]
@@ -123,11 +136,8 @@ func (m *trustModel) View() tea.View {
 		return v
 	}
 	rows := append(m.rows(), m.hint())
-	// rows caps both lists to the height; only when the fixed rows and minimum
-	// summaries do not fit is the top cut so the options stay visible. Short of
-	// the height, blank rows above put the dialog at the bottom, where approvals
-	// are drawn.
-	rows = rows[max(0, len(rows)-m.height):]
+	// Short of the height, blank rows above put the dialog at the bottom, where
+	// approvals are drawn.
 	v.SetContent(strings.Join(append(make([]string, m.height-len(rows)), rows...), "\n"))
 	return v
 }
@@ -148,83 +158,28 @@ func (m *trustModel) hint() string {
 }
 
 func (m *trustModel) rows() []string {
-	none, width := lipgloss.NewStyle(), m.width-2
-	folder := hang("", none, oneLine(m.req.Folder), none.Bold(true), width)
-	header := func(text string) []string { return append([]string{""}, hang("", none, text, none, width)...) }
-	var instructionHead, skillHead, servers []string
-	if len(m.req.Instructions) > 0 {
-		instructionHead = header("Kopi would add these instruction files to the model's instructions:")
+	if m.body == nil || m.bodyWidth != m.width || m.bodyTheme != m.th {
+		none, width := lipgloss.NewStyle(), m.width-2
+		lines := func(prefix, text string, st lipgloss.Style) []string {
+			return hang(prefix, none, oneLine(text), st, width)
+		}
+		m.body = lines("", m.req.Folder, none.Bold(true))
+		list := func(head string, entries []string) {
+			if len(entries) == 0 {
+				return
+			}
+			m.body = append(m.body, "")
+			m.body = append(m.body, hang("", none, head, none, width)...)
+			for _, e := range entries {
+				m.body = append(m.body, lines("  ", e, fg(m.th.muted))...)
+			}
+		}
+		list("Its .mcp.json declares MCP servers that Kopi would start. They run with your permissions.", m.req.Servers)
+		list("Kopi would add these instruction files to the model's instructions:", m.req.Instructions)
+		list("Kopi would load the skills in these folders:", m.req.Skills)
+		m.bodyWidth, m.bodyTheme = m.width, m.th
 	}
-	if len(m.req.Skills) > 0 {
-		skillHead = header("Kopi would load the skills in these folders:")
-	}
-	if len(m.req.Servers) > 0 {
-		servers = header("Its .mcp.json declares MCP servers that Kopi would start. They run with your permissions.")
-	}
-	m.dialog.body = slices.Concat(folder, instructionHead, skillHead, servers)
+	m.dialog.body, m.dialog.hint = m.body, scrollHint(&m.keys)
 	// The footer row is the one below the dialog.
-	fixed := len(m.dialog.rows(m.width, m.height, 1, m.th)) + 1
-	// Each list keeps at least its summary row below the ones before it.
-	serverReserve, skillReserve := 0, 0
-	if len(m.req.Servers) > 0 {
-		serverReserve = 1
-	}
-	if len(m.req.Skills) > 0 {
-		skillReserve = 1
-	}
-	instructions := m.pathRows(m.req.Instructions, "instruction file", m.height-fixed-skillReserve-serverReserve, width)
-	skills := m.pathRows(m.req.Skills, "skill folder", m.height-fixed-len(instructions)-serverReserve, width)
-	m.dialog.body = slices.Concat(folder, instructionHead, instructions, skillHead, skills, servers,
-		m.serverRows(m.height-fixed-len(instructions)-len(skills), width))
-	return m.dialog.rows(m.width, m.height, 1, m.th)
-}
-
-// pathRows keeps wrapped paths whole and counts paths left out, even when the
-// fixed rows leave no room for the count. noun names one path in the count.
-func (m *trustModel) pathRows(paths []string, noun string, limit, width int) []string {
-	var rows []string
-	var ends []int
-	for _, path := range paths {
-		ends = append(ends, len(rows))
-		rows = append(rows, hang("  ", lipgloss.NewStyle(), oneLine(path), fg(m.th.muted), width)...)
-	}
-	if len(rows) <= limit {
-		return rows
-	}
-	for i := len(ends) - 1; i >= 0; i-- {
-		rows = rows[:ends[i]]
-		more := fmt.Sprintf("… %d more %ss", len(ends)-i, noun)
-		if len(ends)-i == 1 {
-			more = "… 1 more " + noun
-		}
-		marker := hang("  ", fg(m.th.dim), more, fg(m.th.dim), width)
-		if len(rows)+len(marker) <= limit || i == 0 {
-			return append(rows, marker...)
-		}
-	}
-	return rows
-}
-
-// serverRows draws whole server lines within limit rows; when they do not all
-// fit, the last row counts the servers left out. The count shows even past
-// limit, so the top cut drops a top row rather than every server unseen.
-func (m *trustModel) serverRows(limit, width int) []string {
-	var rows []string
-	for i, s := range m.req.Servers {
-		lines := hang("  ", lipgloss.NewStyle(), oneLine(s), fg(m.th.muted), width)
-		budget := limit - len(rows)
-		if i != len(m.req.Servers)-1 {
-			budget--
-		}
-		if len(lines) <= budget {
-			rows = append(rows, lines...)
-			continue
-		}
-		more := fmt.Sprintf("… %d more servers", len(m.req.Servers)-i)
-		if len(m.req.Servers)-i == 1 {
-			more = "… 1 more server"
-		}
-		return append(rows, hang("  ", fg(m.th.dim), more, fg(m.th.dim), width)[0])
-	}
-	return rows
+	return m.dialog.rows(m.width, m.height-1, m.height, m.th)
 }

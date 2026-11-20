@@ -28,7 +28,7 @@ func openPlan(t *testing.T) (*model, *fakeController) {
 	t.Helper()
 	m, c := newTestModel(t, 70, 30)
 	send(m, planRequest(7, "# Heading\n\nstep one"))
-	require.NotNil(t, m.plan)
+	require.NotNil(t, planOf(m))
 	return m, c
 }
 
@@ -83,7 +83,7 @@ func TestPlanRowsKeepRulesSelectionAndFieldAreasWithinBudget(t *testing.T) {
 					d.move(sel)
 					// Seed hit regions so a zero budget must clear stale ones too.
 					d.rows(100, 12, 6, th)
-					rows := plainRows(planRows(d, 100, 6, budget, th))
+					rows := plainRows(d.rows(100, budget, 6, th))
 					require.LessOrEqual(t, len(rows), budget)
 					if budget == 0 {
 						assert.Empty(t, rows)
@@ -134,7 +134,7 @@ func TestPlanYesApproves(t *testing.T) {
 	m, c := openPlan(t)
 	press(m, enter)
 	assert.Equal(t, []planAnswer{{7, tool.PlanAnswer{Approved: true}}}, c.planAnswers)
-	assert.NotNil(t, m.plan, "the dialog stays until PlanEnded")
+	assert.NotNil(t, planOf(m), "the dialog stays until PlanEnded")
 }
 
 func TestPlanNoSendsTheTextAsTypedForTheControllerToJudge(t *testing.T) {
@@ -154,6 +154,13 @@ func TestPlanNoSendsTheTextAsTypedForTheControllerToJudge(t *testing.T) {
 func TestPlanEscDismisses(t *testing.T) {
 	m, c := openPlan(t)
 	press(m, escape)
+	assert.Equal(t, []planAnswer{{7, tool.PlanAnswer{}}}, c.planAnswers)
+}
+
+func TestPlanCancelDismisses(t *testing.T) {
+	m, c := openPlan(t)
+	press(m, ctrlC)
+	assert.Zero(t, c.interrupts)
 	assert.Equal(t, []planAnswer{{7, tool.PlanAnswer{}}}, c.planAnswers)
 }
 
@@ -190,16 +197,16 @@ func TestPlanRepeatKeepsTheDialogAndTheTypedFeedback(t *testing.T) {
 	assert.Equal(t, []planAnswer{{7, tool.PlanAnswer{Feedback: "tighter"}}}, c.planAnswers)
 }
 
-func TestPlanClosesOnEndTurnAndSessionChange(t *testing.T) {
-	for name, ev := range map[string]event.Event{
-		"PlanEnded":      event.PlanEnded{Token: 7},
-		"TurnEnd":        event.TurnEnd{},
-		"SessionChanged": event.SessionChanged{},
+func TestPlanClosesOnPlanEndedWhateverFollows(t *testing.T) {
+	for name, evs := range map[string][]event.Event{
+		"PlanEnded":      {event.PlanEnded{Token: 7}},
+		"TurnEnd":        {event.PlanEnded{Token: 7}, event.TurnEnd{}},
+		"SessionChanged": {event.PlanEnded{Token: 7}, event.SessionChanged{}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, _ := openPlan(t)
-			send(m, ev)
-			assert.Nil(t, m.plan)
+			send(m, evs...)
+			assert.Nil(t, planOf(m))
 			assert.Nil(t, m.frontDialog())
 			assert.NotContains(t, strings.Join(screen(m), "\n"), "Approve this plan?")
 		})
@@ -209,7 +216,7 @@ func TestPlanClosesOnEndTurnAndSessionChange(t *testing.T) {
 func TestPlanEndedForAnotherTokenKeepsTheDialog(t *testing.T) {
 	m, _ := openPlan(t)
 	send(m, event.PlanEnded{Token: 8})
-	assert.NotNil(t, m.plan)
+	assert.NotNil(t, planOf(m))
 }
 
 func TestPlanBlockStaysAfterTheDialogCloses(t *testing.T) {
@@ -225,7 +232,7 @@ func TestPlanRequestShowsTheMainView(t *testing.T) {
 
 	send(m, planRequest(7, "# Heading\n\nstep one"))
 	assert.Equal(t, app.Main, m.shown)
-	assert.NotNil(t, m.plan)
+	assert.NotNil(t, planOf(m))
 }
 
 func TestPlanReturnsAfterAChildApprovalOverIt(t *testing.T) {
@@ -240,7 +247,7 @@ func TestPlanReturnsAfterAChildApprovalOverIt(t *testing.T) {
 	assert.Empty(t, c.planAnswers, "keys go to the approval")
 
 	send(m, event.ApprovalEnded{Token: 2})
-	assert.Nil(t, m.approval)
+	assert.Nil(t, approvalOf(m))
 	assert.Contains(t, strings.Join(screen(m), "\n"), "Approve this plan?")
 	press(m, enter)
 	assert.Equal(t, []planAnswer{{7, tool.PlanAnswer{Approved: true}}}, c.planAnswers)

@@ -97,7 +97,7 @@
 - Tab adds a note to the focused option; the note goes to the model with the option when it is chosen.
 - With several questions a tab strip shows which are answered, and a review page after the last one lists the answers and the gaps before you submit. A single question answers at once.
 - The result lists each question with its answer, any note and any typed text, or says you dismissed the questions.
-- Esc dismisses the questions and stops the turn; the model sees that you dismissed them. Ctrl+C interrupts the turn. There is no time limit.
+- Esc dismisses the questions and stops the turn; the model sees that you dismissed them. Ctrl+C does the same. There is no time limit.
 - Only in the fullscreen interface; `kopi -p` has no `AskUserQuestion`.
 - A response's tool calls run one at a time when it contains a question.
 - A subagent's approval request that arrives while a question is open is shown first; the question returns after it.
@@ -115,7 +115,7 @@
 | `Type something.` | Up on the first row | Back to the options |
 | `Type something.` | Left, Right | Switch questions while the field is empty, else move the cursor |
 | Note | Enter or Tab | Save the note; a blank note removes it |
-| Note | Esc | Discard the edit and close the note |
+| Note | Esc or Ctrl+C | Discard the edit and close the note; the questions stay open |
 | Review | Enter | Submit; with a gap, jump to the first unanswered question |
 | Review | Left | Back to the last question |
 | Any | PgUp, PgDn | Scroll a cut preview or review, in a note too (the mouse wheel over the dialog does too); they do not move the cursor in a text field |

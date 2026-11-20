@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -136,7 +135,7 @@ func (m *model) menuRows() []string {
 		// Clipped: keep the last row for the position.
 		n--
 	}
-	start := min(max(0, mn.sel-n/2), len(mn.shown)-n)
+	start := around(mn.sel, 1, n, len(mn.shown))
 	window := mn.shown[start : start+n]
 
 	labels := make([]string, n)
@@ -179,7 +178,7 @@ func (m *model) menuRows() []string {
 		rows = append(rows, ansi.Truncate(marker+ls.Render(label)+ds.Render(desc), m.width, ""))
 	}
 	if len(mn.shown) > n && n < h {
-		rows = append(rows, fg(th.dim).Render(ansi.Truncate(fmt.Sprintf("  %d of %d", mn.sel+1, len(mn.shown)), m.width, "")))
+		rows = append(rows, positionRow(mn.sel, len(mn.shown), m.width, th))
 	}
 	return rows
 }

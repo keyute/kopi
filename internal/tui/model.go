@@ -19,7 +19,6 @@ import (
 
 	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/event"
-	"github.com/keyute/kopi/internal/policy"
 )
 
 const (
@@ -121,27 +120,11 @@ type model struct {
 	// cancel quits.
 	exitArmed bool
 	pickVerb  func() verb
-	// approval is the call awaiting an answer, nil when none; approvalDialog is
-	// its prompt, non-nil exactly when approval is. tasks is the /tasks dialog,
-	// nil when closed; any request closes it. prompt is the front prompt's rows,
-	// drawn in place of the composer; front says which prompt that is.
-	approval       *event.ApprovalRequested
-	approvalDialog *dialog
-	// approvalPreview is the shown approval's preview rows.
-	approvalPreview approvalPreview
-	// queued asks wait behind approval, in arrival order.
-	approvalQueue []event.ApprovalRequested
-	// login is the pending login question; loginDialog is its prompt, non-nil
-	// exactly when login is.
-	login       *event.LoginRequested
-	loginDialog *dialog
-	// question is the pending AskUserQuestion dialog; plan is the pending
-	// ExitPlanMode dialog.
-	question *questionDialog
-	tasks    *taskDialog
-	plan     *planDialog
-	prompt   []string
-	menu     menu
+	// prompts are the open prompts, the front one first; prompt is the front
+	// one's rows, drawn in place of the composer.
+	prompts []held
+	prompt  []string
+	menu    menu
 	// seen is the draft, shown session and cursor syncInput last reconciled.
 	seen struct {
 		value     string
@@ -249,18 +232,15 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			}
 			return nil
 		}
-		if f := m.front(); f == promptNone || f == promptLogin {
+		if m.front() == nil {
 			return m.paste(msg.text)
 		}
 		return nil
 	case tea.PasteMsg:
-		if m.front() == promptNone {
-			return m.paste(msg.Content)
-		}
 		if d := m.frontDialog(); d != nil {
 			return d.paste(msg.Content)
 		}
-		return nil
+		return m.paste(msg.Content)
 	case imagePastedMsg:
 		m.focus = agentFocus{}
 		return m.composer.insertImage(msg.path)
@@ -291,7 +271,7 @@ func (m *model) syncInput(wasHeld bool) tea.Cmd {
 func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	m.clearSelection()
 	km := &m.keys
-	if key.Matches(msg, km.cancel) {
+	if m.front() == nil && key.Matches(msg, km.cancel) {
 		m.focus = agentFocus{}
 		return m.cancel()
 	}
@@ -306,17 +286,22 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		m.pageFront(1)
 		return nil
 	}
-	switch m.front() {
-	case promptApproval:
-		return m.approvalKey(msg)
-	case promptQuestion:
-		return m.questionKey(msg)
-	case promptPlan:
-		return m.planKey(msg)
-	case promptLogin:
-		return m.loginKey(msg)
-	case promptTasks:
-		return m.tasksKey(msg)
+	if front := m.front(); front != nil {
+		// A key may open or close prompts, so it goes to a copy.
+		h := *front
+		d := h.dialog(m.width, m.th)
+		d.warn = ""
+		if key.Matches(msg, km.paste) {
+			if f := d.field(); f != nil {
+				return readClipboardText(m.clip, f)
+			}
+			return nil
+		}
+		cmd, keep := h.key(m, msg)
+		if !keep {
+			m.prompts = slices.DeleteFunc(m.prompts, func(x held) bool { return x.prompt == h.prompt })
+		}
+		return cmd
 	}
 	if m.focus.on {
 		if cmd, ok := m.agentKey(msg); ok {
@@ -361,92 +346,6 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		return readClipboard(m.ctx, m.clip, m.imageDir)
 	}
 	return m.composer.update(msg)
-}
-
-// approvalKey goes to the prompt, which answers when an option is picked;
-// interrupt rejects without a reason. Keys the prompt has no use for are
-// swallowed. The prompt stays until its ApprovalEnded arrives.
-func (m *model) approvalKey(msg tea.KeyPressMsg) tea.Cmd {
-	token := m.approval.Token
-	switch {
-	case key.Matches(msg, m.keys.interrupt):
-		m.c.Answer(token, policy.Decision{})
-		return nil
-	case key.Matches(msg, m.keys.paste) && m.approvalDialog.field() != nil:
-		return readClipboardText(m.clip, m.approvalDialog.field())
-	}
-	picked, cmd := m.approvalDialog.key(msg, &m.keys)
-	if picked {
-		opts := approvalOptions(m.approval, &m.keys)
-		m.c.Answer(token, policy.Decision{Answer: opts[m.approvalDialog.sel].answer, Reason: m.approvalDialog.text()})
-	}
-	return cmd
-}
-
-// dropApprovals removes the asks drop selects from the shown one and the
-// queue. When the shown one goes, the first remaining ask is shown next.
-func (m *model) dropApprovals(drop func(event.ApprovalRequested) bool) {
-	if m.approval == nil {
-		return
-	}
-	shownGone := drop(*m.approval)
-	var keep []event.ApprovalRequested
-	if !shownGone {
-		keep = append(keep, *m.approval)
-	}
-	for _, a := range m.approvalQueue {
-		if !drop(a) {
-			keep = append(keep, a)
-		}
-	}
-	if !shownGone {
-		m.approvalQueue = keep[1:]
-		return
-	}
-	m.approval, m.approvalDialog, m.approvalQueue, m.approvalPreview = nil, nil, nil, approvalPreview{}
-	if len(keep) > 0 {
-		m.showApproval(keep[0])
-		m.approvalQueue = keep[1:]
-	}
-}
-
-// showApproval makes a the shown approval, with its prompt.
-func (m *model) showApproval(a event.ApprovalRequested) {
-	m.approval, m.approvalDialog, m.approvalPreview = &a, newApprovalDialog(&a, &m.keys, m.th), approvalPreview{}
-}
-
-// loginKey goes to the login prompt like approvalKey: a pick answers with the
-// chosen option's ID or the typed text, and interrupt cancels the login. The
-// prompt stays until its LoginEnded arrives.
-func (m *model) loginKey(msg tea.KeyPressMsg) tea.Cmd {
-	switch {
-	case key.Matches(msg, m.keys.interrupt):
-		m.c.Interrupt(app.Main)
-		return nil
-	case key.Matches(msg, m.keys.paste) && m.loginDialog.field() != nil:
-		return readClipboardText(m.clip, m.loginDialog.field())
-	}
-	picked, cmd := m.loginDialog.key(msg, &m.keys)
-	if picked {
-		answer := m.loginDialog.text()
-		if f := m.loginDialog.field(); f != nil && f.secret {
-			answer = strings.NewReplacer("\r", "", "\n", "").Replace(answer)
-		}
-		if len(m.login.Options) > 0 {
-			answer = m.login.Options[m.loginDialog.sel].ID
-		}
-		m.c.AnswerLogin(m.login.Token, answer)
-		m.loginDialog.clear()
-	}
-	return cmd
-}
-
-// endLogin drops the pending question and its prompt.
-func (m *model) endLogin() {
-	if m.login != nil {
-		m.loginDialog.clear()
-		m.login, m.loginDialog = nil, nil
-	}
 }
 
 // cancel is the cancel key and SIGINT: it interrupts a running turn, else
@@ -574,6 +473,7 @@ func unwrap(ev event.Event) (string, event.Event) {
 // session's view, which it returns; nil when no view changed.
 func (m *model) apply(ev event.Event) *view {
 	id, ev := unwrap(ev)
+	m.sweep(ev)
 	switch ev := ev.(type) {
 	case event.StatusCommandResult:
 		if ev.Err != nil {
@@ -609,12 +509,9 @@ func (m *model) apply(ev event.Event) *view {
 			m.view().tr.Restore(ev.History)
 		}
 		m.clearSelection()
-		m.dropApprovals(func(event.ApprovalRequested) bool { return true })
-		m.question, m.plan = nil, nil
-		m.tasks, m.focus = nil, agentFocus{}
+		m.focus = agentFocus{}
 		return m.view()
 	case event.TasksChanged:
-		m.refreshTasks()
 		return nil
 	case event.ModeChanged:
 		return nil
@@ -622,45 +519,24 @@ func (m *model) apply(ev event.Event) *view {
 		m.activity = ev.Text
 		return nil
 	case event.ApprovalRequested:
-		if m.approval != nil {
-			m.approvalQueue = append(m.approvalQueue, ev)
-			return nil
-		}
-		m.showApproval(ev)
-		m.tasks = nil
+		m.open(promptApproval, newApprovalDialog(&ev, &m.keys, m.th))
 		return nil
 	case event.QuestionRequested:
-		m.question, m.tasks = newQuestionDialog(ev, &m.keys, m.th), nil
-		return nil
-	case event.QuestionEnded:
-		if m.question != nil && m.question.token == ev.Token {
-			m.question = nil
-		}
+		m.open(promptQuestion, newQuestionDialog(ev, &m.keys, m.th))
 		return nil
 	case event.PlanRequested:
 		// A repeat after an edit keeps the dialog and what was typed in it.
-		if m.plan == nil || m.plan.token != ev.Token {
-			m.plan, m.tasks = newPlanDialog(ev, &m.keys, m.th), nil
+		if !m.owned(ev) {
+			m.open(promptPlan, newPlanDialog(ev, &m.keys, m.th))
 			// The plan is a block in the main transcript and the dialog takes every key.
 			if m.shown != app.Main {
 				m.show(app.Main)
 			}
 		}
-	case event.PlanEnded:
-		if m.plan != nil && m.plan.token == ev.Token {
-			m.plan = nil
-		}
-		return nil
 	case event.LoginRequested:
-		m.login, m.loginDialog, m.tasks = &ev, newLoginDialog(ev, &m.keys, m.th), nil
+		m.open(promptLogin, newLoginDialog(ev, &m.keys, m.th))
 		return nil
-	case event.LoginEnded:
-		if m.login != nil && m.login.Token == ev.Token {
-			m.endLogin()
-		}
-		return nil
-	case event.ApprovalEnded:
-		m.dropApprovals(func(a event.ApprovalRequested) bool { return a.Token == ev.Token })
+	case event.QuestionEnded, event.PlanEnded, event.LoginEnded, event.ApprovalEnded:
 		return nil
 	}
 	v := m.viewOf(id)
@@ -680,10 +556,6 @@ func (m *model) apply(ev event.Event) *view {
 			v.folds.verbs[blocks[len(blocks)-1].Key()] = v.verb
 		}
 		v.busy = false
-		m.dropApprovals(func(a event.ApprovalRequested) bool { return a.TaskID == id })
-		if id == app.Main {
-			m.question, m.plan = nil, nil
-		}
 		if id == m.shown {
 			m.composer.restore(ev.Unsent)
 		} else {
@@ -779,24 +651,14 @@ func (m *model) place() {
 		free -= busyRows
 	}
 	input := m.composer.height()
-	front := m.front()
-	switch front {
-	case promptApproval:
-		m.prompt = approvalRows(m.approvalDialog, &m.approvalPreview, m.approval, &m.keys, m.width, max(2, m.height/3), free+2, m.th)
-	case promptQuestion:
-		m.prompt = m.question.rows(m.width, max(2, m.height/3), free+2, m.th)
-	case promptPlan:
-		m.prompt = planRows(m.plan.d, m.width, max(2, m.height/3), free+2, m.th)
-	case promptLogin:
-		m.prompt = loginRows(m.loginDialog, m.width, max(2, m.height/3), free+2, m.th)
-	case promptTasks:
-		m.prompt = m.tasks.rows(m.width, max(2, m.height/3), free+2, &m.keys, m.th)
-	case promptNone:
-		m.geo.menu = max(0, min(m.menu.want(), free-input))
-	}
-	if front != promptNone {
+	var d *dialog
+	if front := m.front(); front != nil {
+		d = front.dialog(m.width, m.th)
+		m.prompt = d.rows(m.width, free+2, max(2, m.height/3), m.th)
 		// The prompt takes the composer's frame rows too.
 		input = len(m.prompt) - 2
+	} else {
+		m.geo.menu = max(0, min(m.menu.want(), free-input))
 	}
 	free -= input + m.geo.menu
 	m.pending = m.pendingCache.rows(m.view().queued, m.shown, func(t string) []app.Span { return m.c.PromptSpans(m.shown, t) }, &m.keys, m.width, max(2, m.height/3), free, m.th)
@@ -813,17 +675,14 @@ func (m *model) place() {
 	}
 	// The +1 is the shaded top row that the composer and the prompt both draw.
 	m.geo.composerTop = m.geo.transcript + len(rows) + 1
-	if front != promptNone {
+	if d != nil {
 		rows = append(rows, m.prompt...)
-		if d := m.frontDialog(); d != nil && len(m.prompt) > 0 {
-			// The prompt's first row is the composer's top shaded row; with
-			// no rows, the areas are an earlier render's.
-			for _, fa := range d.areas {
-				// A secret is never selectable, so it has no area.
-				if !fa.c.secret {
-					fa.y += m.geo.composerTop - 1
-					m.geo.fields = append(m.geo.fields, fa)
-				}
+		// The prompt's first row is the composer's top shaded row.
+		for _, fa := range d.areas {
+			// A secret is never selectable, so it has no area.
+			if !fa.c.secret {
+				fa.y += m.geo.composerTop - 1
+				m.geo.fields = append(m.geo.fields, fa)
 			}
 		}
 	} else {

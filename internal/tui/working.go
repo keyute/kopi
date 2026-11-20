@@ -33,7 +33,7 @@ func workingRow(sp *spinner.Model, text, hint string, th theme) string {
 func (m *model) workingText() (string, bool) {
 	v, front := m.view(), m.front()
 	switch {
-	case front == promptApproval || front == promptQuestion || front == promptPlan:
+	case front != nil && front.kind.waits():
 		return "Waiting for you…", true
 	case v.busy:
 		return v.verb.ing + "… " + formatDuration(time.Since(v.turnStart)), true
@@ -85,7 +85,7 @@ func countText(n int, noun string) string {
 // command can be moved to the background, "" otherwise.
 func (m *model) workingHint() string {
 	ks := m.keys.background.Keys()
-	if m.shown != app.Main || !m.view().busy || m.front() != promptNone || !m.status.Foreground || len(ks) == 0 {
+	if m.shown != app.Main || !m.view().busy || m.front() != nil || !m.status.Foreground || len(ks) == 0 {
 		return ""
 	}
 	return " · " + ks[0] + " to background"

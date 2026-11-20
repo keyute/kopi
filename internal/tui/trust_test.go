@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -89,15 +90,15 @@ func TestTrustRowsListInstructionFiles(t *testing.T) {
 		"  Do you trust this folder?",
 		"  /w/proj",
 		"",
-		"  Kopi would add these instruction files to the model's",
-		"  instructions:",
-		"    /w/AGENTS.md",
-		"    /w/proj/CLAUDE.md",
-		"",
 		"  Its .mcp.json declares MCP servers that Kopi would start.",
 		"  They run with your permissions.",
 		"    docs: npx -y docs-mcp",
 		"    remote: https://example.com/mcp",
+		"",
+		"  Kopi would add these instruction files to the model's",
+		"  instructions:",
+		"    /w/AGENTS.md",
+		"    /w/proj/CLAUDE.md",
 		"",
 		"❭ 1. Yes, trust this folder",
 		"  2. Yes, trust the parent folder (/w)",
@@ -107,7 +108,21 @@ func TestTrustRowsListInstructionFiles(t *testing.T) {
 	), trustScreen(newTrustTestModel(both)))
 }
 
-func TestTrustRowsCapTheServersBelowTheInstructionFiles(t *testing.T) {
+// trustReach is every row the prompt shows while the page keys scroll its lists
+// from the top to the end.
+func trustReach(m *trustModel) []string {
+	var seen []string
+	for prev := ""; ; trustPress(m, pgDown) {
+		rows := trustScreen(m)
+		if strings.Join(rows, "\n") == prev {
+			return seen
+		}
+		prev = strings.Join(rows, "\n")
+		seen = append(seen, rows...)
+	}
+}
+
+func TestTrustRowsScrollTheInstructionFilesBelowTheServers(t *testing.T) {
 	req := trustReq
 	req.Servers = []string{"a: a-mcp", "b: b-mcp", "c: c-mcp", "d: d-mcp", "e: e-mcp"}
 	req.Instructions = []string{"/w/AGENTS.md"}
@@ -115,13 +130,14 @@ func TestTrustRowsCapTheServersBelowTheInstructionFiles(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 19})
 	rows := trustScreen(m)
 	assert.Len(t, rows, 19)
-	assert.Equal(t, []string{"    /w/AGENTS.md", "", "  Its .mcp.json declares MCP servers that Kopi would start.", "  They run with your permissions.", "    a: a-mcp", "    b: b-mcp", "    … 3 more servers"}, rows[6:13])
+	assert.Equal(t, []string{"  Its .mcp.json declares MCP servers that Kopi would start.", "  They run with your permissions.", "    a: a-mcp", "    b: b-mcp", "    c: c-mcp", "    d: d-mcp", "    e: e-mcp", "  … 4 more lines", "  " + scrollHint(&m.keys)}, rows[4:13])
+	assert.Contains(t, trustReach(m), "    /w/AGENTS.md")
 }
 
-func TestTrustRowsCapInstructionFilesToTheHeight(t *testing.T) {
+func TestTrustRowsScrollInstructionFilesToTheHeight(t *testing.T) {
 	req := TrustRequest{Folder: "/w/proj", Parent: "/w"}
-	for range 20 {
-		req.Instructions = append(req.Instructions, "/w/AGENTS.md")
+	for i := range 20 {
+		req.Instructions = append(req.Instructions, fmt.Sprintf("/w/%d/AGENTS.md", i))
 	}
 	m := newTrustTestModel(req)
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 16})
@@ -130,35 +146,89 @@ func TestTrustRowsCapInstructionFilesToTheHeight(t *testing.T) {
 	assert.Equal(t, strings.Repeat("─", 60), rows[0])
 	assert.Equal(t, "  Do you trust this folder?", rows[1])
 	assert.Equal(t, "  /w/proj", rows[2])
-	assert.Equal(t, []string{"    /w/AGENTS.md", "    /w/AGENTS.md", "    /w/AGENTS.md", "    … 17 more instruction files"}, rows[6:10])
+	assert.Equal(t, []string{"    /w/0/AGENTS.md", "    /w/1/AGENTS.md", "  … 18 more lines", "  " + scrollHint(&m.keys)}, rows[6:10])
+	assert.Equal(t, "  enter to choose · esc to decide later", rows[15])
+	reached := trustReach(m)
+	for i := range 20 {
+		assert.Contains(t, reached, fmt.Sprintf("    /w/%d/AGENTS.md", i))
+	}
+	rows = trustScreen(m)
+	assert.Len(t, rows, 16)
+	assert.Equal(t, strings.Repeat("─", 60), rows[0])
+	assert.Equal(t, "❭ 1. Yes, trust this folder", rows[11])
 	assert.Equal(t, "  enter to choose · esc to decide later", rows[15])
 }
 
-func TestTrustRowsKeepWrappedInstructionPathsWhole(t *testing.T) {
+func TestTrustRowsScrollBack(t *testing.T) {
+	req := trustReq
+	req.Servers = []string{"a: a-mcp", "b: b-mcp", "c: c-mcp", "d: d-mcp", "e: e-mcp"}
+	m := newTrustTestModel(req)
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 14})
+	top := trustScreen(m)
+	assert.NotContains(t, top, "    e: e-mcp")
+	trustReach(m)
+	assert.Contains(t, trustScreen(m), "    e: e-mcp")
+	for range 10 {
+		trustPress(m, tea.KeyPressMsg{Code: tea.KeyPgUp})
+	}
+	assert.Equal(t, top, trustScreen(m))
+}
+
+func TestTrustRowsWithNoRoomForTheBodyShowOnlyTheOptions(t *testing.T) {
+	m := newTrustTestModel(trustReq)
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 8})
+	rule := strings.Repeat("─", 60)
+	want := []string{
+		rule,
+		"  Do you trust this folder?",
+		"",
+		"❭ 1. Yes, trust this folder",
+		"  2. Yes, trust the parent folder (/w)",
+		"  3. No, don't trust",
+		rule,
+		"  enter to choose · esc to decide later",
+	}
+	assert.Equal(t, want, trustScreen(m))
+
+	trustPress(m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+
+	assert.Equal(t, want, trustScreen(m))
+}
+
+func TestTrustRowsShowTheScrollHintOnlyWhileCut(t *testing.T) {
+	m := newTrustTestModel(trustReq)
+	assert.NotContains(t, strings.Join(trustScreen(m), "\n"), "to scroll")
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 12})
+	assert.Contains(t, trustScreen(m), "  "+scrollHint(&m.keys))
+}
+
+func TestTrustRowsKeepTheMarkerWithoutTheHintWhenTheHintWouldStarveTheLists(t *testing.T) {
+	req := TrustRequest{Folder: "/w/proj", Parent: "/w", Instructions: []string{"/w/proj/AGENTS.md"}, Servers: []string{"a: a-mcp", "b: b-mcp", "c: c-mcp"}}
+	m := newTrustTestModel(req)
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 9})
+	screen := strings.Join(trustScreen(m), "\n")
+	assert.Contains(t, screen, "  … 11 more lines")
+	assert.NotContains(t, screen, scrollHint(&m.keys))
+}
+
+func TestTrustRowsScrollWrappedInstructionPaths(t *testing.T) {
 	path := "/w/" + strings.Repeat("a", 60) + "/AGENTS.md"
 	req := TrustRequest{Folder: "/w/proj", Parent: "/w", Instructions: []string{path, path, "/w/AGENTS.md"}}
 	m := newTrustTestModel(req)
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 16})
 	rows := trustScreen(m)
-	assert.Equal(t, "  Do you trust this folder?", rows[2])
-	assert.Equal(t, "    /w/"+strings.Repeat("a", 53), rows[7])
-	assert.Equal(t, "    "+strings.Repeat("a", 7)+"/AGENTS.md", rows[8])
-	assert.Equal(t, "    … 2 more instruction files", rows[9])
+	assert.Equal(t, "  /w/proj", rows[2])
+	assert.Equal(t, []string{"    /w/" + strings.Repeat("a", 53), "    " + strings.Repeat("a", 7) + "/AGENTS.md", "  … 3 more lines"}, rows[6:9])
+	assert.Contains(t, trustReach(m), "    /w/AGENTS.md")
 
-	m.Update(tea.WindowSizeMsg{Width: 60, Height: 17})
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 19})
 	rows = trustScreen(m)
-	assert.Equal(t, "  Do you trust this folder?", rows[1])
-	assert.Equal(t, rows[6:8], rows[8:10])
-	assert.Equal(t, "    /w/AGENTS.md", rows[10])
-	assert.NotContains(t, strings.Join(rows, "\n"), "more instruction")
-
-	req.Instructions = req.Instructions[:1]
-	m = newTrustTestModel(req)
-	m.Update(tea.WindowSizeMsg{Width: 60, Height: 13})
-	assert.Contains(t, trustScreen(m), "    … 1 more instruction file")
+	assert.Equal(t, rows[8:10], rows[10:12])
+	assert.Contains(t, rows, "    /w/AGENTS.md")
+	assert.NotContains(t, strings.Join(rows, "\n"), "more lines")
 }
 
-func TestTrustRowsKeepWrappedInstructionOmissionMarkerWhole(t *testing.T) {
+func TestTrustRowsScrollWrappedInstructionPathsAtANarrowWidth(t *testing.T) {
 	path := "/w/" + strings.Repeat("a", 30) + "/AGENTS.md"
 	req := TrustRequest{Folder: "/w/proj"}
 	for range 20 {
@@ -171,9 +241,7 @@ func TestTrustRowsKeepWrappedInstructionOmissionMarkerWhole(t *testing.T) {
 	assert.Equal(t, strings.Repeat("─", 30), rows[0])
 	assert.Equal(t, "  Do you trust this folder?", rows[1])
 	assert.Equal(t, "  /w/proj", rows[2])
-	assert.Equal(t, 5, strings.Count(strings.Join(rows, "\n"), "    /w/"))
-	assert.Equal(t, 5, strings.Count(strings.Join(rows, "\n"), "/AGENTS.md"))
-	assert.Equal(t, []string{"    … 15 more instruction", "    files"}, rows[17:19])
+	assert.Equal(t, []string{"  … 30 more lines", "  " + scrollHint(&m.keys)}, rows[17:19])
 	assert.Equal(t, []string{
 		"",
 		"❭ 1. Yes, trust this folder",
@@ -181,9 +249,12 @@ func TestTrustRowsKeepWrappedInstructionOmissionMarkerWhole(t *testing.T) {
 		strings.Repeat("─", 30),
 		"  enter to choose · esc to de…",
 	}, rows[19:])
+	reached := trustReach(m)
+	assert.Contains(t, reached, "    /w/"+strings.Repeat("a", 23))
+	assert.Contains(t, reached, "    "+strings.Repeat("a", 7)+"/AGENTS.md")
 }
 
-func TestTrustRowsReserveServerSummaryBeforeInstructionFiles(t *testing.T) {
+func TestTrustRowsKeepTheServersInViewWhileInstructionFilesScroll(t *testing.T) {
 	req := trustReq
 	for range 20 {
 		req.Instructions = append(req.Instructions, "/w/AGENTS.md")
@@ -194,15 +265,12 @@ func TestTrustRowsReserveServerSummaryBeforeInstructionFiles(t *testing.T) {
 	assert.Len(t, rows, 19)
 	assert.Equal(t, "  Do you trust this folder?", rows[1])
 	assert.Equal(t, "  /w/proj", rows[2])
-	assert.Equal(t, []string{
-		"    /w/AGENTS.md",
-		"    /w/AGENTS.md",
-		"    … 18 more instruction files",
-		"",
-		"  Its .mcp.json declares MCP servers that Kopi would start.",
-		"  They run with your permissions.",
-		"    … 2 more servers",
-	}, rows[6:13])
+	assert.Contains(t, rows, "  Its .mcp.json declares MCP servers that Kopi would start.")
+	assert.Contains(t, rows, "  They run with your permissions.")
+	assert.Contains(t, rows, "    docs: npx -y docs-mcp")
+	assert.Contains(t, rows, "  … 20 more lines")
+	assert.Contains(t, rows, "  "+scrollHint(&m.keys))
+	assert.Contains(t, trustReach(m), "    /w/AGENTS.md")
 }
 
 func TestTrustRowsListSkillFolders(t *testing.T) {
@@ -229,8 +297,10 @@ func TestTrustRowsListSkillFolders(t *testing.T) {
 	all.Skills = []string{"/w/proj/.agents/skills"}
 	rows := trustScreen(newTrustTestModel(all))
 	assert.Equal(t, []string{
-		"  Do you trust this folder?",
-		"  /w/proj",
+		"  Its .mcp.json declares MCP servers that Kopi would start.",
+		"  They run with your permissions.",
+		"    docs: npx -y docs-mcp",
+		"    remote: https://example.com/mcp",
 		"",
 		"  Kopi would add these instruction files to the model's",
 		"  instructions:",
@@ -239,19 +309,19 @@ func TestTrustRowsListSkillFolders(t *testing.T) {
 		"  Kopi would load the skills in these folders:",
 		"    /w/proj/.agents/skills",
 		"",
-		"  Its .mcp.json declares MCP servers that Kopi would start.",
-	}, rows[slices.Index(rows, "  Do you trust this folder?"):][:11])
+	}, rows[slices.Index(rows, "  Do you trust this folder?")+3:][:12])
 }
 
-func TestTrustRowsCountSkillFoldersLeftOut(t *testing.T) {
+func TestTrustRowsScrollSkillFolders(t *testing.T) {
 	req := TrustRequest{Folder: "/w/proj", Skills: []string{"/a/.agents/skills", "/b/.agents/skills", "/c/.agents/skills"}}
 	m := newTrustTestModel(req)
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 12})
 	rows := trustScreen(m)
 	assert.Len(t, rows, 12)
-	assert.Contains(t, rows, "    /a/.agents/skills")
-	assert.Contains(t, rows, "    … 2 more skill folders")
 	assert.NotContains(t, rows, "    /c/.agents/skills")
+	reached := trustReach(m)
+	assert.Contains(t, reached, "    /a/.agents/skills")
+	assert.Contains(t, reached, "    /c/.agents/skills")
 }
 
 func TestTrustChoices(t *testing.T) {
@@ -316,7 +386,7 @@ func TestTrustRowsKeepHostileTextOnItsLine(t *testing.T) {
 	}
 }
 
-func TestTrustRowsCapTheServersToTheHeight(t *testing.T) {
+func TestTrustRowsScrollTheServersToTheHeight(t *testing.T) {
 	req := trustReq
 	req.Servers = []string{"a: a-mcp", "b: b-mcp", "c: c-mcp", "d: d-mcp", "e: e-mcp"}
 	m := newTrustTestModel(req)
@@ -330,8 +400,8 @@ func TestTrustRowsCapTheServersToTheHeight(t *testing.T) {
 		"  Its .mcp.json declares MCP servers that Kopi would start.",
 		"  They run with your permissions.",
 		"    a: a-mcp",
-		"    b: b-mcp",
-		"    … 3 more servers",
+		"  … 4 more lines",
+		"  " + scrollHint(&m.keys),
 		"",
 		"❭ 1. Yes, trust this folder",
 		"  2. Yes, trust the parent folder (/w)",
@@ -340,24 +410,54 @@ func TestTrustRowsCapTheServersToTheHeight(t *testing.T) {
 		"  enter to choose · esc to decide later",
 	}, trustScreen(m))
 
-	m.Update(tea.WindowSizeMsg{Width: 60, Height: 12})
-	assert.Contains(t, trustScreen(m), "    … 5 more servers", "with no room left the count still shows")
-	m.Update(tea.WindowSizeMsg{Width: 60, Height: 14})
-	assert.Contains(t, trustScreen(m), "    … 4 more servers")
-	m.Update(tea.WindowSizeMsg{Width: 60, Height: 16})
-	assert.Contains(t, trustScreen(m), "    … 2 more servers")
-	m.Update(tea.WindowSizeMsg{Width: 60, Height: 17})
-	assert.Contains(t, trustScreen(m), "    e: e-mcp", "the last server takes the row the count would")
+	for _, height := range []int{12, 14, 16, 17} {
+		m.Update(tea.WindowSizeMsg{Width: 60, Height: height})
+		rows := trustScreen(m)
+		assert.Len(t, rows, height)
+		assert.Equal(t, rule, rows[len(rows)-2], "height %d", height)
+		assert.Contains(t, rows, "❭ 1. Yes, trust this folder", "height %d", height)
+		assert.Contains(t, trustReach(m), "    e: e-mcp", "height %d", height)
+	}
 }
 
-func TestTrustRowsCutTheTopWhenTheFixedRowsDoNotFit(t *testing.T) {
+func TestTrustPagingReachesTheLastServerAndReturns(t *testing.T) {
+	req := trustReq
+	req.Servers = []string{"a: a-mcp", "b: b-mcp", "c: c-mcp", "d: d-mcp", "e: e-mcp"}
+	m := newTrustTestModel(req)
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 14})
+	top := trustScreen(m)
+	assert.NotContains(t, top, "    e: e-mcp")
+	for range 5 {
+		assert.False(t, trustPress(m, pgDown))
+	}
+	assert.Contains(t, trustScreen(m), "    e: e-mcp")
+	for range 5 {
+		assert.False(t, trustPress(m, tea.KeyPressMsg{Code: tea.KeyPgUp}))
+	}
+	assert.Equal(t, top, trustScreen(m))
+}
+
+func TestTrustRowsWrapOncePerWidthAndTheme(t *testing.T) {
+	m := newTrustTestModel(trustReq)
+	m.rows()
+	require.NotEmpty(t, m.body)
+	body := &m.body[0]
+	m.rows()
+	assert.Same(t, body, &m.body[0])
+	m.Update(tea.WindowSizeMsg{Width: 50, Height: 30})
+	m.rows()
+	assert.NotSame(t, body, &m.body[0])
+}
+
+func TestTrustRowsKeepBothRulesWhenTheFixedRowsDoNotFit(t *testing.T) {
 	for _, instructions := range [][]string{nil, {"/w/AGENTS.md", "/w/proj/AGENTS.md"}} {
 		req := trustReq
 		req.Instructions = instructions
 		m := newTrustTestModel(req)
 		m.Update(tea.WindowSizeMsg{Width: 60, Height: 5})
 		rows := trustScreen(m)
-		assert.Equal(t, []string{"❭ 1. Yes, trust this folder", "  2. Yes, trust the parent folder (/w)", "  3. No, don't trust", strings.Repeat("─", 60), "  enter to choose · esc to decide later"}, rows)
+		rule := strings.Repeat("─", 60)
+		assert.Equal(t, []string{rule, "❭ 1. Yes, trust this folder", "  1 of 3", rule, "  enter to choose · esc to decide later"}, rows)
 	}
 }
 

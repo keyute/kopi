@@ -227,7 +227,7 @@ func TestAStoppedHiddenSubagentKeepsItsRowWhileItHoldsUnsentInput(t *testing.T) 
 	assert.Empty(t, m.entries(), "the row goes once its input came back")
 }
 
-func TestSubagentTurnEndDropsOnlyItsOwnApproval(t *testing.T) {
+func TestSubagentTurnEndLeavesTheApprovalsOfOtherAgents(t *testing.T) {
 	m, _ := agentsModel(t)
 	send(m,
 		event.ApprovalRequested{Token: 1, Agent: "explore", TaskID: "t1"},
@@ -235,16 +235,16 @@ func TestSubagentTurnEndDropsOnlyItsOwnApproval(t *testing.T) {
 		event.ApprovalRequested{Token: 3},
 	)
 
-	send(m, sub("t1", event.TurnEnd{}))
+	send(m, event.ApprovalEnded{Token: 1}, sub("t1", event.TurnEnd{}))
 
-	require.NotNil(t, m.approval)
-	assert.Equal(t, uint64(2), m.approval.Token)
-	require.Len(t, m.approvalQueue, 1)
-	assert.Equal(t, uint64(3), m.approvalQueue[0].Token)
+	require.NotNil(t, approvalOf(m))
+	assert.Equal(t, uint64(2), approvalOf(m).req.Token)
+	require.Len(t, queuedOf(m), 1)
+	assert.Equal(t, uint64(3), queuedOf(m)[0].Token)
 
-	send(m, event.TurnEnd{})
-	assert.Equal(t, uint64(2), m.approval.Token)
-	assert.Empty(t, m.approvalQueue)
+	send(m, event.ApprovalEnded{Token: 3}, event.TurnEnd{})
+	assert.Equal(t, uint64(2), approvalOf(m).req.Token)
+	assert.Empty(t, queuedOf(m))
 }
 
 func TestSubagentTurnEndKeepsMainsQuestionAndPlan(t *testing.T) {
@@ -253,13 +253,13 @@ func TestSubagentTurnEndKeepsMainsQuestionAndPlan(t *testing.T) {
 
 	send(m, sub("t1", event.TurnEnd{}))
 
-	require.NotNil(t, m.question)
+	require.NotNil(t, questionOf(m))
 	assert.Contains(t, strings.Join(screen(m), "\n"), "Which db?")
 
 	send(m, event.QuestionEnded{Token: 7}, planRequest(8, "# Heading\n\nstep one"))
 
 	send(m, sub("t1", event.TurnEnd{}))
 
-	require.NotNil(t, m.plan)
+	require.NotNil(t, planOf(m))
 	assert.Contains(t, strings.Join(screen(m), "\n"), "step one")
 }

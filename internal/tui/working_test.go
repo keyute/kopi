@@ -205,7 +205,7 @@ func TestWorkingRowHidesBackgroundKeyWhileTasksOpen(t *testing.T) {
 
 		submitText(m, "/tasks")
 
-		require.NotNil(t, m.tasks)
+		require.NotNil(t, tasksOf(m))
 		assert.Contains(t, screen(m), "⠋ Working… 0s")
 		assert.NotContains(t, screen(m), "⠋ Working… 0s · ctrl+b to background")
 		press(m, ctrlB)
@@ -213,7 +213,7 @@ func TestWorkingRowHidesBackgroundKeyWhileTasksOpen(t *testing.T) {
 
 		press(m, escape)
 
-		require.Nil(t, m.tasks)
+		require.Nil(t, tasksOf(m))
 		assert.Contains(t, screen(m), "⠋ Working… 0s · ctrl+b to background")
 		press(m, ctrlB)
 		assert.Equal(t, 1, c.backgrounds, "the background key works again after closing")

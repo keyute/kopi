@@ -3118,3 +3118,55 @@ func TestResumeRestoresACutCommand(t *testing.T) {
 	require.Len(t, starts, 1)
 	assert.Equal(t, "the whole command", starts[0].Command)
 }
+
+func openRequests(c *Controller) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.requests)
+}
+
+func TestRequestEndsOnceHoweverOftenItIsCalled(t *testing.T) {
+	c := NewController(pigruntimetest.NewRuntime(t, pigruntimetest.NewSandbox(t)), Config{})
+	var ends atomic.Int32
+	c.mu.Lock()
+	_, end := c.openRequestLocked(func(uint64) { ends.Add(1) })
+	c.mu.Unlock()
+	require.Equal(t, 1, openRequests(c))
+
+	end()
+	end()
+	c.endRequests()
+
+	assert.Equal(t, int32(1), ends.Load())
+	assert.Zero(t, openRequests(c))
+}
+
+func TestEndRequestsEndsAnOpenRequestOnce(t *testing.T) {
+	c := NewController(pigruntimetest.NewRuntime(t, pigruntimetest.NewSandbox(t)), Config{})
+	var ends atomic.Int32
+	c.mu.Lock()
+	_, end := c.openRequestLocked(func(uint64) { ends.Add(1) })
+	c.mu.Unlock()
+
+	c.endRequests()
+	end()
+
+	assert.Equal(t, int32(1), ends.Load())
+	assert.Zero(t, openRequests(c))
+}
+
+func TestAnsweredApprovalLeavesNoOpenRequest(t *testing.T) {
+	h, _ := editHarness(t, Config{})
+	approvals, ended := subscribeTo[event.ApprovalRequested](h.c), subscribeTo[event.ApprovalEnded](h.c)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(editCall("call-1", "a.txt")), pigruntimetest.Text("done")})
+
+	w, err := h.c.Submit(t.Context(), Main, "edit a.txt")
+	require.NoError(t, err)
+	req := receiveEvent(t, approvals)
+	require.Equal(t, 1, openRequests(h.c))
+	require.True(t, h.c.Answer(req.Token, policy.Decision{Answer: policy.Allow}))
+	wait(t, w.Done())
+
+	assert.Equal(t, event.ApprovalEnded{Token: req.Token}, receiveEvent(t, ended))
+	assert.Zero(t, openRequests(h.c))
+}
