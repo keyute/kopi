@@ -69,6 +69,10 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 			"and, in execute mode, the workspace; it may block reading some paths and the network. " +
 			"A blocked operation fails, typically with \"Operation not permitted\" or \"Read-only file system\". " +
 			"A directory it blocks reading may instead appear empty."
+		if sh.FiltersNetwork() {
+			description += " The network is reachable only through the HTTP proxy named in HTTP_PROXY and HTTPS_PROXY, " +
+				"and only for hosts the user listed; the command's output then ends with the hosts the proxy refused."
+		}
 		if allowUnsandboxed {
 			description += " unsandboxed runs one command outside it; that call asks for approval unless a rule allows it."
 			properties["unsandboxed"] = map[string]any{

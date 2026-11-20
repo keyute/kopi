@@ -2,7 +2,7 @@
 ; https://github.com/openai/codex at commit 0184dfa6a48f0110dd9c6835522492908e5abcf3.
 ; Copyright 2025 OpenAI
 ; Licensed under the Apache License, Version 2.0; see LICENSE in this directory.
-; Modified by the Kopi authors: dropped the proxy comment, added the TLS trust service, IP-only socket rules and the DNS socket.
+; Modified by the Kopi authors: dropped the proxy comment and added the TLS trust service.
 
 ; when network access is enabled, these policies are added after those in seatbelt_base_policy.sbpl
 ; Ref https://source.chromium.org/chromium/chromium/src/+/main:sandbox/policy/mac/network.sb;drc=f8f264d5e4e7509c913f4c60c2639d15905a07e4
@@ -37,10 +37,3 @@
 
 ; Kopi addition: system libcurl needs this service for TLS.
 (allow mach-lookup (global-name "com.apple.TrustEvaluationAgent"))
-
-; Kopi addition: IP networking only. Unix sockets (Docker, ssh-agent) stay
-; unreachable, apart from the one DNS resolution needs.
-(allow network-bind (local ip "*:*"))
-(allow network-inbound (local ip "*:*"))
-(allow network-outbound (remote ip "*:*"))
-(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))

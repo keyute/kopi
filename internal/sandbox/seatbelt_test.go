@@ -64,7 +64,7 @@ func TestSeatbeltSectionOrder(t *testing.T) {
 		"(allow file-write*\n",
 		"(deny file-write*\n",
 		"(deny file-write*\n  (regex ",
-		networkPolicy,
+		networkPolicy + openNetwork,
 		`(deny mach-lookup (xpc-service-name-prefix ""))`,
 		"(deny system-fcntl (fcntl-command 80 110))",
 		"(deny file-write-unlink file-write-create\n",
@@ -125,7 +125,8 @@ func TestSeatbeltNetwork(t *testing.T) {
 	on, _ := profileOf(t, seatbeltPrefix(Policy{Network: true}))
 	assert.NotContains(t, off, networkPolicy)
 	assert.NotContains(t, off, "(allow network")
-	assert.Contains(t, on, networkPolicy)
+	assert.Contains(t, on, networkPolicy+openNetwork)
+	assert.NotContains(t, on, proxyNetwork)
 
 	allow := regexp.MustCompile(`\(allow network[^\s()]*[^\n]*`)
 	rules := allow.FindAllString(on, -1)
@@ -135,6 +136,20 @@ func TestSeatbeltNetwork(t *testing.T) {
 			r == `(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))`
 		assert.True(t, ok, r)
 	}
+}
+
+func TestSeatbeltNetworkFiltered(t *testing.T) {
+	proxy, err := NewProxy([]string{"example.com"}, nil, nil)
+	require.NoError(t, err)
+	filtered, defs := profileOf(t, seatbeltPrefix(Policy{Proxy: proxy}))
+
+	assert.Contains(t, filtered, networkPolicy+proxyNetwork)
+	assert.NotContains(t, filtered, openNetwork)
+	assert.Equal(t, []string{`(allow network-outbound (remote ip (param "PROXY")))`},
+		regexp.MustCompile(`\(allow network[^\n]*`).FindAllString(filtered, -1))
+	assert.NotContains(t, filtered, "unix-socket")
+	// Command defines PROXY once it has a port.
+	assert.NotContains(t, defs, "PROXY")
 }
 
 func TestSeatbeltParamsMatchDefinitions(t *testing.T) {

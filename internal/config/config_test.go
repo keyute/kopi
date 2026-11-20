@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/sandbox"
 )
 
 func globalLayer(t *testing.T, content string) Layer {
@@ -31,7 +32,7 @@ func withDefaults(c Config) Config {
 	c.AgentLine = DefaultAgentLine()
 	c.Theme = DefaultTheme()
 	c.Permissions = Permissions{Allow: []string{}, Ask: []string{}, Deny: []string{}}
-	c.Sandbox = Sandbox{AllowWrite: []string{}, DenyRead: []string{}, AllowUnsandboxed: true}
+	c.Sandbox = Sandbox{AllowWrite: []string{}, DenyRead: []string{}, AllowDomains: []string{}, DenyDomains: []string{}, AllowUnsandboxed: true}
 	c.Skills = Skills{Prefix: "skill"}
 	c.Classifier = Classifier{Instructions: []string{}}
 	c.MCPServers = map[string]MCPServer{}
@@ -603,14 +604,53 @@ func TestResolveRejectsEmptySandboxPathNamingLayerAndIndex(t *testing.T) {
 	}
 }
 
+func TestResolveRejectsInvalidSandboxDomainNamingLayerAndIndex(t *testing.T) {
+	for _, key := range []string{"allowDomains", "denyDomains"} {
+		t.Run(key, func(t *testing.T) {
+			global := globalLayer(t, fmt.Sprintf(`{"sandbox": {%q: ["example.com", "*.com"]}}`, key))
+			_, err := Resolve(Defaults(), global)
+			require.ErrorIs(t, err, ErrInvalidValue)
+			require.ErrorIs(t, err, sandbox.ErrInvalidDomain)
+			assert.Contains(t, err.Error(), global.Name)
+			assert.Contains(t, err.Error(), "sandbox."+key+"[1]")
+		})
+	}
+}
+
+func TestResolveRejectsNetworkWithDomainList(t *testing.T) {
+	for _, key := range []string{"allowDomains", "denyDomains"} {
+		t.Run(key+" same layer", func(t *testing.T) {
+			global := globalLayer(t, fmt.Sprintf(`{"sandbox": {"network": true, %q: ["example.com"]}}`, key))
+			_, err := Resolve(Defaults(), global)
+			require.ErrorIs(t, err, ErrInvalidValue)
+			assert.Contains(t, err.Error(), "sandbox.network")
+			assert.Contains(t, err.Error(), "sandbox."+key)
+		})
+		t.Run(key+" across layers", func(t *testing.T) {
+			global := globalLayer(t, `{"sandbox": {"network": true}}`)
+			flags := Map("flags", map[string]any{"sandbox": map[string]any{key: []any{"example.com"}}})
+			_, err := Resolve(Defaults(), global, flags)
+			require.ErrorIs(t, err, ErrInvalidValue)
+			assert.Contains(t, err.Error(), "sandbox.network (from "+global.Name+")")
+			assert.Contains(t, err.Error(), "sandbox."+key+" (from flags)")
+		})
+	}
+}
+
 func TestSandboxListsReplaceAcrossLayers(t *testing.T) {
 	global := globalLayer(t, `{"sandbox": {"allowWrite": ["~/.cache", "/tmp/x"], "denyRead": ["~/.aws"], "network": true}}`)
 	r, err := Resolve(Defaults(), global, Map("flags", map[string]any{"sandbox": map[string]any{"allowWrite": []any{"/var/y"}}}))
 	require.NoError(t, err)
-	assert.Equal(t, Sandbox{AllowWrite: []string{"/var/y"}, DenyRead: []string{"~/.aws"}, Network: true, AllowUnsandboxed: true}, r.Config.Sandbox)
+	assert.Equal(t, Sandbox{AllowWrite: []string{"/var/y"}, DenyRead: []string{"~/.aws"}, Network: true, AllowDomains: []string{}, DenyDomains: []string{}, AllowUnsandboxed: true}, r.Config.Sandbox)
 	assert.Equal(t, "flags", r.Origins["sandbox.allowWrite"])
 	assert.Equal(t, global.Name, r.Origins["sandbox.denyRead"])
 	assert.Equal(t, global.Name, r.Origins["sandbox.network"])
+
+	global = globalLayer(t, `{"sandbox": {"allowDomains": ["a.com", "b.com"]}}`)
+	r, err = Resolve(Defaults(), global, Map("flags", map[string]any{"sandbox": map[string]any{"allowDomains": []any{"c.com"}}}))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"c.com"}, r.Config.Sandbox.AllowDomains)
+	assert.Equal(t, "flags", r.Origins["sandbox.allowDomains"])
 }
 
 func TestSandboxAllowUnsandboxed(t *testing.T) {
@@ -793,7 +833,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	r, err := Resolve(Defaults())
 	require.NoError(t, err)
 	entries := r.Entries()
-	assert.Len(t, entries, 25+len(KeyActions))
+	assert.Len(t, entries, 27+len(KeyActions))
 	assert.IsIncreasing(t, entryKeys(entries))
 	assert.Contains(t, entries, Entry{Key: "model", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "smallModel", Value: "", Origin: "unset"})
@@ -811,6 +851,8 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "sandbox.allowWrite", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "sandbox.denyRead", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "sandbox.network", Value: "false", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "sandbox.allowDomains", Value: "[]", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "sandbox.denyDomains", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "sandbox.allowUnsandboxed", Value: "true", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "skills.prefix", Value: "skill", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "classifier.enabled", Value: "false", Origin: "default"})
@@ -839,6 +881,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "sandbox.enabled", Value: "false", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "sandbox.denyRead", Value: `["~/.aws"]`, Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "sandbox.network", Value: "true", Origin: "flags"})
+	assert.Contains(t, entries, Entry{Key: "sandbox.allowDomains", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "sandbox.allowWrite", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "classifier.enabled", Value: "true", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "classifier.model", Value: "e/f", Origin: "flags"})

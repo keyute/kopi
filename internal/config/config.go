@@ -22,6 +22,7 @@ import (
 	"github.com/knadh/koanf/v2"
 
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/sandbox"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -71,6 +72,10 @@ type Sandbox struct {
 	AllowWrite []string `koanf:"allowWrite"`
 	DenyRead   []string `koanf:"denyRead"`
 	Network    bool     `koanf:"network"`
+	// AllowDomains and DenyDomains filter the network of a sandboxed command
+	// while Network is false; they conflict with Network true.
+	AllowDomains []string `koanf:"allowDomains"`
+	DenyDomains  []string `koanf:"denyDomains"`
 	// AllowUnsandboxed offers Bash's unsandboxed parameter.
 	AllowUnsandboxed bool `koanf:"allowUnsandboxed"`
 }
@@ -125,7 +130,7 @@ func Defaults() Layer {
 	values["mode"] = policy.Plan.String()
 	values["instructionFallbacks"] = []string{"CLAUDE.md"}
 	values["permissions"] = map[string]any{"allow": []string{}, "ask": []string{}, "deny": []string{}}
-	values["sandbox"] = map[string]any{"allowWrite": []string{}, "denyRead": []string{}, "network": false, "allowUnsandboxed": true}
+	values["sandbox"] = map[string]any{"allowWrite": []string{}, "denyRead": []string{}, "network": false, "allowDomains": []string{}, "denyDomains": []string{}, "allowUnsandboxed": true}
 	values["skills"] = map[string]any{"prefix": "skill"}
 	values["classifier"] = map[string]any{"enabled": false, "instructions": []string{}}
 	values["mcpServers"] = map[string]any{}
@@ -227,6 +232,17 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 	}
 	if c.Version != Version {
 		return nil, fmt.Errorf("%w: %d (from %s), want %d", ErrUnsupportedVersion, c.Version, originOf(origins, "version"), Version)
+	}
+	if c.Sandbox.Network {
+		for _, list := range []struct {
+			key     string
+			domains []string
+		}{{"allowDomains", c.Sandbox.AllowDomains}, {"denyDomains", c.Sandbox.DenyDomains}} {
+			if len(list.domains) > 0 {
+				return nil, fmt.Errorf("%w: sandbox.network (from %s) conflicts with sandbox.%s (from %s)", ErrInvalidValue,
+					originOf(origins, "sandbox.network"), list.key, originOf(origins, "sandbox."+list.key))
+			}
+		}
 	}
 	if err := validateSegmentRefs("statusline", c.StatusLine.Left, c.StatusLine.Right, func(name string) bool {
 		_, user := c.StatusLine.Segments[name]
@@ -366,6 +382,16 @@ func validateSandbox(s Sandbox) error {
 			}
 		}
 	}
+	for _, list := range []struct {
+		key     string
+		domains []string
+	}{{"allowDomains", s.AllowDomains}, {"denyDomains", s.DenyDomains}} {
+		for i, d := range list.domains {
+			if err := sandbox.ValidateDomain(d); err != nil {
+				return fmt.Errorf("%w: sandbox.%s[%d]: %w", ErrInvalidValue, list.key, i, err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -434,6 +460,8 @@ func (r *Resolved) Entries() []Entry {
 		"sandbox.allowWrite":       c.Sandbox.AllowWrite,
 		"sandbox.denyRead":         c.Sandbox.DenyRead,
 		"sandbox.network":          c.Sandbox.Network,
+		"sandbox.allowDomains":     c.Sandbox.AllowDomains,
+		"sandbox.denyDomains":      c.Sandbox.DenyDomains,
 		"sandbox.allowUnsandboxed": c.Sandbox.AllowUnsandboxed,
 		"skills.prefix":            c.Skills.Prefix,
 		"classifier.enabled":       c.Classifier.Enabled,

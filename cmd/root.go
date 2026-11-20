@@ -59,6 +59,7 @@ func newRoot() *cobra.Command {
 	root.AddCommand(loginCmd())
 	root.AddCommand(mcpCmd())
 	root.AddCommand(logoutCmd())
+	root.AddCommand(sandboxListenCmd())
 	return root
 }
 
@@ -758,6 +759,15 @@ func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHom
 		return nil, nil, nil, nil
 	}
 	p := sandboxPolicy(cfg, cwd, userHome, kopiHome)
+	if len(cfg.AllowDomains) > 0 {
+		exe, err := os.Executable()
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to start the sandbox: failed to find the kopi binary: %w", err)
+		}
+		if p.Proxy, err = sandbox.NewProxy(cfg.AllowDomains, cfg.DenyDomains, []string{exe, "sandbox-listen", "--"}); err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to start the sandbox: %w", err)
+		}
+	}
 	sandboxes, err := sandbox.New(ctx, filepath.Join(kopiHome, "sandbox"), p, planPolicy(p, cwd))
 	switch {
 	case cfg.Enabled == nil && errors.Is(err, sandbox.ErrUnavailable):

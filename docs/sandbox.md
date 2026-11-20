@@ -21,6 +21,8 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
     "allowWrite": ["~/Library/Caches/go-build"],
     "denyRead": ["~/.ssh"],
     "network": false,
+    "allowDomains": ["github.com", "*.github.com", "registry.npmjs.org:443"],
+    "denyDomains": ["gist.github.com"],
     "allowUnsandboxed": true
   }
 }
@@ -33,6 +35,8 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
 - `sandbox.allowWrite` and `sandbox.denyRead` take plain paths, no globs: `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory. So `.env` means only `<start directory>/.env`, unlike in a [rule](permissions.md#rules).
 - A later layer's `sandbox.allowWrite` or `sandbox.denyRead` replaces an earlier one's whole.
 - `sandbox.network` (default `false`) allows IP networking in the sandbox.
+- `sandbox.allowDomains` and `sandbox.denyDomains` (default empty) list the hosts commands may reach while `sandbox.network` is false, see [Network](#network). `sandbox.network` true with either list set refuses to start.
+- A later layer's `sandbox.allowDomains` or `sandbox.denyDomains` replaces an earlier one's whole.
 - `sandbox.allowUnsandboxed` (default `true`) offers `Bash` the [`unsandboxed`](#outside-the-sandbox) parameter.
 
 ## Write
@@ -58,7 +62,14 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
 
 ## Network
 
-- A command has no network unless `sandbox.network` is true, which opens IP networking only.
+- A command has no network unless `sandbox.network` is true, which opens IP networking only, or `sandbox.allowDomains` lists hosts.
+- With `sandbox.allowDomains`, a command reaches the network only through an HTTP proxy inside Kopi, which connects to a host only when an `allowDomains` entry matches it and no `denyDomains` entry does.
+- An entry is a host name, or `*.example.com`, which matches every subdomain but not `example.com` itself; letter case is ignored; a `:port` suffix limits the entry to that port.
+- Not accepted as entries: IP addresses, `localhost`, a scheme or path, `*`, a wildcard over a single label such as `*.com`, and a name ending in a numeric label.
+- A listed host that resolves to a loopback, private or link-local address is refused.
+- The command gets `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `GRPC_PROXY` pointing at the proxy and `NO_PROXY` set to `localhost,127.0.0.1,::1`, each in upper and lower case. `unsandboxed` commands and commands run without the sandbox get neither the proxy nor the variables.
+- A refused request is answered with 403, and the command's output ends with a line naming the refused hosts, at most 20: `[sandbox refused network access to: example.org:443]`. A command moved to the background reports them when it ends.
+- Without the sandbox the lists have no effect; `sandbox.enabled` true refuses to start instead of running without it.
 - Unix sockets (ssh-agent, Docker) stay blocked; on Linux so do VM sockets, Unix datagram socket pairs (stream and seqpacket pairs work) and io_uring.
 
 ## Outside the sandbox
@@ -78,6 +89,7 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
 - `sandbox-exec` is deprecated by Apple.
 - `ps`, `pgrep` and `top` do not work.
 - Programs that open a pseudo-terminal, such as `script`, fail.
+- With `sandbox.allowDomains`, a command can connect only to the proxy: it cannot listen on a port, reach a server it started itself, or resolve names; any local process can use a running command's proxy port, and a process a command leaves running keeps access to that port number after the command ends and reaches whatever listens there later.
 
 ### Linux
 
@@ -94,6 +106,7 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
 - 32-bit programs cannot run: their system calls end the process.
 - Commands cannot create user namespaces, so tools that need them fail, such as rootless containers, browsers' own sandboxes and nested bubblewrap.
 - `ps`, `pgrep` and `top` see only the command's own processes.
+- With `sandbox.allowDomains`, port 3128 on the command's own loopback is the proxy; every command starts through the `kopi` binary, which must not be under Kopi's home or a `sandbox.denyRead` path (Kopi refuses to start otherwise); programs can listen and connect on the command's own loopback.
 
 ### Linux placeholders
 
@@ -106,7 +119,11 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
 ### macOS and Linux
 
 - Sandboxed commands inherit Kopi's environment, including provider API keys, and can read any file outside Kopi's home and `sandbox.denyRead`.
-- With `sandbox.network` true, commands reach the network without asking, in plan mode too.
+- With `sandbox.network` true, or for hosts in `sandbox.allowDomains`, commands reach the network without asking, in plan mode too.
+- Programs that ignore the proxy variables have no network under `sandbox.allowDomains` (Node's built-in `fetch` needs `NODE_USE_ENV_PROXY=1` in the environment).
+- The proxy does not inspect TLS, so a listed host that fronts other sites relays to them.
+- Listed hosts receive whatever a command sends, including inherited provider API keys.
+- Kopi's own `HTTP_PROXY` and `HTTPS_PROXY` are replaced for the command and not chained, so behind a mandatory outbound proxy listed hosts are unreachable.
 - A bare `Bash` or `*` allow rule, or `--allowed-tools Bash`, lets `unsandboxed` calls run without asking; `sandbox.allowUnsandboxed` false stops them.
 - The status line's `sandbox` segment shows the default, not whether a call set `unsandboxed`.
 - Tools that write outside the start directory and temp directories, such as Go's build cache and package-manager caches, fail until those paths are in `sandbox.allowWrite`.
@@ -118,11 +135,17 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
 - The files a `.mcp.json` server runs, such as `./server.sh` or `node_modules/.bin/…`, stay writable.
 - In execute mode, sandboxed commands can write anything else in the start directory, so starting Kopi in a directory holding files other programs run, such as the home directory, lets commands change them.
 - Plan mode keeps only the start directory read-only:
-  - Commands can still write `/tmp`, the temp directory and `sandbox.allowWrite` paths outside it, and act over the network when `sandbox.network` is true.
+  - Commands can still write `/tmp`, the temp directory and `sandbox.allowWrite` paths outside it, and act over the network when `sandbox.network` is true or for hosts in `sandbox.allowDomains`.
   - `kopi -p` runs sandboxed `Bash` without asking in plan mode.
   - Commands started in execute mode, including background tasks and processes they leave running, keep their execute-mode access after a switch to plan mode.
 
 ## Not implemented
 
-- Network allowlists by domain.
+- Approving an unlisted host while a command runs.
+- SOCKS5: `ssh`, git over ssh and other non-HTTP protocols cannot pass the proxy.
+- TLS inspection and rules by URL path.
+- Proxy authentication.
+- Sending the proxy's traffic through another proxy.
+- IP addresses and `localhost` as `sandbox.allowDomains` entries.
+- Listening on a port or reaching local servers under `sandbox.allowDomains` on macOS.
 - Allowing chosen Unix sockets.
