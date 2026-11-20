@@ -443,7 +443,8 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			return fmt.Errorf("failed to use %q in %s: %w", "smallModel", paths.ConfigFile, err)
 		}
 	}
-	if resolved.Config.Workflows.Model != "" {
+	// Workflow agents run only where Workflow can be offered.
+	if fullscreen && !rules.Removes("Workflow") && resolved.Config.Workflows.Model != "" {
 		if err := checkModel(resolved.Config.Workflows.Model, resolved.Origins["workflows.model"]); err != nil {
 			return fmt.Errorf("failed to use %q in %s: %w", "workflows.model", paths.ConfigFile, err)
 		}

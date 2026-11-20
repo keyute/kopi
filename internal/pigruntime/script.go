@@ -19,7 +19,8 @@ type ScriptFunc func(ctx context.Context, arg json.RawMessage) (json.RawMessage,
 // RunScript runs code, the body of an async JavaScript function, in a VM of
 // its own. host(arg) in the script returns a promise of call's result, and
 // calls may run concurrently. It returns the JSON of the returned value; a
-// throw wraps ErrScript with the stack, whose line numbers are code's;
+// throw wraps ErrScript with the stack, whose line numbers are code's, and
+// any other VM failure returns a plain error;
 // cancelling ctx cancels every call and returns ctx's cause. It returns once
 // every call has returned and the VM is gone.
 func RunScript(ctx context.Context, code string, call ScriptFunc) (json.RawMessage, error) {
@@ -52,6 +53,9 @@ func RunScript(ctx context.Context, code string, call ScriptFunc) (json.RawMessa
 	}
 	if res.Error.Kind == codemode.ErrorAborted && ctx.Err() != nil {
 		return nil, context.Cause(ctx)
+	}
+	if res.Error.Kind != codemode.ErrorScript {
+		return nil, fmt.Errorf("failed to run script: %s", res.Error.Message)
 	}
 	return nil, fmt.Errorf("%w: %s: %s\n%s", ErrScript, res.Error.Name, res.Error.Message, res.Error.Stack)
 }

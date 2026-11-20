@@ -15,6 +15,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/subagent"
@@ -420,6 +421,83 @@ func TestWorkflowLimitRefusesAnotherRunUntilOneEnds(t *testing.T) {
 	assert.Equal(t, "1", a.info(t, second).Result)
 }
 
+func TestWorkflowLimitIsFreedBySessionSwitch(t *testing.T) {
+	a, started := blockingHarness(t, Config{MaxWorkflows: 1})
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1"))})
+	a.rootAcks(1)
+	a.startWorkflow(t, "first", `return await agent("go")`)
+	wait(t, started)
+
+	require.NoError(t, a.c.NewSession(t.Context()))
+	second := a.startWorkflow(t, "second", `return 1`)
+
+	a.untilStatus(t, second, tool.TaskCompleted)
+}
+
+func TestWorkflowEndAfterASwitchReportsNothingToTheNewSession(t *testing.T) {
+	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
+	a.c.mu.Lock()
+	old := a.c.main.sess
+	a.c.mu.Unlock()
+	require.NoError(t, a.c.NewSession(t.Context()))
+	a.c.mu.Lock()
+	current := a.c.main.sess
+	a.c.mu.Unlock()
+	require.NotSame(t, old, current)
+
+	// StopAll forgets every task of the old session, so a run completing
+	// naturally between the install and the StopAll is reproduced with a task
+	// registered after the switch.
+	end := func(parent *pigruntime.Session) {
+		r := &workflowRun{c: a.c, parent: parent, cancel: func(error) {}}
+		r.task = a.tasks.StartAgent(tool.WorkflowAgent, "audit", func() {})
+		r.end(tool.TaskCompleted, "", "1")
+	}
+	requests := make(chan pigruntimetest.Request, 1)
+	a.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "ack")})
+
+	end(old)
+	assert.Empty(t, a.queuedNotices())
+	assert.True(t, a.idle())
+	assert.Zero(t, a.faux.CallCount())
+
+	end(current)
+	assert.Contains(t, receive(t, requests).Raw, "Workflow t")
+}
+
+func TestWorkflowAgentOfAPlanPinnedDefinitionIsRefusedWritesWhileOthersFollowTheMode(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	var ran atomic.Int32
+	rules, err := policy.NewRules(sb.Workspace, sb.Home, map[string]policy.ToolSpec{"Exec": {}}, policy.Source{Name: "test", Allow: []string{"Exec"}})
+	require.NoError(t, err)
+	planner, worker := agentDef("planner"), agentDef("worker")
+	planner.Plan = true
+	a := newWorkflowHarness(t, sb, Config{AgentTools: []tool.Tool{execTool(&ran)}, Rules: rules}, planner, worker)
+	a.c.EnterExecute()
+	requests := make(chan pigruntimetest.Request, 1)
+	a.rootAcks(3)
+	run := func(agentType, toolCall string) []string {
+		a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Exec", toolCall)), pigruntimetest.Capture(t, requests, "done")})
+		id := a.startWorkflow(t, agentType, fmt.Sprintf(`return await agent("go", {agentType: %q})`, agentType))
+		a.untilStatus(t, id, tool.TaskCompleted)
+		return receive(t, requests).ToolResults
+	}
+
+	results := run("planner", "c1")
+	require.Len(t, results, 1)
+	assert.Contains(t, results[0], "needs execute mode")
+	assert.Zero(t, ran.Load())
+
+	assert.Equal(t, []string{execOutput}, run("worker", "c2"))
+	assert.Equal(t, int32(1), ran.Load())
+
+	a.c.EnterPlan()
+	results = run("worker", "c3")
+	require.Len(t, results, 1)
+	assert.Contains(t, results[0], "needs execute mode")
+	assert.Equal(t, int32(1), ran.Load())
+}
+
 func TestWorkflowCallBeyondTheLimitFailsTheRunEvenWhenCaught(t *testing.T) {
 	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
 	requests := make(chan pigruntimetest.Request, 1)
@@ -515,11 +593,28 @@ func TestWorkflowToolIsOfferedToTheMainSessionOnlyAndNotDescribedAsDeferredMCP(t
 
 	assert.Contains(t, toolNames(a.c.tools), "Workflow")
 	assert.NotContains(t, a.c.prompt[0].Text, "deferred")
-	for _, spec := range slices.Concat(a.c.agents, a.c.workflowSpecs) {
-		assert.NotContains(t, toolNames(spec.tools), "Workflow")
-	}
 	assert.Len(t, a.c.workflowSpecs, 2, "the default agent and the definition")
 	assert.Equal(t, "", a.c.workflowSpecs[0].def.Name)
+}
+
+func TestNoChildSpecHasANeverChildToolWhateverItsDefinitionNames(t *testing.T) {
+	excluded := []string{"Agent", "SendMessage", "TaskOutput", "TaskStop", "Workflow"}
+	agentTools := []tool.Tool{testTool("Look", policy.Read, nil)}
+	for _, name := range excluded {
+		agentTools = append(agentTools, testTool(name, policy.Read, nil))
+	}
+	all, named := agentDef("all"), agentDef("named")
+	named.Tools = append([]string{"Look"}, excluded...)
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: agentTools}, all, named)
+
+	require.Len(t, a.c.workflowSpecs, 3)
+	for _, spec := range slices.Concat(a.c.agents, a.c.workflowSpecs) {
+		names := toolNames(spec.tools)
+		assert.Contains(t, names, "Look")
+		for _, name := range excluded {
+			assert.NotContains(t, names, name)
+		}
+	}
 }
 
 func TestKeywordMakesWorkflowCallableForThatPrompt(t *testing.T) {

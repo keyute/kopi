@@ -104,7 +104,7 @@ const Main = ""
 // the Controller. Neither queue nor mu is held while calling Config.Tasks,
 // whose callback takes both, except for starting an agent task and its
 // AgentTask.Run and End, which a subagent's or a workflow's run makes with
-// queue held. That is
+// queue held, and Tasks.List, which Status calls with queue held. That is
 // safe only because tool.Tasks calls nothing back while holding its own locks:
 // OnChange and the stop function run without them, and the stop function takes
 // queue.
@@ -772,14 +772,14 @@ func (c *Controller) Status() Status {
 			break
 		}
 	}
+	// queue stays held so a workflow that starts meanwhile is not listed as a
+	// subagent; List takes only the registry's lock.
 	c.queue.Lock()
-	runs := maps.Clone(c.workflowRuns)
-	c.queue.Unlock()
 	for _, info := range c.cfg.Tasks.List() {
 		if info.Status != tool.TaskRunning {
 			continue
 		}
-		_, workflow := runs[info.ID]
+		_, workflow := c.workflowRuns[info.ID]
 		switch {
 		case workflow:
 			s.Workflows++
@@ -789,6 +789,7 @@ func (c *Controller) Status() Status {
 			s.Shells++
 		}
 	}
+	c.queue.Unlock()
 	s.Foreground = c.cfg.Tasks.Foreground()
 	return s
 }

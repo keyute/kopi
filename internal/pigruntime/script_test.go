@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 )
+
+// waitLimit bounds a wait that only a regression leaves hanging.
+const waitLimit = 10 * time.Second
 
 func echoArg(_ context.Context, arg json.RawMessage) (json.RawMessage, error) { return arg, nil }
 
@@ -37,10 +41,20 @@ func TestRunScriptHostCallsRunTogether(t *testing.T) {
 		assert.NoError(t, err)
 		done <- out
 	}()
-	<-arrived
-	<-arrived
+	for range 2 {
+		select {
+		case <-arrived:
+		case <-time.After(waitLimit):
+			require.FailNow(t, "host calls did not run together")
+		}
+	}
 	close(release)
-	assert.JSONEq(t, `[1,2]`, string(<-done))
+	select {
+	case out := <-done:
+		assert.JSONEq(t, `[1,2]`, string(out))
+	case <-time.After(waitLimit):
+		require.FailNow(t, "script did not finish")
+	}
 }
 
 func TestRunScriptHostErrorIsCatchable(t *testing.T) {

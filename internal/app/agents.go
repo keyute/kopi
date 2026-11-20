@@ -42,17 +42,19 @@ func (c *Controller) buildAgents(extra, serverTools []tool.Tool, servers []mcpSe
 	base := slices.DeleteFunc(slices.Concat(c.cfg.AgentTools, extra), func(t tool.Tool) bool {
 		return c.cfg.Rules.Removes(t.Name) || slices.Contains(neverChild, t.Name)
 	})
-	workflows = append(workflows, c.buildSpec(base, serverTools, servers, nil, true))
+	workflows = append(workflows, c.buildSpecs(base, serverTools, servers, nil)[1])
 	for i := range c.cfg.Agents {
-		subagents = append(subagents, c.buildSpec(base, serverTools, servers, &c.cfg.Agents[i], false))
-		workflows = append(workflows, c.buildSpec(base, serverTools, servers, &c.cfg.Agents[i], true))
+		both := c.buildSpecs(base, serverTools, servers, &c.cfg.Agents[i])
+		subagents = append(subagents, both[0])
+		workflows = append(workflows, both[1])
 	}
 	return subagents, workflows
 }
 
-// buildSpec is def's spec; nil def is the default workflow agent, which has
-// every tool, the instruction files and the default effort.
-func (c *Controller) buildSpec(base, serverTools []tool.Tool, servers []mcpServer, def *subagent.Definition, workflow bool) agentSpec {
+// buildSpecs is def's spec as a subagent and as a workflow agent, which differ
+// only in the prompt; nil def is the default workflow agent, which has every
+// tool, the instruction files and the default effort.
+func (c *Controller) buildSpecs(base, serverTools []tool.Tool, servers []mcpServer, def *subagent.Definition) [2]agentSpec {
 	spec := agentSpec{effort: pigruntime.DefaultEffort}
 	named := func(tool.Tool) bool { return true }
 	groups := c.cfg.Instructions
@@ -86,8 +88,11 @@ func (c *Controller) buildSpec(base, serverTools []tool.Tool, servers []mcpServe
 		}
 	}
 	spec.tools = tools
-	spec.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, c.cfg.Classifier != nil, def, workflow)
-	return spec
+	classified := c.cfg.Classifier != nil
+	child := spec
+	child.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, classified, def, false)
+	spec.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, classified, def, true)
+	return [2]agentSpec{child, spec}
 }
 
 // agentLauncher is the tool.Agents over the Controller, kept off its exported API.
@@ -214,6 +219,35 @@ func (c *Controller) admitLocked() error {
 	return nil
 }
 
+// openChild opens run's session under parent with tools: run.rec is its
+// classifier record when a classifier is configured, and run.sess the session.
+// A definition that pins plan mode gets an authority of its own.
+func (c *Controller) openChild(ctx context.Context, spec agentSpec, tools []tool.Tool, parent *pigruntime.Session, run *runner) error {
+	if c.cfg.Classifier != nil {
+		run.rec = &classifier.Record{}
+	}
+	authority := c.authority
+	if spec.def.Plan {
+		authority = policy.NewAuthority()
+	}
+	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
+		Model:        run.model,
+		Effort:       spec.effort,
+		Parent:       parent,
+		SystemPrompt: spec.prompt,
+		Tools:        tools,
+		Authority:    authority,
+		Rules:        c.cfg.Rules,
+		Approve:      c.approver(run.d, run),
+		Review:       c.reviewer(run.rec),
+	})
+	if err != nil {
+		return err
+	}
+	run.sess = sess
+	return nil
+}
+
 // launch starts a run of the subagent agent in the background and returns its
 // task id.
 func (c *Controller) launch(ctx context.Context, agent, description, prompt string) (string, error) {
@@ -245,31 +279,12 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 	r := &runner{c: c, name: spec.def.Name, d: newDisplay(spec.tools), model: model}
 	role := &subagentRole{r: r, parent: parent}
 	r.role = role
-	if c.cfg.Classifier != nil {
-		r.rec = &classifier.Record{}
-	}
-	authority := c.authority
-	if spec.def.Plan {
-		authority = policy.NewAuthority()
-	}
-	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
-		Model:        model,
-		Effort:       spec.effort,
-		Parent:       parent,
-		SystemPrompt: spec.prompt,
-		Tools:        spec.tools,
-		Authority:    authority,
-		Rules:        c.cfg.Rules,
-		Approve:      c.approver(r.d, r),
-		Review:       c.reviewer(r.rec),
-	})
-	if err != nil {
+	if err := c.openChild(ctx, spec, spec.tools, parent, r); err != nil {
 		c.queue.Lock()
 		c.live--
 		c.queue.Unlock()
 		return "", fmt.Errorf("failed to start subagent %s: %w", agent, err)
 	}
-	r.sess = sess
 
 	// A switch or Close that began meanwhile has run, or will run, StopAll
 	// without a child to stop; it must not be left running. One that begins
@@ -292,7 +307,7 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 	c.mu.Unlock()
 	role.task = c.cfg.Tasks.StartAgent(spec.def.Name, description, r.stopper(w))
 	r.id, r.bound, r.emit = role.task.ID(), c.relay.bind(), role.emit
-	r.unsubscribe = sess.Subscribe(role.emit)
+	r.unsubscribe = r.sess.Subscribe(role.emit)
 	if c.children == nil {
 		c.children = map[string]*runner{}
 	}

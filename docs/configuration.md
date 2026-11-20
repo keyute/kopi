@@ -47,7 +47,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `provider/id` of the session model; `--model` overrides it.
 - Unset, each start uses the default model of a provider with a credential, environment credentials included. Nothing is saved, and a notice names the model and the config file to set it in.
 - With credentials for several providers, the default depends on the order the runtime prefers; set `model` to pin it.
-- With no credential at all, the fullscreen interface asks which provider to log in to, then opens the session; print mode fails with a hint to run `kopi login`. Start fails first, naming the provider, when `smallModel`, `workflows.model`, an enabled `classifier.model` or a [subagent](subagents.md) definition's `model` names a provider with no credential.
+- With no credential at all, the fullscreen interface asks which provider to log in to, then opens the session; print mode fails with a hint to run `kopi login`. Start fails first, naming the provider, when `smallModel`, an enabled `classifier.model`, `workflows.model` (checked only in the fullscreen interface and when no rule denies `Workflow`) or a [subagent](subagents.md) definition's `model` names a provider with no credential.
 
 ## `mode`
 
@@ -62,7 +62,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 ## `workflows`
 
-- `workflows.model` is the `provider/id` of the model workflow agents use when their definition sets none; unset, it is the session model. A wrong value, an unknown model or one whose provider has no credential fails at start.
+- `workflows.model` is the `provider/id` of the model workflow agents use when their definition sets none; unset, it is the session model. A wrong value, an unknown model or one whose provider has no credential fails at start, checked only where workflows can run: in the fullscreen interface, with no rule denying `Workflow`.
 - `workflows.maxWorkflows` (default 4, at least 1) is how many [workflows](workflows.md) run at once, and `workflows.maxAgents` (default 16, at least 1) how many agents of one workflow run at once.
 - In the fullscreen interface, a `workflows.model` that shares the provider of a configured `model` without a credential gets the first-run login instead when that provider offers a sign-in or an API key.
 

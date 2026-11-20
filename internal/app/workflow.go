@@ -11,10 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/keyute/kopi/internal/classifier"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/pigruntime"
-	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -180,30 +178,11 @@ func (r *workflowRun) call(ctx context.Context, raw json.RawMessage) (json.RawMe
 		name += " " + label
 	}
 	run := &runner{c: c, name: name, id: r.task.ID(), d: newDisplay(tools), model: c.workflowModel(spec), bound: r.bound, emit: r.bound}
-	if c.cfg.Classifier != nil {
-		run.rec = &classifier.Record{}
-	}
-	authority := c.authority
-	if spec.def.Plan {
-		authority = policy.NewAuthority()
-	}
-	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
-		Model:        run.model,
-		Effort:       spec.effort,
-		Parent:       r.parent,
-		SystemPrompt: spec.prompt,
-		Tools:        tools,
-		Authority:    authority,
-		Rules:        c.cfg.Rules,
-		Approve:      c.approver(run.d, run),
-		Review:       c.reviewer(run.rec),
-	})
-	if err != nil {
+	if err := c.openChild(ctx, spec, tools, r.parent, run); err != nil {
 		return nil, fmt.Errorf("failed to start agent: %w", err)
 	}
-	run.sess = sess
 	if run.rec != nil {
-		run.unsubscribe = sess.Subscribe(run.rec.Observe)
+		run.unsubscribe = run.sess.Subscribe(run.rec.Observe)
 	}
 	defer c.closeChild(run)
 
