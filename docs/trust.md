@@ -25,7 +25,7 @@ The fullscreen interface asks before the session opens when you have not decided
 - The folder has project instruction files.
 - The folder has project skills.
 
-It lists the folder's instruction files, skill folders and servers, with these answers. When the lists do not fit the terminal's height, the page-up and page-down keys scroll them and the answers stay in view. When the terminal leaves the lists one row, only a count of the hidden lines shows, and with none they are left out:
+It lists the folder's servers, instruction files and skill folders, with these answers. When the lists do not fit the terminal's height, the page-up and page-down keys scroll them and the answers stay in view. When the terminal leaves the lists one row, only a count of the hidden lines shows, and with none they are left out:
 
 - `Yes, trust this folder`
 - `Yes, trust the parent folder` (not offered when the parent is the root or your home directory)

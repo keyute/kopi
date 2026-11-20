@@ -533,10 +533,7 @@ func (m *model) apply(ev event.Event) *view {
 		return nil
 	case event.PlanRequested:
 		// A repeat after an edit keeps the dialog and what was typed in it.
-		if !slices.ContainsFunc(m.prompts, func(h held) bool {
-			p, ok := h.prompt.(*planDialog)
-			return ok && p.token == ev.Token
-		}) {
+		if !m.owned(ev) {
 			m.open(promptPlan, true, newPlanDialog(ev, &m.keys, m.th))
 			// The plan is a block in the main transcript and the dialog takes every key.
 			if m.shown != app.Main {

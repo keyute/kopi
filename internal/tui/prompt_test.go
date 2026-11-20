@@ -75,17 +75,14 @@ func queuedOf(m *model) []event.ApprovalRequested {
 	return out[1:]
 }
 
-// frontKind is the kind of the front prompt, promptNone when none is open.
+// frontKind is the kind of the front prompt; it requires one to be open.
 func frontKind(m *model) promptKind {
-	if h := m.front(); h != nil {
-		return h.kind
-	}
-	return promptNone
+	return m.front().kind
 }
 
 func TestFrontIsTheOpenPromptOfTheHighestKind(t *testing.T) {
 	m, _ := newTestModel(t, 70, 30)
-	assert.Equal(t, promptNone, frontKind(m))
+	assert.Nil(t, m.front())
 	assert.Nil(t, m.frontDialog())
 
 	for _, pc := range []promptCase{approvalCase, questionCase, planCase, loginCase} {
@@ -406,7 +403,7 @@ func TestCancelCancelsALoginAndLeavesTheTasksList(t *testing.T) {
 		m, _ := tasksModel(t)
 		submitText(m, "/tasks")
 		press(m, ctrlC)
-		assert.Equal(t, promptNone, frontKind(m))
+		assert.Nil(t, m.front())
 	})
 }
 
@@ -474,6 +471,6 @@ func TestAPromptStaysThroughTurnEndAndSessionChangeUntilItsEnd(t *testing.T) {
 		assert.Equal(t, pc.kind, frontKind(m))
 
 		send(m, pc.end)
-		assert.Equal(t, promptNone, frontKind(m))
+		assert.Nil(t, m.front())
 	}
 }

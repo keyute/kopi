@@ -25,3 +25,12 @@ func TestNewKeyMapBindsConfiguredKeysOnly(t *testing.T) {
 	assert.False(t, key.Matches(ctrlC, km.cancel), "an action without keys never fires")
 	assert.False(t, km.cancel.Enabled())
 }
+
+func TestNewKeyMapDismissFollowsInterruptAndCancel(t *testing.T) {
+	km := newKeyMap(map[string][]string{"interrupt": {"ctrl+x"}})
+
+	assert.Equal(t, []string{"ctrl+x"}, km.dismiss.Keys())
+	assert.True(t, key.Matches(tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl}, km.dismiss))
+	assert.False(t, key.Matches(ctrlC, km.dismiss))
+	assert.False(t, key.Matches(escape, km.dismiss), "a cleared cancel no longer dismisses")
+}

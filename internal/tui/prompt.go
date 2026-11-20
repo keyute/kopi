@@ -4,6 +4,8 @@ import (
 	"slices"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/keyute/kopi/internal/event"
 )
 
 // promptKind is a kind of prompt, in rank order: a prompt of an earlier kind
@@ -11,8 +13,7 @@ import (
 type promptKind int
 
 const (
-	promptNone promptKind = iota
-	promptApproval
+	promptApproval promptKind = iota
 	promptQuestion
 	promptPlan
 	promptLogin
@@ -29,6 +30,12 @@ type prompt interface {
 	key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool)
 	// seen applies an event, or the editor's exit; false closes the prompt.
 	seen(m *model, msg tea.Msg) bool
+}
+
+// requester is a prompt that can own the request an event repeats.
+type requester interface {
+	// owns reports that ev repeats the request the prompt was opened for.
+	owns(ev event.Event) bool
 }
 
 // held is an open prompt.
@@ -57,6 +64,14 @@ func (m *model) front() *held {
 		return nil
 	}
 	return &m.prompts[0]
+}
+
+// owned reports that an open prompt already holds the request ev repeats.
+func (m *model) owned(ev event.Event) bool {
+	return slices.ContainsFunc(m.prompts, func(h held) bool {
+		r, ok := h.prompt.(requester)
+		return ok && r.owns(ev)
+	})
 }
 
 // frontDialog is the front prompt's dialog, nil when no prompt is open.

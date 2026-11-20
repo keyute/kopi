@@ -1173,40 +1173,37 @@ func TestApprovalPasteReachesTheField(t *testing.T) {
 	assert.Empty(t, m.composer.value())
 }
 
-func TestApprovalClipboardCompletionAfterTransitionIsDiscarded(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		evs  []event.Event
-	}{
-		{"approval ended", []event.Event{event.ApprovalEnded{Token: 1}}},
-		{"turn ended", []event.Event{event.ApprovalEnded{Token: 1}, event.TurnEnd{}}},
-		{"session changed", []event.Event{event.ApprovalEnded{Token: 1}, event.SessionChanged{SessionID: "s2"}}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			m, _ := newTestModel(t, 60, 30)
-			m.clip = &fakeClipboard{text: "stale clipboard"}
-			typeText(m, "composer draft")
-			send(m, editApproval())
-			press(m, digit('3'))
-			keys(m, "feedback")
-			oldField := m.frontDialog().field()
-			cmd := press(m, ctrlV)
-			require.NotNil(t, cmd)
+func TestApprovalClipboardCompletionAfterItsEndIsDiscarded(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	m.clip = &fakeClipboard{text: "stale clipboard"}
+	typeText(m, "composer draft")
+	send(m, editApproval())
+	press(m, digit('3'))
+	keys(m, "feedback")
+	oldField := m.frontDialog().field()
+	cmd := press(m, ctrlV)
+	require.NotNil(t, cmd)
 
-			send(m, tc.evs...)
-			if approvalOf(m) != nil {
-				press(m, digit('3'))
-				keys(m, "replacement feedback")
-			}
-			m.Update(cmd())
+	send(m, event.ApprovalEnded{Token: 1})
+	m.Update(cmd())
 
-			assert.Equal(t, "composer draft", m.composer.value())
-			assert.Equal(t, "feedback", oldField.value())
-			if approvalOf(m) != nil {
-				assert.Equal(t, "replacement feedback", m.frontDialog().text())
-			}
-		})
-	}
+	assert.Equal(t, "composer draft", m.composer.value())
+	assert.Equal(t, "feedback", oldField.value())
+}
+
+func TestTwoApprovalsStayThroughTurnEndAndSessionChangeUntilAnswered(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	send(m, editApproval(), subagentAsk(2, "explore"))
+
+	send(m, event.TurnEnd{}, event.SessionChanged{SessionID: "s2"})
+	require.Equal(t, uint64(1), approvalOf(m).req.Token)
+
+	press(m, enter)
+	send(m, event.ApprovalEnded{Token: 1})
+	require.Equal(t, uint64(2), approvalOf(m).req.Token)
+	press(m, enter)
+
+	assert.Equal(t, []answer{{1, policy.Decision{Answer: policy.Allow}}, {2, policy.Decision{Answer: policy.Allow}}}, c.answers)
 }
 
 func TestApprovalClipboardCompletionAfterPromotionIsDiscarded(t *testing.T) {
@@ -1260,7 +1257,7 @@ func TestApprovalQueueEndOfAQueuedAskRemovesIt(t *testing.T) {
 	assert.Equal(t, uint64(3), approvalOf(m).req.Token)
 }
 
-func TestApprovalQueueRootTurnEndKeepsSubagentAsks(t *testing.T) {
+func TestApprovalQueueEndedRootAskLeavesTheSubagentAsk(t *testing.T) {
 	m, _ := newTestModel(t, 60, 30)
 	send(m, editApproval(), subagentAsk(2, "explore"))
 	send(m, event.ApprovalEnded{Token: 1}, event.TurnEnd{})
@@ -1278,7 +1275,7 @@ func TestApprovalQueueRootTurnEndKeepsSubagentAsks(t *testing.T) {
 	assert.Nil(t, approvalOf(m), "the queued root ask was ended")
 }
 
-func TestApprovalQueueSessionChangeClearsAll(t *testing.T) {
+func TestApprovalQueueEmptyAfterEveryAskEnded(t *testing.T) {
 	m, _ := newTestModel(t, 60, 30)
 	send(m, editApproval(), subagentAsk(2, "explore"))
 	send(m, event.ApprovalEnded{Token: 1}, event.ApprovalEnded{Token: 2}, event.SessionChanged{SessionID: "s2"})
@@ -1411,7 +1408,7 @@ func TestStaleApprovalEndedCannotDismissReusedCallID(t *testing.T) {
 	assert.Nil(t, approvalOf(m))
 }
 
-func TestTurnEndAndSessionChangedAfterTheApprovalEndedLeaveTheComposer(t *testing.T) {
+func TestComposerReturnsAfterTheApprovalEndsThenTurnEndOrSessionChange(t *testing.T) {
 	for _, ev := range []event.Event{event.TurnEnd{}, event.SessionChanged{SessionID: "s2"}} {
 		m, _ := newTestModel(t, 60, 30)
 		send(m, editApproval())

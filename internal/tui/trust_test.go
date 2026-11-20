@@ -90,15 +90,15 @@ func TestTrustRowsListInstructionFiles(t *testing.T) {
 		"  Do you trust this folder?",
 		"  /w/proj",
 		"",
-		"  Kopi would add these instruction files to the model's",
-		"  instructions:",
-		"    /w/AGENTS.md",
-		"    /w/proj/CLAUDE.md",
-		"",
 		"  Its .mcp.json declares MCP servers that Kopi would start.",
 		"  They run with your permissions.",
 		"    docs: npx -y docs-mcp",
 		"    remote: https://example.com/mcp",
+		"",
+		"  Kopi would add these instruction files to the model's",
+		"  instructions:",
+		"    /w/AGENTS.md",
+		"    /w/proj/CLAUDE.md",
 		"",
 		"❭ 1. Yes, trust this folder",
 		"  2. Yes, trust the parent folder (/w)",
@@ -122,7 +122,7 @@ func trustReach(m *trustModel) []string {
 	}
 }
 
-func TestTrustRowsScrollTheServersBelowTheInstructionFiles(t *testing.T) {
+func TestTrustRowsScrollTheInstructionFilesBelowTheServers(t *testing.T) {
 	req := trustReq
 	req.Servers = []string{"a: a-mcp", "b: b-mcp", "c: c-mcp", "d: d-mcp", "e: e-mcp"}
 	req.Instructions = []string{"/w/AGENTS.md"}
@@ -130,8 +130,8 @@ func TestTrustRowsScrollTheServersBelowTheInstructionFiles(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 19})
 	rows := trustScreen(m)
 	assert.Len(t, rows, 19)
-	assert.Equal(t, []string{"    /w/AGENTS.md", "", "  Its .mcp.json declares MCP servers that Kopi would start.", "  They run with your permissions.", "    a: a-mcp", "  … 4 more lines", "  " + scrollHint(&m.keys)}, rows[6:13])
-	assert.Subset(t, trustReach(m), []string{"    a: a-mcp", "    b: b-mcp", "    c: c-mcp", "    d: d-mcp", "    e: e-mcp"})
+	assert.Equal(t, []string{"  Its .mcp.json declares MCP servers that Kopi would start.", "  They run with your permissions.", "    a: a-mcp", "    b: b-mcp", "    c: c-mcp", "    d: d-mcp", "    e: e-mcp", "  … 4 more lines", "  " + scrollHint(&m.keys)}, rows[4:13])
+	assert.Contains(t, trustReach(m), "    /w/AGENTS.md")
 }
 
 func TestTrustRowsScrollInstructionFilesToTheHeight(t *testing.T) {
@@ -220,6 +220,7 @@ func TestTrustRowsScrollWrappedInstructionPathsAtANarrowWidth(t *testing.T) {
 	assert.Equal(t, strings.Repeat("─", 30), rows[0])
 	assert.Equal(t, "  Do you trust this folder?", rows[1])
 	assert.Equal(t, "  /w/proj", rows[2])
+	assert.Equal(t, []string{"  … 30 more lines", "  " + scrollHint(&m.keys)}, rows[17:19])
 	assert.Equal(t, []string{
 		"",
 		"❭ 1. Yes, trust this folder",
@@ -232,7 +233,7 @@ func TestTrustRowsScrollWrappedInstructionPathsAtANarrowWidth(t *testing.T) {
 	assert.Contains(t, reached, "    "+strings.Repeat("a", 7)+"/AGENTS.md")
 }
 
-func TestTrustRowsScrollInstructionFilesAboveTheServers(t *testing.T) {
+func TestTrustRowsKeepTheServersInViewWhileInstructionFilesScroll(t *testing.T) {
 	req := trustReq
 	for range 20 {
 		req.Instructions = append(req.Instructions, "/w/AGENTS.md")
@@ -243,7 +244,12 @@ func TestTrustRowsScrollInstructionFilesAboveTheServers(t *testing.T) {
 	assert.Len(t, rows, 19)
 	assert.Equal(t, "  Do you trust this folder?", rows[1])
 	assert.Equal(t, "  /w/proj", rows[2])
-	assert.Contains(t, trustReach(m), "    remote: https://example.com/mcp")
+	assert.Contains(t, rows, "  Its .mcp.json declares MCP servers that Kopi would start.")
+	assert.Contains(t, rows, "  They run with your permissions.")
+	assert.Contains(t, rows, "    docs: npx -y docs-mcp")
+	assert.Contains(t, rows, "  … 20 more lines")
+	assert.Contains(t, rows, "  "+scrollHint(&m.keys))
+	assert.Contains(t, trustReach(m), "    /w/AGENTS.md")
 }
 
 func TestTrustRowsListSkillFolders(t *testing.T) {
@@ -270,8 +276,10 @@ func TestTrustRowsListSkillFolders(t *testing.T) {
 	all.Skills = []string{"/w/proj/.agents/skills"}
 	rows := trustScreen(newTrustTestModel(all))
 	assert.Equal(t, []string{
-		"  Do you trust this folder?",
-		"  /w/proj",
+		"  Its .mcp.json declares MCP servers that Kopi would start.",
+		"  They run with your permissions.",
+		"    docs: npx -y docs-mcp",
+		"    remote: https://example.com/mcp",
 		"",
 		"  Kopi would add these instruction files to the model's",
 		"  instructions:",
@@ -280,8 +288,7 @@ func TestTrustRowsListSkillFolders(t *testing.T) {
 		"  Kopi would load the skills in these folders:",
 		"    /w/proj/.agents/skills",
 		"",
-		"  Its .mcp.json declares MCP servers that Kopi would start.",
-	}, rows[slices.Index(rows, "  Do you trust this folder?"):][:11])
+	}, rows[slices.Index(rows, "  Do you trust this folder?")+3:][:12])
 }
 
 func TestTrustRowsScrollSkillFolders(t *testing.T) {

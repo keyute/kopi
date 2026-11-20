@@ -48,6 +48,17 @@ type questionDialog struct {
 	sizes        map[int][2]int
 	previewWidth int
 	previewTheme theme
+	// stripText is the tab strip for stripWidth, stripTheme, stripTab and the
+	// answered tabs in stripMarks.
+	stripText  string
+	stripWidth int
+	stripTheme theme
+	stripTab   int
+	stripMarks []bool
+	// reviewWidth and reviewTheme are what review.body was made for; a key
+	// clears the body, as it may change an answer.
+	reviewWidth int
+	reviewTheme theme
 }
 
 // questionPage is one question's draft; it survives switching tabs.
@@ -219,11 +230,18 @@ func (q *questionDialog) strip(width int, th theme) string {
 	if len(q.qs) < 2 {
 		return ""
 	}
+	marks := make([]bool, len(q.qs))
+	for i := range marks {
+		marks[i] = q.answered(i)
+	}
+	if q.stripMarks != nil && q.stripWidth == width && q.stripTheme == th && q.stripTab == q.tab && slices.Equal(q.stripMarks, marks) {
+		return q.stripText
+	}
 	cells := make([]string, len(q.qs)+1)
 	styles := make([]lipgloss.Style, len(cells))
 	for i, qu := range q.qs {
 		mark, st := "☐", fg(th.muted)
-		if q.answered(i) {
+		if marks[i] {
 			mark, st = "☑", fg(th.success)
 		}
 		cells[i], styles[i] = " "+mark+" "+cut(qu.Header, headerWidth)+" ", st
@@ -241,7 +259,9 @@ func (q *questionDialog) strip(width int, th theme) string {
 	for i := start; i < len(cells); i++ {
 		b.WriteString(styles[i].Render(cells[i]))
 	}
-	return "  " + ansi.Truncate(b.String(), max(0, width-2), "…")
+	q.stripText = "  " + ansi.Truncate(b.String(), max(0, width-2), "…")
+	q.stripMarks, q.stripWidth, q.stripTheme, q.stripTab = marks, width, th, q.tab
+	return q.stripText
 }
 
 // dialog is the shown page with its tab strip, key hints and preview or
@@ -393,6 +413,10 @@ func (q *questionDialog) label(p *questionPage, qu tool.Question, width int, th 
 // fillReview sets the review body: every question with its answer.
 func (q *questionDialog) fillReview(width int, th theme) {
 	d := q.review
+	if d.body != nil && q.reviewWidth == width && q.reviewTheme == th {
+		return
+	}
+	q.reviewWidth, q.reviewTheme = width, th
 	d.body = nil
 	none, muted := lipgloss.NewStyle(), fg(th.muted)
 	for i, qu := range q.qs {
@@ -441,6 +465,9 @@ func plainKey(msg tea.KeyPressMsg, code rune) bool {
 // has no use for are swallowed. The dialog stays until its QuestionEnded
 // arrives.
 func (q *questionDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	if q.review != nil {
+		q.review.body = nil
+	}
 	if q.tab == len(q.qs) {
 		return q.reviewKey(m, msg), true
 	}

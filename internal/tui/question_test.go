@@ -282,6 +282,23 @@ func TestQuestionDialogMeasuresThePreviewsOncePerWidthAndTheme(t *testing.T) {
 	assert.Equal(t, measured, size(), "a new width measures again")
 }
 
+func TestQuestionDialogRendersTheReviewOncePerWidthThemeAndKey(t *testing.T) {
+	m, _ := openQuestion(t, choice("One", false, "A", "B"), choice("Two", false, "C", "D"))
+	q := questionOf(m)
+	q.tab = 2
+	body := func(width int) []string { return q.dialog(width, mocha()).body }
+	require.Contains(t, body(70)[0], "1. Which One?")
+
+	q.review.body[0] = "kept"
+	assert.Equal(t, "kept", body(70)[0], "a repeat call reads the kept body")
+	assert.Contains(t, body(60)[0], "1. Which One?", "a new width renders again")
+
+	q.review.body[0] = "kept"
+	press(m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	q.tab = 2
+	assert.Contains(t, body(60)[0], "1. Which One?", "a key renders again")
+}
+
 func TestQuestionRowsCutAPreviewAndScrollIt(t *testing.T) {
 	km := newKeyMap(config.DefaultKeys())
 	var lines []string

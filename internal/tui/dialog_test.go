@@ -484,6 +484,23 @@ func TestDialogRowsKeepTheSelectionAndCountWhenTheOptionsDoNotFit(t *testing.T) 
 	assert.Equal(t, []int{-1, -1, 3, 4, 5, -1, -1, -1, 6}, d.optionStarts, "options left out have no row")
 }
 
+func TestDialogRowsKeepTheFirstAndLastSelectionWhenTheOptionsDoNotFit(t *testing.T) {
+	for _, sel := range []int{0, 7} {
+		d := &dialog{title: "Pick", sel: sel}
+		for i := range 8 {
+			d.options = append(d.options, option{label: fmt.Sprintf("o%d", i+1)})
+		}
+		for height := 3; height <= 8; height++ {
+			rows := plainRows(d.rows(20, height, 5, mocha()))
+			require.LessOrEqual(t, len(rows), height, "sel %d height %d", sel, height)
+			assert.Contains(t, rows, fmt.Sprintf("❭ %d. o%d", sel+1, sel+1), "sel %d height %d", sel, height)
+			if height >= 4 {
+				assert.Contains(t, rows, fmt.Sprintf("  %d of 8", sel+1), "sel %d height %d", sel, height)
+			}
+		}
+	}
+}
+
 func TestDialogRowsNeverPassTheHeightAndRecordWhatIsDrawn(t *testing.T) {
 	th := mocha()
 	rule := strings.Repeat("─", 30)

@@ -50,6 +50,12 @@ func (p *planDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	return cmd, true
 }
 
+// owns reports a repeat of the dialog's own request.
+func (p *planDialog) owns(ev event.Event) bool {
+	r, ok := ev.(event.PlanRequested)
+	return ok && r.Token == p.token
+}
+
 // seen ends the dialog with its PlanEnded. A repeat of its own request keeps it,
 // and what was typed in it; the editor's exit has the Controller read the plan
 // again.

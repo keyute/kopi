@@ -336,7 +336,7 @@ func (d *dialog) previewBox(lines []string, bw, room, indent int, th theme) []st
 
 // squeeze draws d within maxRows of 3 or more when its fixed rows do not fit.
 func (d *dialog) squeeze(s *shape, maxRows int, th theme) []string {
-	d.scroll.window(nil, 0, th)
+	d.scroll = scroller{}
 	all, areas, starts := d.expand(s, 0, th)
 	room := maxRows - 2
 	take := func(n int) int {

@@ -110,13 +110,15 @@ func (m *trustModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key.Matches(msg, m.keys.dismiss) {
 			return m, tea.Quit
 		}
-		switch {
-		case key.Matches(msg, m.keys.pageUp):
-			m.dialog.scroll.page(-1)
-			return m, nil
-		case key.Matches(msg, m.keys.pageDown):
-			m.dialog.scroll.page(1)
-			return m, nil
+		if m.dialog.scroll.cut() {
+			switch {
+			case key.Matches(msg, m.keys.pageUp):
+				m.dialog.scroll.page(-1)
+				return m, nil
+			case key.Matches(msg, m.keys.pageDown):
+				m.dialog.scroll.page(1)
+				return m, nil
+			}
 		}
 		if picked, _ := m.dialog.key(msg, &m.keys); picked {
 			m.choice = m.choices[m.dialog.sel]
@@ -172,9 +174,9 @@ func (m *trustModel) rows() []string {
 				m.body = append(m.body, lines("  ", e, fg(m.th.muted))...)
 			}
 		}
+		list("Its .mcp.json declares MCP servers that Kopi would start. They run with your permissions.", m.req.Servers)
 		list("Kopi would add these instruction files to the model's instructions:", m.req.Instructions)
 		list("Kopi would load the skills in these folders:", m.req.Skills)
-		list("Its .mcp.json declares MCP servers that Kopi would start. They run with your permissions.", m.req.Servers)
 		m.bodyWidth, m.bodyTheme = m.width, m.th
 	}
 	m.dialog.body, m.dialog.hint = m.body, scrollHint(&m.keys)
