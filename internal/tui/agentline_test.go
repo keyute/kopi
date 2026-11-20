@@ -72,8 +72,8 @@ func TestAgentRowsFollowTheStatusLine(t *testing.T) {
 
 	assert.Equal(t, 20-chromeRows-m.composer.height()-2, m.transcriptHeight())
 	assert.Equal(t, []string{
-		"  ● main · 850 tokens · model-1",
-		"  ○ explorer › Find the config loader · 22.1k tokens · gpt-5.6",
+		"  ● main · model-1 · 850 tokens",
+		"  ○ explorer › Find the config loader · gpt-5.6 · 22.1k tokens",
 	}, lastRows(m, 2))
 	assert.Equal(t, statusText(m), screen(m)[len(screen(m))-3])
 }
@@ -412,8 +412,8 @@ func TestAgentRowFitsTheWidth(t *testing.T) {
 		line  config.AgentLine
 		want  []string
 	}{
-		{"drops left segments from the right end", 40, config.DefaultAgentLine(), []string{"  ● main · 850 tokens · model-1", "  ○ explorer › Find the config loader"}},
-		{"keeps what fits", 60, config.DefaultAgentLine(), []string{"  ● main · 850 tokens · model-1", "  ○ explorer › Find the config loader · 22.1k tokens"}},
+		{"drops left segments from the right end", 40, config.DefaultAgentLine(), []string{"  ● main · model-1 · 850 tokens", "  ○ explorer › Find the config loader"}},
+		{"keeps what fits", 60, config.DefaultAgentLine(), []string{"  ● main · model-1 · 850 tokens", "  ○ explorer › Find the config loader · gpt-5.6"}},
 		{"aligns the right segments", 60, lineOf([]string{"$agent"}, "$model"), []string{"  ● main" + strings.Repeat(" ", 43) + "model-1", "  ○ explorer › Find the config loader" + strings.Repeat(" ", 14) + "gpt-5.6"}},
 		{"drops left segments for the right ones", 28, lineOf([]string{"$agent", "$tokens"}, "$model"), []string{"  ● main" + strings.Repeat(" ", 11) + "model-1", "  ○" + strings.Repeat(" ", 16) + "gpt-5.6"}},
 		{"truncates to the width", 10, lineOf([]string{"$agent"}, "$model"), []string{"  ●  model", "  ○  gpt-5"}},

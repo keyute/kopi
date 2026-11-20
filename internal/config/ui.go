@@ -107,11 +107,11 @@ func DefaultKeys() map[string][]string {
 }
 
 func DefaultStatusLine() StatusLine {
-	return StatusLine{Left: []string{"$model", "$context", "$branch( $changes)"}, Right: []string{"$notice", "$sandbox", "$shells", "$mode"}, Separator: " · "}
+	return StatusLine{Left: []string{"$model", "$context", "$branch( $changes)"}, Right: []string{"$notice", "$shells", "$sandbox", "$mode"}, Separator: " · "}
 }
 
 func DefaultAgentLine() AgentLine {
-	return AgentLine{Left: []string{"$agent", "$tokens", "$model"}, Right: []string{}, Separator: " · "}
+	return AgentLine{Left: []string{"$agent", "$model", "$tokens"}, Right: []string{}, Separator: " · "}
 }
 
 // uiDefaults is the default layer's share of the UI blocks. Nested values must
