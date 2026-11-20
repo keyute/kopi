@@ -264,10 +264,7 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	var search []tool.Tool
 	if small := c.SmallModel(); small != "" && c.rt.CanSearch(small) && !c.cfg.Rules.Removes("WebSearch") {
 		search = append(search, tool.NewWebSearch(func(ctx context.Context, system, query string) (tool.SearchResult, error) {
-			charge := c.chargeSide()
-			result, cost, err := c.rt.Search(ctx, small, system, query)
-			charge(cost)
-			return result, err
+			return c.sideSearch(ctx, small, system, query)
 		}))
 		tools = append(tools, search...)
 	}
@@ -772,8 +769,10 @@ func (c *Controller) Status() Status {
 	c.queue.Unlock()
 
 	mode, _ := c.authority.Snapshot()
-	s := Status{SessionID: sessID, Mode: mode, Model: c.Model(), Busy: busy, Branch: gitBranch(c.cfg.Workspace), Workspace: c.cfg.Workspace}
+	s := Status{SessionID: sessID, Mode: mode, Model: c.Model(), Busy: busy, Branch: gitBranch(c.cfg.Workspace), Workspace: c.cfg.Workspace, TotalCost: side}
 	if sess != nil {
+		_, cost := sess.Usage()
+		s.TotalCost += cost
 		s.MessageCount = sess.MessageCount()
 		if tokens, window, ok := sess.ContextUsage(); ok {
 			s.ContextTokens, s.ContextWindow = tokens, window
@@ -803,11 +802,6 @@ func (c *Controller) Status() Status {
 		}
 	}
 	c.queue.Unlock()
-	s.TotalCost = side
-	if sess != nil {
-		_, cost := sess.Usage()
-		s.TotalCost += cost
-	}
 	for _, r := range children {
 		_, cost := r.sess.Usage()
 		s.TotalCost += cost

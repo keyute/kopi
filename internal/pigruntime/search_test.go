@@ -392,10 +392,11 @@ func TestSearchEmptyAnswerFails(t *testing.T) {
 		responsesStream(w, " ", nil)
 	})
 
-	_, _, err := r.Search(t.Context(), searchModel, "system", "q")
+	_, cost, err := r.Search(t.Context(), searchModel, "system", "q")
 
 	require.ErrorIs(t, err, ErrNoAnswer)
 	assert.Contains(t, err.Error(), searchModel)
+	assert.Equal(t, 4.0, cost)
 }
 
 func TestSearchReportsProviderError(t *testing.T) {

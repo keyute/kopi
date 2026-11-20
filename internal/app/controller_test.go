@@ -2552,7 +2552,9 @@ func TestStatusKeepsRootAndChildCostsTogetherDuringSwitch(t *testing.T) {
 	result := make(chan Status, 1)
 	go func() { result <- a.c.Status() }()
 	// Opening the writer proves Status has reached the branch read, after
-	// snapshotting the root but before the old implementation cloned children.
+	// snapshotting the root; Status takes the root and its children in one
+	// critical section, so a switch during the branch read cannot mix the old
+	// root with new children.
 	wait(t, reached)
 
 	require.NoError(t, a.c.NewSession(t.Context()))

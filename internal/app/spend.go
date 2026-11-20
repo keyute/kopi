@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/keyute/kopi/internal/pigruntime"
+	"github.com/keyute/kopi/internal/tool"
 )
 
 // chargeSide snapshots the root session and returns a func that adds a cost to
@@ -13,17 +14,14 @@ func (c *Controller) chargeSide() func(cost float64) {
 	c.mu.Lock()
 	root := c.main.sess
 	c.mu.Unlock()
-	return c.chargeTo(root)
+	return func(cost float64) { c.charge(root, cost) }
 }
 
-// chargeTo is chargeSide for an explicit root.
-func (c *Controller) chargeTo(root *pigruntime.Session) func(cost float64) {
-	return func(cost float64) {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if c.main.sess == root {
-			c.spent += cost
-		}
+func (c *Controller) charge(root *pigruntime.Session, cost float64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.main.sess == root {
+		c.spent += cost
 	}
 }
 
@@ -34,4 +32,13 @@ func (c *Controller) SideAnswer(ctx context.Context, model string, effort pigrun
 	text, cost, err := c.rt.Answer(ctx, model, effort, system, prompt)
 	charge(cost)
 	return text, err
+}
+
+// sideSearch has model search the web for query under system, outside any
+// session, and charges its cost to the session total.
+func (c *Controller) sideSearch(ctx context.Context, model, system, query string) (tool.SearchResult, error) {
+	charge := c.chargeSide()
+	result, cost, err := c.rt.Search(ctx, model, system, query)
+	charge(cost)
+	return result, err
 }

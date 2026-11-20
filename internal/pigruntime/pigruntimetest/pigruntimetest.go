@@ -156,7 +156,31 @@ const PricedModelCost = 1.0
 // reads models.json.
 func (sb Sandbox) PricedModel(t testing.TB) string {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	return sb.pricedModel(t, nil, nil)
+}
+
+// HeldPricedModel is PricedModel whose server signals reached on each request,
+// then answers only once release is closed or receives.
+func (sb Sandbox) HeldPricedModel(t testing.TB, reached chan<- struct{}, release <-chan struct{}) string {
+	t.Helper()
+	return sb.pricedModel(t, reached, release)
+}
+
+func (sb Sandbox) pricedModel(t testing.TB, reached chan<- struct{}, release <-chan struct{}) string {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if reached != nil {
+			select {
+			case reached <- struct{}{}:
+			case <-r.Context().Done():
+				return
+			}
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		message := map[string]any{
 			"type": "message", "id": "msg_1", "role": "assistant", "status": "completed",
 			"content": []any{map[string]any{"type": "output_text", "text": "priced answer", "annotations": []any{}}},

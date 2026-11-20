@@ -37,6 +37,27 @@ func TestSideChargeAfterASessionSwitchAddsNothing(t *testing.T) {
 	assert.Zero(t, h.c.Status().TotalCost)
 }
 
+func TestSideAnswerOutlivingASessionSwitchChargesNothing(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	reached := make(chan struct{}, 1)
+	release := make(chan struct{})
+	priced := sb.HeldPricedModel(t, reached, release)
+	h := newHarness(t, sb, Config{Model: priced})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.c.SideAnswer(t.Context(), priced, pigruntime.DefaultEffort, "system", "prompt")
+		done <- err
+	}()
+	wait(t, reached)
+
+	require.NoError(t, h.c.NewSession(t.Context()))
+	close(release)
+
+	require.NoError(t, <-done)
+	assert.Zero(t, h.c.Status().TotalCost)
+}
+
 func TestNewSessionZeroesTheTotal(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	priced := sb.PricedModel(t)

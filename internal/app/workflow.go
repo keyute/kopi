@@ -187,7 +187,7 @@ func (r *workflowRun) call(ctx context.Context, raw json.RawMessage) (json.RawMe
 	defer func() {
 		_, cost := run.sess.Usage()
 		c.closeChild(run)
-		c.chargeTo(r.parent)(cost)
+		c.charge(r.parent, cost)
 		r.bound(event.TasksChanged{})
 	}()
 
