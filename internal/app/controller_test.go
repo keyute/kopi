@@ -1883,6 +1883,20 @@ func TestWebSearchIsOfferedForASearchingSmallModel(t *testing.T) {
 	assert.Equal(t, []string{"AskUserQuestion", "WebSearch", "Workflow"}, toolNames(h.c.tools))
 }
 
+func TestWebSearchChargesTheTotal(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	priced := sb.PricedModel(t)
+	h := newHarness(t, sb, Config{Model: priced, SmallModel: priced})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	i := slices.IndexFunc(h.c.tools, func(t tool.Tool) bool { return t.Name == "WebSearch" })
+	require.NotEqual(t, -1, i)
+
+	_, err := h.c.tools[i].Run(t.Context(), json.RawMessage(`{"query":"kopi"}`), func(policy.Target) (policy.Mode, error) { return policy.Execute, nil })
+
+	require.NoError(t, err)
+	assert.Equal(t, pigruntimetest.PricedModelCost, h.c.Status().TotalCost)
+}
+
 func TestWebSearchIsAbsentForANonSearchingModel(t *testing.T) {
 	h := newHarness(t, searchSandbox(t), Config{})
 	assert.Equal(t, []string{"AskUserQuestion", "Workflow"}, toolNames(h.c.tools))
@@ -2497,12 +2511,21 @@ func TestStatusKeepsRootAndChildCostsTogetherDuringSwitch(t *testing.T) {
 	def := agentDef("explorer")
 	def.Model = model
 	a := newAgentHarness(t, sb, Config{Model: model}, def)
+	// Only the root's turns reach this channel; a child's arrive wrapped in a
+	// Session event.
+	ends := turnEnds(a.c)
+	// A finished subagent wakes the root for one more priced turn.
+	child := func(description string) {
+		id := a.launch(t, "explorer", description, "go")
+		a.untilStatus(t, id, tool.TaskCompleted)
+		receiveEnd(t, ends)
+	}
 	a.turn(t, "old root")
-	id := a.launch(t, "explorer", "old child", "go")
-	a.untilStatus(t, id, tool.TaskCompleted)
-	a.c.chargeSide(FetchCall)(3)
+	receiveEnd(t, ends)
+	child("old child")
+	a.c.chargeSide()(3)
 	old := a.c.Status()
-	require.Equal(t, 3+2*pigruntimetest.PricedModelCost, old.TotalCost)
+	require.Equal(t, 3+3*pigruntimetest.PricedModelCost, old.TotalCost)
 
 	gitDir := filepath.Join(sb.Workspace, ".git")
 	require.NoError(t, os.Mkdir(gitDir, 0o700))
@@ -2534,19 +2557,20 @@ func TestStatusKeepsRootAndChildCostsTogetherDuringSwitch(t *testing.T) {
 
 	require.NoError(t, a.c.NewSession(t.Context()))
 	a.turn(t, "new root one")
+	receiveEnd(t, ends)
 	a.turn(t, "new root two")
+	receiveEnd(t, ends)
 	for range 2 {
-		id = a.launch(t, "explorer", "new child", "go")
-		a.untilStatus(t, id, tool.TaskCompleted)
+		child("new child")
 	}
-	a.c.chargeSide(FetchCall)(5)
+	a.c.chargeSide()(5)
 	// Unlinking leaves the blocked reader on the pipe, but lets later status
 	// calls read the replacement HEAD without blocking.
 	require.NoError(t, os.Remove(head))
 	require.NoError(t, os.WriteFile(head, []byte("ref: refs/heads/status\n"), 0o600))
 	fresh := a.c.Status()
 	assert.NotEqual(t, old.SessionID, fresh.SessionID)
-	assert.Equal(t, 5+4*pigruntimetest.PricedModelCost, fresh.TotalCost)
+	assert.Equal(t, 5+6*pigruntimetest.PricedModelCost, fresh.TotalCost)
 	// The writer must close before ReadFile returns.
 	unblock.Do(func() { close(release) })
 	wait(t, written)

@@ -40,6 +40,17 @@ func TestAnswerReturnsTheRequestsCost(t *testing.T) {
 	assert.Equal(t, 4.0, cost)
 }
 
+func TestAnswerReturnsTheCostOfAnEmptyAnswer(t *testing.T) {
+	r, _ := newSearchRuntime(t, "openai-responses", "synthetic-key", func(w http.ResponseWriter) {
+		responsesStream(w, " ", nil)
+	})
+
+	_, cost, err := r.Answer(t.Context(), searchModel, DefaultEffort, "system", "prompt")
+
+	require.ErrorIs(t, err, ErrNoAnswer)
+	assert.Equal(t, 4.0, cost)
+}
+
 func TestAnswerReportsProviderError(t *testing.T) {
 	r, faux := newTestRuntime(t, newSandbox(t))
 	faux.SetResponses([]ai.FauxResponseStep{

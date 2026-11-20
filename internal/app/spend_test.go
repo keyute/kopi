@@ -16,8 +16,8 @@ func TestSideAnswerChargesTheTotal(t *testing.T) {
 	h := newHarness(t, sb, Config{Model: priced})
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
 
-	for i, call := range []SideCall{ClassifierCall, FetchCall, SearchCall} {
-		text, err := h.c.SideAnswer(t.Context(), call, priced, pigruntime.DefaultEffort, "system", "prompt")
+	for i := range 2 {
+		text, err := h.c.SideAnswer(t.Context(), priced, pigruntime.DefaultEffort, "system", "prompt")
 
 		require.NoError(t, err)
 		assert.Equal(t, "priced answer", text)
@@ -29,7 +29,7 @@ func TestSideChargeAfterASessionSwitchAddsNothing(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	h := newHarness(t, sb, Config{Model: sb.PricedModel(t)})
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
-	charge := h.c.chargeSide(FetchCall)
+	charge := h.c.chargeSide()
 
 	require.NoError(t, h.c.NewSession(t.Context()))
 	charge(5)
@@ -42,7 +42,7 @@ func TestNewSessionZeroesTheTotal(t *testing.T) {
 	priced := sb.PricedModel(t)
 	h := newHarness(t, sb, Config{Model: priced})
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
-	_, err := h.c.SideAnswer(t.Context(), ClassifierCall, priced, pigruntime.DefaultEffort, "system", "prompt")
+	_, err := h.c.SideAnswer(t.Context(), priced, pigruntime.DefaultEffort, "system", "prompt")
 	require.NoError(t, err)
 	require.Positive(t, h.c.Status().TotalCost)
 
