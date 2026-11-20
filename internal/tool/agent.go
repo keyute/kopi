@@ -95,6 +95,7 @@ func NewAgent(defs []subagent.Definition, agents Agents) Tool {
 				}
 				return ""
 			},
+			Body:   func(string) string { return "" },
 			Action: Action{Verb: "Launched", One: "agent", Many: "agents"},
 		},
 	}

@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -835,6 +836,59 @@ func TestReply(t *testing.T) {
 			assert.Equal(t, tt.calls, faux.CallCount())
 		})
 	}
+}
+
+// PiG answers a call "Operation aborted" when the turn was cancelled while the
+// call's before hook ran. A sequential batch stops at the cancelled call and
+// never reports the ones after it, so the calls here run in parallel.
+func TestCancelledTurnMarksAbortedCallInterrupted(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	two := ai.FauxAssistantMessage(ai.FauxContentBlocks{
+		ai.FauxToolCall("Probe", map[string]any{}, &ai.FauxToolCallOptions{ID: "call-1"}),
+		ai.FauxToolCall("Probe", map[string]any{}, &ai.FauxToolCallOptions{ID: "call-2"}),
+	}, ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)})
+	faux.SetResponses([]ai.FauxResponseStep{two, reply("unreached")})
+	hooked, cancelled := make(chan struct{}), make(chan struct{})
+	var targets atomic.Int32
+	probe := probeTool(okProbe)
+	probe.Target = func(json.RawMessage) (policy.Target, error) {
+		// The second call's before hook returns only once the turn is cancelled.
+		if targets.Add(1) == 2 {
+			close(hooked)
+			<-cancelled
+		}
+		return policy.Target{}, nil
+	}
+	sess := openTestSession(t, r, probe)
+	ends := make(chan event.ToolEnd, 2)
+	t.Cleanup(sess.Subscribe(func(ev event.Event) {
+		if end, ok := ev.(event.ToolEnd); ok {
+			ends <- end
+		}
+	}))
+	turnCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() {
+		<-hooked
+		cancel()
+		// Send forwards the cancel to PiG on its own goroutine (context.AfterFunc);
+		// release the hook only once PiG's run context is cancelled.
+		<-sess.inner.Agent().Signal().Done()
+		close(cancelled)
+	}()
+
+	res, err := sess.Send(turnCtx, Prompt{Text: "prompt"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, event.Interrupted, res.Outcome.Status)
+
+	got := map[string]event.ToolEnd{}
+	for range 2 {
+		end := <-ends
+		got[end.CallID] = end
+	}
+	assert.Equal(t, event.EndInterrupted, got["call-2"].Kind)
+	assert.Equal(t, abortedCall, got["call-2"].Output)
 }
 
 func TestSendQueuesSkillsAfterPromptBeforeNotices(t *testing.T) {

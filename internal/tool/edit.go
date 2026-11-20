@@ -67,15 +67,20 @@ func NewEdit(ws *Workspace) Tool {
 					ReplaceAll bool `json:"replace_all"`
 				}
 				_ = json.Unmarshal(raw, &args)
-				title := pathTitle("Edit")(raw)
+				title := pathTitle(ws, "Edit")(raw)
 				if args.ReplaceAll {
 					title += " (replace all)"
 				}
 				return title
 			},
+			Done:   pathTitle(ws, "Edited"),
+			Change: editChange,
 			// Relies on edit's output shape: "replaced N occurrences in P".
 			Summary: func(output string) string {
 				n, _, _ := strings.Cut(strings.TrimPrefix(output, "replaced "), " in ")
+				if n == "1 occurrence" {
+					return ""
+				}
 				return n
 			},
 			Preview: editPreview,
@@ -174,6 +179,17 @@ func readForEdit(f *os.File, path string) (string, error) {
 		return "", fmt.Errorf("%w: %s", ErrBinary, path)
 	}
 	return string(data), nil
+}
+
+// editChange runs before the arguments are validated, so it decodes leniently.
+func editChange(raw json.RawMessage) (string, []PreviewLine) {
+	var args struct {
+		OldString string `json:"old_string"`
+		NewString string `json:"new_string"`
+	}
+	_ = json.Unmarshal(raw, &args)
+	return fmt.Sprintf("+%d -%d", countLines(args.NewString), countLines(args.OldString)),
+		append(changeLines(Removed, args.OldString), changeLines(Added, args.NewString)...)
 }
 
 // editPreview runs before the arguments are validated, so it decodes leniently.

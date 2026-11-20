@@ -140,5 +140,7 @@ func TestAgentDisplay(t *testing.T) {
 	assert.Equal(t, "explore › look", tool.Display.Title(json.RawMessage(`{"description":"look","prompt":"p","subagent_type":"explore"}`)))
 	assert.Equal(t, "Agent", tool.Display.Title(json.RawMessage(`{`)))
 	assert.Equal(t, "launched", tool.Display.Summary("Agent t3 started."))
+	assert.Empty(t, tool.Display.Body("Agent t3 started."))
+	assert.Nil(t, tool.Display.Done)
 	assert.Empty(t, tool.Display.Summary("failed to start"))
 }

@@ -264,7 +264,7 @@ func TestTurnStartOpensTurnAndTurnEndIsTimed(t *testing.T) {
 	assert.Positive(t, ends[0].Elapsed)
 }
 
-func TestDeniedCallHasNoSummary(t *testing.T) {
+func TestDeniedCallIsClassified(t *testing.T) {
 	var ran atomic.Int32
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{execTool(&ran)}})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Exec", "call-1")), pigruntimetest.Text("ok")})
@@ -283,7 +283,8 @@ func TestDeniedCallHasNoSummary(t *testing.T) {
 	ends := ofType[event.ToolEnd](evs)
 	require.Len(t, ends, 1)
 	assert.True(t, ends[0].IsError)
-	assert.Empty(t, ends[0].Summary)
+	assert.Equal(t, event.EndDenied, ends[0].Kind)
+	assert.Equal(t, "denied · plan mode needs the sandbox, which is off or unavailable", ends[0].Summary)
 	assert.Zero(t, ran.Load())
 }
 
@@ -318,35 +319,53 @@ func TestReadResultReachesNextRequest(t *testing.T) {
 func TestResumeDeliversDisplayedHistory(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	require.NoError(t, os.WriteFile(filepath.Join(sb.Workspace, "notes.txt"), []byte("kopi fixture 42\n"), 0o600))
-	read := readTool(t, sb)
-	h := newHarness(t, sb, Config{Tools: []tool.Tool{read}})
+	require.NoError(t, os.WriteFile(filepath.Join(sb.Workspace, "edit.txt"), []byte("alpha\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(sb.Workspace, "secret.txt"), []byte("alpha\n"), 0o600))
+	ws, err := tool.NewWorkspace(sb.Workspace, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
+	read, edit := readTool(t, sb), tool.NewEdit(ws)
+	rules, err := policy.NewRules(sb.Workspace, sb.Home, tool.Specs([]tool.Tool{edit}), policy.Source{Name: "test", Allow: []string{"Edit"}, Deny: []string{"Edit(secret.txt)"}})
+	require.NoError(t, err)
+	cfg := Config{Tools: []tool.Tool{read, edit}, Rules: rules, Mode: policy.Execute}
+	h := newHarness(t, sb, cfg)
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
 	changed := ofType[event.SessionChanged](h.rec.all())
 	require.Len(t, changed, 1)
 	assert.Nil(t, changed[0].History)
 	h.faux.SetResponses([]ai.FauxResponseStep{
 		pigruntimetest.ToolCalls(pigruntimetest.Call{Name: "Read", ID: "call-1", Args: map[string]any{"file_path": "notes.txt"}}),
-		pigruntimetest.Text("read it"),
+		pigruntimetest.ToolCalls(editCall("call-2", "secret.txt")),
+		pigruntimetest.ToolCalls(editCall("call-3", "edit.txt")),
+		pigruntimetest.Text("done"),
 	})
 	h.turn(t, "read notes.txt")
 	id := h.c.Status().SessionID
 	require.NoError(t, h.c.Close(t.Context()))
 
-	fresh := newHarness(t, sb, Config{Tools: []tool.Tool{read}})
+	fresh := newHarness(t, sb, cfg)
 	require.NoError(t, fresh.c.Open(t.Context(), OpenRequest{ResumeID: id}))
 	changed = ofType[event.SessionChanged](fresh.rec.all())
 	require.Len(t, changed, 1)
 	history := changed[0].History
 	require.NotEmpty(t, history)
 	assert.Equal(t, event.TurnStart{Prompt: "read notes.txt"}, history[0])
-	assert.Equal(t, []event.ToolStart{{
+	starts := ofType[event.ToolStart](history)
+	require.Len(t, starts, 3)
+	assert.Equal(t, event.ToolStart{
 		CallID: "call-1", Name: "Read", Args: `{"file_path":"notes.txt"}`,
 		Title: "Read notes.txt", Action: tool.Action{Verb: "Read", One: "file", Many: "files"},
-	}}, ofType[event.ToolStart](history))
+	}, starts[0])
+	assert.NotEmpty(t, starts[2].Done)
+	assert.NotEmpty(t, starts[2].Change)
 	ends := ofType[event.ToolEnd](history)
-	require.Len(t, ends, 1)
+	require.Len(t, ends, 3)
 	assert.Contains(t, ends[0].Output, "kopi fixture 42")
 	assert.Equal(t, "1 line", ends[0].Summary)
+	assert.Equal(t, event.EndDenied, ends[1].Kind)
+	assert.Equal(t, "denied by rule Edit(secret.txt) (test)", ends[1].Summary)
+	assert.Equal(t, event.EndRan, ends[2].Kind)
+	assert.False(t, ends[2].IsError)
 }
 
 // In execute mode a non-Read call with no rule deciding it asks first.

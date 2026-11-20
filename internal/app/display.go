@@ -29,24 +29,64 @@ func newDisplay(tools []tool.Tool) *display {
 func (d *display) apply(ev event.Event) event.Event {
 	switch e := ev.(type) {
 	case event.ToolStart:
-		e.Title = d.title(e.Name, json.RawMessage(e.Args))
-		e.Action = d.tools[e.Name].Display.Action
+		t := d.tools[e.Name]
+		args := json.RawMessage(e.Args)
+		e.Title = d.title(e.Name, args)
+		if t.Display.Done != nil {
+			e.Done = t.Display.Done(args)
+		}
+		e.Action = t.Display.Action
 		if e.Action == (tool.Action{}) {
 			e.Action = fallbackAction
 		}
+		if t.Display.Change != nil {
+			e.Change, e.Preview = t.Display.Change(args)
+		}
+		e.Solo = t.Display.Solo
+		e.Unsandboxed = t.Unsandboxed != nil && t.Unsandboxed(args)
 		return e
 	case event.ToolEnd:
-		if e.IsError {
+		if e.Kind == event.EndInterrupted {
+			e.Summary, e.Body = interrupted, ""
 			return e
 		}
-		if summary := d.tools[e.Name].Display.Summary; summary != nil {
-			e.Summary = summary(e.Output)
-		} else {
+		if e.IsError {
+			e.Kind, e.Summary, e.Body = d.failure(e.Name, e.Output)
+			return e
+		}
+		display := d.tools[e.Name].Display
+		switch {
+		case display.Summary != nil:
+			e.Summary = display.Summary(e.Output)
+		case display.Change == nil:
 			e.Summary = lineCount(e.Output)
+		}
+		switch {
+		case display.Change != nil:
+		case display.Body != nil:
+			e.Body = display.Body(e.Output)
+		default:
+			e.Body = e.Output
 		}
 		return e
 	}
 	return ev
+}
+
+// failure is how a call that returned an error reads: refused, rejected,
+// interrupted or failed.
+func (d *display) failure(name, text string) (event.EndKind, string, string) {
+	if kind, summary, body := classify(name, text); kind != event.EndRan {
+		return kind, summary, body
+	}
+	if failure := d.tools[name].Display.Failure; failure != nil {
+		summary, body := failure(text)
+		return event.EndRan, summary, body
+	}
+	if line := strings.TrimRight(text, "\n"); line != "" && !strings.Contains(line, "\n") {
+		return event.EndRan, line, ""
+	}
+	return event.EndRan, "failed", text
 }
 
 func (d *display) title(name string, args json.RawMessage) string {

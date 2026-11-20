@@ -14,11 +14,15 @@ import (
 func (g Group) Sentence() string {
 	var order []tool.Action
 	counts := map[tool.Action]int{}
+	unsandboxed := map[tool.Action]int{}
 	for _, c := range g.Calls {
 		if counts[c.Action] == 0 {
 			order = append(order, c.Action)
 		}
 		counts[c.Action]++
+		if c.Unsandboxed {
+			unsandboxed[c.Action]++
+		}
 	}
 	clauses := make([]string, len(order))
 	for i, a := range order {
@@ -30,6 +34,9 @@ func (g Group) Sentence() string {
 			noun = a.One
 		}
 		clauses[i] = verb + " " + strconv.Itoa(counts[a]) + " " + noun
+		if n := unsandboxed[a]; n > 0 {
+			clauses[i] += " (" + strconv.Itoa(n) + " unsandboxed)"
+		}
 	}
 	return strings.Join(clauses, ", ")
 }

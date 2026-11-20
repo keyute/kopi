@@ -137,7 +137,7 @@ func history(msgs []agent.AgentMessage) []event.Event {
 			}
 		case m.ToolResult != nil:
 			r := m.ToolResult
-			out = append(out, event.ToolEnd{CallID: r.ToolCallID, Name: r.ToolName, Output: toolResultContentText(r.Content), IsError: r.IsError})
+			out = append(out, toolEnd(r.ToolCallID, r.ToolName, r.Content, r.IsError))
 			afterText = false
 		case isNotice(m):
 			d, _ := m.Custom["details"].(noticeDetails)

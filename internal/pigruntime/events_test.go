@@ -41,6 +41,22 @@ func TestTranslate(t *testing.T) {
 			want: event.ToolEnd{CallID: "c1", Name: "Read", Output: "a\nb", IsError: true},
 		},
 		{
+			name: "tool end aborted before it ran",
+			in: agent.ToolExecutionEndEvent{
+				ToolCallID: "c1", ToolName: "Read", IsError: true,
+				Result: agent.AgentToolResult{Content: []ai.ToolResultMessageContent{ai.TextContent{Text: "Operation aborted"}}},
+			},
+			want: event.ToolEnd{CallID: "c1", Name: "Read", Output: "Operation aborted", IsError: true, Kind: event.EndInterrupted},
+		},
+		{
+			name: "tool end aborted text without error",
+			in: agent.ToolExecutionEndEvent{
+				ToolCallID: "c1", ToolName: "Read",
+				Result: agent.AgentToolResult{Content: []ai.ToolResultMessageContent{ai.TextContent{Text: "Operation aborted"}}},
+			},
+			want: event.ToolEnd{CallID: "c1", Name: "Read", Output: "Operation aborted"},
+		},
+		{
 			name: "auto retry",
 			in:   agent.AutoRetryStartEvent{Attempt: 2, MaxAttempts: 3, DelayMs: 1500, ErrorMessage: "overloaded"},
 			want: event.Notice{Text: "retrying (attempt 2/3) in 1.5s: overloaded"},

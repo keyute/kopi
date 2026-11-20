@@ -104,9 +104,16 @@ func NewLS(ws *Workspace, hidden Hidden) Tool {
 			return Result{Text: lsOutput(names)}, nil
 		},
 		Display: Display{
-			Title:   lsTitle,
+			Title:   lsTitle(ws, "LS"),
+			Done:    lsTitle(ws, "Listed"),
 			Summary: lsSummary,
-			Action:  Action{Verb: "Listed", One: "directory", Many: "directories"},
+			Body: func(output string) string {
+				if output == emptyDirNotice {
+					return ""
+				}
+				return output
+			},
+			Action: Action{Verb: "Listed", One: "directory", Many: "directories"},
 		},
 	}
 }
@@ -123,13 +130,18 @@ func lsOutput(names []string) string {
 }
 
 // lsTitle runs before the arguments are validated, so it decodes leniently.
-func lsTitle(raw json.RawMessage) string {
-	var args lsArgs
-	_ = json.Unmarshal(raw, &args)
-	if args.Path == "" {
-		return "LS"
+func lsTitle(ws *Workspace, verb string) func(json.RawMessage) string {
+	return func(raw json.RawMessage) string {
+		var args lsArgs
+		_ = json.Unmarshal(raw, &args)
+		switch {
+		case args.Path != "":
+			return verb + " " + ws.shown(args.Path)
+		case verb == "LS":
+			return verb
+		}
+		return verb + " ."
 	}
-	return "LS " + args.Path
 }
 
 // lsSummary relies on lsOutput's shape: one entry per line, and a notice line

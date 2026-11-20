@@ -64,6 +64,7 @@ The fullscreen interface asks before a call that needs approval.
   - `No`, which takes an optional reason typed on its row
 - While it waits, the working row reads `Waiting for you…`.
 - `No` with a reason refuses the call, gives the model the reason and lets the turn go on. A blank `No` stops the turn.
+- In the transcript a call you refused is `↳ rejected` with your reason under it. A call a rule, the mode or the [classifier](#classifier) refused is `↳ denied` followed by why (`denied by rule …`, `denied · plan mode`, `denied by the classifier: <reason>`, `denied · this run cannot ask for approval`), with nothing under it. Both have the call's name as the title (`Bash rm -rf build`), not a past-tense verb. See [Transcript](usage.md#transcript).
 - Keys:
   - The `menu-up` and `menu-down` keys choose and `submit` answers.
   - A digit answers with that option, or moves to `No` to type the reason.

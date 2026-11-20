@@ -49,7 +49,9 @@ func TestExitPlanModeDescribesItself(t *testing.T) {
 	assert.True(t, tool.Exclusive)
 	assert.False(t, tool.Ask)
 	assert.Nil(t, tool.Target)
-	assert.Equal(t, "Plan", tool.Display.Title(json.RawMessage(`{}`)))
+	assert.Equal(t, "Plan approval", tool.Display.Title(json.RawMessage(`{}`)))
+	assert.Zero(t, tool.Display.Action)
+	assert.True(t, tool.Display.Solo)
 }
 
 func TestExitPlanModeRefusesOutsidePlanMode(t *testing.T) {
@@ -169,6 +171,15 @@ func TestExitPlanModeShowsTheFileTextAndPassesReviewErrorThrough(t *testing.T) {
 
 	assert.Equal(t, failed, err)
 	assert.Equal(t, "# Plan\n", shown)
+}
+
+func TestExitPlanModeBody(t *testing.T) {
+	body := NewExitPlanMode(nil, nil).Display.Body
+
+	assert.Equal(t, "x\ny", body(planResult(PlanAnswer{Feedback: "x\ny"}, policy.Plan, false)))
+	assert.Equal(t, "x", body(planResult(PlanAnswer{Feedback: "x"}, policy.Plan, true)))
+	assert.Empty(t, body(planResult(PlanAnswer{Approved: true}, policy.Execute, false)))
+	assert.Empty(t, body(planResult(PlanAnswer{}, policy.Plan, false)))
 }
 
 func TestExitPlanModeSummary(t *testing.T) {

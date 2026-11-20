@@ -152,6 +152,8 @@ func TestWebFetchReturnsCrossHostRedirect(t *testing.T) {
 		`To read it, call WebFetch again with url "https://other.example.org/x".`, out.Text)
 	assert.Empty(t, *calls)
 	assert.Equal(t, "redirected", tool.Display.Summary(out.Text))
+	assert.Equal(t, "Fetched example.com", tool.Display.Done(json.RawMessage(`{"url":"http://example.com/a","prompt":"p"}`)))
+	assert.Equal(t, "Fetched not a url", tool.Display.Done(json.RawMessage(`{"url":"not a url","prompt":"p"}`)))
 }
 
 func TestWebFetchRedirectNamesThePageThatRedirected(t *testing.T) {

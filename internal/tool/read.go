@@ -108,21 +108,41 @@ func NewRead(ws *Workspace) Tool {
 			return read(ctx, f, args)
 		},
 		Display: Display{
-			Title:   readTitle,
+			Title:   readTitle(ws),
 			Summary: readSummary,
+			Body:    readBody,
 			Action:  Action{Verb: "Read", One: "file", Many: "files"},
 		},
 	}
 }
 
 // readTitle runs before the arguments are validated, so it decodes leniently.
-func readTitle(raw json.RawMessage) string {
-	var args readArgs
-	_ = json.Unmarshal(raw, &args)
-	if args.FilePath == "" {
-		return "Read"
+func readTitle(ws *Workspace) func(json.RawMessage) string {
+	return func(raw json.RawMessage) string {
+		var args readArgs
+		_ = json.Unmarshal(raw, &args)
+		if args.FilePath == "" {
+			return "Read"
+		}
+		title := "Read " + ws.shown(args.FilePath)
+		switch {
+		case args.Offset != nil && args.Limit != nil:
+			title += fmt.Sprintf(":%d-%d", *args.Offset, *args.Offset+*args.Limit-1)
+		case args.Offset != nil:
+			title += fmt.Sprintf(":%d-", *args.Offset)
+		case args.Limit != nil:
+			title += fmt.Sprintf(":1-%d", *args.Limit)
+		}
+		return title
 	}
-	return "Read " + args.FilePath
+}
+
+// readBody is the output, except for the notices that replace file lines.
+func readBody(output string) string {
+	if output == emptyFileNotice || strings.HasPrefix(output, pastEndNotice) || strings.HasPrefix(output, imageNotice) {
+		return ""
+	}
+	return output
 }
 
 // readSummary relies on read's output shape: every file line and the

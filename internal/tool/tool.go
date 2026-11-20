@@ -60,8 +60,22 @@ func Specs(tools []Tool) map[string]policy.ToolSpec {
 type Display struct {
 	// Title names one call: "Read cmd/root.go".
 	Title func(args json.RawMessage) string
+	// Done is the title of a call that succeeded: "Wrote a.go"; nil reads
+	// as Title.
+	Done func(args json.RawMessage) string
 	// Summary is the line under a successfully finished call: "212 lines".
 	Summary func(output string) string
+	// Body is what an opened row shows of a successful result; nil is the
+	// output, "" means the row does not open.
+	Body func(output string) string
+	// Change is, for a file change, the line under the row ("+3 -1") and the
+	// full removed and added lines an opened row shows.
+	Change func(args json.RawMessage) (summary string, lines []PreviewLine)
+	// Failure is the line under a call that ran and failed and the body an
+	// opened row shows.
+	Failure func(output string) (summary, body string)
+	// Solo reports that the row records a human decision: it never joins a group.
+	Solo bool
 	// Preview is what an approval prompt shows of the change a call would make.
 	Preview func(args json.RawMessage) []PreviewLine
 	// Action is how a group counts calls: "Read 3 files".

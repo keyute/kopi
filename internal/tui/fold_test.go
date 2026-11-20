@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -124,17 +125,60 @@ func TestClickOnSingleOkRowTogglesOutput(t *testing.T) {
 	})
 }
 
-func TestRunningAndFailedRowsDoNotToggle(t *testing.T) {
+func TestRunningAndBodylessRowsDoNotToggle(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, _ := newTestModel(t, 40, 30)
-		send(m, start("a"), event.ToolEnd{CallID: "a", IsError: true, Output: "boom"}, start("b"))
-		want := []string{"", "• a.go", "  boom", "", "• b.go"}
+		send(m, start("a"), ok("a", "no output"), event.TextDelta{Text: "x"}, start("b"))
+		want := []string{"", "• a.go", "  ↳ no output", "", "x", "", "• b.go"}
 		require.Equal(t, want, body(m))
 
 		clickText(t, m, "• a.go")
 		clickText(t, m, "• b.go")
 
 		assert.Equal(t, want, body(m))
+	})
+}
+
+func TestOneLineFailureIsInert(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 40, 30)
+		send(m, start("a"), event.ToolEnd{CallID: "a", IsError: true, Summary: "boom", Output: "boom"})
+		want := []string{"", "• a.go", "  ↳ boom"}
+		require.Equal(t, want, body(m))
+
+		clickText(t, m, "• a.go")
+
+		assert.Equal(t, want, body(m))
+	})
+}
+
+func TestLongFailureOpensByClickAndByCtrlO(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 40, 40)
+		var lines []string
+		for i := 1; i <= 12; i++ {
+			lines = append(lines, fmt.Sprintf("l%d", i))
+		}
+		out := strings.Join(lines, "\n")
+		send(m, start("a"), event.ToolEnd{CallID: "a", IsError: true, Summary: "exit code 1 · 12 lines", Output: out, Body: out})
+		collapsed := []string{"", "• a.go", "  ↳ exit code 1 · 12 lines", "    l1", "    l2", "    … 8 more lines", "    l11", "    l12"}
+		require.Equal(t, collapsed, body(m))
+
+		clickText(t, m, "  ↳ exit code 1 · 12 lines")
+		assert.Equal(t, collapsed, body(m), "only the title line toggles")
+
+		clickText(t, m, "• a.go")
+		open := []string{"", "• a.go", "  ↳ exit code 1 · 12 lines"}
+		for _, l := range lines {
+			open = append(open, "    "+l)
+		}
+		assert.Equal(t, open, body(m))
+
+		clickText(t, m, "• a.go")
+		assert.Equal(t, collapsed, body(m))
+
+		press(m, ctrlO)
+		assert.Equal(t, open, body(m))
 	})
 }
 

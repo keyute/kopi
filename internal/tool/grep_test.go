@@ -518,6 +518,10 @@ func TestGrepDisplay(t *testing.T) {
 	assert.Equal(t, Action{Verb: "Searched for", One: "pattern", Many: "patterns"}, tool.Display.Action)
 	assert.Equal(t, "Grep x in sub", tool.Display.Title(json.RawMessage(`{"pattern":"x","path":"sub"}`)))
 	assert.Equal(t, "Grep x", tool.Display.Title(json.RawMessage(`{"pattern":"x"}`)))
+	assert.Equal(t, `Searched for "x" in sub`, tool.Display.Done(json.RawMessage(`{"pattern":"x","path":"sub"}`)))
+	assert.Equal(t, `Searched for "x"`, tool.Display.Done(json.RawMessage(`{"pattern":"x"}`)))
+	assert.Empty(t, tool.Display.Body("No matches found"))
+	assert.Equal(t, "Found 1 file\na.txt", tool.Display.Body("Found 1 file\na.txt"))
 	for _, tc := range []struct {
 		name, args, want string
 	}{

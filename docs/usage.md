@@ -66,7 +66,44 @@ Defaults; change them with [`keys`](configuration.md#keys).
 - Ctrl+V pastes text or an image from the clipboard.
 - Mouse wheel or PgUp/PgDn scrolls the transcript; while an [`AskUserQuestion`](tools.md#askuserquestion) dialog is open PgUp/PgDn scroll its cut preview or review instead.
 - Keys while the model asks you a question are listed under [`AskUserQuestion`](tools.md#askuserquestion).
-- Ctrl+O expands every group and call output until pressed again.
+- Ctrl+O opens every group and every row that opens, and every capped failure, until pressed again; see [Transcript](#transcript).
+
+## Transcript
+
+Each tool call is a row. It names the call by the tool while it runs, while it waits for approval and when it did not succeed, and by a past-tense verb once it succeeded. A path shows relative to the start directory, and the session's plan file as `plan`.
+
+```text
+• Ran go test ./...
+  ↳ 84 lines
+• Edited internal/app/app.go
+  ↳ +3 -1
+• Read cmd/root.go:40-89
+  ↳ 50 lines
+```
+
+- A run of successful calls folds into a group, `Read 3 files, ran 2 commands`; click it or press Ctrl+O to list its calls. A call that did not succeed, and the question and plan-approval rows below, are never in a group.
+- A group counts the commands that ran outside the [sandbox](sandbox.md#outside-the-sandbox): `ran 9 commands (1 unsandboxed)`. A succeeded command's own row ends `· unsandboxed`.
+- A question you answered (`Asked about …`) and a plan decision (`Plan approval`) stay visible, with your answer or decision on the line under them.
+
+A call that did not succeed is one of:
+
+| Kind | Example | Meaning |
+| --- | --- | --- |
+| Rejected | `↳ rejected` | You answered `No` in the [approval dialog](permissions.md#approval-dialog); your reason shows under it |
+| Denied | `↳ denied · plan mode` | A rule, the mode, the classifier or a run that cannot ask refused it |
+| Interrupted | `↳ interrupted` | The turn was interrupted while it ran |
+| Failed | `↳ exit code 1 · 84 lines` | It ran and returned an error; a one-line error shows itself, any other shows `failed` |
+
+Rejected, denied and interrupted rows have a warning-coloured bullet, a failed row the error colour.
+
+- A failed command's output shows under its line: in full up to 5 lines, otherwise its first two and last two lines around `… N more lines`. Click the row or press Ctrl+O for all of it.
+- A successful row opens to the result as the model received it. An `Edit` or `Write` row shows `+3 -1` or `+40` and opens to its removed lines and its added lines.
+- A row that has nothing to add to its title and summary does not open: a command with no output, a file that is empty, a search with no match, a launched agent. A question's answers are on its row.
+- A plan revision you asked for opens to your feedback.
+- An opened result is the model's text, so it includes notices written to the model, such as `use offset=2001 to continue`.
+- An edit's lines show without surrounding context or line numbers.
+- Colour in command output is not kept.
+- Only the row's title line opens and closes it; scroll up to close a long body.
 
 ## Menus and highlighting
 
@@ -84,7 +121,7 @@ Defaults; change them with [`keys`](configuration.md#keys).
 
 ## Mouse
 
-- Click a folded group to open it, and a call to show its output.
+- Click a folded group to open it, and a row that [opens](#transcript) to open or close it. Only the row's title line takes the click.
 - Drag in the transcript to select text; it is copied on release. Double-click selects a word, triple-click a line.
 - Drag in the input to select text; it is copied on release. A click places the cursor. Double-click selects a word, triple-click the whole line across wraps.
 - Dragging after a double- or triple-click extends the selection by words or lines.

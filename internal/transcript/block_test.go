@@ -18,22 +18,45 @@ func start(id string) event.ToolStart {
 }
 
 func end(id string) event.ToolEnd {
-	return event.ToolEnd{CallID: id, Name: "Read", Output: "out " + id, Summary: "sum " + id}
+	return event.ToolEnd{CallID: id, Name: "Read", Body: "out " + id, Summary: "sum " + id}
 }
 
 func fail(id string) event.ToolEnd {
-	return event.ToolEnd{CallID: id, Name: "Read", Output: "err " + id, IsError: true}
+	return event.ToolEnd{CallID: id, Name: "Read", Output: "err " + id, Summary: "err " + id, IsError: true}
 }
 
 func call(id string, state State) Call {
 	c := Call{ID: id, Title: "Read " + id, Action: readAction, State: state}
 	switch state {
 	case OK:
-		c.Output, c.Summary = "out "+id, "sum "+id
-	case Failed:
-		c.Output = "err " + id
+		c.Body, c.Summary = "out "+id, "sum "+id
+	case Failed, Denied, Rejected:
+		c.Summary = "err " + id
 	}
 	return c
+}
+
+// endKind is a call that did not succeed, in the way kind says.
+func endKind(id string, kind event.EndKind) event.ToolEnd {
+	return event.ToolEnd{CallID: id, Name: "Read", Output: "err " + id, IsError: true, Kind: kind, Summary: "err " + id}
+}
+
+func interrupted(id string) Row {
+	r := row(id, Unfinished)
+	r.Call.Summary = "err " + id
+	return r
+}
+
+func soloStart(id string) event.ToolStart {
+	s := start(id)
+	s.Solo = true
+	return s
+}
+
+func soloRow(id string, state State) Row {
+	r := row(id, state)
+	r.Call.solo = true
+	return r
 }
 
 func row(id string, state State) Row { return Row{Call: call(id, state)} }
@@ -86,6 +109,32 @@ func TestBlocks(t *testing.T) {
 			name:   "failed call is its own row and splits the stretch",
 			events: []event.Event{start("a"), end("a"), start("b"), end("b"), start("c"), fail("c"), start("d"), end("d")},
 			want:   []Block{group("a", true, "a", "b"), row("c", Failed), row("d", OK)},
+		},
+		{
+			name: "denied, rejected and interrupted calls are own rows and split the stretch",
+			events: []event.Event{
+				start("a"), end("a"), start("b"), end("b"),
+				start("c"), endKind("c", event.EndDenied),
+				start("d"), endKind("d", event.EndRejected),
+				start("e"), endKind("e", event.EndInterrupted),
+				start("f"), end("f"),
+			},
+			want: []Block{group("a", true, "a", "b"), row("c", Denied), row("d", Rejected), interrupted("e"), row("f", OK)},
+		},
+		{
+			name: "solo call is its own row in any state and splits the stretch",
+			events: []event.Event{
+				start("a"), end("a"),
+				soloStart("b"), end("b"),
+				start("c"), end("c"), start("d"), end("d"),
+				soloStart("e"),
+			},
+			want: []Block{row("a", OK), soloRow("b", OK), group("c", true, "c", "d"), soloRow("e", Running)},
+		},
+		{
+			name:   "a group above a running solo call is sealed",
+			events: []event.Event{start("a"), end("a"), start("b"), end("b"), soloStart("c")},
+			want:   []Block{group("a", true, "a", "b"), soloRow("c", Running)},
 		},
 		{
 			name:   "parallel starts group in start order",

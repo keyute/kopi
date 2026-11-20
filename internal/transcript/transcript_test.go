@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/tool"
 )
 
 func TestApplyIgnoresEndOfSettledCall(t *testing.T) {
@@ -171,4 +172,73 @@ func TestPlanRequestedAppendsABlockAndTheSameTokenReplacesItsText(t *testing.T) 
 
 	tr.Apply(event.PlanRequested{Token: 2, Plan: "# next"})
 	assert.Equal(t, []Block{row("a", OK), Plan{key: "item:1", Text: "# v2"}, Plan{key: "item:2", Text: "# next"}}, tr.Blocks())
+}
+
+func TestToolEndSwapsTitleOnSuccessOnly(t *testing.T) {
+	started := event.ToolStart{CallID: "a", Title: "Write a.go", Done: "Wrote a.go", Change: "+2 -1", Preview: []tool.PreviewLine{{Kind: tool.Added, Text: "x"}}}
+	var tr Transcript
+	tr.Apply(started)
+	title, ok := tr.Running()
+	assert.True(t, ok)
+	assert.Equal(t, "Write a.go", title)
+
+	tr.Apply(event.ToolEnd{CallID: "a", Summary: "2 occurrences"})
+	assert.Equal(t, []Block{Row{Call: Call{
+		ID: "a", Title: "Wrote a.go", Summary: "+2 -1 · 2 occurrences", State: OK, Preview: started.Preview,
+	}}}, tr.Blocks())
+
+	started.CallID = "b"
+	tr.Apply(started)
+	tr.Apply(event.ToolEnd{CallID: "b", Output: "boom\nbang", IsError: true, Summary: "failed", Body: "boom\nbang"})
+	row := tr.Blocks()[1].(Row)
+	assert.Equal(t, Call{ID: "b", Title: "Write a.go", Summary: "failed", Body: "boom\nbang", State: Failed}, row.Call)
+}
+
+func TestToolEndSummaryJoinsOnlyWhatIsSet(t *testing.T) {
+	for _, tc := range []struct{ change, summary, want string }{
+		{"+1", "", "+1"},
+		{"", "3 lines", "3 lines"},
+		{"", "", ""},
+	} {
+		var tr Transcript
+		tr.Apply(event.ToolStart{CallID: "a", Change: tc.change})
+		tr.Apply(event.ToolEnd{CallID: "a", Summary: tc.summary})
+		assert.Equal(t, tc.want, tr.Blocks()[0].(Row).Call.Summary)
+	}
+}
+
+func TestToolEndKindsSetState(t *testing.T) {
+	for kind, want := range map[event.EndKind]State{
+		event.EndRan:         Failed,
+		event.EndDenied:      Denied,
+		event.EndRejected:    Rejected,
+		event.EndInterrupted: Unfinished,
+	} {
+		var tr Transcript
+		tr.Apply(event.ToolStart{CallID: "a", Done: "Done"})
+		tr.Apply(event.ToolEnd{CallID: "a", IsError: true, Kind: kind, Summary: "s", Body: "b"})
+		c := tr.Blocks()[0].(Row).Call
+		assert.Equal(t, want, c.State)
+		assert.Empty(t, c.Title)
+		assert.Equal(t, "s", c.Summary)
+		assert.Equal(t, "b", c.Body)
+	}
+}
+
+func TestRestoreMatchesApply(t *testing.T) {
+	events := []event.Event{
+		event.TurnStart{Prompt: "go"},
+		event.ToolStart{CallID: "a", Title: "Write a", Done: "Wrote a", Change: "+1"},
+		event.ToolEnd{CallID: "a"},
+		event.ToolStart{CallID: "b", Title: "Bash x", Done: "Ran x", Unsandboxed: true},
+		event.ToolEnd{CallID: "b", IsError: true, Kind: event.EndDenied, Summary: "denied"},
+		event.ToolStart{CallID: "c", Title: "Ask", Solo: true},
+		event.ToolEnd{CallID: "c", Summary: "answered"},
+	}
+	var live, restored Transcript
+	for _, ev := range events {
+		live.Apply(ev)
+	}
+	restored.Restore(events)
+	assert.Equal(t, live.Blocks(), restored.Blocks())
 }

@@ -94,6 +94,7 @@ func TestWebSearchCountsOnlyKopisSources(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "No idea.\n\nSources: none", out.Text)
 	assert.Equal(t, "no sources", tool.Display.Summary(out.Text))
+	assert.Equal(t, `Searched the web for "q"`, tool.Display.Done(json.RawMessage(`{"query":"q"}`)))
 }
 
 func TestWebSearchIgnoresSourcesTheAnswerListsItself(t *testing.T) {

@@ -94,20 +94,42 @@ func renderRow(c transcript.Call, f blockFolds, width int, th theme) []line {
 	none := lipgloss.NewStyle()
 	switch c.State {
 	case transcript.OK:
-		out := withHit(outputHit(c), hang("• ", fg(th.success), c.Title, none, width))
+		out := withHit(openHit(c), hang("• ", fg(th.success), c.Title, none, width))
 		if c.Summary != "" {
 			out = append(out, plain(hang("  ↳ ", fg(th.dim), c.Summary, fg(th.dim), width))...)
 		}
 		if f.expanded[0] {
-			out = append(out, outputLines(c, width, th)...)
+			out = append(out, openedLines(c, width, th)...)
 		}
 		return out
 	case transcript.Failed:
-		out := hang("• ", fg(th.error), c.Title, fg(th.error), width)
-		if output := strings.TrimRight(c.Output, "\n"); output != "" {
-			out = append(out, hang("  ", fg(th.error), output, fg(th.error), width)...)
+		text := bodyText(c.Body)
+		head, tail, omitted := capBody(text)
+		var h hit
+		if omitted > 0 {
+			h = hit{kind: hitOutput, id: c.ID}
 		}
-		return plain(out)
+		out := withHit(h, hang("• ", fg(th.error), c.Title, none, width))
+		if c.Summary != "" {
+			out = append(out, plain(hang("  ↳ ", fg(th.error), c.Summary, fg(th.error), width))...)
+		}
+		switch {
+		case text == "":
+		case omitted == 0 || f.expanded[0]:
+			out = append(out, mutedBody(text, width, th)...)
+		default:
+			out = append(out, mutedBody(strings.Join(head, "\n"), width, th)...)
+			out = append(out, plain(hang("    ", fg(th.dim), fmt.Sprintf("… %d more lines", omitted), fg(th.dim), width))...)
+			out = append(out, mutedBody(strings.Join(tail, "\n"), width, th)...)
+		}
+		return out
+	case transcript.Denied, transcript.Rejected:
+		out := plain(hang("• ", fg(th.warning), c.Title, none, width))
+		out = append(out, plain(hang("  ↳ ", fg(th.dim), c.Summary, fg(th.dim), width))...)
+		if text := bodyText(c.Body); c.State == transcript.Rejected && text != "" {
+			out = append(out, mutedBody(text, width, th)...)
+		}
+		return out
 	case transcript.Unfinished:
 		out := hang("• ", fg(th.warning), c.Title, none, width)
 		return plain(append(out, hang("  ↳ ", fg(th.dim), "interrupted", fg(th.dim), width)...))
@@ -132,30 +154,74 @@ func renderGroup(g transcript.Group, f blockFolds, width int, th theme) []line {
 		if c.Summary != "" {
 			label += " · " + c.Summary
 		}
-		out = append(out, withHit(outputHit(c), hang("  ↳ ", fg(th.dim), label, fg(th.dim), width))...)
+		out = append(out, withHit(openHit(c), hang("  ↳ ", fg(th.dim), label, fg(th.dim), width))...)
 		if f.expanded[i] {
-			out = append(out, outputLines(c, width, th)...)
+			out = append(out, openedLines(c, width, th)...)
 		}
 	}
 	return out
 }
 
-// outputHit makes a call's line toggle its output; a call without output
-// has nothing to toggle.
-func outputHit(c transcript.Call) hit {
-	if strings.TrimSpace(c.Output) == "" {
+// openHit makes a successful call's line toggle what it opens to; a call that
+// opens to nothing has nothing to toggle.
+func openHit(c transcript.Call) hit {
+	if len(c.Preview) == 0 && bodyText(c.Body) == "" {
 		return hit{}
 	}
 	return hit{kind: hitOutput, id: c.ID}
 }
 
-// outputLines is a call's output in full, four in.
-func outputLines(c transcript.Call, width int, th theme) []line {
-	output := strings.TrimRight(c.Output, "\n")
-	if strings.TrimSpace(output) == "" {
+// openedLines is what a successful call opens to, four in: a file change's
+// lines, else its body in full.
+func openedLines(c transcript.Call, width int, th theme) []line {
+	if len(c.Preview) == 0 {
+		return mutedBody(bodyText(c.Body), width, th)
+	}
+	var out []string
+	for _, l := range c.Preview {
+		for _, s := range previewLine(l, width-4, th) {
+			out = append(out, "    "+s)
+		}
+	}
+	return plain(out)
+}
+
+func mutedBody(text string, width int, th theme) []line {
+	if text == "" {
 		return nil
 	}
-	return plain(hang("    ", fg(th.muted), output, fg(th.muted), width))
+	return plain(hang("    ", fg(th.muted), text, fg(th.muted), width))
+}
+
+// bodyText prepares a command's output for drawing: a carriage return redraws
+// its line, so a line keeps only what follows its last one.
+func bodyText(body string) string {
+	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
+	for i, l := range lines {
+		l = strings.TrimRight(l, "\r")
+		lines[i] = l[strings.LastIndex(l, "\r")+1:]
+	}
+	text := strings.TrimRight(strings.Join(lines, "\n"), "\n")
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	return text
+}
+
+// capBody cuts a failure body longer than five non-empty lines to its first
+// two and last two, and counts the non-empty lines between; omitted is 0 when
+// the body is not cut.
+func capBody(text string) (head, tail []string, omitted int) {
+	var ne []string
+	for l := range strings.SplitSeq(text, "\n") {
+		if strings.TrimSpace(l) != "" {
+			ne = append(ne, l)
+		}
+	}
+	if len(ne) <= 5 {
+		return nil, nil, 0
+	}
+	return ne[:2], ne[len(ne)-2:], len(ne) - 4
 }
 
 func renderTurn(t transcript.Turn, v verb, width int, th theme) []string {

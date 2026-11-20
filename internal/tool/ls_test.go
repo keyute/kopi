@@ -179,6 +179,10 @@ func TestLSDisplay(t *testing.T) {
 	assert.Equal(t, "LS internal", tool.Display.Title(json.RawMessage(`{"path":"internal"}`)))
 	assert.Equal(t, "LS", tool.Display.Title(json.RawMessage(`{}`)))
 	assert.Equal(t, "LS", tool.Display.Title(json.RawMessage(`{"path":`)))
+	assert.Equal(t, "Listed internal", tool.Display.Done(json.RawMessage(`{"path":"internal"}`)))
+	assert.Equal(t, "Listed .", tool.Display.Done(json.RawMessage(`{}`)))
+	assert.Empty(t, tool.Display.Body(emptyDirNotice))
+	assert.Equal(t, "a.txt", tool.Display.Body("a.txt"))
 	for _, tc := range []struct {
 		args, want string
 	}{

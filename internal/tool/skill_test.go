@@ -337,6 +337,8 @@ func TestSkillDisplay(t *testing.T) {
 	assert.Equal(t, "Skill", d.Title(json.RawMessage(`{}`)))
 	assert.Equal(t, "Skill deploy", d.Title(json.RawMessage(`{"name":"deploy"}`)))
 	assert.Equal(t, "Skill deploy ref.md", d.Title(json.RawMessage(`{"name":"deploy","file":"ref.md"}`)))
+	assert.Equal(t, "Loaded skill deploy", d.Done(json.RawMessage(`{"name":"deploy"}`)))
+	assert.Equal(t, "Read skill deploy ref.md", d.Done(json.RawMessage(`{"name":"deploy","file":"ref.md"}`)))
 	assert.Equal(t, "loaded", d.Summary(skill.Text(skill.Skill{Name: "a"})))
 	assert.Equal(t, "2 lines", d.Summary("     1\ta\n     2\tb\n"))
 }

@@ -68,7 +68,7 @@ Report file paths and line numbers.
 
 ## What you see
 
-- In the transcript a call shows as `• explorer › <description>` with `↳ launched`, and its end as `• explorer finished · <description> · 2m 14s` (`failed` or `stopped` in the error colour).
+- In the transcript a call shows as `• explorer › <description>` with `↳ launched` (the row does not open), and its end as `• explorer finished · <description> · 2m 14s` (`failed` or `stopped` in the error colour).
 - While the main agent is idle and work is running, the row above the input reads `Waiting on 2 agents, 1 shell… <elapsed>`. The status line's [`agents` and `shells`](configuration.md#segments) segments show the same counts.
 - `/new`, `/resume` and exit stop them.
 - `kopi -p` waits for running subagents and prints the reply that follows their results.
@@ -76,7 +76,7 @@ Report file paths and line numbers.
 
 ### Agent rows
 
-- While a subagent runs, rows show under the status line, two columns in: `main` first, then one row per running subagent in start order, such as `  ○ explorer › Find the config loader · 22.1k tokens · gpt-5.6`. The segments are set by [`agentline`](configuration.md#agent-rows).
+- While a subagent runs, rows show under the status line, two columns in: `main` first, then one row per running subagent in start order, such as `○ explorer › Find the config loader · 22.1k tokens · gpt-5.6`. The segments are set by [`agentline`](configuration.md#agent-rows).
 - `●` marks the row of the session whose view is open, `○` the others.
 - A subagent that has ended leaves the rows, unless its view is the one open or holds input handed back when it stopped; then `main` and that row stay until you switch away, or for held input until you open it. With no running subagent and the main view open there are no rows.
 - At most five rows show; with more, `↑ N more` and `↓ N more` lines mark what is hidden. On a narrow terminal a row drops entries from the right end, then is cut.

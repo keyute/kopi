@@ -60,15 +60,9 @@ func NewSendMessage(agents Agents) Tool {
 			return Result{Text: fmt.Sprintf("Message queued for %s.", args.To)}, nil
 		},
 		Display: Display{
-			// It runs before the arguments are validated, so it decodes leniently.
-			Title: func(raw json.RawMessage) string {
-				var args sendMessageArgs
-				_ = json.Unmarshal(raw, &args)
-				if args.To == "" {
-					return "SendMessage"
-				}
-				return "SendMessage " + args.To
-			},
+			Title: sendMessageTitle("SendMessage"),
+			Done:  sendMessageTitle("Messaged"),
+			Body:  func(string) string { return "" },
 			Summary: func(output string) string {
 				if strings.HasSuffix(output, " continued.") {
 					return "continued"
@@ -77,5 +71,17 @@ func NewSendMessage(agents Agents) Tool {
 			},
 			Action: Action{Verb: "Sent", One: "message", Many: "messages"},
 		},
+	}
+}
+
+// sendMessageTitle runs before the arguments are validated, so it decodes leniently.
+func sendMessageTitle(verb string) func(json.RawMessage) string {
+	return func(raw json.RawMessage) string {
+		var args sendMessageArgs
+		_ = json.Unmarshal(raw, &args)
+		if args.To == "" {
+			return verb
+		}
+		return verb + " " + args.To
 	}
 }

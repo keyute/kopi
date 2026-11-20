@@ -63,6 +63,15 @@ type MCPTool struct {
 // text share the same output bound.
 func NewMCP(t MCPTool, call func(ctx context.Context, args json.RawMessage) (string, error)) Tool {
 	label := t.Server + "/" + t.Tool
+	// It runs before the arguments are validated, so it decodes leniently.
+	title := func(raw json.RawMessage) string {
+		line := label
+		var compact bytes.Buffer
+		if json.Compact(&compact, raw) == nil && compact.String() != "{}" {
+			line += " " + compact.String()
+		}
+		return titleLine(line)
+	}
 	description := t.Description
 	if description == "" {
 		description = "Tool " + t.Tool + " of MCP server " + t.Server + "."
@@ -97,13 +106,13 @@ func NewMCP(t MCPTool, call func(ctx context.Context, args json.RawMessage) (str
 			return Result{Text: out.String()}, nil
 		},
 		Display: Display{
-			Title: func(raw json.RawMessage) string {
-				title := label
-				var compact bytes.Buffer
-				if json.Compact(&compact, raw) == nil && compact.String() != "{}" {
-					title += " " + compact.String()
+			Title: title,
+			Done:  func(raw json.RawMessage) string { return "Called " + title(raw) },
+			Body: func(output string) string {
+				if output == noOutputNotice {
+					return ""
 				}
-				return titleLine(title)
+				return output
 			},
 			Summary: func(output string) string {
 				if output == noOutputNotice {

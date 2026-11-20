@@ -428,6 +428,18 @@ func (w *Workspace) inProtectedPath(target string) (bool, error) {
 	return false, nil
 }
 
+// shown is path as a transcript names it: "plan" for the plan file, relative
+// to the start directory when inside it, else as written. It does no I/O.
+func (w *Workspace) shown(path string) string {
+	if p := w.plans.Path(); p != "" && filepath.Clean(w.absolute(path)) == filepath.Clean(p) {
+		return "plan"
+	}
+	if rel, err := w.relative(path); err == nil {
+		return rel
+	}
+	return path
+}
+
 func (w *Workspace) relative(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return path, nil

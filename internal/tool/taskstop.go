@@ -35,6 +35,8 @@ func NewTaskStop(tasks *Tasks) Tool {
 		},
 		Display: Display{
 			Title:   taskTitle("TaskStop"),
+			Done:    taskTitle("Stopped task"),
+			Body:    func(string) string { return "" },
 			Summary: taskSummary,
 			Action:  Action{Verb: "Stopped", One: "task", Many: "tasks"},
 		},

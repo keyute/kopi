@@ -158,6 +158,14 @@ func keepNewest(kept []found, f found, limit int) []found {
 	return kept
 }
 
+// foundBody is the output, except for the no-result lines.
+func foundBody(output string) string {
+	if output == "No matches found" || output == "No files found" {
+		return ""
+	}
+	return output
+}
+
 // foundSummary relies on the search tools' output starting with a "Found …"
 // line or one of the no-result lines.
 func foundSummary(output string) string {
@@ -173,19 +181,23 @@ func foundSummary(output string) string {
 
 // searchTitle returns a Display.Title such as "Grep TODO in internal". It
 // runs before the arguments are validated, so it decodes leniently.
-func searchTitle(verb string) func(json.RawMessage) string {
+func searchTitle(ws *Workspace, verb string, quote bool) func(json.RawMessage) string {
 	return func(raw json.RawMessage) string {
 		var args struct {
 			Pattern string `json:"pattern"`
 			Path    string `json:"path"`
 		}
 		_ = json.Unmarshal(raw, &args)
-		switch {
-		case args.Pattern == "":
+		if args.Pattern == "" {
 			return verb
-		case args.Path == "":
-			return verb + " " + args.Pattern
 		}
-		return verb + " " + args.Pattern + " in " + args.Path
+		title := verb + " " + args.Pattern
+		if quote {
+			title = verb + ` "` + args.Pattern + `"`
+		}
+		if args.Path != "" {
+			title += " in " + ws.shown(args.Path)
+		}
+		return title
 	}
 }

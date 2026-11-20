@@ -38,6 +38,7 @@ func NewTaskOutput(tasks *Tasks) Tool {
 		},
 		Display: Display{
 			Title:   taskTitle("TaskOutput"),
+			Done:    taskTitle("Checked task"),
 			Summary: taskSummary,
 			Action:  Action{Verb: "Checked", One: "task", Many: "tasks"},
 		},

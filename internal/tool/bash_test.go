@@ -209,14 +209,96 @@ func TestBashDisplaySummary(t *testing.T) {
 	assert.Equal(t, "no output", tool.Display.Summary(noOutputNotice))
 	assert.Equal(t, "1 line", tool.Display.Summary("hi\n"))
 	assert.Equal(t, "3 lines", tool.Display.Summary("a\nb\nc"))
+	assert.Equal(t, "task t1", tool.Display.Summary("Background task t1 started."))
 	for _, out := range []string{
-		"Background task t1 started.",
 		"Background task t1: the user moved this command to the background, where it keeps running.",
 		"Background task t1: this command did not finish within its 2m0s timeout and keeps running in the background.",
 	} {
-		assert.Equal(t, "task t1 · running", tool.Display.Summary(out))
+		assert.Equal(t, "moved to background · task t1", tool.Display.Summary(out))
 	}
 	assert.Equal(t, "1 line", tool.Display.Summary("Background task t1x"))
+}
+
+func TestBashDisplayBackgroundNotifications(t *testing.T) {
+	tool, _ := newBashTool(t)
+
+	for _, tc := range []struct {
+		name, output, summary string
+	}{
+		{"started", "Background task t1 started.", "task t1"},
+		{"user moved", "Background task t12: the user moved this command to the background, where it keeps running.", "moved to background · task t12"},
+		{"timeout moved", "Background task t123: this command did not finish within its 2m0s timeout and keeps running in the background.", "moved to background · task t123"},
+		{"millisecond timeout", "Background task t1: this command did not finish within its 1ms timeout and keeps running in the background.", "moved to background · task t1"},
+		{"fractional timeout", "Background task t1: this command did not finish within its 1.001s timeout and keeps running in the background.", "moved to background · task t1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.summary, tool.Display.Summary(tc.output))
+			assert.Empty(t, tool.Display.Body(tc.output))
+			for _, suffix := range []string{" more output", "\nreal output", "\n"} {
+				output := tc.output + suffix
+				assert.Equal(t, lineCount(countLines(output)), tool.Display.Summary(output))
+				assert.Equal(t, output, tool.Display.Body(output))
+			}
+		})
+	}
+}
+
+func TestBashDisplayPreservesBackgroundLookalikes(t *testing.T) {
+	tool, _ := newBashTool(t)
+
+	for _, output := range []string{
+		"Background task t1: ordinary stdout\nreal output\n",
+		"Background task t1 started",
+		"Background task t1: something started.",
+		"Background task t1. ordinary stdout",
+		"Background task t1x started.",
+		"Background task t1: this command did not finish within its unknown timeout and keeps running in the background.",
+	} {
+		assert.Equal(t, lineCount(countLines(output)), tool.Display.Summary(output))
+		assert.Equal(t, output, tool.Display.Body(output))
+	}
+}
+
+func TestBashDisplayDone(t *testing.T) {
+	tool, _ := newBashTool(t)
+
+	assert.Equal(t, "Ran go test", tool.Display.Done(json.RawMessage(`{"command":"go test"}`)))
+	assert.Equal(t, "Ran cd a …", tool.Display.Done(json.RawMessage(`{"command":"cd a\nls"}`)))
+	assert.Equal(t, "Started sleep 5 in background", tool.Display.Done(json.RawMessage(`{"command":"sleep 5","run_in_background":true}`)))
+	assert.Equal(t, "Ran git config -l", tool.Display.Done(json.RawMessage(`{"command":"git config -l","unsandboxed":true}`)))
+}
+
+func TestBashDisplayBody(t *testing.T) {
+	tool, _ := newBashTool(t)
+
+	assert.Equal(t, "a\nb\n", tool.Display.Body("a\nb\n"))
+	assert.Empty(t, tool.Display.Body(noOutputNotice))
+	assert.Empty(t, tool.Display.Body("Background task t1 started."))
+	assert.Empty(t, tool.Display.Body("Background task t1: the user moved this command to the background, where it keeps running."))
+}
+
+func TestBashDisplayFailure(t *testing.T) {
+	tool, _ := newBashTool(t)
+	status := ErrExitStatus.Error() + ": "
+	for _, tc := range []struct {
+		name, output, summary, body string
+	}{
+		{"exit with output", "a\nb\n\n" + status + "exit code 2", "exit code 2 · 2 lines", "a\nb\n"},
+		{"exit with one line", "a\n" + status + "exit code 1", "exit code 1 · 1 line", "a"},
+		{"exit without output", noOutputNotice + "\n" + status + "exit code 1", "exit code 1", ""},
+		{"signal", "x\n" + status + "signal: killed", "signal: killed · 1 line", "x"},
+		{"timeout", "x\ny\n" + ErrCommandTimeout.Error(), "timed out · 2 lines", "x\ny"},
+		{"timeout without output", noOutputNotice + "\n" + ErrCommandTimeout.Error(), "timed out", ""},
+		{"stopped", "x\n" + ErrStopped.Error(), "stopped · 1 line", "x"},
+		{"other one line", "failed to run command: boom\n", "failed to run command: boom", ""},
+		{"other many lines", "a\nb", "failed", "a\nb"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			summary, body := tool.Display.Failure(tc.output)
+			assert.Equal(t, tc.summary, summary)
+			assert.Equal(t, tc.body, body)
+		})
+	}
 }
 
 func TestBashDisplayPreview(t *testing.T) {
@@ -400,4 +482,43 @@ func TestBashDisplayTitleMarksUnsandboxedOnlyWhenOffered(t *testing.T) {
 	assert.Equal(t, "Bash (unsandboxed)", offered.Display.Title(json.RawMessage(`{"unsandboxed":true}`)))
 	assert.Equal(t, "Bash git config -l", offered.Display.Title(json.RawMessage(`{"command":"git config -l","unsandboxed":false}`)))
 	assert.Equal(t, "Bash git config -l", notOffered.Display.Title(json.RawMessage(`{"command":"git config -l","unsandboxed":true}`)))
+	assert.Equal(t, "Ran git config -l · unsandboxed", offered.Display.Done(json.RawMessage(`{"command":"git config -l","unsandboxed":true}`)))
+	assert.Equal(t, "Started make in background · unsandboxed", offered.Display.Done(json.RawMessage(`{"command":"make","run_in_background":true,"unsandboxed":true}`)))
+	assert.Equal(t, "Ran git config -l", offered.Display.Done(json.RawMessage(`{"command":"git config -l"}`)))
+	assert.Equal(t, "Ran git config -l", notOffered.Display.Done(json.RawMessage(`{"command":"git config -l","unsandboxed":true}`)))
+}
+
+func TestBashPlanRefusalsCarryTheTextTheAppMatches(t *testing.T) {
+	plan := func(policy.Target) (policy.Mode, error) { return policy.Plan, nil }
+	dir := t.TempDir()
+
+	_, err := NewBash(NewShell(dir, &sandbox.Sandbox{}), NewShell(dir, &sandbox.Sandbox{}), NewTasks(), true).
+		Run(t.Context(), json.RawMessage(`{"command":"true","unsandboxed":true}`), plan)
+	require.ErrorIs(t, err, policy.ErrDenied)
+	assert.Contains(t, err.Error(), "an unsandboxed command runs only in execute mode")
+
+	_, err = NewBash(NewShell(dir, nil), NewShell(dir, nil), NewTasks(), true).
+		Run(t.Context(), json.RawMessage(`{"command":"true"}`), plan)
+	require.ErrorIs(t, err, policy.ErrDenied)
+	assert.Contains(t, err.Error(), "which is off or unavailable")
+}
+
+func TestBashFailureOfRealCommands(t *testing.T) {
+	tool, _ := newBashTool(t)
+	execute := func(policy.Target) (policy.Mode, error) { return policy.Execute, nil }
+	for _, tc := range []struct {
+		command, summary, body string
+	}{
+		{"echo a; exit 2", "exit code 2 · 1 line", "a\n"},
+		{"exit 1", "exit code 1", ""},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			_, err := tool.Run(t.Context(), json.RawMessage(`{"command":"`+tc.command+`"}`), execute)
+			require.Error(t, err)
+
+			summary, body := tool.Display.Failure(err.Error())
+			assert.Equal(t, tc.summary, summary)
+			assert.Equal(t, tc.body, body)
+		})
+	}
 }

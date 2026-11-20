@@ -587,6 +587,17 @@ func TestHistoryMapsStoredShapes(t *testing.T) {
 			},
 		},
 		{
+			name: "a call PiG aborted before it ran is interrupted, other errors are not",
+			msgs: []agent.AgentMessage{
+				{ToolResult: &agent.ToolResultMessage{ToolCallID: "c1", ToolName: "Probe", IsError: true, Content: []ai.ToolResultMessageContent{ai.TextContent{Text: "Operation aborted"}}}},
+				{ToolResult: &agent.ToolResultMessage{ToolCallID: "c2", ToolName: "Probe", IsError: true, Content: []ai.ToolResultMessageContent{ai.TextContent{Text: "Operation aborted by user"}}}},
+			},
+			want: []event.Event{
+				event.ToolEnd{CallID: "c1", Name: "Probe", Output: "Operation aborted", IsError: true, Kind: event.EndInterrupted},
+				event.ToolEnd{CallID: "c2", Name: "Probe", Output: "Operation aborted by user", IsError: true},
+			},
+		},
+		{
 			name: "aborted",
 			msgs: []agent.AgentMessage{assistant(ai.StopReasonAborted, "", text("partial"))},
 			want: []event.Event{event.TextDelta{Text: "partial"}, event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}}},
