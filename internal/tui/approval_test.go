@@ -249,6 +249,9 @@ func TestApprovalRowsPrefixASubagentTitle(t *testing.T) {
 
 	a.Agent, a.TaskID = "", ""
 	assert.Equal(t, "  Edit a.go", plainApprovalRows(a, 0, 10)[1])
+
+	w := event.ApprovalRequested{Title: "Bash npm test", Agent: "workflow #2 auth", TaskID: "t3"}
+	assert.Equal(t, "  workflow #2 auth t3 › Bash npm test", plainApprovalRows(w, 0, 10)[1])
 }
 
 func TestApprovalRowsNoteTheClassifierReview(t *testing.T) {

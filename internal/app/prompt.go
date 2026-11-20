@@ -30,9 +30,10 @@ type mcpServer struct {
 // most: Kopi's own text, the instruction groups, then what the MCP servers
 // report.
 //
-// def is nil for the root session; a subagent's preamble says who it is, and
-// its own part follows the preamble.
-func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group, servers []mcpServer, reviewed bool, def *subagent.Definition) []pigruntime.PromptPart {
+// def is nil for the root session and for the default workflow agent; a
+// subagent's or a workflow agent's preamble says who it is, and a definition's
+// own part follows the preamble.
+func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group, servers []mcpServer, reviewed bool, def *subagent.Definition, workflow bool) []pigruntime.PromptPart {
 	names := make([]string, 0, len(tools))
 	for _, t := range tools {
 		if !t.Deferred {
@@ -46,7 +47,10 @@ func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group
 	lines := []string{
 		fmt.Sprintf("You are Kopi, a coding agent working in %s.", workspace),
 	}
-	if def != nil {
+	switch {
+	case workflow:
+		lines = append(lines, "You are a workflow agent: a script gave you your task, and your final message is returned to that script as the result.")
+	case def != nil:
 		lines = append(lines, fmt.Sprintf("You are the subagent %s: another agent gave you your task, and your final message is returned to that agent as the result.", def.Name))
 	}
 	modes := "The session has a plan mode and an execute mode; only the user can switch between them."

@@ -82,6 +82,12 @@ type Config struct {
 	// Plans is the root session's plan file; nil means there is none, and no
 	// ExitPlanMode tool.
 	Plans *tool.Plans
+	// WorkflowModel is "provider/id"; empty means the session model. A
+	// definition's model comes first.
+	WorkflowModel string
+	// MaxWorkflows is how many workflows may run at once, and MaxAgents how
+	// many agents of one workflow.
+	MaxWorkflows, MaxAgents int
 }
 
 const maxReferenceEntries = 10000
@@ -97,7 +103,8 @@ const Main = ""
 // delivering events, which is safe because subscribers must not call back into
 // the Controller. Neither queue nor mu is held while calling Config.Tasks,
 // whose callback takes both, except for starting an agent task and its
-// AgentTask.Run and End, which a subagent's run makes with queue held. That is
+// AgentTask.Run and End, which a subagent's or a workflow's run makes with
+// queue held, and Tasks.List, which Status calls with queue held. That is
 // safe only because tool.Tasks calls nothing back while holding its own locks:
 // OnChange and the stop function run without them, and the stop function takes
 // queue.
@@ -108,8 +115,10 @@ type Controller struct {
 	// first session and not changed after.
 	tools  []tool.Tool
 	prompt []pigruntime.PromptPart
-	// agents are the subagents' tools and prompts, set with tools.
-	agents []agentSpec
+	// agents are the subagents' tools and prompts, set with tools; workflowSpecs
+	// are the workflow agents', the default one first.
+	agents        []agentSpec
+	workflowSpecs []agentSpec
 	// skills is what users can type; skillErrs reports the skills it left out.
 	skills    *skill.Set
 	skillErrs []error
@@ -141,6 +150,9 @@ type Controller struct {
 	// changed closes, and is replaced, whenever a turn starts or ends or a
 	// subagent's run ends; queue guards it.
 	changed chan struct{}
+	// workflowRuns are the task ids of the running workflows of the current
+	// session; queue guards it.
+	workflowRuns map[string]struct{}
 	// followers retain turns only for frontends that consume their results.
 	followers map[*WorkQueue]struct{}
 
@@ -167,7 +179,7 @@ type Controller struct {
 	plan    *pendingPlan
 	planSeq uint64
 	// login is the running login; nil when none is. A login and a turn or a
-	// running subagent never run together: each is refused while the other is
+	// running subagent or workflow never run together: each is refused while the other is
 	// registered. The login's questions and an approval would otherwise share
 	// the one dialog the frontend has.
 	login    *loginRun
@@ -271,8 +283,13 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	}
 	tools = append(tools, serverTools...)
 	c.tools = tools
-	c.prompt = buildPrompt(c.cfg.Workspace, c.tools, c.cfg.Instructions, servers, c.cfg.Classifier != nil, nil)
-	c.agents = c.buildAgents(search, serverTools, servers)
+	c.prompt = buildPrompt(c.cfg.Workspace, c.tools, c.cfg.Instructions, servers, c.cfg.Classifier != nil, nil, false)
+	c.agents, c.workflowSpecs = c.buildAgents(search, serverTools, servers)
+	// Workflow is deferred, so it comes after the prompt, which would otherwise
+	// describe ToolSearch for it; it never reaches a subagent's tools.
+	if c.workflowOffered() {
+		c.tools = append(c.tools, tool.NewWorkflow(c.cfg.Agents, workflowLauncher{c}, c.cfg.MaxWorkflows, c.cfg.MaxAgents))
+	}
 	return events
 }
 
@@ -546,7 +563,11 @@ func (c *Controller) input(ctx context.Context, session, text string, paths []st
 	if err != nil {
 		return nil, err
 	}
-	return target.submitLocked(ctx, pigruntime.Prompt{Text: prompt, Images: images, Skills: skills}, now)
+	p := pigruntime.Prompt{Text: prompt, Images: images, Skills: skills}
+	if target == c.main && c.workflowOffered() && len(keywordSpans(text, c.skills)) > 0 {
+		p.Tools = []string{"Workflow"}
+	}
+	return target.submitLocked(ctx, p, now)
 }
 
 // runnerOf returns the runner of session, Main or a subagent's task id.
@@ -633,9 +654,15 @@ func (c *Controller) Commands() []Command {
 	return out
 }
 
-// Spans returns the input's highlighted runs.
-func (c *Controller) Spans(text string) []Span {
-	return Spans(text, c.skills)
+// PromptSpans returns the highlighted runs of a prompt as sent to session; a
+// sent prompt is never a command.
+func (c *Controller) PromptSpans(session, text string) []Span {
+	return promptSpans(text, c.skills, session == Main && c.workflowOffered())
+}
+
+// Spans returns the input's highlighted runs when it is typed to session.
+func (c *Controller) Spans(session, text string) []Span {
+	return Spans(text, c.skills, session == Main && c.workflowOffered())
 }
 
 // signalLocked must be called with queue held.
@@ -745,15 +772,24 @@ func (c *Controller) Status() Status {
 			break
 		}
 	}
+	// queue stays held so a workflow that starts meanwhile is not listed as a
+	// subagent; List takes only the registry's lock.
+	c.queue.Lock()
 	for _, info := range c.cfg.Tasks.List() {
-		if info.Status == tool.TaskRunning {
-			if info.Agent != "" {
-				s.Agents++
-			} else {
-				s.Shells++
-			}
+		if info.Status != tool.TaskRunning {
+			continue
+		}
+		_, workflow := c.workflowRuns[info.ID]
+		switch {
+		case workflow:
+			s.Workflows++
+		case info.Agent != "":
+			s.Agents++
+		default:
+			s.Shells++
 		}
 	}
+	c.queue.Unlock()
 	s.Foreground = c.cfg.Tasks.Foreground()
 	return s
 }
@@ -1107,4 +1143,9 @@ func (c *Controller) releaseSwitch(w *Work, emit func(event.Event), committed bo
 		}
 		emit(end)
 	}
+}
+
+// workflowOffered reports that the main session has the Workflow tool.
+func (c *Controller) workflowOffered() bool {
+	return !c.cfg.Unattended && !c.cfg.Rules.Removes("Workflow")
 }

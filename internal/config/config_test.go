@@ -35,6 +35,7 @@ func withDefaults(c Config) Config {
 	c.Sandbox = Sandbox{AllowWrite: []string{}, DenyRead: []string{}, AllowDomains: []string{}, DenyDomains: []string{}, AllowUnsandboxed: true}
 	c.Skills = Skills{Prefix: "skill"}
 	c.Classifier = Classifier{Instructions: []string{}}
+	c.Workflows.MaxWorkflows, c.Workflows.MaxAgents = 4, 16
 	c.MCPServers = map[string]MCPServer{}
 	return c
 }
@@ -230,6 +231,45 @@ func TestResolveSmallModel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "anthropic/claude-haiku", r.Config.SmallModel)
 	assert.Equal(t, global.Name, r.Origins["smallModel"])
+}
+
+func TestResolveRejectsInvalidWorkflowsModelNamingLayer(t *testing.T) {
+	_, err := Resolve(Defaults(), Map("flags", map[string]any{"workflows": map[string]any{"model": "noslash"}}))
+	require.ErrorIs(t, err, ErrInvalidModel)
+	assert.Contains(t, err.Error(), "flags")
+}
+
+func TestResolveWorkflowsModel(t *testing.T) {
+	global := globalLayer(t, `{"workflows": {"model": "anthropic/claude-haiku"}}`)
+	r, err := Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Equal(t, "anthropic/claude-haiku", r.Config.Workflows.Model)
+	assert.Equal(t, global.Name, r.Origins["workflows.model"])
+}
+
+func TestResolveWorkflowLimits(t *testing.T) {
+	r, err := Resolve(Defaults())
+	require.NoError(t, err)
+	assert.Equal(t, 4, r.Config.Workflows.MaxWorkflows)
+	assert.Equal(t, 16, r.Config.Workflows.MaxAgents)
+
+	global := globalLayer(t, `{"workflows": {"maxWorkflows": 2, "maxAgents": 5}}`)
+	r, err = Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Equal(t, 2, r.Config.Workflows.MaxWorkflows)
+	assert.Equal(t, 5, r.Config.Workflows.MaxAgents)
+	assert.Equal(t, global.Name, r.Origins["workflows.maxWorkflows"])
+}
+
+func TestResolveRejectsWorkflowLimitBelowOne(t *testing.T) {
+	for _, key := range []string{"maxWorkflows", "maxAgents"} {
+		for _, n := range []int{0, -1} {
+			_, err := Resolve(Defaults(), Map("flags", map[string]any{"workflows": map[string]any{key: n}}))
+			require.ErrorIs(t, err, ErrInvalidValue, "%s %d", key, n)
+			assert.Contains(t, err.Error(), "flags")
+			assert.Contains(t, err.Error(), key)
+		}
+	}
 }
 
 func TestResolveOverridesOneActionKeepingOthers(t *testing.T) {
@@ -833,7 +873,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	r, err := Resolve(Defaults())
 	require.NoError(t, err)
 	entries := r.Entries()
-	assert.Len(t, entries, 27+len(KeyActions))
+	assert.Len(t, entries, 30+len(KeyActions))
 	assert.IsIncreasing(t, entryKeys(entries))
 	assert.Contains(t, entries, Entry{Key: "model", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "smallModel", Value: "", Origin: "unset"})
@@ -858,6 +898,9 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "classifier.enabled", Value: "false", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "classifier.model", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "classifier.instructions", Value: "[]", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "workflows.model", Value: "", Origin: "unset"})
+	assert.Contains(t, entries, Entry{Key: "workflows.maxWorkflows", Value: "4", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "workflows.maxAgents", Value: "16", Origin: "default"})
 
 	r, err = Resolve(Defaults(), Map("flags", map[string]any{
 		"model":                "a/b",
@@ -868,6 +911,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 		"permissions":          map[string]any{"deny": []any{"Read(.env)", "*(~/.ssh)"}},
 		"sandbox":              map[string]any{"enabled": false, "denyRead": []any{"~/.aws"}, "network": true},
 		"classifier":           map[string]any{"enabled": true, "model": "e/f"},
+		"workflows":            map[string]any{"model": "g/h"},
 	}))
 	require.NoError(t, err)
 	entries = r.Entries()
@@ -886,6 +930,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "classifier.enabled", Value: "true", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "classifier.model", Value: "e/f", Origin: "flags"})
 	assert.Contains(t, entries, Entry{Key: "classifier.instructions", Value: "[]", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "workflows.model", Value: "g/h", Origin: "flags"})
 }
 
 func TestEntriesShowThemeSeparatorAndSegments(t *testing.T) {

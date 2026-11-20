@@ -128,8 +128,8 @@ func permissionRules(cwd, home string, tools []tool.Tool, perms config.Permissio
 		{Name: origins["permissions.ask"], Ask: perms.Ask},
 		{Name: origins["permissions.deny"], Deny: perms.Deny},
 	}
-	// ToolSearch, Skill, WebSearch, AskUserQuestion, ExitPlanMode, Agent and SendMessage are known to rules even when the session lacks them.
-	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil), tool.NewSkill(nil, ""), tool.NewWebSearch(nil), tool.NewAskUserQuestion(nil), tool.NewExitPlanMode(nil, nil), tool.NewAgent(nil, nil), tool.NewSendMessage(nil)}))
+	// ToolSearch, Skill, WebSearch, AskUserQuestion, ExitPlanMode, Agent, SendMessage, Workflow and StructuredOutput are known to rules even when the session lacks them.
+	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil), tool.NewSkill(nil, ""), tool.NewWebSearch(nil), tool.NewAskUserQuestion(nil), tool.NewExitPlanMode(nil, nil), tool.NewAgent(nil, nil), tool.NewSendMessage(nil), tool.NewWorkflow(nil, nil, 1, 1), tool.NewStructuredOutput(nil, nil)}))
 	rules, err := policy.NewRules(cwd, home, specs, append(sources, flagRules...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load permission rules: %w", err)
@@ -443,6 +443,12 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			return fmt.Errorf("failed to use %q in %s: %w", "smallModel", paths.ConfigFile, err)
 		}
 	}
+	// Workflow agents run only where Workflow can be offered.
+	if fullscreen && !rules.Removes("Workflow") && resolved.Config.Workflows.Model != "" {
+		if err := checkModel(resolved.Config.Workflows.Model, resolved.Origins["workflows.model"]); err != nil {
+			return fmt.Errorf("failed to use %q in %s: %w", "workflows.model", paths.ConfigFile, err)
+		}
+	}
 	if classifierOn && resolved.Config.Classifier.Model != "" {
 		if err := checkModel(resolved.Config.Classifier.Model, resolved.Origins["classifier.model"]); err != nil {
 			return fmt.Errorf("failed to use %q in %s: %w", "classifier.model", paths.ConfigFile, err)
@@ -475,15 +481,14 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		Model: resolved.Config.Model, SmallModel: resolved.Config.SmallModel, ConfigFile: paths.ConfigFile, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
 		Errors: slices.Concat(set.errs, instructionErrs, skillErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review,
 		Skills: skills, SkillPrefix: resolved.Config.Skills.Prefix,
+		WorkflowModel: resolved.Config.Workflows.Model, MaxWorkflows: resolved.Config.Workflows.MaxWorkflows, MaxAgents: resolved.Config.Workflows.MaxAgents,
 	}
 	// Print mode has no plan approval, so its session has no plan file.
 	if fullscreen {
 		cfg.Plans = plans
 	}
-	if len(agents) > 0 {
-		cfg.Agents = agents
-		cfg.AgentTools = agentTools(tools, ws, shell, planShell, resolved.Config.Sandbox.AllowUnsandboxed)
-	}
+	cfg.Agents = agents
+	cfg.AgentTools = agentTools(tools, ws, shell, planShell, resolved.Config.Sandbox.AllowUnsandboxed)
 	if len(set.servers) > 0 {
 		cfg.Servers = func(ctx context.Context) ([]pigruntime.ServerStatus, error) { return waitServers(ctx, servers) }
 	}

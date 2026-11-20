@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/history"
+	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 )
 
@@ -614,6 +615,49 @@ func TestRootFullscreenDifferentProviderSmallModelWithoutCredentialFailsAtStart(
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `"smallModel" in `+configFile)
+	assert.Contains(t, err.Error(), `no credential for provider "mistral"`)
+	assert.Contains(t, err.Error(), `run "kopi login mistral"`)
+	assert.NotContains(t, err.Error(), "failed to open session")
+}
+
+// startFullscreenWithConfig runs the fullscreen interface on a terminal with
+// config as config.json and returns the error of start.
+func startFullscreenWithConfig(t *testing.T, e testEnv, config string) error {
+	t.Helper()
+	logger := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(logger) })
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), config)
+	master, slave := openTestTerminal(t)
+	t.Cleanup(func() {
+		_ = slave.Close()
+		_ = master.Close()
+	})
+	root := newRoot()
+	root.SetIn(slave)
+	root.SetOut(slave)
+	var stderr bytes.Buffer
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"--model", builtinModel(t, "openai-codex")})
+	return root.ExecuteContext(t.Context())
+}
+
+func TestRootFullscreenUnknownWorkflowsModelFailsAtStart(t *testing.T) {
+	e := newTestEnv(t)
+
+	err := startFullscreenWithConfig(t, e, `{"workflows":{"model":"nosuch/model-1"}}`)
+
+	require.ErrorIs(t, err, pigruntime.ErrUnknownModel)
+	assert.Contains(t, err.Error(), `"workflows.model" in `+filepath.Join(e.kopiHome, "config.json"))
+}
+
+func TestRootFullscreenDifferentProviderWorkflowsModelWithoutCredentialFailsAtStart(t *testing.T) {
+	e := newTestEnv(t)
+	t.Setenv("MISTRAL_API_KEY", "")
+
+	err := startFullscreenWithConfig(t, e, fmt.Sprintf(`{"workflows":{"model":%q}}`, builtinModel(t, "mistral")))
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"workflows.model" in `+filepath.Join(e.kopiHome, "config.json"))
 	assert.Contains(t, err.Error(), `no credential for provider "mistral"`)
 	assert.Contains(t, err.Error(), `run "kopi login mistral"`)
 	assert.NotContains(t, err.Error(), "failed to open session")

@@ -143,9 +143,10 @@ type model struct {
 	plan     *planDialog
 	prompt   []string
 	menu     menu
-	// seen is the draft and cursor syncInput last reconciled.
+	// seen is the draft, shown session and cursor syncInput last reconciled.
 	seen struct {
 		value     string
+		shown     string
 		line, col int
 	}
 }
@@ -278,10 +279,10 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 func (m *model) syncInput(wasHeld bool) tea.Cmd {
 	value, line, col := m.composer.value(), m.composer.ta.Line(), m.composer.ta.Column()
 	changed := value != m.seen.value || line != m.seen.line || col != m.seen.col
-	if value != m.seen.value {
-		m.composer.spans = m.c.Spans(value)
+	if value != m.seen.value || m.shown != m.seen.shown {
+		m.composer.spans = m.c.Spans(m.shown, value)
 	}
-	m.seen.value, m.seen.line, m.seen.col = value, line, col
+	m.seen.value, m.seen.shown, m.seen.line, m.seen.col = value, m.shown, line, col
 	if m.holding() || (!changed && !wasHeld) {
 		return nil
 	}
@@ -717,10 +718,11 @@ func (m *model) relayout() {
 	v := m.view()
 	blocks := v.tr.Blocks()
 	v.folds.settle(blocks)
+	spans := func(t string) []app.Span { return m.c.PromptSpans(m.shown, t) }
 	old := v.lines
 	v.lines = header(m.version, m.th)
 	for _, b := range blocks {
-		ls := v.cache.lines(b, v.folds.of(b), m.width, m.th)
+		ls := v.cache.lines(b, v.folds.of(b), spans, m.width, m.th)
 		if len(ls) == 0 {
 			continue
 		}
@@ -797,7 +799,7 @@ func (m *model) place() {
 		input = len(m.prompt) - 2
 	}
 	free -= input + m.geo.menu
-	m.pending = m.pendingCache.rows(m.view().queued, &m.keys, m.width, max(2, m.height/3), free, m.th)
+	m.pending = m.pendingCache.rows(m.view().queued, m.shown, func(t string) []app.Span { return m.c.PromptSpans(m.shown, t) }, &m.keys, m.width, max(2, m.height/3), free, m.th)
 	m.geo.transcript = max(0, free-len(m.pending))
 	// The rows take only what is left of the transcript.
 	agentRows := m.agentRows(m.geo.transcript)

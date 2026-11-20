@@ -20,11 +20,11 @@ type Status struct {
 	// Shell reports that a tool that runs commands is available, and
 	// Sandboxed that it runs them under the OS sandbox.
 	Shell, Sandboxed bool
-	// Shells and Agents count the running background shell commands and
-	// subagents; Foreground reports that a command runs in the foreground,
-	// which Background can move.
-	Shells, Agents int
-	Foreground     bool
+	// Shells, Agents and Workflows count the running background shell commands,
+	// subagents and workflows; Foreground reports that a command runs in the
+	// foreground, which Background can move.
+	Shells, Agents, Workflows int
+	Foreground                bool
 }
 
 // AgentStatus describes one session for a frontend: the main session or a subagent's.

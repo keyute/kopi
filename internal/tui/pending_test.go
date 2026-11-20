@@ -12,7 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/skill"
 )
 
 // workingIndex is the working row's screen row with a one-line composer.
@@ -120,12 +122,12 @@ func TestPendingBudgetIncludesWrappedHelp(t *testing.T) {
 	th := mocha()
 	for _, width := range []int{20, 80} {
 		for budget := 0; budget <= 20; budget++ {
-			rows := pendingRows([]string{linesOf(30)}, &km, width, 8, budget, th)
+			rows := pendingRows([]string{linesOf(30)}, "", nil, &km, width, 8, budget, th)
 			assert.LessOrEqual(t, len(rows), budget)
 		}
 	}
-	assert.Empty(t, pendingRows([]string{"a"}, &km, 20, 8, 0, th))
-	assert.Len(t, pendingRows([]string{linesOf(30)}, &km, 80, 8, 20, th), 13)
+	assert.Empty(t, pendingRows([]string{"a"}, "", nil, &km, 20, 8, 0, th))
+	assert.Len(t, pendingRows([]string{linesOf(30)}, "", nil, &km, 80, 8, 20, th), 13)
 }
 
 func TestPendingGeometryInputPaths(t *testing.T) {
@@ -163,7 +165,7 @@ func TestPendingGeometryInputPaths(t *testing.T) {
 			if m.view().busy {
 				budget -= busyRows
 			}
-			assert.Equal(t, pendingRows(m.view().queued, &m.keys, m.width, max(2, m.height/3), budget, m.th), m.pending)
+			assert.Equal(t, pendingRows(m.view().queued, "", nil, &m.keys, m.width, max(2, m.height/3), budget, m.th), m.pending)
 			assert.Len(t, screen(m), m.height)
 			assert.Equal(t, m.height-m.composer.height()-2, m.composerTop())
 		})
@@ -186,7 +188,7 @@ func TestPendingCacheReusesRenderedQueue(t *testing.T) {
 			assert.Same(t, box, &m.pendingCache.box[0])
 			assert.Same(t, note, &m.pendingCache.note[0])
 			budget := m.height - m.composer.height() - chromeRows - busyRows
-			assert.Equal(t, pendingRows(m.view().queued, &m.keys, m.width, max(2, m.height/3), budget, m.th), m.pending)
+			assert.Equal(t, pendingRows(m.view().queued, "", nil, &m.keys, m.width, max(2, m.height/3), budget, m.th), m.pending)
 		})
 	}
 }
@@ -208,7 +210,7 @@ func TestPendingCacheInvalidatesRenderedQueue(t *testing.T) {
 			assert.NotSame(t, box, &m.pendingCache.box[0])
 			assert.NotSame(t, note, &m.pendingCache.note[0])
 			budget := m.height - m.composer.height() - chromeRows
-			assert.Equal(t, pendingRows(m.view().queued, &m.keys, m.width, max(2, m.height/3), budget, m.th), m.pending)
+			assert.Equal(t, pendingRows(m.view().queued, "", nil, &m.keys, m.width, max(2, m.height/3), budget, m.th), m.pending)
 			send(m, event.QueueChanged{})
 			assert.Empty(t, m.pending)
 			assert.Empty(t, m.pendingCache.box)
@@ -220,13 +222,13 @@ func TestPendingCacheBudgetDoesNotAlterFullBox(t *testing.T) {
 	var c pendingCache
 	km, th := newKeyMap(testOptions().Keys), mocha()
 	queued := []string{linesOf(30)}
-	full := c.rows(queued, &km, 80, 100, 100, th)
+	full := c.rows(queued, "", nil, &km, 80, 100, 100, th)
 	box := append([]string(nil), c.box...)
 	for budget := 0; budget < 40; budget++ {
-		assert.LessOrEqual(t, len(c.rows(queued, &km, 80, 8, budget, th)), budget)
+		assert.LessOrEqual(t, len(c.rows(queued, "", nil, &km, 80, 8, budget, th)), budget)
 		assert.Equal(t, box, c.box)
 	}
-	assert.Equal(t, full, c.rows(queued, &km, 80, 100, 100, th))
+	assert.Equal(t, full, c.rows(queued, "", nil, &km, 80, 100, 100, th))
 }
 
 func TestFoldClickHitsTranscriptWhilePendingShown(t *testing.T) {
@@ -243,4 +245,14 @@ func TestFoldClickHitsTranscriptWhilePendingShown(t *testing.T) {
 
 		assert.Contains(t, screen(m), "▾ Read 2 files")
 	})
+}
+
+func TestPendingRowsStyleSkillTokens(t *testing.T) {
+	km, th := newKeyMap(testOptions().Keys), mocha()
+	set, _ := skill.NewSet("skill", []skill.Skill{{Name: "a"}}, nil)
+	spans := func(text string) []app.Span { return app.Spans(text, set, false) }
+
+	rows := pendingRows([]string{"run /skill:a"}, "", spans, &km, 40, 8, 20, th)
+
+	assert.Contains(t, rows[1], spanStyle(th, app.KindCommand).Render("/skill:a"))
 }

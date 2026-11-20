@@ -21,9 +21,10 @@ const maxAgents = 20
 
 // neverChild are the tools a subagent never has, whatever its definition says.
 // A subagent builds its own ToolSearch.
-var neverChild = []string{"Agent", "SendMessage", "TaskOutput", "TaskStop", "ToolSearch"}
+var neverChild = []string{"Agent", "SendMessage", "TaskOutput", "TaskStop", "ToolSearch", "Workflow"}
 
-// agentSpec is what a subagent opens with, computed once per process.
+// agentSpec is what a subagent or a workflow agent opens with, computed once
+// per process.
 type agentSpec struct {
 	def    subagent.Definition
 	effort pigruntime.Effort
@@ -31,46 +32,67 @@ type agentSpec struct {
 	prompt []pigruntime.PromptPart
 }
 
-// buildAgents computes the tools and prompt of each definition, in order.
-// extra are built-in tools created with the root's session tools rather than
-// in Config.AgentTools; serverTools and servers are the root's. All are
-// already filtered by the rules.
-func (c *Controller) buildAgents(extra, serverTools []tool.Tool, servers []mcpServer) []agentSpec {
+// buildAgents computes the tools and prompt of each definition, in order, as
+// subagents, and as workflow agents: those follow the default workflow agent,
+// whose spec has no definition (and so an empty name) and exists even with no
+// definitions. extra are built-in tools created with the root's session tools
+// rather than in Config.AgentTools; serverTools and servers are the root's. All
+// are already filtered by the rules.
+func (c *Controller) buildAgents(extra, serverTools []tool.Tool, servers []mcpServer) (subagents, workflows []agentSpec) {
 	base := slices.DeleteFunc(slices.Concat(c.cfg.AgentTools, extra), func(t tool.Tool) bool {
 		return c.cfg.Rules.Removes(t.Name) || slices.Contains(neverChild, t.Name)
 	})
-	var specs []agentSpec
-	for _, def := range c.cfg.Agents {
-		effort := pigruntime.DefaultEffort
+	workflows = append(workflows, c.buildSpecs(base, serverTools, servers, nil)[1])
+	for i := range c.cfg.Agents {
+		both := c.buildSpecs(base, serverTools, servers, &c.cfg.Agents[i])
+		subagents = append(subagents, both[0])
+		workflows = append(workflows, both[1])
+	}
+	return subagents, workflows
+}
+
+// buildSpecs is def's spec as a subagent and as a workflow agent, which differ
+// only in the prompt; nil def is the default workflow agent, which has every
+// tool, the instruction files and the default effort.
+func (c *Controller) buildSpecs(base, serverTools []tool.Tool, servers []mcpServer, def *subagent.Definition) [2]agentSpec {
+	spec := agentSpec{effort: pigruntime.DefaultEffort}
+	named := func(tool.Tool) bool { return true }
+	groups := c.cfg.Instructions
+	if def != nil {
+		spec.def = *def
 		if def.Effort != "" {
 			// The definition's effort was validated when it was loaded.
-			effort, _ = pigruntime.ParseEffort(def.Effort)
+			spec.effort, _ = pigruntime.ParseEffort(def.Effort)
 		}
-		named := func(t tool.Tool) bool { return def.Tools == nil || slices.Contains(def.Tools, t.Name) }
-		tools := slices.DeleteFunc(slices.Clone(base), func(t tool.Tool) bool { return !named(t) })
-		mcp := slices.DeleteFunc(slices.Clone(serverTools), func(t tool.Tool) bool { return !named(t) })
-		if deferred := slices.DeleteFunc(slices.Clone(mcp), func(t tool.Tool) bool { return !t.Deferred }); len(deferred) > 0 {
-			tools = append(tools, tool.NewToolSearch(deferred, pigruntime.RankTools, pigruntime.LoadTools))
+		if def.Tools != nil {
+			named = func(t tool.Tool) bool { return slices.Contains(def.Tools, t.Name) }
 		}
-		tools = append(tools, mcp...)
-
-		var childServers []mcpServer
-		for _, s := range servers {
-			own := slices.DeleteFunc(slices.Clone(s.tools), func(name string) bool {
-				return !slices.ContainsFunc(mcp, func(t tool.Tool) bool { return t.Name == name })
-			})
-			if len(own) > 0 {
-				childServers = append(childServers, mcpServer{name: s.name, instructions: s.instructions, tools: own})
-			}
-		}
-		groups := c.cfg.Instructions
 		if !def.Instructions {
 			groups = nil
 		}
-		prompt := buildPrompt(c.cfg.Workspace, tools, groups, childServers, c.cfg.Classifier != nil, &def)
-		specs = append(specs, agentSpec{def: def, effort: effort, tools: tools, prompt: prompt})
 	}
-	return specs
+	tools := slices.DeleteFunc(slices.Clone(base), func(t tool.Tool) bool { return !named(t) })
+	mcp := slices.DeleteFunc(slices.Clone(serverTools), func(t tool.Tool) bool { return !named(t) })
+	if deferred := slices.DeleteFunc(slices.Clone(mcp), func(t tool.Tool) bool { return !t.Deferred }); len(deferred) > 0 {
+		tools = append(tools, tool.NewToolSearch(deferred, pigruntime.RankTools, pigruntime.LoadTools))
+	}
+	tools = append(tools, mcp...)
+
+	var childServers []mcpServer
+	for _, s := range servers {
+		own := slices.DeleteFunc(slices.Clone(s.tools), func(name string) bool {
+			return !slices.ContainsFunc(mcp, func(t tool.Tool) bool { return t.Name == name })
+		})
+		if len(own) > 0 {
+			childServers = append(childServers, mcpServer{name: s.name, instructions: s.instructions, tools: own})
+		}
+	}
+	spec.tools = tools
+	classified := c.cfg.Classifier != nil
+	child := spec
+	child.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, classified, def, false)
+	spec.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, classified, def, true)
+	return [2]agentSpec{child, spec}
 }
 
 // agentLauncher is the tool.Agents over the Controller, kept off its exported API.
@@ -197,6 +219,35 @@ func (c *Controller) admitLocked() error {
 	return nil
 }
 
+// openChild opens run's session under parent with tools: run.rec is its
+// classifier record when a classifier is configured, and run.sess the session.
+// A definition that pins plan mode gets an authority of its own.
+func (c *Controller) openChild(ctx context.Context, spec agentSpec, tools []tool.Tool, parent *pigruntime.Session, run *runner) error {
+	if c.cfg.Classifier != nil {
+		run.rec = &classifier.Record{}
+	}
+	authority := c.authority
+	if spec.def.Plan {
+		authority = policy.NewAuthority()
+	}
+	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
+		Model:        run.model,
+		Effort:       spec.effort,
+		Parent:       parent,
+		SystemPrompt: spec.prompt,
+		Tools:        tools,
+		Authority:    authority,
+		Rules:        c.cfg.Rules,
+		Approve:      c.approver(run.d, run),
+		Review:       c.reviewer(run.rec),
+	})
+	if err != nil {
+		return err
+	}
+	run.sess = sess
+	return nil
+}
+
 // launch starts a run of the subagent agent in the background and returns its
 // task id.
 func (c *Controller) launch(ctx context.Context, agent, description, prompt string) (string, error) {
@@ -228,31 +279,12 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 	r := &runner{c: c, name: spec.def.Name, d: newDisplay(spec.tools), model: model}
 	role := &subagentRole{r: r, parent: parent}
 	r.role = role
-	if c.cfg.Classifier != nil {
-		r.rec = &classifier.Record{}
-	}
-	authority := c.authority
-	if spec.def.Plan {
-		authority = policy.NewAuthority()
-	}
-	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
-		Model:        model,
-		Effort:       spec.effort,
-		Parent:       parent,
-		SystemPrompt: spec.prompt,
-		Tools:        spec.tools,
-		Authority:    authority,
-		Rules:        c.cfg.Rules,
-		Approve:      c.approver(r.d, r),
-		Review:       c.reviewer(r.rec),
-	})
-	if err != nil {
+	if err := c.openChild(ctx, spec, spec.tools, parent, r); err != nil {
 		c.queue.Lock()
 		c.live--
 		c.queue.Unlock()
 		return "", fmt.Errorf("failed to start subagent %s: %w", agent, err)
 	}
-	r.sess = sess
 
 	// A switch or Close that began meanwhile has run, or will run, StopAll
 	// without a child to stop; it must not be left running. One that begins
@@ -275,7 +307,7 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 	c.mu.Unlock()
 	role.task = c.cfg.Tasks.StartAgent(spec.def.Name, description, r.stopper(w))
 	r.id, r.bound, r.emit = role.task.ID(), c.relay.bind(), role.emit
-	r.unsubscribe = sess.Subscribe(role.emit)
+	r.unsubscribe = r.sess.Subscribe(role.emit)
 	if c.children == nil {
 		c.children = map[string]*runner{}
 	}

@@ -464,7 +464,7 @@ func settle(stopped, cancelled bool, outcome event.Outcome, sent bool, parts, un
 func joined(ps []pigruntime.Prompt) pigruntime.Prompt {
 	texts := make([]string, 0, len(ps))
 	var images []pigruntime.Image
-	var skills []string
+	var skills, tools []string
 	var mode string
 	for _, p := range ps {
 		texts = append(texts, p.Text)
@@ -477,8 +477,13 @@ func joined(ps []pigruntime.Prompt) pigruntime.Prompt {
 				skills = append(skills, sk)
 			}
 		}
+		for _, name := range p.Tools {
+			if !slices.Contains(tools, name) {
+				tools = append(tools, name)
+			}
+		}
 	}
-	return pigruntime.Prompt{Text: strings.Join(texts, "\n\n"), Images: images, Skills: skills, Mode: mode}
+	return pigruntime.Prompt{Text: strings.Join(texts, "\n\n"), Images: images, Skills: skills, Tools: tools, Mode: mode}
 }
 
 func inputs(ps []pigruntime.Prompt) []event.Input {

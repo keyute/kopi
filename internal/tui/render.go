@@ -5,10 +5,12 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/tool"
 	"github.com/keyute/kopi/internal/transcript"
@@ -52,7 +54,7 @@ type cached struct {
 	lines []line
 }
 
-func (c *renderCache) lines(b transcript.Block, f blockFolds, width int, th theme) []line {
+func (c *renderCache) lines(b transcript.Block, f blockFolds, spans func(string) []app.Span, width int, th theme) []line {
 	if c.entries == nil || width != c.width || th != c.th {
 		c.entries, c.width, c.th = map[string]cached{}, width, th
 		c.md = newMarkdown(width, th)
@@ -60,16 +62,16 @@ func (c *renderCache) lines(b transcript.Block, f blockFolds, width int, th them
 	if e, ok := c.entries[b.Key()]; ok && reflect.DeepEqual(e.block, b) && reflect.DeepEqual(e.folds, f) {
 		return e.lines
 	}
-	ls := c.render(b, f)
+	ls := c.render(b, f, spans)
 	c.entries[b.Key()] = cached{block: b, folds: f, lines: ls}
 	return ls
 }
 
-func (c *renderCache) render(b transcript.Block, f blockFolds) []line {
+func (c *renderCache) render(b transcript.Block, f blockFolds, spans func(string) []app.Span) []line {
 	width, th := c.width, c.th
 	switch b := b.(type) {
 	case transcript.User:
-		return plain(shadedBox("❯ ", shade(th), b.Text, width, th))
+		return plain(shadedBox("❯ ", shade(th), b.Text, spans, width, th))
 	case transcript.Assistant:
 		return plain(c.md.lines(b.Key(), b.Text))
 	case transcript.Plan:
@@ -294,18 +296,36 @@ func hang(prefix string, ps lipgloss.Style, text string, ts lipgloss.Style, widt
 }
 
 // shadedBox is the user box: a blank shaded row, prefix and the wrapped text
-// with continuation lines two in, a blank shaded row, all full width.
-func shadedBox(prefix string, ps lipgloss.Style, text string, width int, th theme) []string {
+// with continuation lines two in, a blank shaded row, all full width. spans,
+// when not nil, gives the runs of the cleaned text to highlight.
+func shadedBox(prefix string, ps lipgloss.Style, text string, spans func(string) []app.Span, width int, th theme) []string {
 	st := shade(th)
 	blank := st.Render(strings.Repeat(" ", width))
 	out := []string{blank}
-	for i, s := range wrap(text, width-2) {
-		p := st.Render("  ")
-		if i == 0 {
-			p = ps.Render(prefix)
+	text = clean(text)
+	var runs []app.Span
+	if spans != nil {
+		runs = spans(text)
+	}
+	first := true
+	for n, l := range strings.Split(text, "\n") {
+		// Wrap only drops whitespace at a break, so the rows are in-order substrings of l.
+		cursor := 0
+		for _, s := range strings.Split(lipgloss.Wrap(l, max(1, width-2), ""), "\n") {
+			p := st.Render("  ")
+			if first {
+				p = ps.Render(prefix)
+				first = false
+			}
+			pad := strings.Repeat(" ", max(0, width-2-lipgloss.Width(s)))
+			row := p + st.Render(s+pad)
+			if at := strings.Index(l[cursor:], s); at >= 0 {
+				start := utf8.RuneCountInString(l[:cursor+at])
+				cursor += at + len(s)
+				row = styleRuns(row, runs, n, start, s, th)
+			}
+			out = append(out, row)
 		}
-		pad := strings.Repeat(" ", max(0, width-2-lipgloss.Width(s)))
-		out = append(out, p+st.Render(s+pad))
 	}
 	return append(out, blank)
 }
@@ -317,6 +337,12 @@ func shade(th theme) lipgloss.Style {
 // wrap breaks text into lines no wider than width. Tabs become spaces because
 // they have no fixed width.
 func wrap(text string, width int) []string {
+	return strings.Split(lipgloss.Wrap(clean(text), max(1, width), ""), "\n")
+}
+
+// clean strips escape sequences and control characters from text and turns
+// tabs into spaces.
+func clean(text string) string {
 	// Strip removes escape sequences but retains executable controls.
 	text = strings.Map(func(r rune) rune {
 		if (r < 0x20 && r != '\n' && r != '\t') || (r >= 0x7f && r <= 0x9f) {
@@ -324,8 +350,7 @@ func wrap(text string, width int) []string {
 		}
 		return r
 	}, ansi.Strip(text))
-	text = strings.ReplaceAll(text, "\t", "    ")
-	return strings.Split(lipgloss.Wrap(text, max(1, width), ""), "\n")
+	return strings.ReplaceAll(text, "\t", "    ")
 }
 
 func plain(ss []string) []line { return withHit(hit{}, ss) }

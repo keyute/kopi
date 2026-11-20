@@ -58,6 +58,10 @@ type Prompt struct {
 	// Mode is a line about the session's mode, read after Text and Skills; the
 	// transcript does not draw it. Empty sends none.
 	Mode string
+	// Tools names the deferred tools the prompt makes callable, from the
+	// model request that carries it. Names the session does not have are
+	// ignored.
+	Tools []string
 }
 
 // skillType is the PiG custom type of a skill text, stored in session history.
@@ -327,6 +331,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 			for _, q := range prompts {
 				text, images := s.steerContent(q)
 				handed = append(handed, q)
+				s.loadTools(q.Tools)
 				s.inner.QueueSteer(text, images)
 				for _, sk := range q.Skills {
 					if err := s.inner.SendCustomMessage(pigCtx, skillMessage(sk), &extension.SendMessageOptions{DeliverAs: extension.DeliverAsSteer}); err != nil {
@@ -359,6 +364,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 		defer close(abortDone)
 		abort()
 	})
+	s.loadTools(p.Tools)
 	err := s.deliver(pigCtx, p, notices)
 	// An abort already under way must finish before Send returns, or its
 	// RequestAbort could land on the following turn.

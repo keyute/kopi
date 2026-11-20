@@ -46,7 +46,8 @@ type Controller interface {
 	Status() app.Status
 	Agents() []app.AgentStatus
 	Commands() []app.Command
-	Spans(text string) []app.Span
+	Spans(session, text string) []app.Span
+	PromptSpans(session, text string) []app.Span
 	// Arguments and Files may read many files; call them off the event loop.
 	Arguments(name string) ([]app.Candidate, error)
 	Files() ([]app.Candidate, error)
