@@ -761,11 +761,14 @@ func (c *Controller) changeMode(enter func() uint64) {
 }
 
 func (c *Controller) Status() Status {
+	c.queue.Lock()
+	children := maps.Clone(c.children)
 	c.mu.Lock()
 	sess, sessID := c.main.sess, c.sessID
 	busy := c.main.work != nil
 	side := c.spend.sum()
 	c.mu.Unlock()
+	c.queue.Unlock()
 
 	mode, _ := c.authority.Snapshot()
 	s := Status{SessionID: sessID, Mode: mode, Model: c.Model(), Busy: busy, Branch: gitBranch(c.cfg.Workspace), Workspace: c.cfg.Workspace}
@@ -784,7 +787,6 @@ func (c *Controller) Status() Status {
 	// queue stays held so a workflow that starts meanwhile is not listed as a
 	// subagent; List takes only the registry's lock.
 	c.queue.Lock()
-	children := maps.Clone(c.children)
 	for _, info := range c.cfg.Tasks.List() {
 		if info.Status != tool.TaskRunning {
 			continue
