@@ -150,3 +150,30 @@ func TestHighlightMarksSkillCommands(t *testing.T) {
 
 	assert.Equal(t, []string{"/skill:a", "@x", "/skill:b"}, pieces(m))
 }
+
+func TestHighlightFollowsShownSessionWithUnchangedDraft(t *testing.T) {
+	m, _ := agentsModel(t)
+	const draft = "ultracode now"
+	pasteText(m, draft)
+	assert.Equal(t, []string{"ultracode"}, pieces(m))
+
+	display(m, "t1")
+	m.Update(nil)
+	assert.Equal(t, draft, m.composer.value())
+	assert.Nil(t, pieces(m))
+
+	display(m, app.Main)
+	m.Update(nil)
+	assert.Equal(t, draft, m.composer.value())
+	assert.Equal(t, []string{"ultracode"}, pieces(m))
+}
+
+func TestHighlightMarksTheKeywordOnlyInTheMainView(t *testing.T) {
+	m, _ := agentsModel(t)
+	pasteText(m, "ultracode now")
+	assert.Equal(t, []string{"ultracode"}, pieces(m))
+
+	display(m, "t1")
+	pasteText(m, "ultracode now")
+	assert.Nil(t, pieces(m))
+}

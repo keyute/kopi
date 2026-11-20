@@ -6,35 +6,38 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/keyute/kopi/internal/app"
 )
 
 // pendingCache keeps the full rendered queue independent of the current
 // composer height and the space left for it.
 type pendingCache struct {
-	queued []string
-	width  int
-	th     theme
-	box    []string
-	note   []string
+	queued  []string
+	session string
+	width   int
+	th      theme
+	box     []string
+	note    []string
 }
 
 // pendingRows draws the queued messages above the working row: one shaded
 // box holding them all with a blank line between messages, a blank row, the
 // note naming the keys that act on the queue and a blank row. maxContent caps
 // the box's rows between its shaded blank rows; maxRows caps the entire area.
-func pendingRows(queued []string, km *keyMap, width, maxContent, maxRows int, th theme) []string {
+func pendingRows(queued []string, session string, spans func(string) []app.Span, km *keyMap, width, maxContent, maxRows int, th theme) []string {
 	var c pendingCache
-	return c.rows(queued, km, width, maxContent, maxRows, th)
+	return c.rows(queued, session, spans, km, width, maxContent, maxRows, th)
 }
 
-func (c *pendingCache) rows(queued []string, km *keyMap, width, maxContent, maxRows int, th theme) []string {
+func (c *pendingCache) rows(queued []string, session string, spans func(string) []app.Span, km *keyMap, width, maxContent, maxRows int, th theme) []string {
 	if len(queued) == 0 {
 		*c = pendingCache{}
 		return nil
 	}
-	if c.box == nil || width != c.width || th != c.th || !slices.Equal(queued, c.queued) {
-		c.queued, c.width, c.th = slices.Clone(queued), width, th
-		c.box = shadedBox("❯ ", shade(th), strings.Join(queued, "\n\n"), width, th)
+	if c.box == nil || width != c.width || th != c.th || session != c.session || !slices.Equal(queued, c.queued) {
+		c.queued, c.session, c.width, c.th = slices.Clone(queued), session, width, th
+		c.box = shadedBox("❯ ", shade(th), strings.Join(queued, "\n\n"), spans, width, th)
 		note := "queued"
 		if ks := km.sendNow.Keys(); len(ks) > 0 {
 			note += " · " + ks[0] + " to send now"

@@ -35,7 +35,7 @@ Commands in the fullscreen interface:
 | `/resume <id>` | Resume a session |
 | `/login <provider>` | Log in to a provider |
 | `/logout <provider>` | Remove a provider's stored credential |
-| `/tasks` | List background tasks and [subagents](subagents.md), show one's output, open a subagent's view and stop it |
+| `/tasks` | List background tasks, [subagents](subagents.md) and [workflows](workflows.md), show one's output, open a subagent's view and stop it |
 | `/skill:<name>` | Load a skill with the prompt ([skills](skills.md)) |
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
@@ -54,7 +54,7 @@ Defaults; change them with [`keys`](configuration.md#keys).
 - Up at the top of the input pulls queued messages back into it for editing; with nothing queued it browses input history, and Down goes back.
 - Down from the last line of the input, with no newer history entry, moves into the [agent rows](subagents.md#agent-rows) under the status line: Up and Down move, Enter opens that session's view, `x` stops the selected subagent, Esc or typing returns to the input.
 - Esc interrupts the running turn of the session whose view is open: the main agent's in the main view, only that subagent's run in a [subagent's view](subagents.md#views). It never acts on another session.
-- While the turn is idle and background tasks or subagents run, the row above the input reads `Waiting on 2 agents, 1 shell… 1m 5s`.
+- While the turn is idle and background tasks, subagents or [workflows](workflows.md) run, the row above the input reads `Waiting on 2 agents, 1 workflow, 1 shell… 1m 5s`.
 - Ctrl+C interrupts the open view's running turn as Esc does, else clears the draft, else a second press within two seconds exits.
 - After an interrupt, queued messages return to the input; `/new`, `/resume` and exiting discard them.
 - Ctrl+D exits when the input is empty.
@@ -118,7 +118,7 @@ Rejected, denied and interrupted rows have a warning-coloured bullet, a failed r
 - While a menu shows:
   - Up and Down choose, Tab fills in, Esc closes the menu.
   - Enter fills in and runs a command; a command that takes an argument, or a file reference, is only filled in.
-- Known commands, skill commands (wherever they appear in the input) and `@` references are highlighted in the input.
+- Known commands, skill commands (wherever they appear in the input) and `@` references are highlighted in the input. Sent and queued messages highlight the same skill commands and references.
 - An `@path` is sent as written; a space in an inserted path is written `\ `.
 
 ## Mouse

@@ -328,6 +328,29 @@ func TestRootAcceptsExitPlanModeRuleWithoutTheTool(t *testing.T) {
 	assert.Equal(t, "ok\n", stdout)
 }
 
+func TestRootAcceptsWorkflowRulesWithoutTheTools(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+
+	stdout, _, err := execute(t, "", "--model", mockModel, "--disallowed-tools", "Workflow,StructuredOutput", "-p", "hi")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok\n", stdout)
+	assert.NotContains(t, toolNames(server.next(t)), "Workflow")
+}
+
+func TestRootPrintModeNeverOffersWorkflow(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "ultracode hi")
+
+	require.NoError(t, err)
+	assert.NotContains(t, toolNames(server.next(t)), "Workflow")
+}
+
 func TestRootOffersWebSearchForSearchingSmallModel(t *testing.T) {
 	e := newTestEnv(t)
 	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
@@ -658,6 +681,18 @@ func TestRootDisabledClassifierModelIsNotChecked(t *testing.T) {
 	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
 	e.writeMockModels(t, server.URL)
 	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"classifier":{"enabled":false,"model":"nosuch/model-1"}}`)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+}
+
+// Print mode has no Workflow, so no workflow agent can run.
+func TestRootPrintModeDoesNotCheckWorkflowsModel(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"workflows":{"model":"nosuch/model-1"}}`)
 
 	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
 

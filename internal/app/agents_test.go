@@ -165,7 +165,7 @@ func TestNoDefinitionsMeansNoAgentTools(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read", "AskUserQuestion"}, req.ToolNames)
-	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil)}, nil, nil, false, nil)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil)}, nil, nil, false, nil, false)), req.SystemPrompt)
 }
 
 func TestDefinitionsAddAgentAndSendMessageUnlessRuleRemovesThem(t *testing.T) {
@@ -175,9 +175,9 @@ func TestDefinitionsAddAgentAndSendMessageUnlessRuleRemovesThem(t *testing.T) {
 		deny string
 		want []string
 	}{
-		{"no rule", "", []string{"AskUserQuestion", "Agent", "SendMessage"}},
-		{"agent", "Agent", []string{"AskUserQuestion"}},
-		{"send message", "SendMessage", []string{"AskUserQuestion", "Agent"}},
+		{"no rule", "", []string{"AskUserQuestion", "Agent", "SendMessage", "Workflow"}},
+		{"agent", "Agent", []string{"AskUserQuestion", "Workflow"}},
+		{"send message", "SendMessage", []string{"AskUserQuestion", "Agent", "Workflow"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sb := pigruntimetest.NewSandbox(t)

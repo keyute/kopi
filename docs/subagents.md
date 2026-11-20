@@ -55,7 +55,7 @@ Report file paths and line numbers.
 ## What a subagent gets
 
 - Its prompt is Kopi's own text, then the definition's body, then the instruction files (unless `instructions: false`), then what its MCP servers report.
-- Its tools are the session's tools, or the `tools` list, but never `Agent`, `SendMessage`, `AskUserQuestion`, `ExitPlanMode`, `TaskOutput` or `TaskStop`, and it cannot reach the session's [plan file](tools.md#exitplanmode). Its `Read` and `Grep` do reach the session's [saved output](tools.md#saved-output), the root's and other subagents' alike, as its `Bash` output is saved there too.
+- Its tools are the session's tools, or the `tools` list, but never `Agent`, `SendMessage`, `Workflow`, `AskUserQuestion`, `ExitPlanMode`, `TaskOutput` or `TaskStop`, and it cannot reach the session's [plan file](tools.md#exitplanmode). Its `Read` and `Grep` do reach the session's [saved output](tools.md#saved-output), the root's and other subagents' alike, as its `Bash` output is saved there too.
 - Its `Bash` runs in the foreground only, and a command still running at its timeout is stopped.
 
 ## Permissions
@@ -99,6 +99,10 @@ Report file paths and line numbers.
 - The status line keeps its layout; `model`, `effort`, `context`, `tokens`, `tools` and `cost` show the viewed subagent's own. The row above the input shows the viewed session's activity; `Waiting on 2 agents, 1 shell…` shows only in the main view.
 - Approvals are unchanged: a subagent's request shows as a dialog naming the subagent and its task whatever view is open.
 
+## Workflows
+
+A [workflow](workflows.md)'s agents use these definitions by name, but are not subagents: they have no task, row or notice of their own and are not among the 20.
+
 ## Limitations
 
 - A subagent cannot start subagents.
@@ -107,7 +111,7 @@ Report file paths and line numbers.
 - A subagent's turns and time are not limited.
 - An MCP tool named in `tools` is checked only for its `mcp__` prefix at startup; one that is not available is left out without an error.
 - Stopping a subagent (`TaskStop`, `/tasks`) and switching session wait for its current model request or tool call to stop.
-- `/login` is refused while a subagent is running, as it is while a turn runs.
+- `/login` is refused while a subagent or a [workflow](workflows.md) is running, as it is while a turn runs.
 - After Esc in the main view, a subagent that finishes does not wake the agent until your next prompt.
 - Subagents are not restored when a session is resumed, and their earlier task ids cannot be messaged.
 - Definitions load only from Kopi's home, not from a project.

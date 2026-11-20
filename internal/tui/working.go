@@ -48,16 +48,23 @@ func (m *model) workingText() (string, bool) {
 }
 
 // waiting reports whether the root is idle while background work runs.
-func (m *model) waiting() bool { return !m.views[app.Main].busy && m.status.Agents+m.status.Shells > 0 }
+func (m *model) waiting() bool {
+	return !m.views[app.Main].busy && m.status.Agents+m.status.Workflows+m.status.Shells > 0
+}
 
-// waitingOn is the running work as "2 agents, 1 shell".
-func (m *model) waitingOn() string { return taskCounts(m.status.Agents, m.status.Shells) }
+// waitingOn is the running work as "2 agents, 1 workflow, 1 shell".
+func (m *model) waitingOn() string {
+	return taskCounts(m.status.Agents, m.status.Workflows, m.status.Shells)
+}
 
-// taskCounts joins the nonzero counts as "2 agents, 1 shell", "" when both are zero.
-func taskCounts(agents, shells int) string {
+// taskCounts joins the nonzero counts as "2 agents, 1 workflow, 1 shell", "" when all are zero.
+func taskCounts(agents, workflows, shells int) string {
 	var parts []string
 	if agents > 0 {
 		parts = append(parts, countText(agents, "agent"))
+	}
+	if workflows > 0 {
+		parts = append(parts, countText(workflows, "workflow"))
 	}
 	if shells > 0 {
 		parts = append(parts, countText(shells, "shell"))

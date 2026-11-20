@@ -119,6 +119,7 @@ func (c *Controller) StopTask(id string) error {
 	}
 	c.queue.Lock()
 	child := c.children[id]
+	_, workflow := c.workflowRuns[id]
 	var w *Work
 	if child != nil {
 		w = c.interruptByHumanLocked(child)
@@ -138,7 +139,10 @@ func (c *Controller) StopTask(id string) error {
 		return nil
 	}
 	head := fmt.Sprintf("Background task %s stopped by the user: %s", info.ID, commandLine(info.Command))
-	if info.Agent != "" {
+	switch {
+	case workflow:
+		head = fmt.Sprintf("Workflow %s stopped by the user: %s", info.ID, commandLine(info.Command))
+	case info.Agent != "":
 		head = agentStoppedHead(info)
 	}
 	c.queue.Lock()

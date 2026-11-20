@@ -76,7 +76,7 @@ func TestSpans(t *testing.T) {
 		{text: "a @ b"},
 	} {
 		t.Run(tc.text, func(t *testing.T) {
-			assert.Equal(t, tc.want, Spans(tc.text, nil))
+			assert.Equal(t, tc.want, Spans(tc.text, nil, false))
 		})
 	}
 }
@@ -99,9 +99,40 @@ func TestSpansWithSkills(t *testing.T) {
 		{text: "/skill:c"},
 	} {
 		t.Run(tc.text, func(t *testing.T) {
-			assert.Equal(t, tc.want, Spans(tc.text, testSkills()))
+			assert.Equal(t, tc.want, Spans(tc.text, testSkills(), false))
 		})
 	}
+}
+
+func TestSpansWithKeyword(t *testing.T) {
+	cmd := func(line, start, end int) Span { return Span{Line: line, Start: start, End: end, Kind: KindCommand} }
+	for _, tc := range []struct {
+		text string
+		want []Span
+	}{
+		{text: "ultracode", want: []Span{cmd(0, 0, 9)}},
+		{text: "Ultracode.", want: []Span{cmd(0, 0, 9)}},
+		{text: "x ULTRACODE y\nultracode", want: []Span{cmd(0, 2, 11), cmd(1, 0, 9)}},
+		{text: "(ultracode)", want: []Span{cmd(0, 1, 10)}},
+		{text: "ultracoder"},
+		{text: "myultracode"},
+		{text: "ultracode_x"},
+		{text: "see @ultracode", want: []Span{{Start: 4, End: 14, Kind: KindReference}}},
+		{text: "@a/ultracode ultracode", want: []Span{
+			{Start: 0, End: 12, Kind: KindReference}, cmd(0, 13, 22),
+		}},
+		{text: "/plan ultracode", want: []Span{cmd(0, 0, 5)}},
+		{text: "/nope ultracode"},
+		{text: "//plan ultracode", want: []Span{cmd(0, 7, 16)}},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			assert.Equal(t, tc.want, Spans(tc.text, nil, true))
+		})
+	}
+	assert.Nil(t, Spans("ultracode", nil, false), "not offered")
+
+	set, _ := skill.NewSet("skill", []skill.Skill{{Name: "ultracode-review"}}, nil)
+	assert.Equal(t, []Span{cmd(0, 0, 23)}, Spans("/skill:ultracode-review now", set, true), "keyword inside a skill command")
 }
 
 func TestSpansManyReferences(t *testing.T) {
@@ -113,7 +144,7 @@ func TestSpansManyReferences(t *testing.T) {
 			want = append(want, Span{Line: line, Start: start, End: start + 2, Kind: KindReference})
 		}
 	}
-	assert.Equal(t, want, Spans(text, nil))
+	assert.Equal(t, want, Spans(text, nil, false))
 }
 
 func TestMatch(t *testing.T) {
@@ -143,4 +174,20 @@ func TestMatch(t *testing.T) {
 func TestReference(t *testing.T) {
 	assert.Equal(t, "@src/main.go", Reference("src/main.go"))
 	assert.Equal(t, `@my\ dir/a\ b.txt`, Reference("my dir/a b.txt"))
+}
+
+func TestPromptSpans(t *testing.T) {
+	cmd := func(line, start, end int) Span { return Span{Line: line, Start: start, End: end, Kind: KindCommand} }
+	for _, tc := range []struct {
+		text string
+		want []Span
+	}{
+		{text: "/plan x"},
+		{text: "/nope ultracode", want: []Span{cmd(0, 6, 15)}},
+		{text: "x\ny /skill:a @r ultracode", want: []Span{cmd(1, 2, 10), {Line: 1, Start: 11, End: 13, Kind: KindReference}, cmd(1, 14, 23)}},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			assert.Equal(t, tc.want, promptSpans(tc.text, testSkills(), true))
+		})
+	}
 }

@@ -82,20 +82,22 @@ func TestWorkingRowShowsActivity(t *testing.T) {
 
 func TestWorkingRowWaitsOnBackgroundWork(t *testing.T) {
 	for _, tc := range []struct {
-		agents, shells int
-		want           string
+		agents, workflows, shells int
+		want                      string
 	}{
-		{1, 0, "Waiting on 1 agent… 0s"},
-		{2, 0, "Waiting on 2 agents… 0s"},
-		{0, 1, "Waiting on 1 shell… 0s"},
-		{0, 3, "Waiting on 3 shells… 0s"},
-		{1, 1, "Waiting on 1 agent, 1 shell… 0s"},
-		{2, 1, "Waiting on 2 agents, 1 shell… 0s"},
+		{1, 0, 0, "Waiting on 1 agent… 0s"},
+		{2, 0, 0, "Waiting on 2 agents… 0s"},
+		{0, 0, 1, "Waiting on 1 shell… 0s"},
+		{0, 0, 3, "Waiting on 3 shells… 0s"},
+		{0, 1, 0, "Waiting on 1 workflow… 0s"},
+		{1, 0, 1, "Waiting on 1 agent, 1 shell… 0s"},
+		{2, 0, 1, "Waiting on 2 agents, 1 shell… 0s"},
+		{2, 1, 1, "Waiting on 2 agents, 1 workflow, 1 shell… 0s"},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				m, c := newTestModel(t, 60, 20)
-				c.status.Agents, c.status.Shells = tc.agents, tc.shells
+				c.status.Agents, c.status.Workflows, c.status.Shells = tc.agents, tc.workflows, tc.shells
 				send(m, event.TasksChanged{})
 				s := screen(m)
 				assert.Equal(t, "⠋ "+tc.want, s[len(s)-6])

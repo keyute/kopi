@@ -17,16 +17,24 @@ func LoadTools(ctx context.Context, names []string) error {
 	if !ok {
 		return ErrNoTurn
 	}
+	s.loadTools(names)
+	return nil
+}
+
+func (s *Session) loadTools(names []string) {
 	s.toolsMu.Lock()
 	defer s.toolsMu.Unlock()
 	active := s.inner.ActiveToolNames()
+	added := false
 	for _, name := range names {
 		if !slices.Contains(active, name) {
 			active = append(active, name)
+			added = true
 		}
 	}
-	s.inner.SetActiveToolsByName(active)
-	return nil
+	if added {
+		s.inner.SetActiveToolsByName(active)
+	}
 }
 
 // RankTools returns the names of at most limit tools matching query by name

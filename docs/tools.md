@@ -4,7 +4,7 @@
 
 - Sessions are in plan or execute mode. Only the user switches, with `/plan`, `/execute`, Shift+Tab or by approving a plan with [`ExitPlanMode`](#exitplanmode).
 - Plan mode allows:
-  - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `Agent`, `SendMessage`, `TaskOutput`, `TaskStop`, `WebFetch`, `WebSearch`, `AskUserQuestion`, `ExitPlanMode`
+  - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `Agent`, `SendMessage`, `Workflow`, `TaskOutput`, `TaskStop`, `WebFetch`, `WebSearch`, `AskUserQuestion`, `ExitPlanMode`
   - read-only MCP tools
   - `Write` and `Edit` on the session's [plan file](#exitplanmode) only
   - `Bash` only in the [sandbox](sandbox.md), where it cannot write the start directory
@@ -58,18 +58,18 @@
 
 - `Bash`, background commands and MCP tool results keep the first and last 15,000 bytes. When the output is longer, the whole of it is also written to `outputs/<session id>/<random name>.txt` in Kopi's home, and the cut notice names the file and the line to continue from: `[… 70000 bytes cut; full output: /home/me/.kopi/outputs/<session id>/<name>.txt; use Read with offset=140 to continue …]`.
 - The file is created at the first write that would cut the output, so output that fits is never saved. It is mode `0600` in a `0700` folder, and holds at most 64 MiB; past that the notice reads `first <n> bytes of output` in place of `full output`, and the end of the output is only in the result. If the file cannot be created the notice is the plain `[… 70000 bytes cut …]`.
-- `Read` reaches the file with `offset` and `limit`, and `Grep` searches it when `path` names it. Only the session's own files are reachable, one at a time, and read only: `Write` and `Edit` refuse them, and so does everything else in Kopi's home, including the `outputs/` folder itself. The root session and its [subagents](subagents.md) share one folder, and its files show as `output <name>` in a row.
+- `Read` reaches the file with `offset` and `limit`, and `Grep` searches it when `path` names it. Only the session's own files are reachable, one at a time, and read only: `Write` and `Edit` refuse them, and so does everything else in Kopi's home, including the `outputs/` folder itself. The root session, its [subagents](subagents.md) and [workflow agents](workflows.md#workflow-agents) share one folder, and its files show as `output <name>` in a row.
 - A resumed session keeps its folder; a new session gets a new one. Kopi removes files older than a week, and the folders left empty, when it starts, so a resumed session older than that names a file that is gone.
 - The end notice of a background command ends with `[Output saved to <path>]` when its output was saved.
 
 ## Background tasks
 
-- Tasks are background commands and [subagents](subagents.md), numbered `t1`, `t2`, … per run in one sequence.
+- Tasks are background commands, [subagents](subagents.md) and [workflows](workflows.md), numbered `t1`, `t2`, … per run in one sequence.
 - They have no time limit. A command keeps the sandbox profile of the mode it started in; a subagent follows the session's mode unless its definition pins plan mode.
-- `TaskOutput` returns a task's status and its output so far, kept and [saved](#saved-output) like `Bash` output; for a subagent, its activity so far.
 - `/tasks` shows an open task's output from its end and follows new output; PgUp/PgDn or the mouse wheel over the dialog scroll it when it does not fit, and scrolling back to the end follows again. Otherwise those keys scroll the transcript.
-- `TaskStop` kills a command task's process group (on Windows, only the shell), whichever mode it started in, and stops a subagent.
-- When a task completes or fails, the model is told, for a command, its status and its last 20 non-empty output lines, and for a subagent its final message, at the next boundary of the running turn, or in a new turn when none runs. After an interrupt such notices wait for the next prompt; they never return to the input.
+- `TaskOutput` returns a task's status and its output so far, kept and [saved](#saved-output) like `Bash` output; for a subagent, its activity so far, and for a workflow, a line for each agent's start and end.
+- `TaskStop` kills a command task's process group (on Windows, only the shell), whichever mode it started in, and stops a subagent or a workflow.
+- When a task completes or fails, the model is told, for a command, its status and its last 20 non-empty output lines, for a subagent its final message, and for a workflow the value it returned or its error, at the next boundary of the running turn, or in a new turn when none runs. After an interrupt such notices wait for the next prompt; they never return to the input.
 - A task stopped from `/tasks` is reported to the model along with the next prompt or the next task notice, without starting a turn. One the model stops is not reported again.
 - A task that completes, fails or is stopped from `/tasks` adds a `• task t1 finished · <command> · 12s` row to the transcript (`failed` or `stopped` in place of `finished`), restored on resume.
 - Tasks are stopped on exit, when `/new` or `/resume` opens another session, and at the end of `kopi -p`.
@@ -81,6 +81,12 @@
 - `SendMessage` sends a further message to a subagent by task id. A running subagent reads it when its current step ends; one that has ended, or whose run is being stopped, starts again with its earlier context, and the call does not wait for the stopping run to end.
 - The notice the agent receives when a subagent's run completes or fails, or when you stop it, lists the messages queued for it that it never read as undelivered. When the agent stops a subagent with `TaskStop` it receives no notice, and those messages are dropped.
 - Both exist only when a subagent is defined.
+
+## Workflow
+
+- `Workflow` runs a JavaScript script that starts agents and combines their results, and returns a task id at once; the script runs in the background as a [workflow](workflows.md).
+- It is offered only in the fullscreen interface and becomes callable when a prompt you type in the main session contains `ultracode`.
+- It only reads, so it works in plan mode and does not ask by default; a bare `Workflow` rule in `deny` removes it.
 
 ## AskUserQuestion
 
@@ -197,7 +203,6 @@
 ## Not implemented
 
 - Streaming command output.
-- Workflows.
 - Domain rules for `WebFetch`.
 - Domain filters and citation markers for `WebSearch`.
 - Other search backends (an MCP server can provide one).

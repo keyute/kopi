@@ -50,6 +50,7 @@ type Config struct {
 	Sandbox     Sandbox              `koanf:"sandbox"`
 	Skills      Skills               `koanf:"skills"`
 	Classifier  Classifier           `koanf:"classifier"`
+	Workflows   Workflows            `koanf:"workflows"`
 	MCPServers  map[string]MCPServer `koanf:"mcpServers"`
 }
 
@@ -86,6 +87,15 @@ type Classifier struct {
 	Enabled      bool     `koanf:"enabled"`
 	Model        string   `koanf:"model"` // "provider/id"; empty means model
 	Instructions []string `koanf:"instructions"`
+}
+
+// Workflows configures the agents a workflow script starts.
+type Workflows struct {
+	Model string `koanf:"model"` // "provider/id"; empty means a workflow agent without a model of its own runs on the session model
+	// MaxWorkflows is how many workflows run at once in a session.
+	MaxWorkflows int `koanf:"maxWorkflows"`
+	// MaxAgents is how many of one workflow's agents run at once.
+	MaxAgents int `koanf:"maxAgents"`
 }
 
 // MCPServer is one entry of the standard mcpServers object.
@@ -133,6 +143,7 @@ func Defaults() Layer {
 	values["sandbox"] = map[string]any{"allowWrite": []string{}, "denyRead": []string{}, "network": false, "allowDomains": []string{}, "denyDomains": []string{}, "allowUnsandboxed": true}
 	values["skills"] = map[string]any{"prefix": "skill"}
 	values["classifier"] = map[string]any{"enabled": false, "instructions": []string{}}
+	values["workflows"] = map[string]any{"maxWorkflows": 4, "maxAgents": 16}
 	values["mcpServers"] = map[string]any{}
 	return Map("default", values)
 }
@@ -177,7 +188,7 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 		if err := decode(k, &c); err != nil {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 		}
-		for _, ref := range []string{c.Model, c.SmallModel, c.Classifier.Model} {
+		for _, ref := range []string{c.Model, c.SmallModel, c.Classifier.Model, c.Workflows.Model} {
 			if ref == "" {
 				continue
 			}
@@ -214,6 +225,14 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 		}
 		if err := validateClassifier(c.Classifier); err != nil {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
+		}
+		for _, limit := range []struct {
+			key   string
+			value int
+		}{{"workflows.maxWorkflows", c.Workflows.MaxWorkflows}, {"workflows.maxAgents", c.Workflows.MaxAgents}} {
+			if k.Exists(limit.key) && limit.value < 1 {
+				return nil, fmt.Errorf("config layer %s: %w: %s: %d is less than 1", l.Name, ErrInvalidValue, limit.key, limit.value)
+			}
 		}
 		if err := validateMCPServers(c.MCPServers); err != nil {
 			return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
@@ -467,6 +486,9 @@ func (r *Resolved) Entries() []Entry {
 		"classifier.enabled":       c.Classifier.Enabled,
 		"classifier.model":         c.Classifier.Model,
 		"classifier.instructions":  c.Classifier.Instructions,
+		"workflows.model":          c.Workflows.Model,
+		"workflows.maxWorkflows":   c.Workflows.MaxWorkflows,
+		"workflows.maxAgents":      c.Workflows.MaxAgents,
 	}
 	for _, action := range KeyActions {
 		values["keys."+action] = c.Keys[action]
