@@ -188,7 +188,10 @@ func TestReadDisplayTitle(t *testing.T) {
 		name, args, want string
 	}{
 		{"relative path", `{"file_path":"cmd/root.go"}`, "Read cmd/root.go"},
-		{"absolute path", `{"file_path":"/w/a.txt","offset":3}`, "Read /w/a.txt"},
+		{"absolute path", `{"file_path":"/w/a.txt"}`, "Read /w/a.txt"},
+		{"offset only", `{"file_path":"a.txt","offset":40}`, "Read a.txt:40-"},
+		{"limit only", `{"file_path":"a.txt","limit":50}`, "Read a.txt:1-50"},
+		{"offset and limit", `{"file_path":"a.txt","offset":40,"limit":50}`, "Read a.txt:40-89"},
 		{"missing path", `{}`, "Read"},
 		{"bad json", `{"file_path":`, "Read"},
 	} {
@@ -223,6 +226,15 @@ func TestReadDisplaySummary(t *testing.T) {
 			assert.Equal(t, tc.want, tool.Display.Summary(out))
 		})
 	}
+}
+
+func TestReadDisplayBody(t *testing.T) {
+	tool, _ := newReadTool(t)
+
+	assert.Equal(t, "     1\tx\n", tool.Display.Body("     1\tx\n"))
+	assert.Empty(t, tool.Display.Body(emptyFileNotice))
+	assert.Empty(t, tool.Display.Body("(offset 11 is past the end of the file, which has 10 lines)"))
+	assert.Empty(t, tool.Display.Body("(image/png, 20 bytes)"))
 }
 
 func TestReadSummaryOmittedImageIsNotAnImage(t *testing.T) {

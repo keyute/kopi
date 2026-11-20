@@ -40,17 +40,16 @@ func TestWriteCreatesFileAndReports(t *testing.T) {
 	tool, dir := newWriteTool(t)
 
 	for _, tc := range []struct {
-		name, args, path, content, want, summary string
+		name, args, path, content, want string
 	}{
-		{"lines", `{"file_path":"sub/a.txt","content":"one\ntwo\n"}`, "sub/a.txt", "one\ntwo\n", "wrote 2 lines to sub/a.txt", "2 lines"},
-		{"one line", `{"file_path":"b.txt","content":"one"}`, "b.txt", "one", "wrote 1 line to b.txt", "1 line"},
-		{"empty", `{"file_path":"c.txt","content":""}`, "c.txt", "", "wrote 0 lines to c.txt", "0 lines"},
+		{"lines", `{"file_path":"sub/a.txt","content":"one\ntwo\n"}`, "sub/a.txt", "one\ntwo\n", "wrote 2 lines to sub/a.txt"},
+		{"one line", `{"file_path":"b.txt","content":"one"}`, "b.txt", "one", "wrote 1 line to b.txt"},
+		{"empty", `{"file_path":"c.txt","content":""}`, "c.txt", "", "wrote 0 lines to c.txt"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, err := tool.Run(context.Background(), json.RawMessage(tc.args), allowTarget)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, out.Text)
-			assert.Equal(t, tc.summary, tool.Display.Summary(out.Text))
 			got, err := os.ReadFile(filepath.Join(dir, tc.path))
 			require.NoError(t, err)
 			assert.Equal(t, tc.content, string(got))
@@ -85,6 +84,34 @@ func TestWriteDisplayTitle(t *testing.T) {
 
 	assert.Equal(t, "Write cmd/root.go", tool.Display.Title(json.RawMessage(`{"file_path":"cmd/root.go"}`)))
 	assert.Equal(t, "Write", tool.Display.Title(json.RawMessage(`{"file_path":`)))
+}
+
+func TestWriteDisplayDone(t *testing.T) {
+	tool, _ := newWriteTool(t)
+
+	assert.Equal(t, "Wrote cmd/root.go", tool.Display.Done(json.RawMessage(`{"file_path":"cmd/root.go"}`)))
+	assert.Equal(t, "Wrote", tool.Display.Done(json.RawMessage(`{"file_path":`)))
+	assert.Nil(t, tool.Display.Summary)
+}
+
+func TestWriteDisplayChange(t *testing.T) {
+	tool, _ := newWriteTool(t)
+
+	summary, lines := tool.Display.Change(json.RawMessage(`{"file_path":"a.txt","content":"one\ntwo\n"}`))
+	assert.Equal(t, "+2", summary)
+	assert.Equal(t, []PreviewLine{{Kind: Added, Text: "one"}, {Kind: Added, Text: "two"}}, lines)
+
+	args, err := json.Marshal(map[string]string{"file_path": "a.txt", "content": numberedLines(13) + strings.Repeat("é", maxLineChars+5)})
+	require.NoError(t, err)
+	summary, lines = tool.Display.Change(args)
+	assert.Equal(t, "+14", summary)
+	require.Len(t, lines, 14)
+	assert.Equal(t, PreviewLine{Kind: Added, Text: "line 13"}, lines[12])
+	assert.Equal(t, strings.Repeat("é", maxLineChars), lines[13].Text)
+
+	summary, lines = tool.Display.Change(json.RawMessage(`{"file_path":"a.txt","content":""}`))
+	assert.Equal(t, "+0", summary)
+	assert.Empty(t, lines)
 }
 
 func TestWriteDisplayPreview(t *testing.T) {

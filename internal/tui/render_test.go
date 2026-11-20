@@ -1,13 +1,16 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/tool"
@@ -40,9 +43,9 @@ func TestRenderStripsUntrustedTerminalControls(t *testing.T) {
 			const width = 24
 			clean := "ordinary café 世界\n\tmore words wrap here"
 			for _, state := range []transcript.State{transcript.OK, transcript.Failed} {
-				safe := transcript.Call{ID: "call", State: state, Title: clean, Summary: clean, Output: clean}
+				safe := transcript.Call{ID: "call", State: state, Title: clean, Summary: clean, Body: clean}
 				unsafe := safe
-				unsafe.Title, unsafe.Summary, unsafe.Output = attack+clean, attack+clean, attack+clean
+				unsafe.Title, unsafe.Summary, unsafe.Body = attack+clean, attack+clean, attack+clean
 				fold := blockFolds{expanded: []bool{true}, open: true}
 				want := renderRow(safe, fold, width, mocha())
 				got := renderRow(unsafe, fold, width, mocha())
@@ -126,7 +129,7 @@ func agentStart(id, description string) event.ToolStart {
 }
 
 func agentEnd(id string) event.ToolEnd {
-	return event.ToolEnd{CallID: id, Name: "Agent", Summary: "launched", Output: "Agent t1 started."}
+	return event.ToolEnd{CallID: id, Name: "Agent", Summary: "launched", Output: "Agent t1 started.", Body: "Agent t1 started."}
 }
 
 func TestAgentToolRowAndGroup(t *testing.T) {
@@ -169,4 +172,116 @@ func TestPlanBlockDrawsAMutedTitleAndMarkdownAndRerendersWhenEdited(t *testing.T
 	joined = strings.Join(text()[1:], "\n")
 	assert.Contains(t, joined, "second step")
 	assert.NotContains(t, joined, "first step")
+}
+
+func TestOKRowShowsItsDoneForm(t *testing.T) {
+	m, _ := newTestModel(t, 60, 20)
+	send(m, event.ToolStart{CallID: "a", Name: "Bash", Title: "Bash ls", Done: "Ran ls", Action: tool.Action{Verb: "Ran", One: "command", Many: "commands"}},
+		event.ToolEnd{CallID: "a", Name: "Bash", Summary: "2 lines", Output: "a\nb", Body: "a\nb"})
+	assert.Equal(t, []string{"", "• Ran ls", "  ↳ 2 lines"}, body(m))
+}
+
+func TestGroupSentenceCountsUnsandboxedCalls(t *testing.T) {
+	bash := tool.Action{Verb: "Ran", One: "command", Many: "commands"}
+	events := []event.Event{
+		event.ToolStart{CallID: "a", Name: "Bash", Title: "Bash a", Done: "Ran a", Action: bash},
+		event.ToolEnd{CallID: "a", Name: "Bash", Summary: "no output"},
+		event.ToolStart{CallID: "b", Name: "Bash", Title: "Bash (unsandboxed) b", Done: "Ran b · unsandboxed", Action: bash, Unsandboxed: true},
+		event.ToolEnd{CallID: "b", Name: "Bash", Summary: "no output"},
+	}
+	m, _ := newTestModel(t, 60, 20)
+	send(m, events...)
+	assert.Equal(t, []string{"", "• Ran 2 commands (1 unsandboxed)", "  ↳ Ran a · no output", "  ↳ Ran b · unsandboxed · no output"}, body(m))
+
+	send(m, event.TextDelta{Text: "Done."})
+	assert.Equal(t, []string{"", "▸ Ran 2 commands (1 unsandboxed)", "", "Done."}, body(m))
+}
+
+func TestRejectedRowShowsFeedbackInFull(t *testing.T) {
+	th := mocha()
+	m, _ := newTestModel(t, 60, 20)
+	send(m, start("a"), event.ToolEnd{CallID: "a", IsError: true, Kind: event.EndRejected, Summary: "rejected", Body: "use b\ninstead"})
+	assert.Equal(t, []string{"", "• a.go", "  ↳ rejected", "    use b", "    instead"}, body(m))
+	lines := m.view().lines
+	assert.Equal(t, fg(th.warning).Render("• ")+"a.go", lines[len(lines)-4].text)
+	for _, l := range lines {
+		assert.Equal(t, hit{}, l.hit)
+	}
+
+	m, _ = newTestModel(t, 60, 20)
+	send(m, start("a"), event.ToolEnd{CallID: "a", IsError: true, Kind: event.EndRejected, Summary: "rejected"})
+	assert.Equal(t, []string{"", "• a.go", "  ↳ rejected"}, body(m))
+}
+
+func TestDeniedRowHasNoBodyAndNoHit(t *testing.T) {
+	m, _ := newTestModel(t, 60, 20)
+	send(m, start("a"), event.ToolEnd{CallID: "a", IsError: true, Kind: event.EndDenied, Summary: "denied · plan mode", Output: "refused"})
+	assert.Equal(t, []string{"", "• a.go", "  ↳ denied · plan mode"}, body(m))
+	for _, l := range m.view().lines {
+		assert.Equal(t, hit{}, l.hit)
+	}
+}
+
+func TestFailedRowDrawsErrorSummaryAndCapsItsBody(t *testing.T) {
+	th := mocha()
+	five := "1\n2\n\n3\n4\n5\n"
+	got := renderRow(transcript.Call{ID: "a", State: transcript.Failed, Title: "t", Summary: "failed", Body: five}, blockFolds{expanded: []bool{false}}, 40, th)
+	require.Len(t, got, 8)
+	assert.Equal(t, line{text: fg(th.error).Render("  ↳ ") + fg(th.error).Render("failed")}, got[1])
+	assert.Equal(t, hit{}, got[0].hit, "five lines are shown in full, so there is nothing to open")
+
+	six := transcript.Call{ID: "a", State: transcript.Failed, Title: "t", Summary: "failed", Body: five + "6\n"}
+	got = renderRow(six, blockFolds{expanded: []bool{false}}, 40, th)
+	assert.Equal(t, hit{kind: hitOutput, id: "a"}, got[0].hit)
+	assert.Equal(t, hit{}, got[1].hit)
+	var text []string
+	for _, l := range got {
+		text = append(text, ansi.Strip(l.text))
+	}
+	assert.Equal(t, []string{"• t", "  ↳ failed", "    1", "    2", "    … 2 more lines", "    5", "    6"}, text)
+}
+
+func TestEditRowOpensToAllItsChangedLines(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var preview []tool.PreviewLine
+		want := []string{"", "• Edited a.go", "  ↳ +30 -30"}
+		for i := range 30 {
+			preview = append(preview, tool.PreviewLine{Kind: tool.Removed, Text: fmt.Sprintf("old%d", i)})
+		}
+		for i := range 30 {
+			preview = append(preview, tool.PreviewLine{Kind: tool.Added, Text: fmt.Sprintf("new%d", i)})
+		}
+		m, _ := newTestModel(t, 40, 80)
+		send(m, event.ToolStart{CallID: "a", Name: "Edit", Title: "Edit a.go", Done: "Edited a.go", Change: "+30 -30", Preview: preview},
+			event.ToolEnd{CallID: "a", Name: "Edit", Output: "replaced 1 occurrence"})
+		require.Equal(t, want, body(m))
+
+		clickText(t, m, "• Edited a.go")
+		got := body(m)
+		require.Len(t, got, 3+60)
+		assert.Equal(t, "    - old0", got[3])
+		assert.Equal(t, "    - old29", got[32])
+		assert.Equal(t, "    + new0", got[33])
+		assert.Equal(t, "    + new29", got[62])
+	})
+}
+
+func TestCarriageReturnsKeepWhatFollowsTheLast(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	send(m, start("a"), okOut("a", "3 lines", "10%\r50%\r100%\r\nline\r\nx\ry\r"))
+	press(m, ctrlO)
+	assert.Equal(t, []string{"", "• a.go", "  ↳ 3 lines", "    100%", "    line", "    y"}, body(m))
+
+	var pv []tool.PreviewLine
+	pv = append(pv, tool.PreviewLine{Kind: tool.Added, Text: "a\rb"})
+	assert.Equal(t, line{text: "    " + fg(mocha().success).Render("+ ") + fg(mocha().success).Render("ab")}, renderRow(transcript.Call{State: transcript.OK, Title: "t", Preview: pv}, blockFolds{expanded: []bool{true}}, 40, mocha())[1])
+}
+
+func TestSoloRowBreaksAGroup(t *testing.T) {
+	m, _ := newTestModel(t, 60, 20)
+	send(m, start("a"), ok("a", "1 line"), start("b"), ok("b", "1 line"),
+		event.ToolStart{CallID: "q", Name: "AskUserQuestion", Title: "Asked about scope", Solo: true},
+		event.ToolEnd{CallID: "q", Name: "AskUserQuestion", Summary: "all"},
+		start("c"), ok("c", "1 line"))
+	assert.Equal(t, []string{"", "▸ Read 2 files", "", "• Asked about scope", "  ↳ all", "", "• c.go", "  ↳ 1 line"}, body(m))
 }

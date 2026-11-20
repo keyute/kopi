@@ -16,12 +16,24 @@ const (
 	Failed
 	// Unfinished is a call whose turn ended before it settled; it never will.
 	Unfinished
+	// Denied is a call the policy refused, Rejected one the human rejected.
+	Denied
+	Rejected
 )
 
+// Call is one tool call. Title is the call's name until it succeeds, then its
+// done form; Preview is a successful file change's lines.
 type Call struct {
-	ID, Title, Summary, Output string
-	Action                     tool.Action
-	State                      State
+	ID, Title, Summary, Body string
+	Action                   tool.Action
+	State                    State
+	Preview                  []tool.PreviewLine
+	// Unsandboxed is a call that opted out of the OS sandbox.
+	Unsandboxed bool
+	// solo is a call that records a human decision and never joins a group;
+	// done and change come from the start event and are spent at its end.
+	solo         bool
+	done, change string
 }
 
 // Block is one drawable unit. Key is unique within the transcript and stable
@@ -149,8 +161,9 @@ func (t *Transcript) Blocks() []Block {
 	return blocks
 }
 
-// appendStretch splits the stretch at each failed or unfinished call; each
-// segment's ok calls fold into a group, with its running calls below.
+// appendStretch splits the stretch at each call that did not succeed and each
+// solo call; each segment's ok calls fold into a group, with its running calls
+// below.
 func appendStretch(blocks []Block, stretch []Call, historical bool) []Block {
 	var segment []Call
 	flush := func() {
@@ -158,7 +171,7 @@ func appendStretch(blocks []Block, stretch []Call, historical bool) []Block {
 		segment = nil
 	}
 	for _, c := range stretch {
-		if c.State == Failed || c.State == Unfinished {
+		if c.solo || c.State != OK && c.State != Running {
 			flush()
 			blocks = append(blocks, Row{Call: c})
 			continue

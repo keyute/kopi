@@ -102,6 +102,17 @@ func newWebFetch(f *fetcher, answer func(ctx context.Context, system, prompt str
 				}
 				return titleLine("WebFetch " + args.URL)
 			},
+			Done: func(raw json.RawMessage) string {
+				var args webFetchArgs
+				_ = json.Unmarshal(raw, &args)
+				if args.URL == "" {
+					return "Fetched"
+				}
+				if u, err := url.Parse(args.URL); err == nil && u.Host != "" {
+					return titleLine("Fetched " + u.Host)
+				}
+				return titleLine("Fetched " + args.URL)
+			},
 			Summary: func(output string) string {
 				// An answer ends in its source line; a redirect is one line.
 				i := strings.LastIndex(output, webFetchSource)

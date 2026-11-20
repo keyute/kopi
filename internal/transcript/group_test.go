@@ -28,3 +28,9 @@ func TestGroupSentence(t *testing.T) {
 		})
 	}
 }
+
+func TestGroupSentenceCountsUnsandboxed(t *testing.T) {
+	ran := tool.Action{Verb: "Ran", One: "command", Many: "commands"}
+	g := Group{Calls: []Call{{Action: readAction}, {Action: ran}, {Action: ran, Unsandboxed: true}, {Action: ran}}}
+	assert.Equal(t, "Read 1 file, ran 3 commands (1 unsandboxed)", g.Sentence())
+}

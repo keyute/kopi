@@ -14,6 +14,21 @@ import (
 	"github.com/keyute/kopi/internal/event"
 )
 
+// abortedCall is the text PiG's agent loop gives a tool call it abandoned before
+// running it because the turn's context was already cancelled (tool_execution.go
+// errorToolResult("Operation aborted")); PiG exports no constant for it.
+const abortedCall = "Operation aborted"
+
+// toolEnd builds a ToolEnd from a PiG result, live or stored. A call PiG
+// aborted before it ran is marked interrupted, as a cancelled call is.
+func toolEnd(callID, name string, content []ai.ToolResultMessageContent, isError bool) event.ToolEnd {
+	end := event.ToolEnd{CallID: callID, Name: name, Output: toolResultContentText(content), IsError: isError}
+	if isError && end.Output == abortedCall {
+		end.Kind = event.EndInterrupted
+	}
+	return end
+}
+
 func translate(ev agent.AgentEvent) (event.Event, bool) {
 	switch ev := ev.(type) {
 	case agent.MessageUpdateEvent:
@@ -26,7 +41,7 @@ func translate(ev agent.AgentEvent) (event.Event, bool) {
 	case agent.ToolExecutionStartEvent:
 		return event.ToolStart{CallID: ev.ToolCallID, Name: ev.ToolName, Args: compactJSON(ev.Args)}, true
 	case agent.ToolExecutionEndEvent:
-		return event.ToolEnd{CallID: ev.ToolCallID, Name: ev.ToolName, Output: toolResultContentText(ev.Result.Content), IsError: ev.IsError}, true
+		return toolEnd(ev.ToolCallID, ev.ToolName, ev.Result.Content, ev.IsError), true
 	case agent.AutoRetryStartEvent:
 		delay := time.Duration(ev.DelayMs) * time.Millisecond
 		return event.Notice{Text: fmt.Sprintf("retrying (attempt %d/%d) in %s: %s", ev.Attempt, ev.MaxAttempts, delay, pigTexts.Replace(ev.ErrorMessage))}, true

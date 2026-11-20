@@ -282,7 +282,7 @@ func ok(id, summary string) event.ToolEnd {
 }
 
 func okOut(id, summary, output string) event.ToolEnd {
-	return event.ToolEnd{CallID: id, Name: "Read", Summary: summary, Output: output}
+	return event.ToolEnd{CallID: id, Name: "Read", Summary: summary, Output: output, Body: output}
 }
 
 func TestPromptTurnRendersUserBoxThenLiveThenSealedGroup(t *testing.T) {
@@ -312,8 +312,8 @@ func TestRowStates(t *testing.T) {
 		{"ok", []event.Event{start("a"), ok("a", "3 lines")}, []string{"", "• a.go", "  ↳ 3 lines"}},
 		{
 			"failed",
-			[]event.Event{start("a"), event.ToolEnd{CallID: "a", IsError: true, Output: "boom\nbang\n"}},
-			[]string{"", "• a.go", "  boom", "  bang"},
+			[]event.Event{start("a"), event.ToolEnd{CallID: "a", IsError: true, Summary: "failed", Output: "boom\nbang\n", Body: "boom\nbang\n"}},
+			[]string{"", "• a.go", "  ↳ failed", "    boom", "    bang"},
 		},
 		{
 			"unfinished",
@@ -489,7 +489,7 @@ func TestSessionChangedRestoresHistory(t *testing.T) {
 		start("a"), okOut("a", "3 lines", "a1"), start("b"), ok("b", "1 line"),
 		event.TextDelta{Text: "reply"},
 		start("c"),
-		event.ToolEnd{CallID: "c", IsError: true, Output: "nope"},
+		event.ToolEnd{CallID: "c", IsError: true, Output: "nope", Body: "nope"},
 		event.TurnEnd{Elapsed: 5 * time.Second},
 	}})
 	send(m, start("d"), ok("d", "2 lines"), start("e"), ok("e", "4 lines"))
@@ -498,7 +498,7 @@ func TestSessionChangedRestoresHistory(t *testing.T) {
 		"", "", "❯ earlier", "",
 		"", "▸ Read 2 files",
 		"", "reply",
-		"", "• c.go", "  nope",
+		"", "• c.go", "    nope",
 		"", "κ Worked for 5s",
 		"", "• Read 2 files", "  ↳ d.go · 2 lines", "  ↳ e.go · 4 lines",
 	}, body(m))

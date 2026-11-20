@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/keyute/kopi/internal/policy"
@@ -63,12 +64,9 @@ func NewWrite(ws *Workspace) Tool {
 			return Result{Text: fmt.Sprintf("wrote %s to %s", lineCount(countLines(*args.Content)), args.FilePath)}, nil
 		},
 		Display: Display{
-			Title: pathTitle("Write"),
-			// Relies on Run's output shape: "wrote N lines to P".
-			Summary: func(output string) string {
-				n, _, _ := strings.Cut(strings.TrimPrefix(output, "wrote "), " to ")
-				return n
-			},
+			Title:   pathTitle(ws, "Write"),
+			Done:    pathTitle(ws, "Wrote"),
+			Change:  writeChange,
 			Preview: writePreview,
 			Action:  Action{Verb: "Wrote", One: "file", Many: "files"},
 		},
@@ -98,9 +96,34 @@ func writePreview(raw json.RawMessage) []PreviewLine {
 	return append([]PreviewLine{{Kind: Context, Text: lineCount(countLines(args.Content))}}, previewLines(Added, args.Content)...)
 }
 
+// writeChange runs before the arguments are validated, so it decodes leniently.
+func writeChange(raw json.RawMessage) (string, []PreviewLine) {
+	var args struct {
+		Content string `json:"content"`
+	}
+	_ = json.Unmarshal(raw, &args)
+	return fmt.Sprintf("+%d", countLines(args.Content)), changeLines(Added, args.Content)
+}
+
+// changeLines is every line of text as kind, each cut to maxLineChars runes.
+func changeLines(kind PreviewKind, text string) []PreviewLine {
+	lines := previewLinesCap(kind, text, math.MaxInt)
+	for i, l := range lines {
+		n := 0
+		for j := range l.Text {
+			if n == maxLineChars {
+				lines[i].Text = l.Text[:j]
+				break
+			}
+			n++
+		}
+	}
+	return lines
+}
+
 // pathTitle returns a Display.Title naming the call by its file_path. It runs
 // before the arguments are validated, so it decodes leniently.
-func pathTitle(verb string) func(json.RawMessage) string {
+func pathTitle(ws *Workspace, verb string) func(json.RawMessage) string {
 	return func(raw json.RawMessage) string {
 		var args struct {
 			FilePath string `json:"file_path"`
@@ -109,22 +132,28 @@ func pathTitle(verb string) func(json.RawMessage) string {
 		if args.FilePath == "" {
 			return verb
 		}
-		return verb + " " + args.FilePath
+		return verb + " " + ws.shown(args.FilePath)
 	}
 }
 
 // previewLines shows up to maxPreviewLines of lines as kind, then a marker
 // counting the rest.
 func previewLines(kind PreviewKind, text string) []PreviewLine {
+	return previewLinesCap(kind, text, maxPreviewLines)
+}
+
+// previewLinesCap shows up to limit of lines as kind, then a marker counting
+// the rest.
+func previewLinesCap(kind PreviewKind, text string, limit int) []PreviewLine {
 	n := countLines(text)
-	out := make([]PreviewLine, 0, min(n, maxPreviewLines)+1)
+	out := make([]PreviewLine, 0, min(n, limit)+1)
 	restText := strings.TrimSuffix(text, "\n")
-	for range min(n, maxPreviewLines) {
+	for range min(n, limit) {
 		line, rest, _ := strings.Cut(restText, "\n")
 		out = append(out, PreviewLine{Kind: kind, Text: line})
 		restText = rest
 	}
-	switch rest := n - maxPreviewLines; {
+	switch rest := n - limit; {
 	case rest == 1:
 		out = append(out, PreviewLine{Kind: Context, Text: "… 1 more line"})
 	case rest > 1:

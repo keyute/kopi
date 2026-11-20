@@ -35,6 +35,7 @@
 - A `path` inside `.git` or inside an ignored directory is searched.
 - None of `Glob`, `Grep` and `LS` follows a symlink it finds while searching or listing (`LS` lists them, except one whose destination cannot be resolved). A `path` that is itself a symlink is resolved, as for `Read`.
 - `Write` creates a file or replaces its whole content.
+- A file tool's row shows its path relative to the start directory, `plan` for the session's [plan file](#exitplanmode), and the path as written outside the start directory. `Read` adds the lines it was asked for (`Read a.go:40-89`), `Write` its line count (`+40`) and `Edit` the lines removed and added (`+3 -1`, with ` · 2 occurrences` when `replace_all` replaced several). See [Transcript](usage.md#transcript).
 - `Edit` replaces a string that must match exactly once unless `replace_all` is set, in a text file of up to 10 MiB.
 - `Write` and `Edit` work inside the start directory, replace the file atomically and keep its mode.
 - `Read`, `Write` and `Edit` refuse Kopi's home, including paths there that do not exist yet, except the session's [plan file](#exitplanmode).
@@ -45,10 +46,11 @@
 - Runs a command with `bash -c` (`/bin/sh` when `bash` is not on `PATH`) in the start directory, with Kopi's environment.
 - Every call is a fresh shell with no input; `cd` and variables do not carry over.
 - `timeout` is in milliseconds, default 120000, at most 600000.
-- A command still running at its timeout keeps running as a [background task](#background-tasks), as does one started with `run_in_background` or moved with the `background` key. The result names the task.
+- A command still running at its timeout keeps running as a [background task](#background-tasks), as does one started with `run_in_background` or moved with the `background` key. The result names the task, and the row reads `↳ task t1` for a command started in the background and `↳ moved to background · task t1` for one moved there.
 - On interrupt a foreground command's whole process group is killed (on Windows, only the shell).
 - Returns stdout and stderr combined, keeping the first and last 15,000 bytes.
-- A non-zero exit is an error reporting the exit code.
+- A non-zero exit is an error reporting the exit code; its row reads `↳ exit code 1 · 84 lines`, with the output under it.
+- Its row reads `Ran <command>` once it succeeded, `Started <command> in background` for `run_in_background`, and ends ` · unsandboxed` when the call set `unsandboxed`.
 - Runs in the [sandbox](sandbox.md), unless the call sets `unsandboxed` (offered only when sandboxed and `sandbox.allowUnsandboxed` is true), which asks like `Bash` without the sandbox, see [outside the sandbox](sandbox.md#outside-the-sandbox).
 
 ## Background tasks
@@ -72,7 +74,7 @@
 
 ## AskUserQuestion
 
-- Puts one to four questions to you and waits for the answers.
+- Puts one to four questions to you and waits for the answers. Its row (`Asked about …`) stays in the transcript, with the answers under it, and never folds into a group.
 - Each question has a header, shown as its tab and cut with `…` past 16 columns (the model is asked for at most 12 characters), and two to four options, each with a description. A question may allow several options (multi-select).
 - A single-select option may have a markdown preview, shown in a box while the option is focused: beside the options at 64 columns or wider, below them otherwise. Beside the options the box is as wide as the widest preview of that question needs, up to the room there; below them it spans the width. A preview that does not fit shows `… N earlier lines` and `… N more lines` inside the box and scrolls with PgUp and PgDn, or with the mouse wheel over the dialog.
 - Every question ends with a `Type something.` row for a typed answer, and an option labelled `Other` is refused. A single-select answer is one option or typed text, a multi-select answer is any options and/or typed text.
@@ -106,7 +108,7 @@
 
 ## ExitPlanMode
 
-- Takes no arguments. In plan mode it shows you the plan from the session's plan file and asks `Approve this plan?` with `Yes` and `No`.
+- Takes no arguments. Its row reads `Plan approval`, with `approved`, `revision requested` or `dismissed` under it, and never folds into a group; a revision opens to your feedback. In plan mode it shows you the plan from the session's plan file and asks `Approve this plan?` with `Yes` and `No`.
 - Each root session in the fullscreen interface has a plan file, `plans/<session id>.md` in Kopi's home. The model writes it with `Write` and `Edit`; `Read`, `Write` and `Edit` reach that one file in both modes without asking by default. [Rules](permissions.md#precedence) still apply to it.
 - A resumed session keeps its plan file; a new session gets a new one. Kopi never deletes plan files.
 - The plan is drawn in the main session's transcript as Markdown when it is presented, and that view opens if you were viewing a subagent. On resume only the tool's row is restored; the plan is in the file.

@@ -112,6 +112,7 @@ func TestTaskOutputDisplay(t *testing.T) {
 
 	assert.Equal(t, "TaskOutput t1", tool.Display.Title(json.RawMessage(`{"task_id":"t1"}`)))
 	assert.Equal(t, "TaskOutput", tool.Display.Title(json.RawMessage(`{}`)))
+	assert.Equal(t, "Checked task t1", tool.Display.Done(json.RawMessage(`{"task_id":"t1"}`)))
 	assert.Equal(t, "running for 42s", tool.Display.Summary("Task t1 running for 42s.\n(no output)"))
 	assert.Equal(t, "completed (exit code 0)", tool.Display.Summary("Task t1 completed (exit code 0).\nhi\n"))
 	assert.Equal(t, "stopped", tool.Display.Summary("Task t1 stopped.\n(no output)"))

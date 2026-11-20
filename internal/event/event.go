@@ -30,18 +30,42 @@ type TextDelta struct{ Text string }
 
 type ThinkingDelta struct{ Text string }
 
-// ToolStart carries the call's JSON arguments, compacted.
+// ToolStart carries the call's JSON arguments, compacted. Title names the call
+// and Done names it once it succeeded, "" when Title serves. Change is the
+// line a file change shows under the row and Preview its removed and added
+// lines. Solo marks a row that records a human decision, and Unsandboxed a
+// call that opts out of the OS sandbox.
 type ToolStart struct {
 	CallID, Name, Args string
-	Title              string
+	Title, Done        string
 	Action             tool.Action
+	Change             string
+	Preview            []tool.PreviewLine
+	Solo, Unsandboxed  bool
 }
 
-// ToolEnd's Summary is empty for a failed call.
+// EndKind tells how a call ended; the zero value is that it ran.
+type EndKind int
+
+const (
+	// EndRan is a call that ran: it succeeded, or failed when IsError is set.
+	EndRan EndKind = iota
+	// EndDenied is a call the policy refused.
+	EndDenied
+	// EndRejected is a call the human rejected.
+	EndRejected
+	// EndInterrupted is a call cancelled before it finished.
+	EndInterrupted
+)
+
+// ToolEnd's Output is the raw result text. Summary is the line under the call,
+// set for a call that did not succeed too. Body is what an opened row shows:
+// the result of a successful call, the detail of one that did not.
 type ToolEnd struct {
 	CallID, Name, Output string
 	IsError              bool
-	Summary              string
+	Kind                 EndKind
+	Summary, Body        string
 }
 
 // ApprovalRequested asks the human to approve one call; answer with

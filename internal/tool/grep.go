@@ -117,8 +117,10 @@ func NewGrep(ws *Workspace, hidden Hidden) Tool {
 			return grep(ctx, ws, hidden, args, re, match, root, rel, info)
 		},
 		Display: Display{
-			Title:   searchTitle("Grep"),
+			Title:   searchTitle(ws, "Grep", false),
+			Done:    searchTitle(ws, "Searched for", true),
 			Summary: foundSummary,
+			Body:    foundBody,
 			Action:  Action{Verb: "Searched for", One: "pattern", Many: "patterns"},
 		},
 	}

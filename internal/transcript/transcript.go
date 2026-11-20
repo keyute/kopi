@@ -3,6 +3,7 @@
 package transcript
 
 import (
+	"slices"
 	"strings"
 	"time"
 
@@ -65,23 +66,43 @@ func (t *Transcript) Apply(ev event.Event) {
 		t.items = append(t.items, item{kind: assistantItem, text: ev.Text})
 	case event.ToolStart:
 		t.items = append(t.items, item{kind: callItem, call: Call{
-			ID:     ev.CallID,
-			Title:  ev.Title,
-			Action: ev.Action,
-			State:  Running,
+			ID:          ev.CallID,
+			Title:       ev.Title,
+			Action:      ev.Action,
+			State:       Running,
+			Preview:     ev.Preview,
+			Unsandboxed: ev.Unsandboxed,
+			solo:        ev.Solo,
+			done:        ev.Done,
+			change:      ev.Change,
 		}})
 	case event.ToolEnd:
 		c := t.running(ev.CallID)
 		if c == nil {
 			return
 		}
-		c.Output = ev.Output
-		if ev.IsError {
+		done, change := c.done, c.change
+		c.done, c.change = "", ""
+		c.Body = ev.Body
+		switch {
+		case ev.Kind == event.EndInterrupted:
+			c.State = Unfinished
+		case ev.Kind == event.EndDenied:
+			c.State = Denied
+		case ev.Kind == event.EndRejected:
+			c.State = Rejected
+		case ev.IsError:
 			c.State = Failed
+		default:
+			c.State = OK
+			if done != "" {
+				c.Title = done
+			}
+			c.Summary = strings.Join(slices.DeleteFunc([]string{change, ev.Summary}, func(s string) bool { return s == "" }), " · ")
 			return
 		}
-		c.State = OK
 		c.Summary = ev.Summary
+		c.Preview = nil
 	case event.Notice:
 		t.items = append(t.items, item{kind: noticeItem, text: ev.Text})
 	case event.Error:

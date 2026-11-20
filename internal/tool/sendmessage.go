@@ -69,6 +69,15 @@ func NewSendMessage(agents Agents) Tool {
 				}
 				return "SendMessage " + args.To
 			},
+			Done: func(raw json.RawMessage) string {
+				var args sendMessageArgs
+				_ = json.Unmarshal(raw, &args)
+				if args.To == "" {
+					return "Messaged"
+				}
+				return "Messaged " + args.To
+			},
+			Body: func(string) string { return "" },
 			Summary: func(output string) string {
 				if strings.HasSuffix(output, " continued.") {
 					return "continued"

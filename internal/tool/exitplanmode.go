@@ -16,6 +16,7 @@ const (
 	planRevise    = "The user asked for changes to the plan."
 	planDismissed = "The user dismissed the plan without answering."
 	planEdited    = " The user edited the plan file before answering."
+	feedbackLead  = " Their feedback:\n"
 )
 
 // PlanAnswer is the human's answer to a plan. Not approved with blank Feedback
@@ -75,7 +76,15 @@ func NewExitPlanMode(plans *Plans, review ReviewPlan) Tool {
 			return Result{Text: planResult(answer, mode, err != nil || after != plan)}, nil
 		},
 		Display: Display{
-			Title: func(json.RawMessage) string { return "Plan" },
+			Title: func(json.RawMessage) string { return "Plan approval" },
+			Solo:  true,
+			Body: func(output string) string {
+				if !strings.HasPrefix(output, planRevise) {
+					return ""
+				}
+				_, feedback, _ := strings.Cut(output, feedbackLead)
+				return feedback
+			},
 			Summary: func(output string) string {
 				switch {
 				case strings.HasPrefix(output, planApproved):
@@ -87,7 +96,6 @@ func NewExitPlanMode(plans *Plans, review ReviewPlan) Tool {
 				}
 				return ""
 			},
-			Action: Action{Verb: "Reviewed", One: "plan", Many: "plans"},
 		},
 	}
 }
@@ -107,7 +115,7 @@ func planResult(a PlanAnswer, mode policy.Mode, edited bool) string {
 	}
 	text += fmt.Sprintf(" The session is in %s mode.", mode)
 	if !a.Approved && a.Feedback != "" {
-		text += " Their feedback:\n" + a.Feedback
+		text += feedbackLead + a.Feedback
 	}
 	return text
 }

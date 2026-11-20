@@ -35,7 +35,7 @@ func (f *folds) of(b transcript.Block) blockFolds {
 		}
 		return bf
 	case transcript.Row:
-		if b.Call.State == transcript.OK {
+		if b.Call.State == transcript.OK || b.Call.State == transcript.Failed {
 			return blockFolds{expanded: []bool{f.all || f.expanded[b.Call.ID]}}
 		}
 	case transcript.Turn:

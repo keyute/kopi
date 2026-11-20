@@ -96,6 +96,7 @@ func TestToolSearchLoadsRankedMatches(t *testing.T) {
 	assert.Equal(t, []string{"mcp__gh__get_issue", "mcp__docs__fetch"}, loaded)
 	assert.Equal(t, "Loaded 2 tools; call them in your next response:\n- mcp__gh__get_issue: Gets an issue.\n- mcp__docs__fetch", out.Text)
 	assert.Equal(t, "loaded 2 tools", tool.Display.Summary(out.Text))
+	assert.Equal(t, out.Text, tool.Display.Body(out.Text))
 
 	failed := errors.New("failed")
 	failing := NewToolSearch(searchable, func(string, []Tool, int) []string { return []string{"mcp__docs__fetch"} },
@@ -141,6 +142,8 @@ func TestToolSearchReportsNoMatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, `No deferred tool matches "mcp__gh__get_issue weather". Try other keywords, or exact names from the system prompt.`, out.Text)
 	assert.Equal(t, "no match", tool.Display.Summary(out.Text))
+	assert.Empty(t, tool.Display.Body(out.Text))
+	assert.Equal(t, `Searched tools for "mcp__gh__get_issue weather"`, tool.Display.Done(json.RawMessage(`{"query":"mcp__gh__get_issue weather"}`)))
 	assert.False(t, loaded)
 }
 

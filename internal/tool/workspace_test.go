@@ -927,3 +927,35 @@ func TestWriteFileLongBasename(t *testing.T) {
 	assert.Equal(t, fs.FileMode(0o640), info.Mode().Perm())
 	assert.Equal(t, []string{name}, listDir(t, dir))
 }
+
+func TestWorkspaceShown(t *testing.T) {
+	dir := t.TempDir()
+	ws := newWorkspace(t, dir, nil)
+	plans := NewPlans(filepath.Join(t.TempDir(), "plans"))
+	require.NoError(t, plans.Select("s1"))
+	withPlans := ws.WithPlans(plans)
+
+	for _, tc := range []struct{ name, path, want string }{
+		{"relative inside", "sub/a.go", "sub/a.go"},
+		{"absolute inside", filepath.Join(dir, "sub", "a.go"), "sub/a.go"},
+		{"absolute start directory", dir, "."},
+		{"relative outside", "../x", "../x"},
+		{"absolute outside", "/elsewhere/x", "/elsewhere/x"},
+		{"home spelling is kept", "~/x", "~/x"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, ws.shown(tc.path))
+			assert.Equal(t, tc.want, withPlans.shown(tc.path))
+		})
+	}
+
+	t.Run("plan file", func(t *testing.T) {
+		assert.Equal(t, "plan", withPlans.shown(plans.Path()))
+		assert.Equal(t, "plan", withPlans.shown(filepath.Join(filepath.Dir(plans.Path()), ".", filepath.Base(plans.Path()))))
+		assert.Equal(t, plans.Path(), ws.shown(plans.Path()))
+	})
+	t.Run("another plan file", func(t *testing.T) {
+		other := filepath.Join(filepath.Dir(plans.Path()), "s2.md")
+		assert.Equal(t, other, withPlans.shown(other))
+	})
+}

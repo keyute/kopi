@@ -34,7 +34,9 @@ func TestAskUserQuestionDescribesItself(t *testing.T) {
 	assert.True(t, tool.Exclusive)
 	assert.False(t, tool.Ask)
 	assert.Nil(t, tool.Target)
-	assert.Equal(t, Action{Verb: "Asked", One: "question", Many: "questions"}, tool.Display.Action)
+	assert.Zero(t, tool.Display.Action)
+	assert.True(t, tool.Display.Solo)
+	assert.Empty(t, tool.Display.Body("The user answered:\n\"Which database?\" = \"PostgreSQL\""))
 }
 
 func TestAskUserQuestionRefusesInvalidArgs(t *testing.T) {
@@ -159,6 +161,7 @@ func TestAskUserQuestionTitle(t *testing.T) {
 	title := NewAskUserQuestion(nil).Display.Title
 
 	assert.Equal(t, "Asked about Database, Features, Target", title(json.RawMessage(questionsArgs)))
+	assert.Nil(t, NewAskUserQuestion(nil).Display.Done)
 	assert.Equal(t, "AskUserQuestion", title(json.RawMessage(`{`)))
 	assert.Equal(t, "AskUserQuestion", title(json.RawMessage(`{}`)))
 }

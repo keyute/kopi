@@ -211,6 +211,10 @@ func TestGlobDisplay(t *testing.T) {
 	assert.Equal(t, Action{Verb: "Searched for", One: "pattern", Many: "patterns"}, tool.Display.Action)
 	assert.Equal(t, "Glob *.go in sub", tool.Display.Title(json.RawMessage(`{"pattern":"*.go","path":"sub"}`)))
 	assert.Equal(t, "Glob", tool.Display.Title(json.RawMessage(`{"pattern":`)))
+	assert.Equal(t, "Searched for *.go in sub", tool.Display.Done(json.RawMessage(`{"pattern":"*.go","path":"sub"}`)))
+	assert.Equal(t, "Searched for *.go", tool.Display.Done(json.RawMessage(`{"pattern":"*.go"}`)))
+	assert.Empty(t, tool.Display.Body("No files found"))
+	assert.Equal(t, "Found 1 file\na.go", tool.Display.Body("Found 1 file\na.go"))
 	for _, tc := range []struct {
 		pattern, want string
 	}{

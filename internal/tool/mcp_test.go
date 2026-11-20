@@ -158,6 +158,10 @@ func TestMCPDisplay(t *testing.T) {
 		})
 	}
 	assert.Equal(t, "a …", NewMCP(MCPTool{Server: "a\nb", Tool: "t"}, noCall).Display.Title(json.RawMessage(`{}`)))
+	assert.Equal(t, `Called gh/get_issue {"n":1}`, d.Done(json.RawMessage(`{ "n": 1 }`)))
+	assert.Equal(t, "Called gh/get_issue", d.Done(json.RawMessage(`{}`)))
+	assert.Empty(t, d.Body(noOutputNotice))
+	assert.Equal(t, "x", d.Body("x"))
 
 	assert.Equal(t, []PreviewLine{
 		{Kind: Context, Text: "{"},

@@ -68,7 +68,7 @@ Report file paths and line numbers.
 
 ## What you see
 
-- In the transcript a call shows as `• explorer › <description>` with `↳ launched`, and its end as `• explorer finished · <description> · 2m 14s` (`failed` or `stopped` in the error colour).
+- In the transcript a call shows as `• explorer › <description>` with `↳ launched` (the row does not open), and its end as `• explorer finished · <description> · 2m 14s` (`failed` or `stopped` in the error colour).
 - While the main agent is idle and work is running, the row above the input reads `Waiting on 2 agents, 1 shell… <elapsed>`. The status line's [`agents` and `shells`](configuration.md#segments) segments show the same counts.
 - `/new`, `/resume` and exit stop them.
 - `kopi -p` waits for running subagents and prints the reply that follows their results.

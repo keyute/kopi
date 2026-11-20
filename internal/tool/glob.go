@@ -92,8 +92,10 @@ func NewGlob(ws *Workspace, hidden Hidden) Tool {
 			return Result{Text: globOutput(kept, total)}, nil
 		},
 		Display: Display{
-			Title:   searchTitle("Glob"),
+			Title:   searchTitle(ws, "Glob", false),
+			Done:    searchTitle(ws, "Searched for", false),
 			Summary: foundSummary,
+			Body:    foundBody,
 			Action:  Action{Verb: "Searched for", One: "pattern", Many: "patterns"},
 		},
 	}

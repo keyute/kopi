@@ -195,10 +195,23 @@ func TestFoundSummary(t *testing.T) {
 }
 
 func TestSearchTitle(t *testing.T) {
-	title := searchTitle("Grep")
+	ws := newWorkspace(t, t.TempDir(), nil)
+	title := searchTitle(ws, "Grep", false)
 	assert.Equal(t, "Grep TODO in internal", title(json.RawMessage(`{"pattern":"TODO","path":"internal"}`)))
+	assert.Equal(t, "Grep TODO in sub", title(json.RawMessage(`{"pattern":"TODO","path":"`+filepath.Join(ws.given, "sub")+`"}`)))
 	assert.Equal(t, "Grep TODO", title(json.RawMessage(`{"pattern":"TODO"}`)))
 	assert.Equal(t, "Grep", title(json.RawMessage(`{"path":"internal"}`)))
+
+	done := searchTitle(ws, "Searched for", true)
+	assert.Equal(t, `Searched for "TODO" in internal`, done(json.RawMessage(`{"pattern":"TODO","path":"internal"}`)))
+	assert.Equal(t, `Searched for "TODO"`, done(json.RawMessage(`{"pattern":"TODO"}`)))
+	assert.Equal(t, "Searched for TODO", searchTitle(ws, "Searched for", false)(json.RawMessage(`{"pattern":"TODO"}`)))
+}
+
+func TestFoundBody(t *testing.T) {
+	assert.Empty(t, foundBody("No matches found"))
+	assert.Empty(t, foundBody("No files found"))
+	assert.Equal(t, "Found 1 file\na", foundBody("Found 1 file\na"))
 }
 
 func TestOpenWalkedRefusesFileMovedIntoProtection(t *testing.T) {

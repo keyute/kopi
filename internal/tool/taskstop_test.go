@@ -123,6 +123,8 @@ func TestTaskStopDisplay(t *testing.T) {
 
 	assert.Equal(t, "TaskStop t1", tool.Display.Title(json.RawMessage(`{"task_id":"t1"}`)))
 	assert.Equal(t, "TaskStop", tool.Display.Title(json.RawMessage(`{}`)))
+	assert.Equal(t, "Stopped task t1", tool.Display.Done(json.RawMessage(`{"task_id":"t1"}`)))
+	assert.Empty(t, tool.Display.Body("Task t1 stopped."))
 	assert.Equal(t, "stopped", tool.Display.Summary("Task t1 stopped."))
 	assert.Equal(t, "already completed (exit code 0)", tool.Display.Summary("Task t1 already completed (exit code 0)."))
 }

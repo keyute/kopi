@@ -264,7 +264,7 @@ func TestTurnStartOpensTurnAndTurnEndIsTimed(t *testing.T) {
 	assert.Positive(t, ends[0].Elapsed)
 }
 
-func TestDeniedCallHasNoSummary(t *testing.T) {
+func TestDeniedCallIsClassified(t *testing.T) {
 	var ran atomic.Int32
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{execTool(&ran)}})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Exec", "call-1")), pigruntimetest.Text("ok")})
@@ -283,7 +283,8 @@ func TestDeniedCallHasNoSummary(t *testing.T) {
 	ends := ofType[event.ToolEnd](evs)
 	require.Len(t, ends, 1)
 	assert.True(t, ends[0].IsError)
-	assert.Empty(t, ends[0].Summary)
+	assert.Equal(t, event.EndDenied, ends[0].Kind)
+	assert.Equal(t, "denied · plan mode needs the sandbox, which is off or unavailable", ends[0].Summary)
 	assert.Zero(t, ran.Load())
 }
 

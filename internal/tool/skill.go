@@ -103,6 +103,17 @@ func NewSkill(skills []skill.Skill, home string) Tool {
 				}
 				return "Skill " + args.Name + " " + args.File
 			},
+			Done: func(raw json.RawMessage) string {
+				var args skillArgs
+				_ = json.Unmarshal(raw, &args)
+				switch {
+				case args.Name == "":
+					return "Loaded skill"
+				case args.File == "":
+					return "Loaded skill " + args.Name
+				}
+				return "Read skill " + args.Name + " " + args.File
+			},
 			Summary: func(output string) string {
 				if strings.HasPrefix(output, "<skill ") {
 					return "loaded"

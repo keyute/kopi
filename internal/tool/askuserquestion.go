@@ -159,7 +159,8 @@ func NewAskUserQuestion(ask Ask) Tool {
 				}
 				return strings.Join(answers, " · ")
 			},
-			Action: Action{Verb: "Asked", One: "question", Many: "questions"},
+			Solo: true,
+			Body: func(string) string { return "" },
 		},
 	}
 }

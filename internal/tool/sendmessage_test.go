@@ -83,6 +83,8 @@ func TestSendMessageDisplay(t *testing.T) {
 
 	assert.Equal(t, "SendMessage t3", tool.Display.Title(json.RawMessage(`{"to":"t3","message":"hi"}`)))
 	assert.Equal(t, "SendMessage", tool.Display.Title(json.RawMessage(`{}`)))
+	assert.Equal(t, "Messaged t3", tool.Display.Done(json.RawMessage(`{"to":"t3","message":"hi"}`)))
+	assert.Empty(t, tool.Display.Body("Message queued for t3."))
 	assert.Equal(t, "queued", tool.Display.Summary("Message queued for t3."))
 	assert.Equal(t, "continued", tool.Display.Summary("Agent t3 continued."))
 }

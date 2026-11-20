@@ -79,6 +79,20 @@ func NewToolSearch(deferred []Tool, rank func(query string, tools []Tool, limit 
 				}
 				return titleLine("ToolSearch " + args.Query)
 			},
+			Done: func(raw json.RawMessage) string {
+				var args toolSearchArgs
+				_ = json.Unmarshal(raw, &args)
+				if args.Query == "" {
+					return "Searched tools"
+				}
+				return `Searched tools for "` + titleLine(args.Query) + `"`
+			},
+			Body: func(output string) string {
+				if !strings.HasPrefix(output, "Loaded ") {
+					return ""
+				}
+				return output
+			},
 			Summary: func(output string) string {
 				var n int
 				if _, err := fmt.Sscanf(output, "Loaded %d tool", &n); err != nil {

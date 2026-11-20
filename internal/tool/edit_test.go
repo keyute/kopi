@@ -47,6 +47,7 @@ func TestEditDescribesItself(t *testing.T) {
 	assert.Equal(t, []string{"file_path", "old_string", "new_string"}, tool.Parameters["required"])
 	assert.Equal(t, false, tool.Parameters["additionalProperties"])
 	assert.Equal(t, Action{Verb: "Edited", One: "file", Many: "files"}, tool.Display.Action)
+	assert.Equal(t, "Edited a.txt", tool.Display.Done(json.RawMessage(`{"file_path":"a.txt","replace_all":true}`)))
 	assert.Equal(t, "Edit a.txt", tool.Display.Title(json.RawMessage(`{"file_path":"a.txt"}`)))
 	_, err := json.Marshal(tool.Parameters)
 	require.NoError(t, err)
@@ -80,7 +81,7 @@ func TestEditReplacesSingleMatch(t *testing.T) {
 	out, err := runEdit(t, tool, "a.txt", "beta", "BETA", false)
 	require.NoError(t, err)
 	assert.Equal(t, "replaced 1 occurrence in a.txt", out)
-	assert.Equal(t, "1 occurrence", tool.Display.Summary(out))
+	assert.Empty(t, tool.Display.Summary(out))
 	assert.Equal(t, "alpha\nBETA\ngamma\n", readContent(t, filepath.Join(dir, "a.txt")))
 }
 
@@ -199,6 +200,30 @@ func TestEditDisplayPreview(t *testing.T) {
 	}
 	assert.Equal(t, PreviewLine{Kind: Context, Text: "… 1 more line"}, preview[10])
 	assert.Equal(t, PreviewLine{Kind: Context, Text: "… 2 more lines"}, preview[21])
+}
+
+func TestEditDisplayChange(t *testing.T) {
+	tool, _ := newEditTool(t)
+
+	summary, lines := tool.Display.Change(json.RawMessage(`{"file_path":"a.txt","old_string":"a\nb","new_string":"c"}`))
+	assert.Equal(t, "+1 -2", summary)
+	assert.Equal(t, []PreviewLine{
+		{Kind: Removed, Text: "a"},
+		{Kind: Removed, Text: "b"},
+		{Kind: Added, Text: "c"},
+	}, lines)
+
+	args, err := json.Marshal(map[string]string{"old_string": numberedLines(11), "new_string": numberedLines(12)})
+	require.NoError(t, err)
+	summary, lines = tool.Display.Change(args)
+	assert.Equal(t, "+12 -11", summary)
+	require.Len(t, lines, 23)
+	assert.Equal(t, PreviewLine{Kind: Removed, Text: "line 11"}, lines[10])
+	assert.Equal(t, PreviewLine{Kind: Added, Text: "line 12"}, lines[22])
+
+	summary, lines = tool.Display.Change(json.RawMessage(`{"old_string":"a","new_string":""}`))
+	assert.Equal(t, "+0 -1", summary)
+	assert.Equal(t, []PreviewLine{{Kind: Removed, Text: "a"}}, lines)
 }
 
 func TestEditTarget(t *testing.T) {

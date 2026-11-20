@@ -154,19 +154,67 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 		},
 		Display: Display{
 			Title: func(raw json.RawMessage) string { return bashTitle(raw, unsandboxedHook != nil) },
-			Summary: func(output string) string {
-				if m := backgroundResult.FindStringSubmatch(output); m != nil {
-					return "task " + m[1] + " · running"
+			Done: func(raw json.RawMessage) string {
+				var args bashArgs
+				_ = json.Unmarshal(raw, &args)
+				done := "Ran " + titleLine(args.Command)
+				if args.RunInBackground {
+					done = "Started " + titleLine(args.Command) + " in background"
 				}
-				if output == noOutputNotice {
-					return "no output"
+				if unsandboxedHook != nil && args.Unsandboxed {
+					done += " · unsandboxed"
 				}
-				return lineCount(countLines(output))
+				return done
 			},
+			Summary: func(output string) string {
+				m := backgroundResult.FindStringSubmatch(output)
+				switch {
+				case m == nil && output == noOutputNotice:
+					return "no output"
+				case m == nil:
+					return lineCount(countLines(output))
+				case strings.HasSuffix(output, " started."):
+					return "task " + m[1]
+				}
+				return "moved to background · task " + m[1]
+			},
+			Body: func(output string) string {
+				if output == noOutputNotice || backgroundResult.MatchString(output) {
+					return ""
+				}
+				return output
+			},
+			Failure: bashFailure,
 			Preview: bashPreview,
 			Action:  Action{Verb: "Ran", One: "command", Many: "commands"},
 		},
 	}
+}
+
+// bashFailure relies on process.result's error shape: the output, a newline
+// and a last line naming the exit status, the timeout or the stop.
+func bashFailure(output string) (summary, body string) {
+	text, last := "", output
+	if i := strings.LastIndex(output, "\n"); i >= 0 {
+		text, last = output[:i], output[i+1:]
+	}
+	switch {
+	case strings.HasPrefix(last, ErrExitStatus.Error()+": "):
+		summary = strings.TrimPrefix(last, ErrExitStatus.Error()+": ")
+	case last == ErrCommandTimeout.Error():
+		summary = "timed out"
+	case last == ErrStopped.Error():
+		summary = "stopped"
+	default:
+		if line := strings.TrimRight(output, "\n"); line != "" && !strings.Contains(line, "\n") {
+			return line, ""
+		}
+		return "failed", output
+	}
+	if text == "" || text == noOutputNotice {
+		return summary, ""
+	}
+	return summary + " · " + lineCount(countLines(text)), text
 }
 
 // runForeground runs command without the registry: at the timeout or when ctx
