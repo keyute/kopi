@@ -91,6 +91,9 @@ type Config struct {
 	// MaxWorkflows is how many workflows may run at once, and MaxAgents how
 	// many agents of one workflow.
 	MaxWorkflows, MaxAgents int
+	// Title names a session that has no name from its first prompt, using the
+	// small model.
+	Title bool
 }
 
 const maxReferenceEntries = 10000
@@ -128,6 +131,9 @@ type Controller struct {
 	authority *policy.Authority
 	relay     relay
 	wg        sync.WaitGroup
+	// titleCtx ends when Close starts, which stops a title request in flight.
+	titleCtx  context.Context
+	titleStop context.CancelFunc
 	// startup is what the first open that succeeds reports, so a failed first
 	// open does not lose it; life guards it once a session can be opened.
 	startup []event.Event
@@ -163,6 +169,9 @@ type Controller struct {
 	// model is the session model: Config.Model, or the runtime's default once resolved.
 	model  string
 	sessID string
+	// titled is set once the current main session's title has been decided on,
+	// whether or not it was asked for.
+	titled bool
 	// main drives the main session; its sess, emit, unsubscribe and work are
 	// guarded by mu.
 	main *runner
@@ -208,6 +217,7 @@ func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
 		cfg.Tasks = tool.NewTasks()
 	}
 	c := &Controller{rt: rt, cfg: cfg, model: cfg.Model, authority: policy.NewAuthority()}
+	c.titleCtx, c.titleStop = context.WithCancel(context.Background())
 	c.main = &runner{c: c, role: mainRole{c}}
 	var reserved []string
 	for _, cmd := range commandTable() {
@@ -756,10 +766,15 @@ func (c *Controller) changeMode(enter func() uint64) {
 }
 
 func (c *Controller) Status() Status {
+	// Busy is read under queue: the final TurnEnd and the Work's deregistration
+	// are one queue section, so a frontend refreshing on a TurnEnd sees Busy
+	// false for a finished Work and true for one that continues.
+	c.queue.Lock()
 	c.mu.Lock()
 	sess, sessID := c.main.sess, c.sessID
 	busy := c.main.work != nil
 	c.mu.Unlock()
+	c.queue.Unlock()
 
 	mode, _ := c.authority.Snapshot()
 	s := Status{SessionID: sessID, Mode: mode, Model: c.Model(), Busy: busy, Branch: gitBranch(c.cfg.Workspace), Workspace: c.cfg.Workspace}
@@ -842,6 +857,7 @@ func (c *Controller) Close(ctx context.Context) error {
 	c.life.Lock()
 	defer c.life.Unlock()
 	defer c.relay.shut()
+	c.titleStop()
 
 	c.queue.Lock()
 	c.mu.Lock()
@@ -1113,6 +1129,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	}
 	c.main.sess, c.sessID, c.main.emit, c.main.bound, c.main.unsubscribe = sess, id, emit, bound, unsubscribe
 	c.main.told = ""
+	c.titled = false
 	c.deferred = nil
 	c.mu.Unlock()
 	c.queue.Unlock()
@@ -1120,6 +1137,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		SessionID:    id,
 		Resumed:      req.ResumeID != "" || req.Continue,
 		MessageCount: sess.MessageCount(),
+		Name:         sess.Name(),
 	}
 	if changed.Resumed {
 		for _, ev := range sess.History() {

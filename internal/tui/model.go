@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/app"
+	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
 )
@@ -83,9 +84,20 @@ type model struct {
 	geo                       geometry
 	clip                      clipboard
 	imageDir                  string
-	// getenv and execProcess are os.Getenv and tea.ExecProcess, replaced in tests.
+	// getenv, execProcess and raw are os.Getenv, tea.ExecProcess and tea.Raw,
+	// replaced in tests.
 	getenv      func(string) string
 	execProcess func(*exec.Cmd, tea.ExecCallback) tea.Cmd
+	raw         func(any) tea.Cmd
+	terminal    config.Terminal
+	// title is the session's name, "" when it has none.
+	title string
+	// away is set while the terminal reports it is not focused. unseen is the
+	// done or error state a run left while it was, until focus returns or work
+	// starts; ended is the main session's last turn outcome.
+	away   bool
+	unseen tea.ProgramState
+	ended  event.Status
 
 	// views holds each session's state by id, main's under app.Main; shown is
 	// the id of the one drawn and acted on.
@@ -173,10 +185,11 @@ func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model
 		status:       c.Status(),
 		agents:       c.Agents(),
 		pickVerb:     randomVerb,
+		terminal:     opts.Terminal,
 	}
 	m.composer.setHistory(c.History())
 	m.home, _ = os.UserHomeDir()
-	m.getenv, m.execProcess = os.Getenv, tea.ExecProcess
+	m.getenv, m.execProcess, m.raw = os.Getenv, tea.ExecProcess, tea.Raw
 	return m
 }
 
@@ -194,9 +207,9 @@ func (m *model) statusInput() statusInput {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	held := m.holding()
+	held, was := m.holding(), m.programStatus()
 	cmd := m.update(msg)
-	cmd = tea.Batch(cmd, m.syncInput(held))
+	cmd = tea.Batch(cmd, m.syncInput(held), m.attend(msg, was))
 	m.syncFocus()
 	m.arrange()
 	m.syncFocus()
@@ -585,6 +598,9 @@ func (m *model) apply(ev event.Event) *view {
 	case event.Changes:
 		m.added, m.removed = ev.Added, ev.Removed
 		return nil
+	case event.SessionNamed:
+		m.title = ev.Name
+		return nil
 	case event.SessionChanged:
 		// A turn running across the switch keeps its working row.
 		main := newView()
@@ -604,6 +620,7 @@ func (m *model) apply(ev event.Event) *view {
 			unsent = append(unsent, m.views[id].unsent...)
 		}
 		m.views, m.shown = map[string]*view{app.Main: main}, app.Main
+		m.title = ev.Name
 		m.composer.restore(unsent)
 		if len(ev.History) > 0 {
 			m.view().tr.Restore(ev.History)
@@ -683,6 +700,7 @@ func (m *model) apply(ev event.Event) *view {
 		m.dropApprovals(func(a event.ApprovalRequested) bool { return a.TaskID == id })
 		if id == app.Main {
 			m.question, m.plan = nil, nil
+			m.ended = ev.Outcome.Status
 		}
 		if id == m.shown {
 			m.composer.restore(ev.Unsent)
@@ -882,7 +900,15 @@ func (m *model) selected(r region, i int) string {
 }
 
 func (m *model) View() tea.View {
-	v := tea.View{AltScreen: true, MouseMode: tea.MouseModeCellMotion}
+	v := tea.View{AltScreen: true, MouseMode: tea.MouseModeCellMotion, ReportFocus: true}
+	status := m.programStatus()
+	v.ProgramStatus = &status
+	if m.terminal.Title {
+		v.WindowTitle = m.terminalTitle(status.State)
+	}
+	if m.terminal.Progress && status.State == tea.ProgramStateWorking {
+		v.ProgressBar = tea.NewProgressBar(tea.ProgressBarIndeterminate, 0)
+	}
 	if m.width == 0 || m.height == 0 {
 		return v
 	}

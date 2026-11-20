@@ -85,10 +85,14 @@ func modeLine(mode policy.Mode, planPath string) string {
 // already read it, and records it as told. ps carry no line of their own: an
 // earlier one that was not delivered has been taken back by untell. Only the
 // main session is told its mode. It must be called with queue held.
+//
+// Every prompt the main session's model receives passes through tell, so it is
+// also where the session's first human prompt is noticed for its title.
 func (r *runner) tell(ps []pigruntime.Prompt) []pigruntime.Prompt {
 	if len(ps) == 0 || r != r.c.main {
 		return ps
 	}
+	r.c.nameSessionLocked(ps)
 	ps = append([]pigruntime.Prompt(nil), ps...)
 	for i := range ps {
 		ps[i].Mode = ""

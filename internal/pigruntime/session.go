@@ -123,6 +123,17 @@ func toAI(images []Image) []ai.ImageContent {
 
 func (s *Session) ID() string { return s.inner.ID() }
 
+// Name is the session's name; empty when it has none.
+func (s *Session) Name() string { return s.inner.SessionName() }
+
+// SetName gives the session a name, which PiG stores in the session file.
+func (s *Session) SetName(name string) error {
+	if err := s.inner.SetName(name); err != nil {
+		return fmt.Errorf("failed to name session: %w", err)
+	}
+	return nil
+}
+
 // MessageCount counts user, assistant and tool-result messages; PiG also keeps
 // the system prompt and tool set as system messages in the transcript.
 func (s *Session) MessageCount() int {

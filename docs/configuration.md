@@ -38,6 +38,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `statusline` | Status line entries, see [Status line](#status-line) |
 | `agentline` | Agent row entries, see [Agent rows](#agent-rows) |
 | `theme` | Colour themes, see [Theme](#theme) |
+| `terminal` | What Kopi tells the terminal, see [Terminal](#terminal) |
 | `permissions` | Allow, ask and deny rules, see [permissions](permissions.md#rules) |
 | `classifier` | Reviewer of calls that would ask, see [permissions](permissions.md#classifier) |
 | `sandbox` | The OS sandbox `Bash` runs in, see [sandbox](sandbox.md#configuration) |
@@ -245,6 +246,21 @@ Segments:
 
 ```json
 { "base": "dracula", "colors": { "accent": "#ff79c6", "dim": "244" }, "codeTheme": "monokai" }
+```
+
+## Terminal
+
+- `terminal.title` (default `true`): sets the terminal's title to a state glyph and the session's name, see [usage](usage.md#terminal). With `false`, Kopi leaves the title alone and asks no model for a session name.
+- `terminal.progress` (default `false`): shows the terminal's indeterminate progress bar while the session works.
+- `terminal.notifications` (default `auto`): how Kopi notifies you while the terminal is not focused.
+  - `osc9`: a desktop notification (OSC 9).
+  - `bell`: the terminal bell.
+  - `off`: nothing.
+  - `auto`: OSC 9 when `TERM_PROGRAM` is `ghostty`, `iTerm.app`, `WarpTerminal` or `WezTerm`, or `TERM` is `xterm-kitty` or `xterm-ghostty`; the bell otherwise, including under tmux.
+- Any other value stops Kopi at start with an error naming the config layer.
+
+```json
+{ "version": 1, "terminal": { "progress": true, "notifications": "bell" } }
 ```
 
 ## Not implemented

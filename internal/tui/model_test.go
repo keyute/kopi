@@ -210,7 +210,7 @@ func (f *fakeController) StopTask(id string) error {
 
 // testOptions are the options config's defaults resolve to.
 func testOptions() Options {
-	return Options{Version: "v1.2.3", Keys: config.DefaultKeys(), StatusLine: config.DefaultStatusLine(), AgentLine: config.DefaultAgentLine(), Themes: testThemes}
+	return Options{Version: "v1.2.3", Keys: config.DefaultKeys(), StatusLine: config.DefaultStatusLine(), AgentLine: config.DefaultAgentLine(), Themes: testThemes, Terminal: config.DefaultTerminal()}
 }
 
 var testThemes = Themes{dark: mocha(), light: latte()}

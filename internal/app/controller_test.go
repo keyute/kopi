@@ -551,6 +551,53 @@ func TestInterruptAfterTurnFinishedSparesNextTurn(t *testing.T) {
 	assert.Equal(t, 2, h.faux.CallCount())
 }
 
+func TestStatusAfterFinalTurnEndIsNotBusy(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("done")})
+	reached, unblock := blockOnFirstTurnEnd(h.c)
+
+	w, err := h.c.Submit(t.Context(), Main, "go")
+	require.NoError(t, err)
+	wait(t, reached)
+	// The TurnEnd is delivered under queue, so Status waits for the Work's
+	// deregistration that ends the same section.
+	busy := make(chan bool, 1)
+	go func() { busy <- h.c.Status().Busy }()
+	close(unblock)
+	wait(t, w.Done())
+
+	assert.False(t, <-busy)
+}
+
+func TestStatusAfterTurnEndOfContinuingWorkIsBusy(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{blockTool(started)}})
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(call("Block", "call-1")),
+		ai.FauxFactoryStep(func(ai.TranscriptContext, ai.StreamOptions, *ai.FauxProviderState, *ai.Model) (ai.AssistantMessage, error) {
+			<-release
+			return ai.FauxAssistantMessage(ai.FauxContentString("joined"), ai.FauxAssistantMessageOptions{}), nil
+		}),
+	})
+	reached, unblock := blockOnFirstTurnEnd(h.c)
+
+	w, err := h.c.Submit(t.Context(), Main, "block")
+	require.NoError(t, err)
+	wait(t, started)
+	got, err := h.c.Submit(t.Context(), Main, "q")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	require.NoError(t, h.c.SendNow(t.Context(), Main, "d"))
+	wait(t, reached)
+	busy := make(chan bool, 1)
+	go func() { busy <- h.c.Status().Busy }()
+	close(unblock)
+
+	assert.True(t, <-busy)
+	close(release)
+	wait(t, w.Done())
+}
+
 func TestSubmitAsTurnFinishesStartsNextTurn(t *testing.T) {
 	h, _ := openHarness(t, Config{})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first"), pigruntimetest.Text("second")})
