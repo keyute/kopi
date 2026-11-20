@@ -49,12 +49,15 @@
 - What agents share in one format and place is read there, in that format: a project's `AGENTS.md`, `.agents/skills` and `~/.agents/skills`, `.mcp.json` and the `mcpServers` entry shape. Kopi's home holds only what has no shared place, such as the global `AGENTS.md`, or what only Kopi reads. A place is shared when most peers read it. Kopi adds no fields of its own to a shared format; its extras live in `config.json`.
 - A behaviour users reasonably set differently is a `config.json` key with its default in `config.Defaults()`. A flag that overrides a key is a config layer over the file, never a separate code path.
 - Add a key only for a setting someone needs to change, never to move mechanics out of the binary.
+- A number in the binary bounds what one call does or returns, or stops a runaway, and is a constant. The exception is a number sized to something outside Kopi (a model's context, a slow server): it becomes a key when someone hits it, not before.
 - An unset `model` is PiG's default model for a provider with a credential, chosen at each start and never saved.
 - When it is unclear which side something is on, check what peer agents build in and follow the majority.
 
 ## Model-facing text
 
 - The text Kopi ships, which users can add to but not change, is minimal: it says what exists and how it works, enough for the agent to use it, and never how to behave. Preferences are the user's to state in their instruction files. For a subagent tool, say what subagents are and how a call works; do not say to delegate as much as possible.
+- A shipped sentence is the same for every user, is one an agent with an empty Kopi home needs to operate, and sits in the narrowest place: the result it applies to, else the tool's description, else the preamble. A hint naming the tool's own way forward (`use offset=N to continue`) says how it works and stays.
+- The prompt of a model Kopi itself calls (the approval classifier, `WebFetch`, `WebSearch`) is part of that feature's implementation and the binary's; users add to the classifier's through `classifier.instructions`.
 - The system prompt is built once per process from named parts, ordered from what changes least to most: Kopi's text, `$KOPI_HOME/AGENTS.md`, a trusted folder's instruction files, what MCP servers report. Nothing in it depends on the time, git state, the mode or the turn.
 - Never rewrite text the model has been sent: a mid-session change replaces or removes one named part through `internal/pigruntime`, or arrives as a message. Mode is enforced by the gate, not by prompt text.
 - Whatever is listed for the model (tools, servers, files) is in a fixed order: sorted, or the order discovery defines; never map order.

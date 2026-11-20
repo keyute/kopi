@@ -41,7 +41,7 @@ func newWebFetch(f *fetcher, answer func(ctx context.Context, system, prompt str
 			"url must be a full http or https URL on a public host. " +
 			"Redirects within the same host are followed; any other redirect is returned instead of followed, so you can call WebFetch again with the new URL. " +
 			"Pages are fetched without running JavaScript, up to 5 MiB, and only their first 100,000 characters are read. " +
-			"prompt says what to extract or answer; ask for exact text, code or numbers verbatim when you need them.",
+			"prompt says what to extract or answer; the answer quotes code, commands, numbers and short passages verbatim where they answer it.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

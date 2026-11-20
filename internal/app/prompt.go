@@ -60,13 +60,16 @@ func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group
 		line := works + ", and any tool call may need the user's approval."
 		if i := slices.IndexFunc(tools, func(t tool.Tool) bool { return t.PlanSandboxed }); i >= 0 {
 			line = works + ", and any tool call may need the user's approval; in plan mode " + tools[i].Name + " runs too, but cannot write the workspace."
+			if def != nil && def.Plan {
+				line = "Read-only tools work, and " + tools[i].Name + " runs but cannot write the workspace; the others do not, and any tool call may need the user's approval."
+			}
 		}
 		lines = append(lines, line)
 		if reviewed {
 			lines = append(lines, "Tool calls that would need the user's approval and that no permission rule decides are first reviewed by a classifier model, which can allow them, deny them with a reason, or leave them to the user.")
 		}
 	}
-	lines = append(lines, "A tool call that is refused or that the user rejects returns an error saying so; when the rejection carries the user's feedback, act on it; never retry a rejected call unchanged.")
+	lines = append(lines, "A tool call that is refused or that the user rejects returns an error saying so, with the user's feedback when they gave any.")
 	if slices.ContainsFunc(tools, func(t tool.Tool) bool { return t.Deferred }) {
 		lines = append(lines, "Tools of MCP servers are deferred: they are listed below by name and cannot be called until ToolSearch loads them. "+
 			"Call ToolSearch with keywords for what you need, or with exact tool names; the tools it loads can be called in your next response, not in the one that calls ToolSearch.")

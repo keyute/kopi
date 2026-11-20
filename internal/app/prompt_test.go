@@ -149,7 +149,7 @@ func TestSubagentPromptStatesItsRoleThenBodyInstructionsAndItsServers(t *testing
 		"You are the subagent explorer: another agent gave you your task, and your final message is returned to that agent as the result.\n"+
 		"Tools available: Read.\n"+
 		"The session has a plan mode and an execute mode; only the user can switch between them.\n"+
-		"A tool call that is refused or that the user rejects returns an error saying so; when the rejection carries the user's feedback, act on it; never retry a rejected call unchanged.", parts[0].Text)
+		"A tool call that is refused or that the user rejects returns an error saying so, with the user's feedback when they gave any.", parts[0].Text)
 	assert.Equal(t, "Explore only.", parts[1].Text)
 	assert.NotContains(t, partNames(parts), "tools")
 	assert.NotContains(t, partNames(parts), "rules")
@@ -182,6 +182,10 @@ func TestPlanPinnedSubagentPreambleSaysItStaysInPlanMode(t *testing.T) {
 	assert.Contains(t, text, "\nRead-only tools work, the others do not, and any tool call may need the user's approval.\n")
 	assert.NotContains(t, text, "only the user can switch")
 	assert.NotContains(t, text, "execute mode")
+
+	sandboxed := tool.Tool{Name: "Probe", Capability: policy.Exec, PlanSandboxed: true}
+	assert.Contains(t, buildPrompt("/w", []tool.Tool{read, sandboxed}, nil, nil, false, pinned)[0].Text,
+		"\nRead-only tools work, and Probe runs but cannot write the workspace; the others do not, and any tool call may need the user's approval.\n")
 
 	unpinned := buildPrompt("/w", []tool.Tool{read, write}, nil, nil, false, free)[0].Text
 	assert.Contains(t, unpinned, "The session has a plan mode and an execute mode; only the user can switch between them.")
