@@ -21,7 +21,7 @@ func newBashTool(t *testing.T) (Tool, string) {
 	dir := t.TempDir()
 	tasks := NewTasks()
 	t.Cleanup(tasks.StopAll)
-	return NewBash(NewShell(dir, nil), NewShell(dir, nil), tasks), dir
+	return NewBash(NewShell(dir, nil), NewShell(dir, nil), tasks, true), dir
 }
 
 func TestBashDescribesItself(t *testing.T) {
@@ -46,11 +46,11 @@ func TestBashDescribesItself(t *testing.T) {
 	assert.Equal(t, Action{Verb: "Ran", One: "command", Many: "commands"}, tool.Display.Action)
 	_, err := json.Marshal(tool.Parameters)
 	require.NoError(t, err)
-	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), &sandbox.Sandbox{}), NewTasks())
+	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), &sandbox.Sandbox{}), NewTasks(), true)
 	assert.True(t, sandboxed.Sandboxed)
 	assert.True(t, sandboxed.PlanSandboxed)
 	assert.Contains(t, sandboxed.Description, "in execute mode, the workspace")
-	assert.False(t, NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), nil), NewTasks()).PlanSandboxed)
+	assert.False(t, NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), nil), NewTasks(), true).PlanSandboxed)
 }
 
 func TestBashRunsCommand(t *testing.T) {
@@ -115,7 +115,7 @@ func TestBashDoesNotStartWhenAdmissionCancels(t *testing.T) {
 			// A Start attempt must fail differently from cancellation.
 			sh.shell = filepath.Join(sh.dir, "missing-shell")
 			tasks := NewTasks()
-			tool := NewBash(sh, NewShell(sh.dir, nil), tasks)
+			tool := NewBash(sh, NewShell(sh.dir, nil), tasks, true)
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			admitted := false
@@ -137,7 +137,7 @@ func TestBashDoesNotStartWhenAdmissionCancels(t *testing.T) {
 
 func TestBashRunsInTheShellOfTheAdmittedMode(t *testing.T) {
 	execDir, planDir := t.TempDir(), t.TempDir()
-	tool := NewBash(NewShell(execDir, &sandbox.Sandbox{}), NewShell(planDir, &sandbox.Sandbox{}), NewTasks())
+	tool := NewBash(NewShell(execDir, &sandbox.Sandbox{}), NewShell(planDir, &sandbox.Sandbox{}), NewTasks(), true)
 	for _, tc := range []struct {
 		file string
 		mode policy.Mode
@@ -169,7 +169,7 @@ func TestBashRefusesPlanModeWithoutPlanSandbox(t *testing.T) {
 			if tc.sandboxed {
 				sb = &sandbox.Sandbox{}
 			}
-			tool := NewBash(NewShell(execDir, sb), NewShell(planDir, nil), NewTasks())
+			tool := NewBash(NewShell(execDir, sb), NewShell(planDir, nil), NewTasks(), true)
 
 			_, err := tool.Run(t.Context(), json.RawMessage(`{"command":"touch marker"}`), func(policy.Target) (policy.Mode, error) {
 				return policy.Plan, nil
@@ -220,7 +220,7 @@ func TestBashDisplaySummary(t *testing.T) {
 
 func TestBashDisplayPreview(t *testing.T) {
 	unsandboxed, _ := newBashTool(t)
-	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), nil), NewTasks())
+	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), nil), NewTasks(), true)
 	oneLine := json.RawMessage(`{"command":"ls"}`)
 	twoLines := json.RawMessage(`{"command":"cd a\nls\n"}`)
 	long, err := json.Marshal(map[string]string{"command": strings.Repeat("echo\n", maxPreviewLines+5)})
@@ -241,7 +241,7 @@ func TestBashDisplayPreview(t *testing.T) {
 }
 
 func TestForegroundBashDescribesItself(t *testing.T) {
-	tool := NewBash(NewShell(t.TempDir(), nil), NewShell(t.TempDir(), nil), nil)
+	tool := NewBash(NewShell(t.TempDir(), nil), NewShell(t.TempDir(), nil), nil, true)
 
 	assert.Contains(t, tool.Description, "stopped")
 	assert.NotContains(t, tool.Description, "background")
@@ -256,7 +256,7 @@ func TestForegroundBashDescribesItself(t *testing.T) {
 }
 
 func TestForegroundBashRunsCommand(t *testing.T) {
-	tool := NewBash(NewShell(t.TempDir(), nil), NewShell(t.TempDir(), nil), nil)
+	tool := NewBash(NewShell(t.TempDir(), nil), NewShell(t.TempDir(), nil), nil, true)
 
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"command":"echo one; exit 0"}`), allowTarget)
 
@@ -267,9 +267,136 @@ func TestForegroundBashRunsCommand(t *testing.T) {
 }
 
 func TestForegroundBashRefusesBackground(t *testing.T) {
-	tool := NewBash(NewShell(t.TempDir(), nil), NewShell(t.TempDir(), nil), nil)
+	tool := NewBash(NewShell(t.TempDir(), nil), NewShell(t.TempDir(), nil), nil, true)
 
 	_, err := tool.Run(t.Context(), json.RawMessage(`{"command":"true","run_in_background":true}`), allowTarget)
 
 	require.ErrorIs(t, err, ErrInvalidArgs)
+}
+
+func TestBashOffersUnsandboxedOnlyWhenSandboxed(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sb      *sandbox.Sandbox
+		tasks   *Tasks
+		allow   bool
+		offered bool
+	}{
+		{"sandboxed", &sandbox.Sandbox{}, NewTasks(), true, true},
+		{"sandboxed without tasks", &sandbox.Sandbox{}, nil, true, true},
+		{"sandboxed but not allowed", &sandbox.Sandbox{}, NewTasks(), false, false},
+		{"unsandboxed", nil, NewTasks(), true, false},
+		{"unsandboxed without tasks", nil, nil, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tool := NewBash(NewShell(t.TempDir(), tc.sb), NewShell(t.TempDir(), tc.sb), tc.tasks, tc.allow)
+
+			properties, ok := tool.Parameters["properties"].(map[string]any)
+			require.True(t, ok)
+			if !tc.offered {
+				assert.NotContains(t, properties, "unsandboxed")
+				assert.NotContains(t, tool.Description, "unsandboxed")
+				assert.Nil(t, tool.Unsandboxed)
+				return
+			}
+			assert.Equal(t, map[string]any{"type": "boolean", "description": "Run this command outside the OS sandbox; plan mode refuses such a call."}, properties["unsandboxed"])
+			assert.Contains(t, tool.Description, "unsandboxed runs one command outside it; that call asks for approval unless a rule allows it.")
+			require.NotNil(t, tool.Unsandboxed)
+			_, err := json.Marshal(tool.Parameters)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestBashUnsandboxed(t *testing.T) {
+	for _, tc := range []struct {
+		name, args string
+		want       bool
+	}{
+		{"true", `{"command":"ls","unsandboxed":true}`, true},
+		{"false", `{"command":"ls","unsandboxed":false}`, false},
+		{"missing", `{"command":"ls"}`, false},
+		{"malformed", `{"command":"ls","unsandboxed":`, false},
+		{"non-boolean", `{"command":"ls","unsandboxed":"yes"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, bashUnsandboxed(json.RawMessage(tc.args)))
+		})
+	}
+}
+
+func TestSpecsCarryTheUnsandboxedHook(t *testing.T) {
+	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), &sandbox.Sandbox{}), NewTasks(), true)
+	plain, _ := newBashTool(t)
+
+	specs := Specs([]Tool{sandboxed})
+	require.NotNil(t, specs["Bash"].Unsandboxed)
+	assert.True(t, specs["Bash"].Unsandboxed(json.RawMessage(`{"command":"ls","unsandboxed":true}`)))
+	assert.False(t, specs["Bash"].Unsandboxed(json.RawMessage(`{"command":"ls"}`)))
+	assert.Nil(t, Specs([]Tool{plain})["Bash"].Unsandboxed)
+}
+
+func TestBashUnsandboxedRunsInTheUnsandboxedShell(t *testing.T) {
+	dir, planDir := t.TempDir(), t.TempDir()
+	sh, plan := NewShell(dir, &sandbox.Sandbox{}), NewShell(planDir, &sandbox.Sandbox{})
+	// A command that starts in the sandboxed or the plan shell must fail differently from one that runs.
+	sh.shell = filepath.Join(dir, "missing-shell")
+	plan.shell = filepath.Join(planDir, "missing-shell")
+	tool := NewBash(sh, plan, NewTasks(), true)
+	execute := func(policy.Target) (policy.Mode, error) { return policy.Execute, nil }
+
+	out, err := tool.Run(t.Context(), json.RawMessage(`{"command":"echo outside","unsandboxed":true}`), execute)
+	require.NoError(t, err)
+	assert.Equal(t, "outside\n", out.Text)
+
+	_, err = tool.Run(t.Context(), json.RawMessage(`{"command":"echo inside"}`), execute)
+	require.Error(t, err)
+	_, err = tool.Run(t.Context(), json.RawMessage(`{"command":"echo inside","unsandboxed":false}`), execute)
+	require.Error(t, err)
+}
+
+func TestBashUnsandboxedIsDeniedOutsideExecute(t *testing.T) {
+	for _, background := range []string{"false", "true"} {
+		t.Run("background "+background, func(t *testing.T) {
+			execDir, planDir := t.TempDir(), t.TempDir()
+			tasks := NewTasks()
+			tool := NewBash(NewShell(execDir, &sandbox.Sandbox{}), NewShell(planDir, &sandbox.Sandbox{}), tasks, true)
+
+			_, err := tool.Run(t.Context(), json.RawMessage(`{"command":"touch marker","unsandboxed":true,"run_in_background":`+background+`}`), func(policy.Target) (policy.Mode, error) {
+				return policy.Plan, nil
+			})
+
+			require.ErrorIs(t, err, policy.ErrDenied)
+			assert.Empty(t, tasks.List())
+			assert.NoFileExists(t, filepath.Join(execDir, "marker"))
+			assert.NoFileExists(t, filepath.Join(planDir, "marker"))
+		})
+	}
+}
+
+func TestBashUnsandboxedIsInvalidWhenNotOffered(t *testing.T) {
+	execute := func(policy.Target) (policy.Mode, error) { return policy.Execute, nil }
+	dir := t.TempDir()
+	noSandbox, _ := newBashTool(t)
+	notAllowed := NewBash(NewShell(dir, &sandbox.Sandbox{}), NewShell(dir, &sandbox.Sandbox{}), NewTasks(), false)
+
+	for name, tool := range map[string]Tool{"no sandbox": noSandbox, "not allowed": notAllowed} {
+		t.Run(name, func(t *testing.T) {
+			_, err := tool.Run(t.Context(), json.RawMessage(`{"command":"true","unsandboxed":true}`), execute)
+
+			require.ErrorIs(t, err, ErrInvalidArgs)
+		})
+	}
+}
+
+func TestBashDisplayTitleMarksUnsandboxedOnlyWhenOffered(t *testing.T) {
+	dir := t.TempDir()
+	offered := NewBash(NewShell(dir, &sandbox.Sandbox{}), NewShell(dir, &sandbox.Sandbox{}), NewTasks(), true)
+	notOffered := NewBash(NewShell(dir, &sandbox.Sandbox{}), NewShell(dir, &sandbox.Sandbox{}), NewTasks(), false)
+
+	assert.Equal(t, "Bash (unsandboxed) git config -l", offered.Display.Title(json.RawMessage(`{"command":"git config -l","unsandboxed":true}`)))
+	assert.Equal(t, "Bash (unsandboxed) cd a …", offered.Display.Title(json.RawMessage(`{"command":"cd a\nls","unsandboxed":true}`)))
+	assert.Equal(t, "Bash (unsandboxed)", offered.Display.Title(json.RawMessage(`{"unsandboxed":true}`)))
+	assert.Equal(t, "Bash git config -l", offered.Display.Title(json.RawMessage(`{"command":"git config -l","unsandboxed":false}`)))
+	assert.Equal(t, "Bash git config -l", notOffered.Display.Title(json.RawMessage(`{"command":"git config -l","unsandboxed":true}`)))
 }

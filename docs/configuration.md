@@ -116,7 +116,7 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 | `cost` | The session's cost (`$0.42`); absent while zero |
 | `cwd` | The workspace, with your home directory as `~` |
 | `notice` | Transient hints such as `Copied` |
-| `sandbox` | `sandboxed` or `unsandboxed` when `Bash` is available |
+| `sandbox` | `sandboxed` or `unsandboxed` when `Bash` is available; shows the default, not a call that sets `unsandboxed` |
 | `tasks` | Running background work, such as `2 agents, 1 shell` |
 
 - `model`, `effort`, `context`, `tools` and `cost` show the session whose view is open.

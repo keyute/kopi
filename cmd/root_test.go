@@ -472,10 +472,33 @@ func TestSubagentFileToolsNeverReachThePlanFile(t *testing.T) {
 		require.NoError(t, err, "root %s", tl.Name)
 		assert.True(t, target.PlanFile, "root %s", tl.Name)
 	}
-	for _, tl := range agentTools(root, ws, nil, nil) {
+	for _, tl := range agentTools(root, ws, nil, nil, true) {
 		target, err := tl.Target(args)
 		require.NoError(t, err, "subagent %s", tl.Name)
 		assert.False(t, target.PlanFile, "subagent %s", tl.Name)
+	}
+}
+
+func TestAgentToolsHonourAllowUnsandboxed(t *testing.T) {
+	dir := t.TempDir()
+	ws, err := tool.NewWorkspace(dir, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
+	shell, planShell := tool.NewShell(dir, &sandbox.Sandbox{}), tool.NewShell(dir, &sandbox.Sandbox{})
+	root := []tool.Tool{tool.NewBash(shell, planShell, nil, true)}
+
+	for _, allow := range []bool{false, true} {
+		got := agentTools(root, ws, shell, planShell, allow)
+		require.Len(t, got, 1)
+		properties, ok := got[0].Parameters["properties"].(map[string]any)
+		require.True(t, ok)
+		if allow {
+			assert.Contains(t, properties, "unsandboxed")
+			assert.NotNil(t, got[0].Unsandboxed)
+		} else {
+			assert.NotContains(t, properties, "unsandboxed")
+			assert.Nil(t, got[0].Unsandboxed)
+		}
 	}
 }
 
@@ -1279,12 +1302,17 @@ func sandboxAvailable(t *testing.T) bool {
 
 // streamBash answers with one Bash call running command.
 func streamBash(w http.ResponseWriter, command string) {
+	streamBashArgs(w, map[string]any{"command": command})
+}
+
+// streamBashArgs answers with one Bash call with args.
+func streamBashArgs(w http.ResponseWriter, args map[string]any) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	writeChunk(w, map[string]any{"role": "assistant", "content": ""}, nil)
-	args, _ := json.Marshal(map[string]any{"command": command})
+	raw, _ := json.Marshal(args)
 	writeChunk(w, map[string]any{"tool_calls": []any{map[string]any{
 		"index": 0, "id": "call_0", "type": "function",
-		"function": map[string]any{"name": "Bash", "arguments": string(args)},
+		"function": map[string]any{"name": "Bash", "arguments": string(raw)},
 	}}}, nil)
 	writeChunk(w, map[string]any{}, "tool_calls")
 	fmt.Fprint(w, "data: [DONE]\n\n")
@@ -1294,10 +1322,29 @@ func streamBash(w http.ResponseWriter, command string) {
 // and returns the tool result the model got back and kopi's stderr.
 func printBash(t *testing.T, e testEnv, command string, flags ...string) (result, stderr string) {
 	t.Helper()
+	return printBashArgs(t, e, map[string]any{"command": command}, flags...)
+}
+
+// kopiSecret is the text writeKopiSecret stores.
+const kopiSecret = "synthetic kopi Bash secret"
+
+// writeKopiSecret writes kopiSecret to a file named name in Kopi's home and
+// returns a shell command that prints it.
+func writeKopiSecret(t *testing.T, e testEnv, name string) string {
+	t.Helper()
+	path := filepath.Join(e.kopiHome, name)
+	e.writeFile(t, path, kopiSecret+"\n")
+	quoted := "'" + strings.ReplaceAll(path, "'", "'\"'\"'") + "'"
+	return `IFS= read -r secret < ` + quoted + ` && printf '%s\n' "$secret"`
+}
+
+// printBashArgs is printBash for a Bash call with args.
+func printBashArgs(t *testing.T, e testEnv, args map[string]any, flags ...string) (result, stderr string) {
+	t.Helper()
 	var calls atomic.Int32
 	server := newMockProvider(t, func(w http.ResponseWriter) {
 		if calls.Add(1) == 1 {
-			streamBash(w, command)
+			streamBashArgs(w, args)
 			return
 		}
 		streamText(w, "done")
@@ -1516,23 +1563,122 @@ func TestRootSandboxedBashRunsWithoutAllowRule(t *testing.T) {
 	assert.Equal(t, "hi\n", result)
 }
 
+func TestRootSandboxedBashUnsandboxedNeedsApproval(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+
+	result, _ := printBashArgs(t, newSandboxedEnv(t), map[string]any{"command": "echo hi", "unsandboxed": true}, "--mode", "execute")
+
+	assert.Contains(t, result, `tool "Bash" needs approval and this run cannot ask for it`)
+	assert.NotEqual(t, "hi\n", result)
+}
+
+func TestRootSandboxedBashUnsandboxedRunsOutsideTheSandbox(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	e := newSandboxedEnv(t)
+	command := writeKopiSecret(t, e, "secret.txt")
+
+	result, _ := printBashArgs(t, e, map[string]any{"command": command, "unsandboxed": true}, "--mode", "execute", "--allowed-tools", "Bash")
+
+	assert.Equal(t, kopiSecret+"\n", result)
+}
+
+func TestRootSandboxedBashUnsandboxedIsRefusedWhenNotAllowed(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	e := newSandboxedEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"sandbox":{"allowUnsandboxed":false}}`)
+	command := writeKopiSecret(t, e, "secret.txt")
+
+	result, _ := printBashArgs(t, e, map[string]any{"command": command, "unsandboxed": true}, "--mode", "execute", "--allowed-tools", "Bash")
+
+	assert.NotContains(t, result, kopiSecret)
+	// PiG validates the arguments against the schema before Run, and the schema omits unsandboxed here.
+	assert.Contains(t, result, `Validation failed for tool "Bash"`)
+	assert.Contains(t, result, "unsandboxed: unknown field")
+}
+
+func TestSubagentBashUnsandboxedIsRefusedWhenNotAllowed(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	e := newSandboxedEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"sandbox":{"allowUnsandboxed":false}}`)
+	e.writeAgent(t, "")
+	command := writeKopiSecret(t, e, "secret.txt")
+
+	// The subagent is told apart from the root by its system prompt.
+	server := &mockServer{requests: make(chan mockRequest, 16)}
+	server.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("failed to decode request: %v", err)
+		}
+		server.requests <- mockRequest{path: r.URL.Path, authorization: r.Header.Get("Authorization"), body: body}
+		messages := body["messages"].([]any)
+		child := strings.Contains(fmt.Sprint(messages[0].(map[string]any)["content"]), "You are the subagent scout")
+		answered := slices.ContainsFunc(messages, func(m any) bool { return m.(map[string]any)["role"] == "tool" })
+		switch {
+		case answered:
+			streamText(w, "done")
+		case child:
+			streamBashArgs(w, map[string]any{"command": command, "unsandboxed": true})
+		default:
+			streamAgentCall(w)
+		}
+	}))
+	t.Cleanup(server.Close)
+	e.writeMockModels(t, server.URL)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "run it", "--mode", "execute", "--allowed-tools", "Bash")
+
+	require.NoError(t, err)
+	var results []string
+	for range 4 {
+		req := server.next(t)
+		if !strings.Contains(fmt.Sprint(req.body["messages"].([]any)[0].(map[string]any)["content"]), "You are the subagent scout") {
+			continue
+		}
+		for _, m := range req.body["messages"].([]any) {
+			if msg := m.(map[string]any); msg["role"] == "tool" {
+				results = append(results, fmt.Sprint(msg["content"]))
+			}
+		}
+	}
+	require.Len(t, results, 1, "the subagent's Bash call got no result")
+	assert.NotContains(t, results[0], kopiSecret)
+	assert.Contains(t, results[0], `Validation failed for tool "Bash"`)
+	assert.Contains(t, results[0], "unsandboxed: unknown field")
+}
+
+func TestRootSandboxedBashUnsandboxedIsRefusedInPlan(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+
+	result, _ := printBashArgs(t, newSandboxedEnv(t), map[string]any{"command": "echo hi", "unsandboxed": true}, "--mode", "plan", "--allowed-tools", "Bash")
+
+	assert.Contains(t, result, `tool "Bash" needs execute mode; the session is in plan mode, where it never runs outside the OS sandbox`)
+	assert.NotEqual(t, "hi\n", result)
+}
+
 func TestRootSandboxedBashRefusesKopiHomeRead(t *testing.T) {
 	if !sandboxAvailable(t) {
 		t.Skip("the sandbox is unavailable here")
 	}
 	e := newSandboxedEnv(t)
-	secret := filepath.Join(e.kopiHome, "secret's.txt")
-	const sentinel = "synthetic kopi Bash secret"
-	e.writeFile(t, secret, sentinel+"\n")
-	quoted := "'" + strings.ReplaceAll(secret, "'", "'\"'\"'") + "'"
-	command := `IFS= read -r secret < ` + quoted + ` && printf '%s\n' "$secret"`
+	command := writeKopiSecret(t, e, "secret's.txt")
 
 	result, stderr := printBash(t, e, command, "--mode", "execute")
 
 	assert.Contains(t, result, tool.ErrExitStatus.Error())
 	assert.Contains(t, result, "exit code")
 	assert.NotContains(t, result, "needs approval")
-	assert.NotContains(t, result+stderr, sentinel)
+	assert.NotContains(t, result+stderr, kopiSecret)
 }
 
 func TestRootSandboxedBashRefusesKopiHomeWrite(t *testing.T) {

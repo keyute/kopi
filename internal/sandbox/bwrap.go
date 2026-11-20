@@ -1,5 +1,5 @@
 // The mount plan is adapted from src/sandbox/linux-sandbox-utils.ts of
-// Anthropic's sandbox-runtime, https://github.com/anthropic-experimental/sandbox-runtime
+// Anthropic's sandbox-runtime, https://github.com/anthropics/sandbox-runtime
 // at commit 0bbebed0aa9a8e628dc4df8bc30293550a1988eb.
 // Copyright 2025 Anthropic
 // Licensed under the Apache License, Version 2.0; see srt/LICENSE in this directory.
