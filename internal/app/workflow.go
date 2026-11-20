@@ -184,7 +184,16 @@ func (r *workflowRun) call(ctx context.Context, raw json.RawMessage) (json.RawMe
 	if run.rec != nil {
 		run.unsubscribe = run.sess.Subscribe(run.rec.Observe)
 	}
-	defer c.closeChild(run)
+	defer func() {
+		_, cost := run.sess.Usage()
+		c.closeChild(run)
+		c.mu.Lock()
+		if c.main.sess == r.parent {
+			c.spend.addWorkflow(r.task.ID(), cost)
+		}
+		c.mu.Unlock()
+		r.bound(event.TasksChanged{})
+	}()
 
 	r.writeLine(head + ": started")
 	started := time.Now()

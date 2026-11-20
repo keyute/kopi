@@ -154,6 +154,7 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 | `tools` | The tool calls the session has made (`12 tools`); absent until the first |
 | `tokens` | The session's context size (`22.1k tokens`); absent until known |
 | `cost` | The session's cost (`$0.42`); absent while zero |
+| `total` | The whole session's estimated cost (`$1.87`): the main session, its subagents, workflow agents that have ended, and the classifier, `WebFetch` and `WebSearch` requests; absent while zero |
 | `cwd` | The workspace, with your home directory as `~` |
 | `notice` | Transient hints such as `Copied` |
 | `sandbox` | `sandboxed` or `unsandboxed` when `Bash` is available; shows the default, not a call that sets `unsandboxed` |
@@ -162,7 +163,8 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 | `changes` | Lines added and removed against `HEAD` in tracked files, staged or not (`+12 -3`; only the non-zero side shows, `+12` or `-3`); absent when there are none, outside a git repository and in a repository with no commit |
 
 - `model`, `effort`, `context`, `tokens`, `tools` and `cost` show the session whose view is open.
-- `cost` is an estimate computed from the model's listed price; on a subscription sign-in it is not what you are billed.
+- `cost` is an estimate computed from the model's listed price; on a subscription sign-in it is not what you are billed. `total` is the same kind of estimate.
+- `total` always shows the whole session, whichever view is open. It leaves out a workflow agent that is still running. After a resume (`-c`, `-r` or `/resume`) it holds the main session's cost from before the resume, but not what subagents, workflow agents and those requests cost then.
 - `changes`:
   - Untracked files are not counted.
   - Kopi runs `git diff` in the workspace for it, unsandboxed, in any folder whether trusted or not, and only when an entry names `changes` and the workspace is in a repository when Kopi starts.

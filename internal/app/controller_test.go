@@ -2473,6 +2473,17 @@ func TestStatusReportsContextUsageAndBranch(t *testing.T) {
 	assert.Equal(t, "feature/status", status.Branch)
 }
 
+func TestStatusTotalCostIncludesARootTurn(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	h := newHarness(t, sb, Config{Model: sb.PricedModel(t)})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	assert.Zero(t, h.c.Status().TotalCost)
+
+	h.turn(t, "price me")
+
+	assert.Equal(t, pigruntimetest.PricedModelCost, h.c.Status().TotalCost)
+}
+
 func TestAgentsReportEffortAndUsage(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	require.NoError(t, os.WriteFile(filepath.Join(sb.Workspace, "notes.txt"), []byte("kopi fixture 42\n"), 0o600))

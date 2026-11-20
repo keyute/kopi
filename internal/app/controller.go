@@ -160,6 +160,8 @@ type Controller struct {
 	followers map[*WorkQueue]struct{}
 
 	mu sync.Mutex
+	// spend is what the current root session has spent outside its open sessions.
+	spend spend
 	// model is the session model: Config.Model, or the runtime's default once resolved.
 	model  string
 	sessID string
@@ -261,7 +263,10 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	var search []tool.Tool
 	if small := c.SmallModel(); small != "" && c.rt.CanSearch(small) && !c.cfg.Rules.Removes("WebSearch") {
 		search = append(search, tool.NewWebSearch(func(ctx context.Context, system, query string) (tool.SearchResult, error) {
-			return c.rt.Search(ctx, small, system, query)
+			charge := c.chargeSide(SearchCall)
+			result, cost, err := c.rt.Search(ctx, small, system, query)
+			charge(cost)
+			return result, err
 		}))
 		tools = append(tools, search...)
 	}
@@ -759,6 +764,7 @@ func (c *Controller) Status() Status {
 	c.mu.Lock()
 	sess, sessID := c.main.sess, c.sessID
 	busy := c.main.work != nil
+	side := c.spend.sum()
 	c.mu.Unlock()
 
 	mode, _ := c.authority.Snapshot()
@@ -778,6 +784,7 @@ func (c *Controller) Status() Status {
 	// queue stays held so a workflow that starts meanwhile is not listed as a
 	// subagent; List takes only the registry's lock.
 	c.queue.Lock()
+	children := maps.Clone(c.children)
 	for _, info := range c.cfg.Tasks.List() {
 		if info.Status != tool.TaskRunning {
 			continue
@@ -793,6 +800,15 @@ func (c *Controller) Status() Status {
 		}
 	}
 	c.queue.Unlock()
+	s.TotalCost = side
+	if sess != nil {
+		_, cost := sess.Usage()
+		s.TotalCost += cost
+	}
+	for _, r := range children {
+		_, cost := r.sess.Usage()
+		s.TotalCost += cost
+	}
 	s.Foreground = c.cfg.Tasks.Foreground()
 	return s
 }
@@ -1113,6 +1129,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	}
 	c.main.sess, c.sessID, c.main.emit, c.main.bound, c.main.unsubscribe = sess, id, emit, bound, unsubscribe
 	c.main.told = ""
+	c.spend = spend{}
 	c.deferred = nil
 	c.mu.Unlock()
 	c.queue.Unlock()

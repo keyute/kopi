@@ -2,6 +2,7 @@ package pigruntime
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	"github.com/MichaelKinsy/PiG/ai"
@@ -14,7 +15,7 @@ func TestAnswerSendsSystemAndPromptAndReturnsTrimmedText(t *testing.T) {
 	requests := make(chan []ai.Message, 1)
 	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "  the answer\n")})
 
-	got, err := r.Answer(t.Context(), fauxModel, DefaultEffort, "answer from the page", "what is it?")
+	got, _, err := r.Answer(t.Context(), fauxModel, DefaultEffort, "answer from the page", "what is it?")
 	require.NoError(t, err)
 	assert.Equal(t, "the answer", got)
 	req := <-requests
@@ -28,13 +29,24 @@ func TestAnswerSendsSystemAndPromptAndReturnsTrimmedText(t *testing.T) {
 	assert.Equal(t, []ai.UserContent{ai.UserText("what is it?")}, prompts)
 }
 
+func TestAnswerReturnsTheRequestsCost(t *testing.T) {
+	r, _ := newSearchRuntime(t, "openai-responses", "synthetic-key", func(w http.ResponseWriter) {
+		responsesStream(w, "An answer.", nil)
+	})
+
+	_, cost, err := r.Answer(t.Context(), searchModel, DefaultEffort, "system", "prompt")
+
+	require.NoError(t, err)
+	assert.Equal(t, 4.0, cost)
+}
+
 func TestAnswerReportsProviderError(t *testing.T) {
 	r, faux := newTestRuntime(t, newSandbox(t))
 	faux.SetResponses([]ai.FauxResponseStep{
 		ai.FauxAssistantMessage(ai.FauxContentString(""), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonError), ErrorMessage: "invalid request: bad thing"}),
 	})
 
-	_, err := r.Answer(t.Context(), fauxModel, DefaultEffort, "system", "prompt")
+	_, _, err := r.Answer(t.Context(), fauxModel, DefaultEffort, "system", "prompt")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid request: bad thing")
 }
@@ -43,7 +55,7 @@ func TestAnswerEmptyReplyFails(t *testing.T) {
 	r, faux := newTestRuntime(t, newSandbox(t))
 	faux.SetResponses([]ai.FauxResponseStep{reply(" \n")})
 
-	_, err := r.Answer(t.Context(), fauxModel, DefaultEffort, "system", "prompt")
+	_, _, err := r.Answer(t.Context(), fauxModel, DefaultEffort, "system", "prompt")
 	assert.ErrorIs(t, err, ErrNoAnswer)
 }
 
@@ -57,7 +69,7 @@ func TestAnswerCancelledReturnsContextError(t *testing.T) {
 		}),
 	})
 
-	_, err := r.Answer(ctx, fauxModel, DefaultEffort, "system", "prompt")
+	_, _, err := r.Answer(ctx, fauxModel, DefaultEffort, "system", "prompt")
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
@@ -76,7 +88,7 @@ func TestAnswerUnusableModelFails(t *testing.T) {
 		{name: "missing credential", model: "openai-codex/" + codex.ID, sentinel: ErrNoCredential},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := r.Answer(t.Context(), tc.model, DefaultEffort, "system", "prompt")
+			_, _, err := r.Answer(t.Context(), tc.model, DefaultEffort, "system", "prompt")
 			require.ErrorIs(t, err, tc.sentinel)
 			assert.Contains(t, err.Error(), tc.model)
 		})
@@ -106,7 +118,7 @@ func TestAnswerEffortSetsThinkingLevel(t *testing.T) {
 				}),
 			})
 
-			_, err := r.Answer(t.Context(), "faux-thinker/thinker", tc.effort, "system", "prompt")
+			_, _, err := r.Answer(t.Context(), "faux-thinker/thinker", tc.effort, "system", "prompt")
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, <-levels)
 		})
