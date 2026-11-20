@@ -250,6 +250,7 @@ func TestMultilineActivityStaysOnOneAgentRow(t *testing.T) {
 	}{
 		{"left", lineOf([]string{"$activity"})},
 		{"right", lineOf(nil, "$activity")},
+		{"group", lineOf([]string{"$agent", "( $activity)"})},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _ := agentLineModel(t, 60, tc.line, explorer("t1"))

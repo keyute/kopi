@@ -107,7 +107,6 @@ What each key does is in [usage](usage.md#keys).
 - Defaults: left `$model`, `$context`, `$branch( $changes)`; right `$notice`, `$sandbox`, `$shells`, `$mode`.
 - `separator` goes between entries (default ` · `, `""` for none). An entry that draws nothing is left out with its separator. Nothing is trimmed.
 - On a narrow terminal the left side drops whole entries from its right end. When the line still does not fit, the left side is cleared and the right side is cut, keeping the entry that names `mode` whole at the right end when it fits.
-- `tasks` was replaced by `agents` and `shells`.
 
 ### Formats
 
@@ -161,10 +160,10 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
   - Kopi runs `git diff` in the workspace for it, unsandboxed, in any folder whether trusted or not, and only when an entry names `changes` and the workspace is in a repository when Kopi starts.
   - External diff drivers, textconv and fsmonitor hooks are turned off.
   - Git does not refresh or write the index.
-  - A bare repository found without a `.git` is not used.
+  - A bare repository found without a `.git` is not used (git 2.38 or later).
   - A missing object in a partial clone is not fetched (git 2.45 or later).
   - A clean or process filter defined in the repository's or your own git config still runs on files that `.gitattributes` assigns to it.
-  - It refreshes when Kopi starts, when a turn starts and on every status refresh, so a change made outside Kopi shows at the next of those.
+  - It refreshes when Kopi starts, when a turn starts and on every status refresh, so a change made outside Kopi shows at the next of those. A refresh that arrives during a run reruns it once when it finishes.
 
 A segment in `segments`:
 

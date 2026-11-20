@@ -60,6 +60,13 @@ func TestChangesCommandCountsAgainstHEAD(t *testing.T) {
 	added, removed = parseShortstat(out)
 	assert.Equal(t, 2, added, "untracked files are not counted")
 	assert.Equal(t, 1, removed)
+
+	gitIn(t, dir, "add", "untracked")
+	out, err = shellRunner{}.run(t.Context(), dir, changesCommand)
+	require.NoError(t, err)
+	added, removed = parseShortstat(out)
+	assert.Equal(t, 4, added, "a staged file is counted")
+	assert.Equal(t, 1, removed)
 }
 
 func TestChangesCommandFailsWithoutACommit(t *testing.T) {
@@ -103,6 +110,26 @@ func TestChangesCommandIgnoresEmbeddedBareRepository(t *testing.T) {
 	_, err := shellRunner{}.run(t.Context(), inner, changesCommand)
 	require.Error(t, err)
 	assert.NoFileExists(t, marker, "the embedded repository's clean filter must not run")
+}
+
+func TestChangesCommandDoesNotRunFsmonitor(t *testing.T) {
+	dir, file := newCommittedRepo(t)
+	marker := filepath.Join(t.TempDir(), "marker")
+	hook := filepath.Join(t.TempDir(), "fsmonitor")
+	require.NoError(t, os.WriteFile(hook, []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755))
+	gitIn(t, dir, "config", "core.fsmonitor", hook)
+	require.NoError(t, os.WriteFile(file, []byte("a\nB\nc\n"), 0o600))
+
+	unguarded := strings.Replace(changesCommand, " -c core.fsmonitor=false", "", 1)
+	require.NotEqual(t, changesCommand, unguarded)
+	_, err := shellRunner{}.run(t.Context(), dir, unguarded)
+	require.NoError(t, err)
+	require.FileExists(t, marker, "without the guard the hook runs")
+	require.NoError(t, os.Remove(marker))
+
+	_, err = shellRunner{}.run(t.Context(), dir, changesCommand)
+	require.NoError(t, err)
+	assert.NoFileExists(t, marker, "the repository's fsmonitor hook must not run")
 }
 
 func TestChangesCommandDoesNotWriteIndex(t *testing.T) {

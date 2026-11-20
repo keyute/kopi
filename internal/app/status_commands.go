@@ -29,6 +29,8 @@ type statusCommand struct {
 	changes          bool
 	interval         time.Duration
 	running, failing bool
+	// pending marks a refresh refused while the changes command ran.
+	pending bool
 }
 
 // StatusCommands owns the ephemeral footer commands for one frontend run.
@@ -99,9 +101,14 @@ func (s *StatusCommands) tick(command *statusCommand) {
 	}
 }
 
-// launch requires mu. Busy refreshes are discarded, never queued.
+// launch requires mu. Busy refreshes are discarded, never queued, except
+// that the changes command collapses them into one rerun.
 func (s *StatusCommands) launch(command *statusCommand) {
-	if s.closed || s.ctx == nil || s.ctx.Err() != nil || command.running {
+	if s.closed || s.ctx == nil || s.ctx.Err() != nil {
+		return
+	}
+	if command.running {
+		command.pending = command.changes
 		return
 	}
 	command.running = true
@@ -128,6 +135,7 @@ func (s *StatusCommands) launch(command *statusCommand) {
 		if command.changes {
 			if ctx.Err() == context.DeadlineExceeded {
 				// exec may report "signal: killed" instead of the deadline error; keep the last counts.
+				s.rerun(command)
 				s.mu.Unlock()
 				return
 			}
@@ -136,6 +144,7 @@ func (s *StatusCommands) launch(command *statusCommand) {
 				changed.Added, changed.Removed = parseShortstat(out)
 			}
 			s.publish(changed)
+			s.rerun(command)
 		} else {
 			s.publish(event.StatusCommandResult{Name: command.name, Output: out, Err: err})
 		}
@@ -143,7 +152,18 @@ func (s *StatusCommands) launch(command *statusCommand) {
 	}()
 }
 
+// rerun requires mu. It launches the changes command once more when a refresh arrived during its run.
+func (s *StatusCommands) rerun(command *statusCommand) {
+	if command.pending {
+		command.pending = false
+		s.launch(command)
+	}
+}
+
 func (s *StatusCommands) Observe(ev event.Event) {
+	if wrapped, ok := ev.(event.Session); ok {
+		ev = wrapped.Event
+	}
 	switch ev.(type) {
 	case event.TurnStart, event.SessionChanged, event.ModeChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged:
 	default:

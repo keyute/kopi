@@ -131,6 +131,13 @@ func TestStatusLineKeepsTheWholeModeEntryAtNarrowWidths(t *testing.T) {
 	}
 }
 
+func TestStatusLineKeepsTheRightModeEntryWhenModeIsOnBothSides(t *testing.T) {
+	layout := layoutOf([]string{"$mode"}, []string{"$branch", "$sandbox $mode"})
+	s := app.Status{Branch: strings.Repeat("x", 30), Shell: true, Sandboxed: true, Mode: policy.Execute}
+	got := ansi.Strip(statusLine(statusInput{Status: s}, layout, 25, mocha()))
+	assert.Equal(t, strings.Repeat("x", 5)+" · sandboxed execute", got)
+}
+
 func TestStatusLineFormats(t *testing.T) {
 	branchUnit := layoutOf([]string{"$branch( $changes)"}, nil)
 	for _, tc := range []struct {

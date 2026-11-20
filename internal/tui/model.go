@@ -18,7 +18,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/app"
-	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
 )
@@ -153,12 +152,16 @@ type model struct {
 
 func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model {
 	th, km := opts.Themes.dark, newKeyMap(opts.Keys)
-	agentNames := config.SegmentNames(opts.AgentLine.Left, opts.AgentLine.Right)
+	agentLine := newAgentLayout(opts.AgentLine)
+	var agentNames []string
+	for _, f := range slices.Concat(agentLine.left, agentLine.right) {
+		agentNames = append(agentNames, f.Segments()...)
+	}
 	m := &model{
 		ctx: ctx, c: c, bridge: b, version: opts.Version,
 		th: th, themes: opts.Themes, keys: km, composer: newComposer(th, km.newline), spinner: newSpinner(th),
 		layout:       newStatusLayout(opts.StatusLine),
-		agentLine:    newAgentLayout(opts.AgentLine),
+		agentLine:    agentLine,
 		usesActivity: slices.Contains(agentNames, "activity"),
 		usesElapsed:  slices.Contains(agentNames, "elapsed"),
 		commandOut:   map[string]string{},

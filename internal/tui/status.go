@@ -336,7 +336,7 @@ func statusLine(in statusInput, layout statusLayout, width int, th theme) string
 	configuredMode := layout.mode != nil
 	var mode string
 	if configuredMode {
-		mode, _ = renderParts(layout.mode, layout.lookup(in, th), func(s string) string { return fg(th.text).Render(s) })
+		mode = strings.Join(layout.render([]config.Format{layout.mode}, in, th), "")
 	}
 	if lipgloss.Width(right)+1 > width || (configuredMode && !strings.Contains(left+right, mode)) {
 		left = ""

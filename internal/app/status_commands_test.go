@@ -101,7 +101,7 @@ func TestStatusCommandsStartAndRefresh(t *testing.T) {
 		assert.Equal(t, "raw\nsecond line", (<-results).Output)
 		synctest.Wait()
 		assert.Len(t, r.started(), 1, "busy refresh does not queue catchup")
-		for i, ev := range []event.Event{event.TurnStart{}, event.SessionChanged{}, event.ModeChanged{}, event.ToolEnd{}, event.TurnEnd{}, event.TasksChanged{}} {
+		for i, ev := range []event.Event{event.TurnStart{}, event.SessionChanged{}, event.ModeChanged{}, event.ToolEnd{}, event.TurnEnd{}, event.TasksChanged{}, event.Session{ID: "child", Event: event.ToolEnd{}}} {
 			s.Observe(event.Notice{})
 			s.Observe(event.TextDelta{})
 			synctest.Wait()
@@ -334,6 +334,10 @@ func TestStatusCommandsChangesRegistration(t *testing.T) {
 
 func TestStatusCommandsChangesPublishAndTurnStart(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		var logs bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+		defer slog.SetDefault(previous)
 		s, r := newChangesStatusCommands(t, true, true, "$branch( $changes)")
 		published := make(chan event.Event, 4)
 		s.Start(t.Context(), func(ev event.Event) { published <- ev })
@@ -348,6 +352,31 @@ func TestStatusCommandsChangesPublishAndTurnStart(t *testing.T) {
 		require.Len(t, r.started(), 2, "a turn start refreshes")
 		r.release <- runResult{err: errors.New("fatal: bad revision HEAD")}
 		assert.Equal(t, event.Changes{}, <-published, "a failed run publishes zero counts")
+		synctest.Wait()
+		assert.Empty(t, logs.String(), "a failing changes run is not logged")
+	})
+}
+
+func TestStatusCommandsChangesRefreshDuringRunReruns(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, r := newChangesStatusCommands(t, true, true, "$branch( $changes)")
+		published := make(chan event.Event, 4)
+		s.Start(t.Context(), func(ev event.Event) { published <- ev })
+		t.Cleanup(s.Close)
+		synctest.Wait()
+		require.Len(t, r.started(), 1)
+		s.Observe(event.TurnEnd{})
+		s.Observe(event.ToolEnd{})
+		synctest.Wait()
+		require.Len(t, r.started(), 1, "a refresh does not start a second run")
+		r.release <- runResult{out: " 1 file changed, 1 insertion(+)\n"}
+		assert.Equal(t, event.Changes{Added: 1}, <-published)
+		synctest.Wait()
+		require.Len(t, r.started(), 2, "the refreshes collapse into one rerun")
+		r.release <- runResult{out: " 1 file changed, 2 insertions(+)\n"}
+		assert.Equal(t, event.Changes{Added: 2}, <-published)
+		synctest.Wait()
+		assert.Len(t, r.started(), 2)
 	})
 }
 
