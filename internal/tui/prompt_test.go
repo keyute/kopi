@@ -238,6 +238,16 @@ func TestPageKeysScrollACutApprovalNotTheTranscript(t *testing.T) {
 	assert.Equal(t, top, m.top())
 }
 
+func TestPageKeyClearsAQuestionNotice(t *testing.T) {
+	m, _ := newTestModel(t, 90, 20)
+	send(m, event.QuestionRequested{Token: 7, Questions: []tool.Question{choice("Pick", false, "a", "b")}})
+	m.question.notice = unansweredNote
+
+	press(m, pgDown)
+
+	assert.Empty(t, m.question.notice)
+}
+
 func TestPageKeysScrollACutApprovalFromTheNoRowAndKeepTheDraft(t *testing.T) {
 	m, c := newTestModel(t, 40, 20)
 	send(m, longApproval(50))

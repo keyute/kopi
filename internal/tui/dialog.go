@@ -49,10 +49,8 @@ type dialog struct {
 	areas []fieldArea
 	// optionStarts includes the row after the last option.
 	optionStarts []int
-	// scroll is the offset scrollRows windows the body from; scrolled is set
-	// when the human moves it.
-	scroll   scroller
-	scrolled bool
+	// scroll is the offset scrollRows windows the body from.
+	scroll scroller
 }
 
 // rows draws d between two rules: the title, body and note two in, a blank
@@ -308,7 +306,7 @@ func (s *scroller) cut() bool { return s.off > 0 || s.below > 0 }
 func (s *scroller) window(lines []string, room int, th theme) []string {
 	s.below = 0
 	if room < 1 {
-		s.visible = 0
+		s.off, s.visible = 0, 0
 		return nil
 	}
 	if len(lines) <= room {

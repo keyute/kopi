@@ -113,10 +113,9 @@ func NewGrep(ws *Workspace, hidden Hidden) Tool {
 				info  fs.FileInfo
 				saved *os.File
 			)
-			if _, ok := ws.outputs.holds(ws.absolute(args.Path)); ok {
+			if dest, ok, err := ws.outputs.prepare(ws.absolute(args.Path), args.Path); ok {
 				// A saved output file is opened the way Read opens it, and is the
 				// whole search: the walk never sees Kopi's home.
-				dest, err := ws.prepare(args.Path)
 				if err != nil {
 					return Result{}, err
 				}
@@ -125,9 +124,6 @@ func NewGrep(ws *Workspace, hidden Hidden) Tool {
 					return Result{}, err
 				}
 				defer saved.Close()
-				if err := ws.checkRead(dest, saved, args.Path); err != nil {
-					return Result{}, err
-				}
 				if info, err = saved.Stat(); err != nil {
 					return Result{}, fmt.Errorf("failed to stat %s: %w", args.Path, err)
 				}

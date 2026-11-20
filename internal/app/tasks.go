@@ -47,10 +47,12 @@ func (c *Controller) taskChanged(info tool.TaskInfo) {
 
 func notice(info tool.TaskInfo, head string) pigruntime.Notice {
 	text := head
-	if tail := outputTail(info.Output); tail != "" {
+	tail := outputTail(info.Output)
+	if tail != "" {
 		text += "\n" + tail
 	}
-	if info.OutputFile != "" {
+	// A tail that still holds the output's cut marker already names the file.
+	if info.OutputFile != "" && !strings.Contains(tail, info.OutputFile) {
 		text += "\n[Output saved to " + info.OutputFile + "]"
 	}
 	return pigruntime.Notice{Text: text, Shown: taskEnded(info)}

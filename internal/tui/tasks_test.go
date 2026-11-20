@@ -486,7 +486,7 @@ func TestTasksPageKeysScrollACutOutput(t *testing.T) {
 		rows = dialogRows(t, m)
 		assert.Equal(t, []string{"  … 16 earlier lines", "    line 17"}, rows[2:4])
 		assert.Equal(t, []string{"    line 25", hint}, rows[11:13])
-		assert.False(t, m.tasks.d.scrolled, "back at the end it follows again")
+		assert.False(t, m.tasks.scrolled, "back at the end it follows again")
 	})
 }
 
@@ -508,7 +508,7 @@ func TestTasksFollowTheOutputUntilScrolledUp(t *testing.T) {
 		send(m, event.TasksChanged{})
 		rows = dialogRows(t, m)
 		assert.Equal(t, []string{"  … 13 earlier lines", "    line 14"}, rows[2:4], "scrolled up it stays put")
-		assert.True(t, m.tasks.d.scrolled)
+		assert.True(t, m.tasks.scrolled)
 	})
 }
 
@@ -548,11 +548,11 @@ func TestTasksKeepTheOffsetAcrossAWidthChange(t *testing.T) {
 		submitText(m, "/tasks")
 		press(m, enter)
 		press(m, pgUp)
-		require.True(t, m.tasks.d.scrolled)
+		require.True(t, m.tasks.scrolled)
 
 		m.Update(tea.WindowSizeMsg{Width: 20, Height: 30})
 
-		assert.True(t, m.tasks.d.scrolled)
+		assert.True(t, m.tasks.scrolled)
 		assert.Equal(t, "  … 8 earlier lines", dialogRows(t, m)[2])
 	})
 }
@@ -564,12 +564,12 @@ func TestTasksReopenStartsAtTheEnd(t *testing.T) {
 		submitText(m, "/tasks")
 		press(m, enter)
 		press(m, pgUp)
-		require.True(t, m.tasks.d.scrolled)
+		require.True(t, m.tasks.scrolled)
 
 		press(m, digit('2'))
 		press(m, enter)
 
-		assert.False(t, m.tasks.d.scrolled)
+		assert.False(t, m.tasks.scrolled)
 		assert.Equal(t, "  … 16 earlier lines", dialogRows(t, m)[2])
 	})
 }
@@ -582,7 +582,7 @@ func TestTasksPageKeysScrollTheTranscriptFromTheListAfterAScrolledOutput(t *test
 		submitText(m, "/tasks")
 		press(m, enter)
 		press(m, pgUp)
-		require.True(t, m.tasks.d.scrolled)
+		require.True(t, m.tasks.scrolled)
 		require.True(t, m.view().follow)
 
 		press(m, escape)
@@ -590,7 +590,7 @@ func TestTasksPageKeysScrollTheTranscriptFromTheListAfterAScrolledOutput(t *test
 		press(m, pgUp)
 
 		assert.False(t, m.view().follow)
-		assert.False(t, m.tasks.d.scrolled)
+		assert.False(t, m.tasks.scrolled)
 		assert.Zero(t, m.tasks.d.scroll.off)
 	})
 }

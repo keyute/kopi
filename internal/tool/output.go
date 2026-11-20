@@ -154,9 +154,7 @@ func (o *Outputs) Prune(now time.Time) {
 	}
 	sessions, err := os.ReadDir(o.dir)
 	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			slog.Warn("failed to list saved outputs", "dir", o.dir, "err", err)
-		}
+		slog.Warn("failed to list saved outputs", "dir", o.dir, "err", err)
 		return
 	}
 	for _, s := range sessions {

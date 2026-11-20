@@ -3057,8 +3057,23 @@ func TestSubagentReadAndGrepReachSavedOutputOnly(t *testing.T) {
 	saved := filepath.Join(e.kopiHome, "outputs", "session", "a.txt")
 	require.NoError(t, os.MkdirAll(filepath.Dir(saved), 0o700))
 	require.NoError(t, os.WriteFile(saved, []byte("saved text\n"), 0o600))
-	// The root builds its Grep with the outputs; subagents get the same tool.
-	root := []tool.Tool{tool.NewRead(ws), tool.NewGrep(ws.WithOutputs(outputs), nil), tool.NewWrite(ws), tool.NewEdit(ws)}
+	plans := tool.NewPlans(filepath.Join(e.kopiHome, "plans"))
+	require.NoError(t, plans.Select("session"))
+	plan := plans.Path()
+	require.NoError(t, os.WriteFile(plan, []byte("plan text\n"), 0o600))
+	allow := func(policy.Target) (policy.Mode, error) { return policy.Execute, nil }
+	run := func(tools []tool.Tool, name string, args map[string]any) error {
+		raw, err := json.Marshal(args)
+		require.NoError(t, err)
+		for _, tl := range tools {
+			if tl.Name == name {
+				_, err = tl.Run(t.Context(), raw, allow)
+				return err
+			}
+		}
+		require.Failf(t, "missing tool", name)
+		return nil
+	}
 	argsFor := map[string]map[string]any{
 		"Read":  {"file_path": saved},
 		"Grep":  {"pattern": "saved", "path": saved},
@@ -3066,14 +3081,23 @@ func TestSubagentReadAndGrepReachSavedOutputOnly(t *testing.T) {
 		"Edit":  {"file_path": saved, "old_string": "saved", "new_string": "x"},
 	}
 
-	for _, tl := range agentTools(root, ws, outputs, nil, nil, true) {
-		raw, err := json.Marshal(argsFor[tl.Name])
-		require.NoError(t, err)
-		_, err = tl.Run(t.Context(), raw, func(policy.Target) (policy.Mode, error) { return policy.Execute, nil })
-		if tl.Name == "Read" || tl.Name == "Grep" {
-			assert.NoError(t, err, tl.Name)
+	shell, planShell := tool.NewShell(e.workspace, &sandbox.Sandbox{}), tool.NewShell(e.workspace, &sandbox.Sandbox{})
+	root := rootTools(ws, plans, outputs, nil, shell, planShell, tool.NewTasks(), true, nil)
+	assert.NoError(t, run(root, "Read", map[string]any{"file_path": plan}))
+	for name, args := range argsFor {
+		err := run(root, name, args)
+		if name == "Read" || name == "Grep" {
+			assert.NoError(t, err, "root "+name)
 		} else {
-			assert.Error(t, err, tl.Name)
+			assert.ErrorIs(t, err, tool.ErrOutsideWorkspace, "root "+name)
+		}
+	}
+	for name, args := range argsFor {
+		err := run(agentTools(root, ws, outputs, shell, planShell, true), name, args)
+		if name == "Read" || name == "Grep" {
+			assert.NoError(t, err, "subagent "+name)
+		} else {
+			assert.ErrorIs(t, err, tool.ErrOutsideWorkspace, "subagent "+name)
 		}
 	}
 	data, err := os.ReadFile(saved)

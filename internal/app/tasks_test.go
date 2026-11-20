@@ -1073,4 +1073,9 @@ func TestTaskNoticeNamesTheSavedOutput(t *testing.T) {
 
 	info.OutputFile = "/kopi/outputs/s1/a.txt"
 	assert.Equal(t, endText("t1")+"\n[Output saved to /kopi/outputs/s1/a.txt]", notice(info, head).Text)
+
+	info.Output = "[… 9 bytes cut; full output: /kopi/outputs/s1/a.txt; use Read with offset=3 to continue …]\nbuilt t1"
+	text := notice(info, head).Text
+	assert.Equal(t, 1, strings.Count(text, "/kopi/outputs/s1/a.txt"))
+	assert.NotContains(t, text, "[Output saved to")
 }

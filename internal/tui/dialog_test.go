@@ -328,6 +328,12 @@ func TestScrollerWindowSingularMarkers(t *testing.T) {
 	assert.Equal(t, []string{"… 1 earlier line", "b", "… 2 more lines"}, plainRows(s.window([]string{"a", "b", "c", "d"}, 3, mocha())))
 }
 
+func TestScrollerWindowWithoutRoomResetsTheOffset(t *testing.T) {
+	s := scroller{off: 3}
+	assert.Nil(t, s.window([]string{"a", "b", "c", "d", "e"}, 0, mocha()))
+	assert.False(t, s.cut())
+}
+
 func scrollDialog(n int) *dialog {
 	d := &dialog{title: "Pick", note: "why", options: []option{{label: "Yes"}}}
 	for i := range n {

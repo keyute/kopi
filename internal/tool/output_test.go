@@ -292,6 +292,18 @@ func TestSavedOutputRefusesASymlinkedFolder(t *testing.T) {
 	assert.NotContains(t, res.Text, "outside")
 }
 
+func TestGrepRefusesASymlinkedSessionFolder(t *testing.T) {
+	f := newOutputFixture(t)
+	elsewhere := t.TempDir()
+	writeFile(t, filepath.Join(elsewhere, "a.txt"), "outside")
+	require.NoError(t, os.MkdirAll(f.outputsDir, 0o700))
+	require.NoError(t, os.Symlink(elsewhere, filepath.Join(f.outputsDir, "s1")))
+
+	text, err := toolText(t, NewGrep(f.ws, nil), map[string]any{"pattern": "outside", "path": filepath.Join(f.outputsDir, "s1", "a.txt")})
+	require.ErrorIs(t, err, ErrProtected)
+	assert.NotContains(t, text, "outside")
+}
+
 func TestSavedOutputIsReadOnly(t *testing.T) {
 	f := newOutputFixture(t)
 	text := numbered(5000)
@@ -336,6 +348,17 @@ func TestGrepRefusesTheOutputsFolderAndOtherSessions(t *testing.T) {
 	}
 }
 
+func TestGrepWalkFromTheWorkspaceRootSkipsSavedOutput(t *testing.T) {
+	f := newOutputFixture(t)
+	_, path := spill(t, f.outputs, strings.Replace(numbered(5000), "line 02500", "NEEDLE 02500", 1))
+
+	text, err := toolText(t, NewGrep(f.ws, nil), map[string]any{"pattern": "NEEDLE|line", "path": ".", "output_mode": "content"})
+
+	require.NoError(t, err)
+	assert.NotContains(t, text, filepath.Base(path))
+	assert.NotContains(t, text, "NEEDLE")
+}
+
 func TestOutputsPrune(t *testing.T) {
 	f := newOutputFixture(t)
 	now := time.Now()
@@ -350,6 +373,18 @@ func TestOutputsPrune(t *testing.T) {
 	for _, p := range []string{old, stale} {
 		require.NoError(t, os.Chtimes(p, aged, aged))
 	}
+	edge := filepath.Join(f.outputsDir, "mixed", "edge.txt")
+	writeFile(t, edge, "x")
+	exact := now.Add(-outputMaxAge)
+	require.NoError(t, os.Chtimes(edge, exact, exact))
+	target := filepath.Join(t.TempDir(), "target.txt")
+	writeFile(t, target, "x")
+	require.NoError(t, os.Chtimes(target, aged, aged))
+	link := filepath.Join(f.outputsDir, "mixed", "link.txt")
+	require.NoError(t, os.Symlink(target, link))
+	top := filepath.Join(f.outputsDir, "top.txt")
+	writeFile(t, top, "x")
+	require.NoError(t, os.Chtimes(top, aged, aged))
 
 	f.outputs.Prune(now)
 
@@ -357,11 +392,18 @@ func TestOutputsPrune(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(f.outputsDir, "old"))
 	assert.NoFileExists(t, stale)
 	assert.FileExists(t, fresh)
+	assert.FileExists(t, edge)
+	_, err := os.Lstat(link)
+	assert.NoError(t, err)
+	assert.FileExists(t, target)
+	assert.FileExists(t, top)
 	assert.NoDirExists(t, filepath.Join(f.outputsDir, "empty"))
 }
 
 func TestOutputsPruneMissingFolder(t *testing.T) {
-	NewOutputs(filepath.Join(t.TempDir(), "none")).Prune(time.Now())
+	dir := filepath.Join(t.TempDir(), "none")
+	NewOutputs(dir).Prune(time.Now())
+	assert.NoDirExists(t, dir)
 }
 
 func TestSavedOutputKeepsRawBytes(t *testing.T) {

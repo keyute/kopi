@@ -42,14 +42,11 @@ func approvalNote(a *event.ApprovalRequested) string {
 	switch {
 	case a.Rule != "":
 		return "asked by " + a.Rule
-	case a.Review != nil && a.Review.Verdict == policy.VerdictDeny:
-		note := "the classifier would deny this"
-		if a.Review.Reason != "" {
-			note += ": " + a.Review.Reason
-		}
-		return note
 	case a.Review != nil:
 		note := "the classifier could not decide"
+		if a.Review.Verdict == policy.VerdictDeny {
+			note = "the classifier would deny this"
+		}
 		if a.Review.Reason != "" {
 			note += ": " + a.Review.Reason
 		}

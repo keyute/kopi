@@ -18,10 +18,12 @@ import (
 // taskDialog is the /tasks dialog, drawn in the composer's slot: the
 // background tasks, or one task's output while open names it.
 type taskDialog struct {
-	d    *dialog
-	list []tool.TaskInfo
-	open string
-	info tool.TaskInfo
+	d *dialog
+	// scrolled is set when the human moves the open output off its end.
+	scrolled bool
+	list     []tool.TaskInfo
+	open     string
+	info     tool.TaskInfo
 	// out is info's output as body rows for outWidth and outTheme, kept
 	// across renders.
 	out      []string
@@ -110,7 +112,7 @@ func (m *model) openTask(id string) {
 		return
 	}
 	if id != t.open {
-		t.d.sel, t.d.scroll, t.d.scrolled = 0, scroller{}, false
+		t.d.sel, t.d.scroll, t.scrolled = 0, scroller{}, false
 	}
 	t.open, t.info, t.out = id, info, nil
 	t.setOptions(m.width)
@@ -127,7 +129,7 @@ func (m *model) taskList(id string) {
 	}
 	sel := slices.IndexFunc(list, func(i tool.TaskInfo) bool { return i.ID == id })
 	t.list, t.open, t.d.sel = list, "", max(0, sel)
-	t.d.scroll, t.d.scrolled = scroller{}, false
+	t.d.scroll, t.scrolled = scroller{}, false
 	t.setOptions(m.width)
 }
 
@@ -179,12 +181,12 @@ func (t *taskDialog) rows(width, maxBody, maxRows int, km *keyMap, th theme) []s
 	if t.open != "" {
 		t.d.body = t.wrapped(width-2, th)
 		// The view follows the end until the human scrolls up.
-		if !t.d.scrolled {
+		if !t.scrolled {
 			t.d.scroll.off = len(t.d.body)
 		}
 	}
 	rows := t.d.scrollRows(width, maxRows, 1, maxBody, scrollHint(km), th)
-	t.d.scrolled = t.d.scroll.below > 0
+	t.scrolled = t.d.scroll.below > 0
 	if t.open == "" && len(rows) > maxRows {
 		head := len(rows) - len(t.d.options) - 1
 		room := maxRows - head - 1

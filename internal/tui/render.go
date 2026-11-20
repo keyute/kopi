@@ -105,8 +105,8 @@ func renderRow(c transcript.Call, f blockFolds, width int, th theme) []line {
 	case transcript.Failed:
 		text := bodyText(c.Body)
 		head, tail, omitted := capBody(text)
-		var h hit
-		if omitted > 0 || c.Command != "" {
+		h := commandHit(c)
+		if omitted > 0 {
 			h = hit{kind: hitOutput, id: c.ID}
 		}
 		out := withHit(h, hang("• ", fg(th.error), c.Title, none, width))
