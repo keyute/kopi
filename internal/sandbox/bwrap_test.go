@@ -82,10 +82,12 @@ func TestBwrapArgsOrder(t *testing.T) {
 }
 
 func TestBwrapArgsNetwork(t *testing.T) {
-	for _, network := range []bool{false, true} {
-		args, _, err := bwrapArgs(Policy{Network: network})
+	proxy, err := NewProxy([]string{"example.com"}, nil, []string{"/helper"})
+	require.NoError(t, err)
+	for _, p := range []Policy{{}, {Network: true}, {Proxy: proxy}} {
+		args, _, err := bwrapArgs(p)
 		require.NoError(t, err)
-		assert.Equal(t, !network, slices.Contains(args, "--unshare-net"), network)
+		assert.Equal(t, !p.Network, slices.Contains(args, "--unshare-net"), p)
 		assert.NotContains(t, args, "--new-session")
 		assert.Contains(t, args, "--unshare-pid")
 		assert.Contains(t, args, "--die-with-parent")
@@ -837,7 +839,7 @@ func TestBwrapExistingEmptyDeniedPathStays(t *testing.T) {
 // held is a sandboxed command waiting for its input to close.
 type held struct {
 	cmd    *exec.Cmd
-	done   func()
+	done   func() []string
 	stdin  io.WriteCloser
 	stderr bytes.Buffer
 }

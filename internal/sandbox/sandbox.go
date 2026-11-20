@@ -3,12 +3,17 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
+
+	"github.com/keyute/kopi/internal/policy"
 )
 
 // Policy is what a sandboxed command may do. Paths are absolute.
@@ -21,12 +26,16 @@ type Policy struct {
 	// enforces them.
 	DenyWriteNames []string
 	Network        bool
+	// Proxy, when set, is the only way commands reach the network. It
+	// conflicts with Network.
+	Proxy *Proxy
 }
 
 // Sandbox runs commands under one Policy.
 type Sandbox struct {
 	prefix []string // macOS: the sandbox-exec argv
 	bwrap  *bwrap   // Linux
+	proxy  *Proxy   // the policy's Proxy
 }
 
 // New checks once that the platform sandbox works and builds one Sandbox per
@@ -42,16 +51,25 @@ func New(ctx context.Context, dir string, policies ...Policy) ([]*Sandbox, error
 		if err := checkAbsolute(policies); err != nil {
 			return nil, err
 		}
+		if err := checkProxy(policies); err != nil {
+			return nil, err
+		}
 		if err := probe(ctx); err != nil {
 			return nil, err
 		}
 		sandboxes := make([]*Sandbox, len(policies))
 		for i, p := range policies {
-			sandboxes[i] = &Sandbox{prefix: seatbeltPrefix(p)}
+			sandboxes[i] = &Sandbox{prefix: seatbeltPrefix(p), proxy: p.Proxy}
 		}
 		return sandboxes, nil
 	case "linux":
 		if err := checkAbsolute(policies); err != nil {
+			return nil, err
+		}
+		if err := checkProxy(policies); err != nil {
+			return nil, err
+		}
+		if err := checkHelper(policies); err != nil {
 			return nil, err
 		}
 		if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
@@ -76,7 +94,7 @@ func New(ctx context.Context, dir string, policies ...Policy) ([]*Sandbox, error
 		shared := newPlaceholders(dir)
 		sandboxes := make([]*Sandbox, len(policies))
 		for i, p := range policies {
-			sandboxes[i] = &Sandbox{bwrap: &bwrap{path: path, policy: p, shared: shared, seccomp: filter}}
+			sandboxes[i] = &Sandbox{bwrap: &bwrap{path: path, policy: p, shared: shared, seccomp: filter}, proxy: p.Proxy}
 		}
 		return sandboxes, nil
 	default:
@@ -97,13 +115,61 @@ func checkAbsolute(policies []Policy) error {
 	return nil
 }
 
+func checkProxy(policies []Policy) error {
+	for _, p := range policies {
+		if p.Network && p.Proxy != nil {
+			return errors.New("sandbox policy has both network and a proxy")
+		}
+	}
+	return nil
+}
+
+// checkHelper fails for a proxy whose helper bwrap could not run: it runs in
+// the sandbox, where a denied path is masked.
+func checkHelper(policies []Policy) error {
+	for _, p := range policies {
+		if p.Proxy == nil {
+			continue
+		}
+		if len(p.Proxy.helper) == 0 {
+			return errors.New("sandbox proxy has no helper command")
+		}
+		helper := policy.Resolve(p.Proxy.helper[0])
+		for _, d := range p.DenyRead {
+			if denied := policy.Resolve(d); within(helper, denied) {
+				return fmt.Errorf("sandbox proxy helper %s is under the denied path %s", helper, denied)
+			}
+		}
+	}
+	return nil
+}
+
+// FiltersNetwork reports whether commands reach the network only through the
+// policy's proxy.
+func (s *Sandbox) FiltersNetwork() bool { return s.proxy != nil }
+
 // Command returns the command that runs argv inside the sandbox. When err is
 // nil, the caller must call done exactly once, after the command has been
-// reaped or if it never starts.
-func (s *Sandbox) Command(argv []string) (cmd *exec.Cmd, done func(), err error) {
+// reaped or if it never starts. done returns the destinations the policy's
+// proxy refused for this command, nil without a proxy.
+func (s *Sandbox) Command(argv []string) (cmd *exec.Cmd, done func() []string, err error) {
 	if s.bwrap != nil {
 		return s.bwrap.command(argv)
 	}
-	full := slices.Concat(s.prefix, argv)
-	return exec.Command(full[0], full[1:]...), func() {}, nil
+	if s.proxy == nil {
+		full := slices.Concat(s.prefix, argv)
+		return exec.Command(full[0], full[1:]...), func() []string { return nil }, nil
+	}
+	l, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to listen for the sandbox proxy: %w", err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	session := s.proxy.serve(l)
+	// The profile's PROXY parameter is the last one before the trailing "--".
+	prefix := slices.Insert(slices.Clone(s.prefix), len(s.prefix)-1, "-DPROXY=localhost:"+strconv.Itoa(port))
+	full := slices.Concat(prefix, argv)
+	cmd = exec.Command(full[0], full[1:]...)
+	cmd.Env = append(os.Environ(), proxyEnv(port)...)
+	return cmd, session.close, nil
 }

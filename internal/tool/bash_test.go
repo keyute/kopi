@@ -50,6 +50,7 @@ func TestBashDescribesItself(t *testing.T) {
 	assert.True(t, sandboxed.Sandboxed)
 	assert.True(t, sandboxed.PlanSandboxed)
 	assert.Contains(t, sandboxed.Description, "in execute mode, the workspace")
+	assert.NotContains(t, sandboxed.Description, "HTTP_PROXY")
 	assert.False(t, NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), nil), NewTasks(), true).PlanSandboxed)
 }
 

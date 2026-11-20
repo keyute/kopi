@@ -46,9 +46,13 @@ type bwrap struct {
 	seccomp []byte // see seccompFilter
 }
 
+// listenPort is where the helper listens in the command's network namespace,
+// which is fresh, so nothing else can hold the port.
+const listenPort = 3128
+
 // command builds the arguments from the filesystem as it is now: what exists
 // decides what can be mounted.
-func (b *bwrap) command(argv []string) (*exec.Cmd, func(), error) {
+func (b *bwrap) command(argv []string) (*exec.Cmd, func() []string, error) {
 	// Locked before looking, so that no placeholder seen here is removed
 	// before this command's bwrap has mounted it.
 	lock, err := b.shared.start()
@@ -76,14 +80,39 @@ func (b *bwrap) command(argv []string) (*exec.Cmd, func(), error) {
 	}
 	// bwrap reports the namespace's PID 1 on fd 4, the second extra file.
 	args = slices.Insert(args, len(args)-1, "--info-fd", "4")
+	extra := []*os.File{filter, infoW}
+	var hand *handoff
+	if b.policy.Proxy != nil {
+		hand, err = b.policy.Proxy.handoff()
+		if err != nil {
+			_ = filter.Close()
+			_ = infoR.Close()
+			_ = infoW.Close()
+			b.shared.finish(lock)
+			return nil, nil, err
+		}
+		// The helper finds its end of the handoff on fd 5, the third extra file.
+		extra = append(extra, hand.child)
+		argv = slices.Concat(b.policy.Proxy.helper, argv)
+	}
 	cmd := exec.Command(b.path, slices.Concat(args, argv)...)
-	cmd.ExtraFiles = []*os.File{filter, infoW}
+	cmd.ExtraFiles = extra
+	if hand != nil {
+		cmd.Env = append(os.Environ(), proxyEnv(listenPort)...)
+	}
 	pidfd := make(chan int, 1)
 	go func() {
 		pidfd <- initPidfd(infoR)
 		_ = infoR.Close()
 	}()
-	return cmd, func() {
+	return cmd, func() []string {
+		var refused []string
+		if hand != nil {
+			// bwrap passes fd 5 on to the command's processes: until Kopi's own
+			// copy is closed too, the host side cannot see the end of the stream.
+			_ = hand.child.Close()
+			refused = hand.close()
+		}
 		_ = filter.Close()
 		// Ends the read if bwrap never reported.
 		_ = infoW.Close()
@@ -94,6 +123,7 @@ func (b *bwrap) command(argv []string) (*exec.Cmd, func(), error) {
 			waitInit(fd)
 		}
 		b.shared.finish(lock)
+		return refused
 	}, nil
 }
 

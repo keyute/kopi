@@ -29,6 +29,23 @@ var (
 	denyPolicy string
 )
 
+// openNetwork follows networkPolicy when Network is set.
+const openNetwork = `
+; Kopi addition: IP networking only. Unix sockets (Docker, ssh-agent) stay
+; unreachable, apart from the one DNS resolution needs.
+(allow network-bind (local ip "*:*"))
+(allow network-inbound (local ip "*:*"))
+(allow network-outbound (remote ip "*:*"))
+(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))
+`
+
+// proxyNetwork follows networkPolicy when Proxy is set. Command defines PROXY
+// as localhost:<port> of that command's proxy listener, the only destination.
+const proxyNetwork = `
+; Kopi addition: outbound only to the filtering proxy's loopback port.
+(allow network-outbound (remote ip (param "PROXY")))
+`
+
 // probe fails when sandbox-exec is missing or cannot apply a profile, as when
 // Kopi itself runs under Seatbelt: profiles do not nest.
 func probe(ctx context.Context) error {
@@ -45,7 +62,8 @@ func probe(ctx context.Context) error {
 
 // seatbeltPrefix returns the sandbox-exec argv that applies p. Paths and name
 // patterns reach the profile only as -D parameters, so the profile text never
-// needs escaping.
+// needs escaping. PROXY is the one parameter defined later, by Command, for
+// each command when the policy has a proxy.
 // Seatbelt applies the last matching rule: each section may only narrow the
 // ones before it, and the rename protection stays last.
 func seatbeltPrefix(p Policy) []string {
@@ -81,8 +99,11 @@ func seatbeltPrefix(p Policy) []string {
 	// literal beside subpath also stops first-time creation of a missing path.
 	rule(&b, "deny file-write*", denyWrite, exact)
 	rule(&b, "deny file-write*", names, func(k string) string { return `(regex (param "` + k + `"))` })
-	if p.Network {
-		b.WriteString(networkPolicy)
+	switch {
+	case p.Network:
+		b.WriteString(networkPolicy + openNetwork)
+	case p.Proxy != nil:
+		b.WriteString(networkPolicy + proxyNetwork)
 	}
 	b.WriteString(denyPolicy)
 	// Renaming an ancestor would move a protected path out from under its

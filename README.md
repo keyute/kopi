@@ -54,7 +54,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Built on [PiG](https://github.com/MichaelKinsy/PiG) by Michael Kinsy (MIT). Other dependencies are listed in `go.mod`.
 
-The Seatbelt policy in `internal/sandbox/codex/` is adapted from [OpenAI Codex](https://github.com/openai/codex) (Apache-2.0); its `LICENSE` and `NOTICE` are in that directory. The Linux sandbox's mount plan in `internal/sandbox/bwrap.go` is adapted from Anthropic's [sandbox-runtime](https://github.com/anthropics/sandbox-runtime) (Apache-2.0); its `LICENSE` is in `internal/sandbox/srt/`.
+The Seatbelt policy in `internal/sandbox/codex/` is adapted from [OpenAI Codex](https://github.com/openai/codex) (Apache-2.0); its `LICENSE` and `NOTICE` are in that directory. The Linux listener handoff in `internal/sandbox/handoff_linux.go` follows Codex's design; no code is copied. The Linux sandbox's mount plan in `internal/sandbox/bwrap.go` is adapted from Anthropic's [sandbox-runtime](https://github.com/anthropics/sandbox-runtime) (Apache-2.0); its `LICENSE` is in `internal/sandbox/srt/`. The domain entry syntax and matching in `internal/sandbox/domain.go` and the proxy environment variables follow the same project (same licence and `LICENSE`).
 
 ## License
 

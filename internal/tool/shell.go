@@ -42,6 +42,10 @@ func NewShell(dir string, sb *sandbox.Sandbox) *Shell {
 
 func (s *Shell) Sandboxed() bool { return s.sb != nil }
 
+// FiltersNetwork reports whether the shell's commands reach the network only
+// through a filtering proxy.
+func (s *Shell) FiltersNetwork() bool { return s.sb != nil && s.sb.FiltersNetwork() }
+
 // process is a started command. Its supervisor alone kills and reaps it; the
 // fields after done are written by the supervisor and read only after done.
 type process struct {
@@ -60,7 +64,7 @@ type process struct {
 func (s *Shell) start(ctx context.Context, command string) (*process, error) {
 	argv := []string{s.shell, "-c", command}
 	var cmd *exec.Cmd
-	release := func() {}
+	release := func() []string { return nil }
 	if s.sb == nil {
 		cmd = exec.Command(argv[0], argv[1:]...)
 	} else {
@@ -115,10 +119,11 @@ func (p *process) stop(reason error) {
 //
 // Every kill happens before the single reap: until then the shell's PID, which
 // is also its process group ID, cannot be reused, so killing the group is safe.
-func (p *process) supervise(cmd *exec.Cmd, r *os.File, drained <-chan struct{}, exited <-chan error, reap func() error, release func()) {
+func (p *process) supervise(cmd *exec.Cmd, r *os.File, drained <-chan struct{}, exited <-chan error, reap func() error, release func() []string) {
 	defer close(p.done)
 	// start returned while the command runs, so release must follow the reap.
-	defer release()
+	// It runs before p.done closes, and so before anything reads p.out.
+	defer func() { _, _ = io.WriteString(p.out, refusedNote(release())) }()
 	defer func() { p.ended = time.Now() }()
 	var exitErr error
 	select {
@@ -155,6 +160,15 @@ func (p *process) supervise(cmd *exec.Cmd, r *os.File, drained <-chan struct{}, 
 	_ = r.Close()
 	<-drained
 	p.exit = reap()
+}
+
+// refusedNote is the line that ends a result naming the destinations the
+// sandbox's proxy refused, or nothing when there are none.
+func refusedNote(hosts []string) string {
+	if len(hosts) == 0 {
+		return ""
+	}
+	return "\n[sandbox refused network access to: " + strings.Join(hosts, ", ") + "]\n"
 }
 
 // result is the command's output, or the error carrying it, once done.

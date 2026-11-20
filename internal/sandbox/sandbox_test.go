@@ -2,12 +2,16 @@ package sandbox
 
 import (
 	"errors"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -56,6 +60,103 @@ func TestNewRejectsRelativePath(t *testing.T) {
 	}
 }
 
+func TestNewRejectsNetworkWithProxy(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("only darwin and linux build a sandbox from the policy")
+	}
+	proxy, err := NewProxy([]string{"example.com"}, nil, []string{"/helper"})
+	require.NoError(t, err)
+
+	_, err = New(t.Context(), t.TempDir(), Policy{Network: true, Proxy: proxy})
+
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrUnavailable)
+}
+
+func TestCheckHelper(t *testing.T) {
+	base := resolvedTemp(t)
+	secret := filepath.Join(base, "secret")
+	require.NoError(t, os.Mkdir(secret, 0o700))
+	link := filepath.Join(base, "link")
+	require.NoError(t, os.Symlink(secret, link))
+	for _, tc := range []struct {
+		name   string
+		helper []string
+		deny   []string
+		fails  string
+	}{
+		{"outside", []string{"/usr/bin/kopi"}, []string{secret}, ""},
+		{"under", []string{filepath.Join(secret, "kopi")}, []string{secret}, secret},
+		{"through a link", []string{filepath.Join(link, "kopi")}, []string{secret}, secret},
+		{"denied by a link", []string{filepath.Join(secret, "kopi")}, []string{link}, secret},
+		{"none", nil, nil, "no helper"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proxy, err := NewProxy([]string{"example.com"}, nil, tc.helper)
+			require.NoError(t, err)
+
+			err = checkHelper([]Policy{{}, {Proxy: proxy, DenyRead: tc.deny}})
+
+			if tc.fails == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, ErrUnavailable)
+			assert.Contains(t, err.Error(), tc.fails)
+		})
+	}
+}
+
+func TestFiltersNetwork(t *testing.T) {
+	proxy, err := NewProxy([]string{"example.com"}, nil, nil)
+	require.NoError(t, err)
+
+	assert.False(t, (&Sandbox{}).FiltersNetwork())
+	assert.False(t, (&Sandbox{prefix: seatbeltPrefix(Policy{Network: true})}).FiltersNetwork())
+	assert.True(t, (&Sandbox{prefix: seatbeltPrefix(Policy{Proxy: proxy}), proxy: proxy}).FiltersNetwork())
+}
+
+func TestCommandWithProxy(t *testing.T) {
+	proxy, err := NewProxy([]string{"example.com"}, nil, nil)
+	require.NoError(t, err)
+	s := &Sandbox{prefix: seatbeltPrefix(Policy{Write: []string{t.TempDir()}, Proxy: proxy}), proxy: proxy}
+	want := append([]string(nil), s.prefix...)
+
+	cmd, done, err := s.Command([]string{"a"})
+	require.NoError(t, err)
+	var defs []string
+	for _, arg := range cmd.Args {
+		if strings.HasPrefix(arg, "-DPROXY=") {
+			defs = append(defs, arg)
+		}
+	}
+	require.Len(t, defs, 1)
+	host, port, ok := strings.Cut(strings.TrimPrefix(defs[0], "-DPROXY="), ":")
+	require.True(t, ok)
+	assert.Equal(t, "localhost", host)
+	assert.Equal(t, append(append([]string(nil), want[:len(want)-1]...), defs[0], "--", "a"), cmd.Args)
+	for _, v := range proxyEnv(mustAtoi(t, port)) {
+		assert.Contains(t, cmd.Env, v)
+	}
+	conn, err := net.Dial("tcp", "127.0.0.1:"+port)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	assert.Empty(t, done())
+
+	_, err = net.Dial("tcp", "127.0.0.1:"+port)
+	assert.Error(t, err)
+	assert.Equal(t, want, s.prefix)
+}
+
+func mustAtoi(t *testing.T, s string) int {
+	t.Helper()
+	n, err := strconv.Atoi(s)
+	require.NoError(t, err)
+	return n
+}
+
 func TestNewUnavailableElsewhere(t *testing.T) {
 	if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
 		t.Skip("darwin and linux have a sandbox")
@@ -100,16 +201,23 @@ func newSandbox(t *testing.T, p Policy) *Sandbox {
 	return sbs[0]
 }
 
-// bash runs script in sb with env added to the test's environment.
+// bash runs script in sb with env added to the command's environment.
 func bash(t *testing.T, sb *Sandbox, script string, env ...string) error {
+	t.Helper()
+	_, err := bashRefused(t, sb, script, env...)
+	return err
+}
+
+// bashRefused is bash that also returns what done reports.
+func bashRefused(t *testing.T, sb *Sandbox, script string, env ...string) (refused []string, err error) {
 	t.Helper()
 	cmd, done, err := sb.Command([]string{"/bin/bash", "-c", script})
 	require.NoError(t, err)
-	defer done()
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(cmd.Environ(), env...)
 	out, err := cmd.CombinedOutput()
+	refused = done()
 	t.Logf("%s: %s", script, out)
-	return err
+	return refused, err
 }
 
 func writeFile(t *testing.T, path string) {
@@ -376,6 +484,45 @@ func TestNetworkTCP(t *testing.T) {
 			assert.False(t, ok)
 		}
 	}
+}
+
+// listenHelperEnv gates TestListenHelper, the helper a filtered Linux command
+// runs in the sandbox in place of Kopi.
+const listenHelperEnv = "KOPI_TEST_LISTEN_HELPER"
+
+func TestNetworkProxy(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "from upstream")
+	}))
+	t.Cleanup(upstream.Close)
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	proxy, err := newProxy([]string{"allowed.test"}, nil, []string{exe, "-test.run=^TestListenHelper$", "--"}, dialTo(upstream.Listener.Addr().String()))
+	require.NoError(t, err)
+	sb := newSandbox(t, Policy{Write: []string{filepath.Join(t.TempDir(), "root")}, Proxy: proxy})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	accepted := listen(ln)
+
+	refused, err := bashRefused(t, sb, `set -e
+port=${HTTP_PROXY##*:}
+exec 3<>/dev/tcp/127.0.0.1/$port
+printf 'GET http://allowed.test/ HTTP/1.1\r\nHost: allowed.test\r\nConnection: close\r\n\r\n' >&3
+reply=$(cat <&3)
+exec 3>&-
+[[ $reply == *"from upstream"* ]]
+exec 4<>/dev/tcp/127.0.0.1/$port
+printf 'CONNECT blocked.test:443 HTTP/1.1\r\nHost: blocked.test:443\r\n\r\n' >&4
+read -r status <&4
+[[ $status == *" 403 "* ]]
+if (exec 5<>/dev/tcp/127.0.0.1/$OTHER) 2>/dev/null; then exit 3; fi`,
+		"OTHER="+strconv.Itoa(ln.Addr().(*net.TCPAddr).Port), listenHelperEnv+"=1")
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"blocked.test:443"}, refused)
+	require.NoError(t, ln.Close())
+	_, ok := <-accepted
+	assert.False(t, ok)
 }
 
 func TestUnixSocketUnreachable(t *testing.T) {
