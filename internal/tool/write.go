@@ -109,13 +109,9 @@ func writeChange(raw json.RawMessage) (string, []PreviewLine) {
 func changeLines(kind PreviewKind, text string) []PreviewLine {
 	lines := previewLinesCap(kind, text, math.MaxInt)
 	for i, l := range lines {
-		n := 0
-		for j := range l.Text {
-			if n == maxLineChars {
-				lines[i].Text = l.Text[:j]
-				break
-			}
-			n++
+		if cut := cutRunes(l.Text, maxLineChars); cut != l.Text {
+			// A bare substring would keep the whole decoded content alive.
+			lines[i].Text = strings.Clone(cut)
 		}
 	}
 	return lines

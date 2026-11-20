@@ -25,7 +25,41 @@ type bashArgs struct {
 	Unsandboxed     bool `json:"unsandboxed"`
 }
 
-var backgroundResult = regexp.MustCompile(`^Background task (t\d+)(?: started\.|: the user moved this command to the background, where it keeps running\.|: this command did not finish within its (?:\d+ms|(?:\d+m)?\d+(?:\.\d+)?s) timeout and keeps running in the background\.)$`)
+const (
+	startedFormat = "Background task %s started."
+	movedFormat   = "Background task %s: the user moved this command to the background, where it keeps running."
+	timeoutFormat = "Background task %s: this command did not finish within its %v timeout and keeps running in the background."
+)
+
+var (
+	startedResult = resultPattern(startedFormat)
+	movedResult   = resultPattern(movedFormat)
+	timeoutResult = resultPattern(timeoutFormat, `(?:\d+ms|(?:\d+m)?\d+(?:\.\d+)?s)`)
+)
+
+// resultPattern matches the text format produces, with the task id as the
+// first group and any further verbs matching args.
+func resultPattern(format string, args ...string) *regexp.Regexp {
+	verbs := append([]any{`(t\d+)`}, make([]any, len(args))...)
+	for i, a := range args {
+		verbs[i+1] = a
+	}
+	return regexp.MustCompile("^" + fmt.Sprintf(regexp.QuoteMeta(format), verbs...) + "$")
+}
+
+// backgroundTask returns the task id output names when it is one of the
+// background results, and whether the task was started rather than moved.
+func backgroundTask(output string) (id string, started, ok bool) {
+	if m := startedResult.FindStringSubmatch(output); m != nil {
+		return m[1], true, true
+	}
+	for _, re := range []*regexp.Regexp{movedResult, timeoutResult} {
+		if m := re.FindStringSubmatch(output); m != nil {
+			return m[1], false, true
+		}
+	}
+	return "", false, false
+}
 
 // NewBash runs execute-mode calls in sh and plan-mode calls in plan, which
 // must keep commands from writing the workspace; with plan unsandboxed, plan
@@ -131,7 +165,7 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 				if err != nil {
 					return Result{}, err
 				}
-				return Result{Text: fmt.Sprintf("Background task %s started.", info.ID)}, nil
+				return Result{Text: fmt.Sprintf(startedFormat, info.ID)}, nil
 			}
 			timeout := defaultBashTimeoutMS
 			if args.Timeout != nil {
@@ -147,9 +181,9 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 			case moved.ID == "":
 				return Result{Text: out}, err
 			case moved.TimedOut:
-				return Result{Text: fmt.Sprintf("Background task %s: this command did not finish within its %v timeout and keeps running in the background.", moved.ID, d)}, nil
+				return Result{Text: fmt.Sprintf(timeoutFormat, moved.ID, d)}, nil
 			default:
-				return Result{Text: fmt.Sprintf("Background task %s: the user moved this command to the background, where it keeps running.", moved.ID)}, nil
+				return Result{Text: fmt.Sprintf(movedFormat, moved.ID)}, nil
 			}
 		},
 		Display: Display{
@@ -167,19 +201,19 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 				return done
 			},
 			Summary: func(output string) string {
-				m := backgroundResult.FindStringSubmatch(output)
+				id, started, ok := backgroundTask(output)
 				switch {
-				case m == nil && output == noOutputNotice:
+				case !ok && output == noOutputNotice:
 					return "no output"
-				case m == nil:
+				case !ok:
 					return lineCount(countLines(output))
-				case strings.HasSuffix(output, " started."):
-					return "task " + m[1]
+				case started:
+					return "task " + id
 				}
-				return "moved to background · task " + m[1]
+				return "moved to background · task " + id
 			},
 			Body: func(output string) string {
-				if output == noOutputNotice || backgroundResult.MatchString(output) {
+				if _, _, ok := backgroundTask(output); ok || output == noOutputNotice {
 					return ""
 				}
 				return output
@@ -294,12 +328,8 @@ func titleLine(s string) string {
 // runes, and whether that shows the whole command.
 func bashTitleLine(command string) (line string, whole bool) {
 	first, rest, _ := strings.Cut(command, "\n")
-	n := 0
-	for i := range first {
-		if n == maxBashTitleRunes {
-			return first[:i], false
-		}
-		n++
+	if cut := cutRunes(first, maxBashTitleRunes); cut != first {
+		return cut, false
 	}
 	return first, rest == ""
 }

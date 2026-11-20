@@ -40,18 +40,13 @@ func (d *display) apply(ev event.Event) event.Event {
 			e.Action = fallbackAction
 		}
 		if t.Display.Change != nil {
-			summary, lines := t.Display.Change(args)
-			e.Change = strings.Clone(summary)
-			e.Preview = make([]tool.PreviewLine, len(lines))
-			for i, l := range lines {
-				e.Preview[i] = tool.PreviewLine{Kind: l.Kind, Text: strings.Clone(l.Text)}
-			}
+			e.Change, e.Preview = t.Display.Change(args)
 		}
 		e.Solo = t.Display.Solo
 		e.Unsandboxed = t.Unsandboxed != nil && t.Unsandboxed(args)
 		return e
 	case event.ToolEnd:
-		if e.IsError && e.Kind == event.EndInterrupted {
+		if e.Kind == event.EndInterrupted {
 			e.Summary, e.Body = interrupted, ""
 			return e
 		}
@@ -81,7 +76,7 @@ func (d *display) apply(ev event.Event) event.Event {
 // failure is how a call that returned an error reads: refused, rejected,
 // interrupted or failed.
 func (d *display) failure(name, text string) (event.EndKind, string, string) {
-	if kind, summary, body, ok := classify(name, text); ok {
+	if kind, summary, body := classify(name, text); kind != event.EndRan {
 		return kind, summary, body
 	}
 	if failure := d.tools[name].Display.Failure; failure != nil {

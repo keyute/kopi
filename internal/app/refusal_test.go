@@ -105,8 +105,7 @@ func TestClassifyGateErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.err(t)
-			kind, summary, body, ok := classify(tc.tool, err.Error())
-			require.True(t, ok, err.Error())
+			kind, summary, body := classify(tc.tool, err.Error())
 			assert.Equal(t, tc.kind, kind, err.Error())
 			assert.Equal(t, tc.summary, summary)
 			assert.Equal(t, tc.body, body)
@@ -124,8 +123,7 @@ func TestClassifyRevokedGrant(t *testing.T) {
 	_, err := g.Admit("c1", "Shell", json.RawMessage("{}"), nil)
 	require.ErrorIs(t, err, policy.ErrRevoked)
 
-	kind, summary, body, ok := classify("Shell", err.Error())
-	assert.True(t, ok)
+	kind, summary, body := classify("Shell", err.Error())
 	assert.Equal(t, event.EndDenied, kind)
 	assert.Equal(t, "denied · the mode changed after approval", summary)
 	assert.Empty(t, body)
@@ -136,10 +134,9 @@ func TestClassifyToolDenials(t *testing.T) {
 	for text, summary := range map[string]string{
 		"failed to run command: an unsandboxed command runs only in execute mode: " + policy.ErrDenied.Error():                            "denied · plan mode never runs a command outside the sandbox",
 		"failed to run command: plan mode runs commands only in the OS sandbox, which is off or unavailable: " + policy.ErrDenied.Error(): "denied · plan mode needs the sandbox, which is off or unavailable",
-		"something else: " + policy.ErrDenied.Error(): "denied",
+		"failed to run command: something else: " + policy.ErrDenied.Error():                                                              "denied",
 	} {
-		kind, got, _, ok := classify("Bash", text)
-		assert.True(t, ok, text)
+		kind, got, _ := classify("Bash", text)
 		assert.Equal(t, event.EndDenied, kind)
 		assert.Equal(t, summary, got)
 	}
@@ -147,8 +144,7 @@ func TestClassifyToolDenials(t *testing.T) {
 
 func TestClassifyCancellation(t *testing.T) {
 	for _, text := range []string{context.Canceled.Error(), "failed to run: " + context.Canceled.Error()} {
-		kind, summary, _, ok := classify("Bash", text)
-		assert.True(t, ok, text)
+		kind, summary, _ := classify("Bash", text)
 		assert.Equal(t, event.EndInterrupted, kind)
 		assert.Equal(t, "interrupted", summary)
 	}
@@ -160,8 +156,10 @@ func TestClassifyLeavesFailuresAlone(t *testing.T) {
 		context.Canceled.Error() + " later",
 		`tool "Other": rejected by the user`,
 		errors.New("boom").Error(),
+		"mcp error: something: " + policy.ErrDenied.Error(),
+		"boom: " + policy.ErrRevoked.Error(),
 	} {
-		_, _, _, ok := classify("Bash", text)
-		assert.False(t, ok, text)
+		kind, _, _ := classify("Bash", text)
+		assert.Equal(t, event.EndRan, kind, text)
 	}
 }

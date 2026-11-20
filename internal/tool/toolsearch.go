@@ -71,22 +71,8 @@ func NewToolSearch(deferred []Tool, rank func(query string, tools []Tool, limit 
 			return Result{Text: loadedText(names, deferred)}, nil
 		},
 		Display: Display{
-			Title: func(raw json.RawMessage) string {
-				var args toolSearchArgs
-				_ = json.Unmarshal(raw, &args)
-				if args.Query == "" {
-					return "ToolSearch"
-				}
-				return titleLine("ToolSearch " + args.Query)
-			},
-			Done: func(raw json.RawMessage) string {
-				var args toolSearchArgs
-				_ = json.Unmarshal(raw, &args)
-				if args.Query == "" {
-					return "Searched tools"
-				}
-				return `Searched tools for "` + titleLine(args.Query) + `"`
-			},
+			Title: queryTitle("ToolSearch", false),
+			Done:  queryTitle("Searched tools", true),
 			Body: func(output string) string {
 				if !strings.HasPrefix(output, "Loaded ") {
 					return ""
@@ -157,4 +143,23 @@ func loadedText(names []string, deferred []Tool) string {
 		_, _ = out.Write([]byte(line))
 	}
 	return out.String()
+}
+
+// queryTitle returns a Display.Title naming the call by its query, in quotes
+// after verb and "for" when quoted. It runs before the arguments are validated, so it
+// decodes leniently.
+func queryTitle(verb string, quoted bool) func(json.RawMessage) string {
+	return func(raw json.RawMessage) string {
+		var args struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(raw, &args)
+		switch {
+		case args.Query == "":
+			return verb
+		case quoted:
+			return verb + ` for "` + titleLine(args.Query) + `"`
+		}
+		return titleLine(verb + " " + args.Query)
+	}
 }

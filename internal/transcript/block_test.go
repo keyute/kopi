@@ -129,7 +129,12 @@ func TestBlocks(t *testing.T) {
 				start("c"), end("c"), start("d"), end("d"),
 				soloStart("e"),
 			},
-			want: []Block{row("a", OK), soloRow("b", OK), group("c", false, "c", "d"), soloRow("e", Running)},
+			want: []Block{row("a", OK), soloRow("b", OK), group("c", true, "c", "d"), soloRow("e", Running)},
+		},
+		{
+			name:   "a group above a running solo call is sealed",
+			events: []event.Event{start("a"), end("a"), start("b"), end("b"), soloStart("c")},
+			want:   []Block{group("a", true, "a", "b"), soloRow("c", Running)},
 		},
 		{
 			name:   "parallel starts group in start order",

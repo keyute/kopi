@@ -89,7 +89,7 @@ func TestDisplayFailedCall(t *testing.T) {
 		},
 		{
 			"a kind set upstream is kept",
-			event.ToolEnd{Name: "Fail", Output: "Operation aborted", IsError: true, Kind: event.EndInterrupted},
+			event.ToolEnd{Name: "Fail", Output: "Operation aborted", IsError: true, Kind: event.EndInterrupted, Body: "stale"},
 			event.ToolEnd{Name: "Fail", Output: "Operation aborted", IsError: true, Kind: event.EndInterrupted, Summary: "interrupted"},
 		},
 	} {
@@ -100,13 +100,12 @@ func TestDisplayFailedCall(t *testing.T) {
 }
 
 func TestDisplayFillsStartFields(t *testing.T) {
-	arg := "x" + strings.Repeat("y", 100)
 	change := testTool("Change", policy.Write, nil)
 	change.Unsandboxed = func(args json.RawMessage) bool { return string(args) == "{}" }
 	change.Display = tool.Display{
 		Done: func(json.RawMessage) string { return "Changed" },
 		Change: func(json.RawMessage) (string, []tool.PreviewLine) {
-			return "+1 -1", []tool.PreviewLine{{Kind: tool.Added, Text: arg[1:]}}
+			return "+1 -1", []tool.PreviewLine{{Kind: tool.Added, Text: "line"}}
 		},
 		Solo: true,
 	}
@@ -115,7 +114,7 @@ func TestDisplayFillsStartFields(t *testing.T) {
 	start := d.apply(event.ToolStart{CallID: "c1", Name: "Change", Args: "{}"}).(event.ToolStart)
 	assert.Equal(t, "Changed", start.Done)
 	assert.Equal(t, "+1 -1", start.Change)
-	assert.Equal(t, []tool.PreviewLine{{Kind: tool.Added, Text: arg[1:]}}, start.Preview)
+	assert.Equal(t, []tool.PreviewLine{{Kind: tool.Added, Text: "line"}}, start.Preview)
 	assert.True(t, start.Solo)
 	assert.True(t, start.Unsandboxed)
 

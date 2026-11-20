@@ -486,3 +486,38 @@ func TestBashDisplayTitleMarksUnsandboxedOnlyWhenOffered(t *testing.T) {
 	assert.Equal(t, "Ran git config -l", offered.Display.Done(json.RawMessage(`{"command":"git config -l"}`)))
 	assert.Equal(t, "Ran git config -l", notOffered.Display.Done(json.RawMessage(`{"command":"git config -l","unsandboxed":true}`)))
 }
+
+func TestBashPlanRefusalsCarryTheTextTheAppMatches(t *testing.T) {
+	plan := func(policy.Target) (policy.Mode, error) { return policy.Plan, nil }
+	dir := t.TempDir()
+
+	_, err := NewBash(NewShell(dir, &sandbox.Sandbox{}), NewShell(dir, &sandbox.Sandbox{}), NewTasks(), true).
+		Run(t.Context(), json.RawMessage(`{"command":"true","unsandboxed":true}`), plan)
+	require.ErrorIs(t, err, policy.ErrDenied)
+	assert.Contains(t, err.Error(), "an unsandboxed command runs only in execute mode")
+
+	_, err = NewBash(NewShell(dir, nil), NewShell(dir, nil), NewTasks(), true).
+		Run(t.Context(), json.RawMessage(`{"command":"true"}`), plan)
+	require.ErrorIs(t, err, policy.ErrDenied)
+	assert.Contains(t, err.Error(), "which is off or unavailable")
+}
+
+func TestBashFailureOfRealCommands(t *testing.T) {
+	tool, _ := newBashTool(t)
+	execute := func(policy.Target) (policy.Mode, error) { return policy.Execute, nil }
+	for _, tc := range []struct {
+		command, summary, body string
+	}{
+		{"echo a; exit 2", "exit code 2 · 1 line", "a\n"},
+		{"exit 1", "exit code 1", ""},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			_, err := tool.Run(t.Context(), json.RawMessage(`{"command":"`+tc.command+`"}`), execute)
+			require.Error(t, err)
+
+			summary, body := tool.Display.Failure(err.Error())
+			assert.Equal(t, tc.summary, summary)
+			assert.Equal(t, tc.body, body)
+		})
+	}
+}

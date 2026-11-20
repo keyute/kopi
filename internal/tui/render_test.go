@@ -215,7 +215,7 @@ func TestRejectedRowShowsFeedbackInFull(t *testing.T) {
 
 func TestDeniedRowHasNoBodyAndNoHit(t *testing.T) {
 	m, _ := newTestModel(t, 60, 20)
-	send(m, start("a"), event.ToolEnd{CallID: "a", IsError: true, Kind: event.EndDenied, Summary: "denied · plan mode", Output: "refused"})
+	send(m, start("a"), event.ToolEnd{CallID: "a", IsError: true, Kind: event.EndDenied, Summary: "denied · plan mode", Body: "refused"})
 	assert.Equal(t, []string{"", "• a.go", "  ↳ denied · plan mode"}, body(m))
 	for _, l := range m.view().lines {
 		assert.Equal(t, hit{}, l.hit)

@@ -160,10 +160,12 @@ func TestAskUserQuestionRefusesMismatchedAnswers(t *testing.T) {
 func TestAskUserQuestionTitle(t *testing.T) {
 	title := NewAskUserQuestion(nil).Display.Title
 
-	assert.Equal(t, "Asked about Database, Features, Target", title(json.RawMessage(questionsArgs)))
-	assert.Nil(t, NewAskUserQuestion(nil).Display.Done)
-	assert.Equal(t, "AskUserQuestion", title(json.RawMessage(`{`)))
-	assert.Equal(t, "AskUserQuestion", title(json.RawMessage(`{}`)))
+	done := NewAskUserQuestion(nil).Display.Done
+
+	assert.Equal(t, "AskUserQuestion", title(json.RawMessage(questionsArgs)))
+	assert.Equal(t, "Asked about Database, Features, Target", done(json.RawMessage(questionsArgs)))
+	assert.Equal(t, "Asked", done(json.RawMessage(`{`)))
+	assert.Equal(t, "Asked", done(json.RawMessage(`{}`)))
 }
 
 func TestAskUserQuestionSummary(t *testing.T) {

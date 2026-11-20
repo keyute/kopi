@@ -69,22 +69,8 @@ func NewWebSearch(search func(ctx context.Context, system, query string) (Search
 			return Result{Text: searchOutput(res)}, nil
 		},
 		Display: Display{
-			Title: func(raw json.RawMessage) string {
-				var args webSearchArgs
-				_ = json.Unmarshal(raw, &args)
-				if args.Query == "" {
-					return "WebSearch"
-				}
-				return titleLine("WebSearch " + args.Query)
-			},
-			Done: func(raw json.RawMessage) string {
-				var args webSearchArgs
-				_ = json.Unmarshal(raw, &args)
-				if args.Query == "" {
-					return "Searched the web"
-				}
-				return `Searched the web for "` + titleLine(args.Query) + `"`
-			},
+			Title: queryTitle("WebSearch", false),
+			Done:  queryTitle("Searched the web", true),
 			Summary: func(output string) string {
 				i := strings.LastIndex(output, "\n\nSources:")
 				if i < 0 || output[i:] == webSearchNoSources {

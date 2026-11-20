@@ -151,7 +151,7 @@ func (t *Transcript) Blocks() []Block {
 			blocks[i] = b
 			followed = true
 		case Row:
-			if b.Call.State != Running {
+			if b.Call.State != Running || b.Call.solo {
 				followed = true
 			}
 		default:

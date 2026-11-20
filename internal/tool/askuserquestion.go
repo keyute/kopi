@@ -134,10 +134,12 @@ func NewAskUserQuestion(ask Ask) Tool {
 			return Result{Text: formatAnswers(args.Questions, answers)}, nil
 		},
 		Display: Display{
-			Title: func(raw json.RawMessage) string {
+			Title: func(json.RawMessage) string { return "AskUserQuestion" },
+			// It runs before the arguments are validated, so it decodes leniently.
+			Done: func(raw json.RawMessage) string {
 				var args askUserQuestionArgs
 				if json.Unmarshal(raw, &args) != nil || len(args.Questions) == 0 {
-					return "AskUserQuestion"
+					return "Asked"
 				}
 				headers := make([]string, len(args.Questions))
 				for i, q := range args.Questions {

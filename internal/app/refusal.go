@@ -13,27 +13,30 @@ import (
 const interrupted = "interrupted"
 
 // classify reads the error text of tool name's call as what the policy, the
-// human or a cancellation made of it, anchored on the policy's sentinel errors;
-// a restored session has only this text. ok is false for a call that failed.
-func classify(name, text string) (kind event.EndKind, summary, body string, ok bool) {
+// human or a cancellation made of it, anchored on the policy's sentinel errors
+// and the prefixes its producers give them; a restored session has only this
+// text. kind is EndRan for a call that failed.
+func classify(name, text string) (kind event.EndKind, summary, body string) {
 	p := fmt.Sprintf("tool %q: ", name)
 	if feedback, found := strings.CutPrefix(text, p+policy.ErrRejected.Error()+", with this feedback:\n"); found {
-		return event.EndRejected, "rejected", feedback, true
+		return event.EndRejected, "rejected", feedback
 	}
 	if strings.HasPrefix(text, p) && strings.HasSuffix(text, ": "+policy.ErrRejected.Error()) {
-		return event.EndRejected, "rejected", "", true
+		return event.EndRejected, "rejected", ""
 	}
-	if strings.HasSuffix(text, ": "+policy.ErrRevoked.Error()) {
-		return event.EndDenied, "denied · the mode changed after approval", "", true
+	if strings.HasPrefix(text, p) && strings.HasSuffix(text, ": "+policy.ErrRevoked.Error()) {
+		return event.EndDenied, "denied · the mode changed after approval", ""
 	}
-	if rest, found := strings.CutSuffix(text, ": "+policy.ErrDenied.Error()); found {
-		return event.EndDenied, denial(strings.TrimPrefix(rest, fmt.Sprintf("tool %q ", name))), "", true
+	named := fmt.Sprintf("tool %q ", name)
+	if rest, found := strings.CutSuffix(text, ": "+policy.ErrDenied.Error()); found &&
+		(strings.HasPrefix(rest, named) || strings.HasPrefix(rest, "rule ") || strings.HasPrefix(rest, "failed to run command: ")) {
+		return event.EndDenied, denial(strings.TrimPrefix(rest, named)), ""
 	}
 	canceled := context.Canceled.Error()
 	if text == canceled || strings.HasSuffix(text, ": "+canceled) {
-		return event.EndInterrupted, interrupted, "", true
+		return event.EndInterrupted, interrupted, ""
 	}
-	return event.EndRan, "", "", false
+	return event.EndRan, "", ""
 }
 
 // denial is the line for a call the policy refused; rest is its error text
