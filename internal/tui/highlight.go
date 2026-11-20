@@ -114,6 +114,23 @@ func (c *composer) highlight(rows []string, th theme) []string {
 	return rows
 }
 
+// styleRuns restyles the cells of row that show runs of logical line line.
+// seg is the text the row shows after its two-cell lead and start the rune
+// offset where it begins in that line.
+func styleRuns(row string, runs []app.Span, line, start int, seg string, th theme) string {
+	rs := []rune(seg)
+	var ranges []lipgloss.Range
+	for _, sp := range runs {
+		from, to := max(sp.Start, start), min(sp.End, start+len(rs))
+		if sp.Line != line || from >= to {
+			continue
+		}
+		x := 2 + ansi.StringWidth(string(rs[:from-start]))
+		ranges = append(ranges, lipgloss.NewRange(x, x+ansi.StringWidth(string(rs[from-start:to-start])), spanStyle(th, sp.Kind)))
+	}
+	return lipgloss.StyleRanges(row, ranges...)
+}
+
 func spanStyle(th theme, k app.Kind) lipgloss.Style {
 	switch k {
 	case app.KindCommand:

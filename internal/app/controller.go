@@ -654,6 +654,12 @@ func (c *Controller) Commands() []Command {
 	return out
 }
 
+// PromptSpans returns the highlighted runs of a prompt as sent to session; a
+// sent prompt is never a command.
+func (c *Controller) PromptSpans(session, text string) []Span {
+	return promptSpans(text, c.skills, session == Main && c.workflowOffered())
+}
+
 // Spans returns the input's highlighted runs when it is typed to session.
 func (c *Controller) Spans(session, text string) []Span {
 	return Spans(text, c.skills, session == Main && c.workflowOffered())

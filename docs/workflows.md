@@ -7,7 +7,7 @@ A workflow is a JavaScript script the main agent writes to start agents and comb
 - Type the whole word `ultracode` (any case) in a prompt to the main agent in the fullscreen interface. That prompt makes the `Workflow` tool callable, and it stays callable for the rest of the session.
 - It does not count inside an `@` reference, a skill command or a control command such as `/plan ultracode`. `ultracoder` and `myultracode` do not match; `Ultracode.` does.
 - A session started with `/new` or resumed with `/resume` starts with it off: type the word again.
-- The word is highlighted in the input as a skill name is, in the main view only. A prompt typed in a [subagent's view](subagents.md#views) does not turn it on.
+- The word is highlighted in the input as a skill name is, and in sent messages, in the main view only. A prompt typed in a [subagent's view](subagents.md#views) does not turn it on.
 - Print mode (`kopi -p`) never offers `Workflow`, and a bare `Workflow` rule in `deny` removes it, and the highlight with it.
 
 ## The script

@@ -42,6 +42,12 @@ func Spans(text string, skills *skill.Set, ultracode bool) []Span {
 			return nil
 		}
 	}
+	return promptSpans(text, skills, ultracode)
+}
+
+// promptSpans returns the @ references, the skill commands skills types and,
+// when ultracode is set, the keyword, of text taken as a prompt.
+func promptSpans(text string, skills *skill.Set, ultracode bool) []Span {
 	var spans []Span
 	for i, l := range strings.Split(text, "\n") {
 		for _, r := range references([]rune(l)) {

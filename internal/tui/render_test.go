@@ -12,7 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/skill"
 	"github.com/keyute/kopi/internal/tool"
 	"github.com/keyute/kopi/internal/transcript"
 )
@@ -66,7 +68,7 @@ func TestRenderStripsUntrustedTerminalControls(t *testing.T) {
 					assert.Equal(t, want, renderGroup(g, fold, width, mocha()))
 				}
 			}
-			assert.Equal(t, shadedBox("❯ ", shade(mocha()), clean, width, mocha()), shadedBox("❯ ", shade(mocha()), attack+clean, width, mocha()))
+			assert.Equal(t, shadedBox("❯ ", shade(mocha()), clean, nil, width, mocha()), shadedBox("❯ ", shade(mocha()), attack+clean, nil, width, mocha()))
 			md := &markdown{width: width}
 			assert.Equal(t, md.render(clean), md.render(attack+clean), "plain markdown fallback")
 		})
@@ -160,7 +162,7 @@ func TestPlanBlockDrawsAMutedTitleAndMarkdownAndRerendersWhenEdited(t *testing.T
 	var c renderCache
 	text := func() []string {
 		var out []string
-		for _, l := range c.lines(tr.Blocks()[0], blockFolds{}, 40, mocha()) {
+		for _, l := range c.lines(tr.Blocks()[0], blockFolds{}, nil, 40, mocha()) {
 			out = append(out, strings.TrimRight(ansi.Strip(l.text), " "))
 		}
 		return out
@@ -168,7 +170,7 @@ func TestPlanBlockDrawsAMutedTitleAndMarkdownAndRerendersWhenEdited(t *testing.T
 
 	got := text()
 	assert.Equal(t, "Plan", got[0])
-	assert.Equal(t, fg(mocha().muted).Render("Plan"), c.lines(tr.Blocks()[0], blockFolds{}, 40, mocha())[0].text)
+	assert.Equal(t, fg(mocha().muted).Render("Plan"), c.lines(tr.Blocks()[0], blockFolds{}, nil, 40, mocha())[0].text)
 	joined := strings.Join(got[1:], "\n")
 	assert.Contains(t, joined, "Heading")
 	assert.NotContains(t, joined, "# Heading", "the Markdown is rendered")
@@ -290,4 +292,22 @@ func TestSoloRowBreaksAGroup(t *testing.T) {
 		event.ToolEnd{CallID: "q", Name: "AskUserQuestion", Summary: "all"},
 		start("c"), ok("c", "1 line"))
 	assert.Equal(t, []string{"", "▸ Read 2 files", "", "• Asked about scope", "  ↳ all", "", "• c.go", "  ↳ 1 line"}, body(m))
+}
+
+func TestShadedBoxStylesSpansOnWrappedRows(t *testing.T) {
+	th := mocha()
+	set, _ := skill.NewSet("skill", []skill.Skill{{Name: "a"}}, nil)
+	spans := func(text string) []app.Span { return app.Spans(text, set, true) }
+	text := "hello world /skill:a ultracode end"
+
+	flat := shadedBox("❯ ", shade(th), text, nil, 20, th)
+	got := shadedBox("❯ ", shade(th), text, spans, 20, th)
+
+	require.Len(t, got, len(flat))
+	for i := range got {
+		assert.Equal(t, ansi.Strip(flat[i]), ansi.Strip(got[i]))
+	}
+	assert.Equal(t, flat[1], got[1])
+	assert.Contains(t, got[2], spanStyle(th, app.KindCommand).Render("/skill:a"))
+	assert.Contains(t, got[2], spanStyle(th, app.KindCommand).Render("ultracode"))
 }

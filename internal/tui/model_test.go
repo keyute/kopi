@@ -169,6 +169,10 @@ func (f *fakeController) Agents() []app.AgentStatus { return f.agents }
 
 func (f *fakeController) Commands() []app.Command { return f.commands }
 
+func (f *fakeController) PromptSpans(session, text string) []app.Span {
+	return app.Spans(text, f.skills, session == app.Main)
+}
+
 func (f *fakeController) Spans(session, text string) []app.Span {
 	return app.Spans(text, f.skills, session == app.Main)
 }

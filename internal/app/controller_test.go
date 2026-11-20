@@ -2805,6 +2805,7 @@ func TestCommandsListSkillsAfterControlCommands(t *testing.T) {
 	}, cmds[n:])
 	assert.Equal(t, []Span{{Start: 0, End: 8, Kind: KindCommand}}, c.Spans(Main, "/skill:a"))
 	assert.Nil(t, c.Spans(Main, "/skill:z"))
+	assert.Equal(t, []Span{{Start: 6, End: 14, Kind: KindCommand}}, c.PromptSpans(Main, "/plan /skill:a"), "a sent prompt is never a command")
 }
 
 func TestControllerSpansHighlightTheKeywordOnlyWhereItTriggers(t *testing.T) {
@@ -2817,6 +2818,11 @@ func TestControllerSpansHighlightTheKeywordOnlyWhereItTriggers(t *testing.T) {
 	assert.Nil(t, NewController(nil, Config{MaxWorkflows: 1, MaxAgents: 1}).Spans("t1", "ultracode"), "a subagent's view")
 	assert.Nil(t, NewController(nil, Config{Unattended: true}).Spans(Main, "ultracode"))
 	assert.Nil(t, NewController(nil, Config{Rules: deny}).Spans(Main, "ultracode"), "removed by a rule")
+
+	assert.Equal(t, want, NewController(nil, Config{MaxWorkflows: 1, MaxAgents: 1}).PromptSpans(Main, "ultracode"))
+	assert.Nil(t, NewController(nil, Config{MaxWorkflows: 1, MaxAgents: 1}).PromptSpans("t1", "ultracode"), "a subagent's view")
+	assert.Nil(t, NewController(nil, Config{Unattended: true}).PromptSpans(Main, "ultracode"))
+	assert.Nil(t, NewController(nil, Config{Rules: deny}).PromptSpans(Main, "ultracode"), "removed by a rule")
 }
 
 // modeHarness opens a harness whose sessions have a plan file and tell the

@@ -718,10 +718,11 @@ func (m *model) relayout() {
 	v := m.view()
 	blocks := v.tr.Blocks()
 	v.folds.settle(blocks)
+	spans := func(t string) []app.Span { return m.c.PromptSpans(m.shown, t) }
 	old := v.lines
 	v.lines = header(m.version, m.th)
 	for _, b := range blocks {
-		ls := v.cache.lines(b, v.folds.of(b), m.width, m.th)
+		ls := v.cache.lines(b, v.folds.of(b), spans, m.width, m.th)
 		if len(ls) == 0 {
 			continue
 		}
@@ -798,7 +799,7 @@ func (m *model) place() {
 		input = len(m.prompt) - 2
 	}
 	free -= input + m.geo.menu
-	m.pending = m.pendingCache.rows(m.view().queued, &m.keys, m.width, max(2, m.height/3), free, m.th)
+	m.pending = m.pendingCache.rows(m.view().queued, m.shown, func(t string) []app.Span { return m.c.PromptSpans(m.shown, t) }, &m.keys, m.width, max(2, m.height/3), free, m.th)
 	m.geo.transcript = max(0, free-len(m.pending))
 	// The rows take only what is left of the transcript.
 	agentRows := m.agentRows(m.geo.transcript)

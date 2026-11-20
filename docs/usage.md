@@ -116,7 +116,7 @@ Rejected, denied and interrupted rows have a warning-coloured bullet, a failed r
 - While a menu shows:
   - Up and Down choose, Tab fills in, Esc closes the menu.
   - Enter fills in and runs a command; a command that takes an argument, or a file reference, is only filled in.
-- Known commands, skill commands (wherever they appear in the input) and `@` references are highlighted in the input.
+- Known commands, skill commands (wherever they appear in the input) and `@` references are highlighted in the input. Sent and queued messages highlight the same skill commands and references.
 - An `@path` is sent as written; a space in an inserted path is written `\ `.
 
 ## Mouse

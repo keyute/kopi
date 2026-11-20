@@ -175,3 +175,19 @@ func TestReference(t *testing.T) {
 	assert.Equal(t, "@src/main.go", Reference("src/main.go"))
 	assert.Equal(t, `@my\ dir/a\ b.txt`, Reference("my dir/a b.txt"))
 }
+
+func TestPromptSpans(t *testing.T) {
+	cmd := func(line, start, end int) Span { return Span{Line: line, Start: start, End: end, Kind: KindCommand} }
+	for _, tc := range []struct {
+		text string
+		want []Span
+	}{
+		{text: "/plan x"},
+		{text: "/nope ultracode", want: []Span{cmd(0, 6, 15)}},
+		{text: "x\ny /skill:a @r ultracode", want: []Span{cmd(1, 2, 10), {Line: 1, Start: 11, End: 13, Kind: KindReference}, cmd(1, 14, 23)}},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			assert.Equal(t, tc.want, promptSpans(tc.text, testSkills(), true))
+		})
+	}
+}
