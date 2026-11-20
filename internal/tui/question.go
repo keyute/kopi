@@ -451,7 +451,7 @@ func (q *questionDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 }
 
 // seen ends the dialog with its QuestionEnded.
-func (q *questionDialog) seen(_ *model, _ string, msg tea.Msg) bool {
+func (q *questionDialog) seen(_ *model, msg tea.Msg) bool {
 	ev, ended := msg.(event.QuestionEnded)
 	return !ended || ev.Token != q.token
 }

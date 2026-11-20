@@ -51,5 +51,5 @@ func (m *model) editorDone(msg editorDoneMsg) {
 		m.view().tr.Apply(event.Error{Err: fmt.Errorf("failed to run the editor: %w", msg.err)})
 		m.relayout()
 	}
-	m.sweep("", msg)
+	m.sweep(msg)
 }

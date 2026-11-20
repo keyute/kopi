@@ -97,6 +97,7 @@ func (d *dialog) rows(width, maxRows, limit int, th theme) []string {
 	case maxRows <= 0:
 		return nil
 	case maxRows <= 2:
+		d.scroll = scroller{}
 		return slices.Repeat([]string{rule}, maxRows)
 	}
 	none := lipgloss.NewStyle()

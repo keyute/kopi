@@ -71,7 +71,7 @@ func (l *loginDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 }
 
 // seen ends the prompt with its LoginEnded, which empties its fields.
-func (l *loginDialog) seen(_ *model, _ string, msg tea.Msg) bool {
+func (l *loginDialog) seen(_ *model, msg tea.Msg) bool {
 	if ev, ended := msg.(event.LoginEnded); ended && ev.Token == l.req.Token {
 		l.d.clear()
 		return false

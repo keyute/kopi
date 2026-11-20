@@ -53,7 +53,7 @@ func (p *planDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 // seen ends the dialog with its PlanEnded. A repeat of its own request keeps it,
 // and what was typed in it; the editor's exit has the Controller read the plan
 // again.
-func (p *planDialog) seen(m *model, _ string, msg tea.Msg) bool {
+func (p *planDialog) seen(m *model, msg tea.Msg) bool {
 	switch ev := msg.(type) {
 	case event.PlanEnded:
 		return ev.Token != p.token

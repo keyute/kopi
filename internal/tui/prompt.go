@@ -27,9 +27,8 @@ type prompt interface {
 	dialog(width int, th theme) *dialog
 	// key applies msg; false closes the prompt.
 	key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool)
-	// seen applies an event of session id, or the editor's exit; false closes
-	// the prompt.
-	seen(m *model, id string, msg tea.Msg) bool
+	// seen applies an event, or the editor's exit; false closes the prompt.
+	seen(m *model, msg tea.Msg) bool
 }
 
 // held is an open prompt.
@@ -68,10 +67,10 @@ func (m *model) frontDialog() *dialog {
 	return nil
 }
 
-// sweep gives every open prompt an event of session id, or the editor's exit,
-// and closes those that report it ends them.
-func (m *model) sweep(id string, msg tea.Msg) {
-	m.prompts = slices.DeleteFunc(m.prompts, func(h held) bool { return !h.seen(m, id, msg) })
+// sweep gives every open prompt an event, or the editor's exit, and closes
+// those that report it ends them.
+func (m *model) sweep(msg tea.Msg) {
+	m.prompts = slices.DeleteFunc(m.prompts, func(h held) bool { return !h.seen(m, msg) })
 }
 
 // scrollFront scrolls the front prompt's dialog d, nil when none is open, by n

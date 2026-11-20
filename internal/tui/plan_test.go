@@ -157,6 +157,13 @@ func TestPlanEscDismisses(t *testing.T) {
 	assert.Equal(t, []planAnswer{{7, tool.PlanAnswer{}}}, c.planAnswers)
 }
 
+func TestPlanCancelDismisses(t *testing.T) {
+	m, c := openPlan(t)
+	press(m, ctrlC)
+	assert.Zero(t, c.interrupts)
+	assert.Equal(t, []planAnswer{{7, tool.PlanAnswer{}}}, c.planAnswers)
+}
+
 func TestPlanCapturesKeys(t *testing.T) {
 	m, c := openPlan(t)
 	press(m, shiftTab)

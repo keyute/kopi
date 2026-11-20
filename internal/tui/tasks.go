@@ -85,7 +85,7 @@ func (t *taskDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 
 // seen ends the dialog with a session switch. A change of tasks has it read what
 // it shows again, keeping the selected task.
-func (t *taskDialog) seen(m *model, _ string, msg tea.Msg) bool {
+func (t *taskDialog) seen(m *model, msg tea.Msg) bool {
 	switch msg.(type) {
 	case event.SessionChanged:
 		return false

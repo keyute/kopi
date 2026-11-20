@@ -480,7 +480,7 @@ func unwrap(ev event.Event) (string, event.Event) {
 // session's view, which it returns; nil when no view changed.
 func (m *model) apply(ev event.Event) *view {
 	id, ev := unwrap(ev)
-	m.sweep(id, ev)
+	m.sweep(ev)
 	switch ev := ev.(type) {
 	case event.StatusCommandResult:
 		if ev.Err != nil {

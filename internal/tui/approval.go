@@ -108,7 +108,7 @@ func (a *approvalDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 }
 
 // seen ends the prompt with its ApprovalEnded.
-func (a *approvalDialog) seen(_ *model, _ string, msg tea.Msg) bool {
+func (a *approvalDialog) seen(_ *model, msg tea.Msg) bool {
 	ev, ended := msg.(event.ApprovalEnded)
 	return !ended || ev.Token != a.req.Token
 }
