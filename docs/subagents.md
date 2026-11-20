@@ -60,7 +60,7 @@ Report file paths and line numbers.
 
 ## Permissions
 
-- A subagent's calls go through the same [permission rules](permissions.md#rules), workspace confinement and [sandbox](sandbox.md) as the main agent's.
+- A subagent's calls go through the same [permission rules](permissions.md#rules), workspace confinement and [sandbox](sandbox.md) as the main agent's, including `Bash` calls that set `unsandboxed` [outside the sandbox](sandbox.md#outside-the-sandbox).
 - When one needs approval, the dialog names the subagent and its task (`explorer t3 › …`). Several requests queue and are shown one at a time.
 - `No` without a reason stops that subagent only; Esc on its dialog answers that way.
 - `Yes, allow all edits this session` covers the main agent and its subagents.

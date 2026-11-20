@@ -378,7 +378,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	rootWS := ws.WithPlans(plans)
 	tools := []tool.Tool{
 		tool.NewRead(rootWS), tool.NewGlob(ws, hidden), tool.NewGrep(ws, hidden), tool.NewLS(ws, hidden),
-		tool.NewWrite(rootWS), tool.NewEdit(rootWS), tool.NewBash(shell, planShell, tasks),
+		tool.NewWrite(rootWS), tool.NewEdit(rootWS), tool.NewBash(shell, planShell, tasks, resolved.Config.Sandbox.AllowUnsandboxed),
 		tool.NewTaskOutput(tasks), tool.NewTaskStop(tasks),
 		tool.NewWebFetch("Kopi/"+kopiVersion(), answer),
 	}
@@ -481,7 +481,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	}
 	if len(agents) > 0 {
 		cfg.Agents = agents
-		cfg.AgentTools = agentTools(tools, ws, shell, planShell)
+		cfg.AgentTools = agentTools(tools, ws, shell, planShell, resolved.Config.Sandbox.AllowUnsandboxed)
 	}
 	if len(set.servers) > 0 {
 		cfg.Servers = func(ctx context.Context) ([]pigruntime.ServerStatus, error) { return waitServers(ctx, servers) }
@@ -561,12 +561,12 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 
 // agentTools is tools with the file and shell tools rebound for a subagent.
 // ws is the plain workspace: only the root's own file tools reach the plan file.
-func agentTools(tools []tool.Tool, ws *tool.Workspace, shell, planShell *tool.Shell) []tool.Tool {
+func agentTools(tools []tool.Tool, ws *tool.Workspace, shell, planShell *tool.Shell, allowUnsandboxed bool) []tool.Tool {
 	var out []tool.Tool
 	for _, t := range tools {
 		switch t.Name {
 		case "Bash":
-			out = append(out, tool.NewBash(shell, planShell, nil))
+			out = append(out, tool.NewBash(shell, planShell, nil, allowUnsandboxed))
 		case "Read":
 			out = append(out, tool.NewRead(ws))
 		case "Write":

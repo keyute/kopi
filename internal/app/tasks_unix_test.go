@@ -54,7 +54,7 @@ func TestRealTasksDrainCompletionDuringSessionTeardown(t *testing.T) {
 			sb := pigruntimetest.NewSandbox(t)
 			tasks := tool.NewTasks()
 			sh := tool.NewShell(sb.Workspace, nil)
-			bash := tool.NewBash(sh, sh, tasks)
+			bash := tool.NewBash(sh, sh, tasks, true)
 			rules, err := policy.NewRules(sb.Workspace, sb.Home, tool.Specs([]tool.Tool{bash}), policy.Source{Name: "test", Allow: []string{"Bash"}})
 			require.NoError(t, err)
 			h := newHarness(t, sb, Config{Tasks: tasks, Tools: []tool.Tool{bash}, Rules: rules, Mode: policy.Execute})

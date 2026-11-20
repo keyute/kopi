@@ -801,3 +801,119 @@ func TestPlanFileFlagIsPartOfTheBoundTarget(t *testing.T) {
 	_, err := g.Admit("c1", "Edit", args, &Target{Path: "/home/plans/s.md", Real: "/home/plans/s.md"})
 	assert.ErrorIs(t, err, ErrChangedCall)
 }
+
+// optOutSpec is a sandboxed exec tool whose calls opt out with {"unsandboxed":true}.
+var optOutSpec = ToolSpec{Capability: Exec, Sandboxed: true, PlanSandboxed: true, Unsandboxed: func(args json.RawMessage) bool {
+	var a struct{ Unsandboxed bool }
+	_ = json.Unmarshal(args, &a)
+	return a.Unsandboxed
+}}
+
+var (
+	plainCall  = json.RawMessage(`{"unsandboxed":false}`)
+	optOutCall = json.RawMessage(`{"unsandboxed":true}`)
+)
+
+func admitArgs(g *Gate, id string, args json.RawMessage) error {
+	_, err := g.Admit(id, "Shell", args, nil)
+	return err
+}
+
+func TestUnsandboxedCallIsRefusedInPlanBeforeRules(t *testing.T) {
+	f := &approver{answer: Allow}
+	_, g := sandboxedGate(t, optOutSpec, f.approve, Source{Name: "config", Allow: []string{"Shell"}})
+
+	err := g.Before(t.Context(), "c1", "Shell", optOutCall)
+	require.ErrorIs(t, err, ErrDenied)
+	assert.Contains(t, err.Error(), `tool "Shell" needs execute mode; the session is in plan mode, where it never runs outside the OS sandbox`)
+	assert.Empty(t, f.reqs)
+
+	require.NoError(t, g.Before(t.Context(), "c2", "Shell", plainCall))
+	assert.NoError(t, admitArgs(g, "c2", plainCall))
+	assert.Empty(t, f.reqs)
+}
+
+func TestUnsandboxedCallAsksInExecute(t *testing.T) {
+	f := &approver{answer: Allow}
+	a, g := sandboxedGate(t, optOutSpec, f.approve, Source{Name: "config"})
+	a.EnterExecute()
+
+	require.NoError(t, g.Before(t.Context(), "c1", "Shell", plainCall))
+	assert.Empty(t, f.reqs)
+
+	require.NoError(t, g.Before(t.Context(), "c2", "Shell", optOutCall))
+	assert.Equal(t, []Request{{CallID: "c2", Tool: "Shell", Args: optOutCall}}, f.reqs)
+	mode, err := g.Admit("c2", "Shell", optOutCall, nil)
+	require.NoError(t, err)
+	assert.Equal(t, Execute, mode)
+}
+
+func TestUnsandboxedCallObeysRules(t *testing.T) {
+	f := &approver{answer: Allow}
+	a, g := sandboxedGate(t, optOutSpec, f.approve, Source{Name: "config", Allow: []string{"Shell"}})
+	a.EnterExecute()
+	require.NoError(t, g.Before(t.Context(), "c1", "Shell", optOutCall))
+	assert.Empty(t, f.reqs)
+
+	a, g = sandboxedGate(t, optOutSpec, f.approve, Source{Name: "config", Deny: []string{"Shell"}})
+	a.EnterExecute()
+	err := g.Before(t.Context(), "c1", "Shell", optOutCall)
+	require.ErrorIs(t, err, ErrDenied)
+	assert.Contains(t, err.Error(), "Shell (config)")
+	assert.Empty(t, f.reqs)
+
+	a, g = sandboxedGate(t, optOutSpec, f.approve, Source{Name: "config", Ask: []string{"Shell"}})
+	a.EnterExecute()
+	require.NoError(t, g.Before(t.Context(), "c1", "Shell", optOutCall))
+	assert.Equal(t, []Request{{CallID: "c1", Tool: "Shell", Args: optOutCall, Rule: "Shell (config)"}}, f.reqs)
+}
+
+func TestUnsandboxedCallWithoutApproverIsDenied(t *testing.T) {
+	a, g := sandboxedGate(t, optOutSpec, nil, Source{Name: "config"})
+	a.EnterExecute()
+
+	err := g.Before(t.Context(), "c1", "Shell", optOutCall)
+
+	require.ErrorIs(t, err, ErrDenied)
+	assert.Contains(t, err.Error(), `tool "Shell" needs approval and this run cannot ask for it`)
+	assert.NotContains(t, err.Error(), "add an allow rule")
+}
+
+func TestUnsandboxedGrantIsRevokedOnModeChange(t *testing.T) {
+	// Exec's generation check alone revokes these; TestAdmitRefusesAnUnsandboxedGrantInPlanWithAMatchingGeneration covers forCall in Admit.
+	a, g := sandboxedGate(t, optOutSpec, nil, Source{Name: "config", Allow: []string{"Shell"}})
+	a.EnterExecute()
+	require.NoError(t, g.Before(t.Context(), "c1", "Shell", optOutCall))
+	a.EnterPlan()
+	assert.ErrorIs(t, admitArgs(g, "c1", optOutCall), ErrRevoked)
+
+	var b *Authority
+	b, g = sandboxedGate(t, optOutSpec, func(context.Context, Request) (Decision, error) {
+		b.EnterPlan()
+		return Decision{Answer: Allow}, nil
+	}, Source{Name: "config"})
+	b.EnterExecute()
+	require.NoError(t, g.Before(t.Context(), "c1", "Shell", optOutCall))
+	mode, err := g.Admit("c1", "Shell", optOutCall, nil)
+	assert.ErrorIs(t, err, ErrRevoked)
+	assert.Equal(t, Plan, mode)
+}
+
+func TestAdmitRefusesAnUnsandboxedGrantInPlanWithAMatchingGeneration(t *testing.T) {
+	a, g := sandboxedGate(t, optOutSpec, nil, Source{Name: "config"})
+	_, gen, _ := a.Permits(optOutSpec)
+	g.grants["c1"] = grant{tool: "Shell", generation: gen, args: optOutCall}
+
+	mode, err := g.Admit("c1", "Shell", optOutCall, nil)
+
+	assert.ErrorIs(t, err, ErrRevoked)
+	assert.Equal(t, Plan, mode)
+}
+
+func TestUnsandboxedFlagIsPartOfTheBoundCall(t *testing.T) {
+	a, g := sandboxedGate(t, optOutSpec, nil, Source{Name: "config", Allow: []string{"Shell"}})
+	a.EnterExecute()
+	require.NoError(t, g.Before(t.Context(), "c1", "Shell", plainCall))
+
+	assert.ErrorIs(t, admitArgs(g, "c1", optOutCall), ErrChangedCall)
+}

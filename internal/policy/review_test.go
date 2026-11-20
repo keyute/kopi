@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -14,7 +15,7 @@ var reviewSpecs = map[string]ToolSpec{
 	"Edit":  {Capability: Write, Target: pathTarget},
 	"Bash":  {Capability: Exec},
 	"Fetch": {Capability: Read, Ask: true},
-	"Shell": {Capability: Exec, Sandboxed: true},
+	"Shell": {Capability: Exec, Sandboxed: true, Unsandboxed: optOutSpec.Unsandboxed},
 }
 
 // reviewer returns the scripted reviews in order, then the last one forever,
@@ -359,4 +360,28 @@ func TestModeChangeDuringReviewRevokes(t *testing.T) {
 	close(release)
 	require.NoError(t, <-done)
 	assert.ErrorIs(t, admitApproved(g, "c1", "Bash"), ErrRevoked)
+}
+
+func TestReviewSeesUnsandboxedCallsOnly(t *testing.T) {
+	f, h := &reviewer{reviews: []Review{{Verdict: VerdictAllow}}}, &approver{}
+	_, g := newReviewGate(t, f, h.approve)
+
+	require.NoError(t, g.Before(t.Context(), "c1", "Shell", json.RawMessage(`{}`)))
+	assert.Empty(t, f.reqs)
+
+	require.NoError(t, g.Before(t.Context(), "c2", "Shell", json.RawMessage(`{"unsandboxed":true}`)))
+	require.Len(t, f.reqs, 1)
+	assert.Equal(t, "c2", f.reqs[0].CallID)
+	assert.Empty(t, h.reqs)
+}
+
+func TestReviewUndecidedUnsandboxedCallWithoutApproverHasNoRuleHint(t *testing.T) {
+	f := &reviewer{reviews: []Review{{Verdict: VerdictAsk}}}
+	_, g := newReviewGate(t, f, nil)
+
+	err := g.Before(t.Context(), "c1", "Shell", json.RawMessage(`{"unsandboxed":true}`))
+
+	require.ErrorIs(t, err, ErrDenied)
+	assert.Contains(t, err.Error(), `tool "Shell" needs approval, the approval classifier could not decide and this run cannot ask for it`)
+	assert.NotContains(t, err.Error(), "add an allow rule")
 }

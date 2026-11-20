@@ -148,7 +148,7 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 | `cost` | The session's cost (`$0.42`); absent while zero |
 | `cwd` | The workspace, with your home directory as `~` |
 | `notice` | Transient hints such as `Copied` |
-| `sandbox` | `sandboxed` or `unsandboxed` when `Bash` is available |
+| `sandbox` | `sandboxed` or `unsandboxed` when `Bash` is available; shows the default, not a call that sets `unsandboxed` |
 | `agents` | Running subagents (`2 agents`); absent at none |
 | `shells` | Running background shells (`1 shell`); absent at none |
 | `changes` | Lines added and removed against `HEAD` in tracked files, staged or not (`+12 -3`; only the non-zero side shows, `+12` or `-3`); absent when there are none, outside a git repository and in a repository with no commit |

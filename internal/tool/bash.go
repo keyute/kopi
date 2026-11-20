@@ -22,6 +22,7 @@ type bashArgs struct {
 	// Timeout is a pointer so a missing timeout is told apart from 0.
 	Timeout         *int `json:"timeout"`
 	RunInBackground bool `json:"run_in_background"`
+	Unsandboxed     bool `json:"unsandboxed"`
 }
 
 var backgroundResult = regexp.MustCompile(`^Background task (t\d+)[ :.]`)
@@ -30,8 +31,9 @@ var backgroundResult = regexp.MustCompile(`^Background task (t\d+)[ :.]`)
 // must keep commands from writing the workspace; with plan unsandboxed, plan
 // mode cannot run commands. Commands run through tasks, which keeps those
 // moved to the background; with nil tasks they run in the foreground only and
-// one still running at its timeout is stopped.
-func NewBash(sh, plan *Shell, tasks *Tasks) Tool {
+// one still running at its timeout is stopped. The unsandboxed parameter is
+// offered only when sh is sandboxed and allowUnsandboxed is true.
+func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 	description := "Runs a shell command (bash, else sh) in the workspace and returns its combined stdout and stderr; " +
 		"long output keeps its start and end. Every call starts a fresh shell in the workspace with no input: " +
 		"cd and variables do not carry over. A non-zero exit status is an error that reports the exit code. "
@@ -60,11 +62,22 @@ func NewBash(sh, plan *Shell, tasks *Tasks) Tool {
 		"maximum":     maxBashTimeoutMS,
 		"description": timeoutText,
 	}
+	var open *Shell
+	var unsandboxedHook func(json.RawMessage) bool
 	if sh.Sandboxed() {
 		description += " Commands run in an OS sandbox that allows writing only in temporary directories, paths the user allowed " +
 			"and, in execute mode, the workspace; it may block reading some paths and the network. " +
 			"A blocked operation fails, typically with \"Operation not permitted\" or \"Read-only file system\". " +
 			"A directory it blocks reading may instead appear empty."
+		if allowUnsandboxed {
+			description += " unsandboxed runs one command outside it; that call asks for approval unless a rule allows it."
+			properties["unsandboxed"] = map[string]any{
+				"type":        "boolean",
+				"description": "Run this command outside the OS sandbox; plan mode refuses such a call.",
+			}
+			open = NewShell(sh.dir, nil)
+			unsandboxedHook = bashUnsandboxed
+		}
 	}
 	planSandboxed := plan.Sandboxed()
 	return Tool{
@@ -80,6 +93,7 @@ func NewBash(sh, plan *Shell, tasks *Tasks) Tool {
 		Capability:    policy.Exec,
 		Sandboxed:     sh.Sandboxed(),
 		PlanSandboxed: planSandboxed,
+		Unsandboxed:   unsandboxedHook,
 		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (Result, error) {
 			args, err := decodeBashArgs(raw)
 			if err != nil {
@@ -87,6 +101,9 @@ func NewBash(sh, plan *Shell, tasks *Tasks) Tool {
 			}
 			if args.RunInBackground && tasks == nil {
 				return Result{}, fmt.Errorf("%w: run_in_background is not available", ErrInvalidArgs)
+			}
+			if args.Unsandboxed && unsandboxedHook == nil {
+				return Result{}, fmt.Errorf("%w: unsandboxed is not available", ErrInvalidArgs)
 			}
 			if err := ctx.Err(); err != nil {
 				return Result{}, err
@@ -98,7 +115,12 @@ func NewBash(sh, plan *Shell, tasks *Tasks) Tool {
 			// The shell is chosen from the admitted mode only: a later read of
 			// the mode could run a plan-admitted call with a writable workspace.
 			run := sh
-			if mode != policy.Execute {
+			if args.Unsandboxed {
+				if mode != policy.Execute {
+					return Result{}, fmt.Errorf("failed to run command: an unsandboxed command runs only in execute mode: %w", policy.ErrDenied)
+				}
+				run = open
+			} else if mode != policy.Execute {
 				if !planSandboxed {
 					return Result{}, fmt.Errorf("failed to run command: plan mode runs commands only in the OS sandbox, which is off or unavailable: %w", policy.ErrDenied)
 				}
@@ -131,7 +153,7 @@ func NewBash(sh, plan *Shell, tasks *Tasks) Tool {
 			}
 		},
 		Display: Display{
-			Title: bashTitle,
+			Title: func(raw json.RawMessage) string { return bashTitle(raw, unsandboxedHook != nil) },
 			Summary: func(output string) string {
 				if m := backgroundResult.FindStringSubmatch(output); m != nil {
 					return "task " + m[1] + " · running"
@@ -190,12 +212,25 @@ func bashCommand(raw json.RawMessage) string {
 	return args.Command
 }
 
-func bashTitle(raw json.RawMessage) string {
+// bashUnsandboxed decodes leniently for the same reason as bashCommand.
+func bashUnsandboxed(raw json.RawMessage) bool {
+	var args struct {
+		Unsandboxed bool `json:"unsandboxed"`
+	}
+	_ = json.Unmarshal(raw, &args)
+	return args.Unsandboxed
+}
+
+func bashTitle(raw json.RawMessage, unsandboxedOffered bool) string {
+	name := "Bash"
+	if unsandboxedOffered && bashUnsandboxed(raw) {
+		name = "Bash (unsandboxed)"
+	}
 	command := bashCommand(raw)
 	if command == "" {
-		return "Bash"
+		return name
 	}
-	return "Bash " + titleLine(command)
+	return name + " " + titleLine(command)
 }
 
 // titleLine is bashTitleLine's line, marked with " …" when cut.

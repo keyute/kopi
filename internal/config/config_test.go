@@ -31,7 +31,7 @@ func withDefaults(c Config) Config {
 	c.AgentLine = DefaultAgentLine()
 	c.Theme = DefaultTheme()
 	c.Permissions = Permissions{Allow: []string{}, Ask: []string{}, Deny: []string{}}
-	c.Sandbox = Sandbox{AllowWrite: []string{}, DenyRead: []string{}}
+	c.Sandbox = Sandbox{AllowWrite: []string{}, DenyRead: []string{}, AllowUnsandboxed: true}
 	c.Skills = Skills{Prefix: "skill"}
 	c.Classifier = Classifier{Instructions: []string{}}
 	c.MCPServers = map[string]MCPServer{}
@@ -423,6 +423,7 @@ func TestResolveRejectsInvalidUIValueNamingLayer(t *testing.T) {
 		{"null sandbox enabled", `{"sandbox": {"enabled": null}}`},
 		{"string sandbox enabled", `{"sandbox": {"enabled": "true"}}`},
 		{"string sandbox network", `{"sandbox": {"network": "true"}}`},
+		{"string sandbox allowUnsandboxed", `{"sandbox": {"allowUnsandboxed": "false"}}`},
 		{"null sandbox list", `{"sandbox": {"allowWrite": null}}`},
 		{"null sandbox", `{"sandbox": null}`},
 		{"instruction fallbacks not a list", `{"instructionFallbacks": "CLAUDE.md"}`},
@@ -606,10 +607,22 @@ func TestSandboxListsReplaceAcrossLayers(t *testing.T) {
 	global := globalLayer(t, `{"sandbox": {"allowWrite": ["~/.cache", "/tmp/x"], "denyRead": ["~/.aws"], "network": true}}`)
 	r, err := Resolve(Defaults(), global, Map("flags", map[string]any{"sandbox": map[string]any{"allowWrite": []any{"/var/y"}}}))
 	require.NoError(t, err)
-	assert.Equal(t, Sandbox{AllowWrite: []string{"/var/y"}, DenyRead: []string{"~/.aws"}, Network: true}, r.Config.Sandbox)
+	assert.Equal(t, Sandbox{AllowWrite: []string{"/var/y"}, DenyRead: []string{"~/.aws"}, Network: true, AllowUnsandboxed: true}, r.Config.Sandbox)
 	assert.Equal(t, "flags", r.Origins["sandbox.allowWrite"])
 	assert.Equal(t, global.Name, r.Origins["sandbox.denyRead"])
 	assert.Equal(t, global.Name, r.Origins["sandbox.network"])
+}
+
+func TestSandboxAllowUnsandboxed(t *testing.T) {
+	r, err := Resolve(Defaults())
+	require.NoError(t, err)
+	assert.True(t, r.Config.Sandbox.AllowUnsandboxed)
+
+	global := globalLayer(t, `{"sandbox": {"allowUnsandboxed": false}}`)
+	r, err = Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.False(t, r.Config.Sandbox.AllowUnsandboxed)
+	assert.Equal(t, global.Name, r.Origins["sandbox.allowUnsandboxed"])
 }
 
 func TestResolveClassifier(t *testing.T) {
@@ -780,7 +793,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	r, err := Resolve(Defaults())
 	require.NoError(t, err)
 	entries := r.Entries()
-	assert.Len(t, entries, 24+len(KeyActions))
+	assert.Len(t, entries, 25+len(KeyActions))
 	assert.IsIncreasing(t, entryKeys(entries))
 	assert.Contains(t, entries, Entry{Key: "model", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "smallModel", Value: "", Origin: "unset"})
@@ -798,6 +811,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "sandbox.allowWrite", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "sandbox.denyRead", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "sandbox.network", Value: "false", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "sandbox.allowUnsandboxed", Value: "true", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "skills.prefix", Value: "skill", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "classifier.enabled", Value: "false", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "classifier.model", Value: "", Origin: "unset"})
