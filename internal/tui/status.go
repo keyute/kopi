@@ -60,6 +60,10 @@ var segments = map[string]segment{
 		text := costText(s.Cost)
 		return fg(th.text).Render(text), text != ""
 	},
+	"total": func(s statusInput, th theme) (string, bool) {
+		text := costText(s.TotalCost)
+		return fg(th.text).Render(text), text != ""
+	},
 	"branch": func(s statusInput, th theme) (string, bool) {
 		return fg(th.accent).Render(s.Branch), s.Branch != ""
 	},
@@ -87,6 +91,9 @@ var segments = map[string]segment{
 	},
 	"shells": func(s statusInput, th theme) (string, bool) {
 		return fg(th.dim).Render(countText(s.Shells, "shell")), s.Shells > 0
+	},
+	"workflows": func(s statusInput, th theme) (string, bool) {
+		return fg(th.dim).Render(countText(s.Workflows, "workflow")), s.Workflows > 0
 	},
 	"tokens": func(s statusInput, th theme) (string, bool) {
 		return fg(th.text).Render(tokensText(s.ContextTokens)), s.ContextTokens > 0

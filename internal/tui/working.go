@@ -29,7 +29,7 @@ func workingRow(sp *spinner.Model, text, hint string, th theme) string {
 // workingText is the working row's text, false when it is not shown. A
 // pending approval wins, then the shown view's running turn, then, in the
 // main view only, the Controller's activity, then idle waiting on background
-// work. The waiting clock runs underneath the others.
+// work.
 func (m *model) workingText() (string, bool) {
 	v, front := m.view(), m.front()
 	switch {
@@ -42,7 +42,7 @@ func (m *model) workingText() (string, bool) {
 	case m.activity != "":
 		return m.activity, true
 	case m.waiting():
-		return "Waiting on " + m.waitingOn() + "… " + formatDuration(time.Since(m.waitStart)), true
+		return m.waitingOn() + " still running", true
 	}
 	return "", false
 }
@@ -79,17 +79,6 @@ func countText(n int, noun string) string {
 		s += "s"
 	}
 	return s
-}
-
-// syncWaiting starts the waiting clock when the waiting state begins and
-// clears it when it ends.
-func (m *model) syncWaiting() {
-	switch {
-	case !m.waiting():
-		m.waitStart = time.Time{}
-	case m.waitStart.IsZero():
-		m.waitStart = time.Now()
-	}
 }
 
 // workingHint names the background key while the main turn's foreground

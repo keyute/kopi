@@ -9,7 +9,9 @@ import (
 	"image"
 	"image/png"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -1881,6 +1883,20 @@ func TestWebSearchIsOfferedForASearchingSmallModel(t *testing.T) {
 	assert.Equal(t, []string{"AskUserQuestion", "WebSearch", "Workflow"}, toolNames(h.c.tools))
 }
 
+func TestWebSearchChargesTheTotal(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	priced := sb.PricedModel(t)
+	h := newHarness(t, sb, Config{Model: priced, SmallModel: priced})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	i := slices.IndexFunc(h.c.tools, func(t tool.Tool) bool { return t.Name == "WebSearch" })
+	require.NotEqual(t, -1, i)
+
+	_, err := h.c.tools[i].Run(t.Context(), json.RawMessage(`{"query":"kopi"}`), func(policy.Target) (policy.Mode, error) { return policy.Execute, nil })
+
+	require.NoError(t, err)
+	assert.Equal(t, pigruntimetest.PricedModelCost, h.c.Status().TotalCost)
+}
+
 func TestWebSearchIsAbsentForANonSearchingModel(t *testing.T) {
 	h := newHarness(t, searchSandbox(t), Config{})
 	assert.Equal(t, []string{"AskUserQuestion", "Workflow"}, toolNames(h.c.tools))
@@ -2471,6 +2487,102 @@ func TestStatusReportsContextUsageAndBranch(t *testing.T) {
 	assert.Equal(t, tokens, status.ContextTokens)
 	assert.Equal(t, window, status.ContextWindow)
 	assert.Equal(t, "feature/status", status.Branch)
+}
+
+func TestStatusTotalCostIncludesARootTurn(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	h := newHarness(t, sb, Config{Model: sb.PricedModel(t)})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	assert.Zero(t, h.c.Status().TotalCost)
+
+	h.turn(t, "price me")
+
+	assert.Equal(t, pigruntimetest.PricedModelCost, h.c.Status().TotalCost)
+}
+
+func TestStatusKeepsRootAndChildCostsTogetherDuringSwitch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a named pipe")
+	}
+	mkfifo, err := exec.LookPath("mkfifo")
+	require.NoError(t, err)
+	sb := pigruntimetest.NewSandbox(t)
+	model := sb.PricedModel(t)
+	def := agentDef("explorer")
+	def.Model = model
+	a := newAgentHarness(t, sb, Config{Model: model}, def)
+	// Only the root's turns reach this channel; a child's arrive wrapped in a
+	// Session event.
+	ends := turnEnds(a.c)
+	// A finished subagent wakes the root for one more priced turn.
+	child := func(description string) {
+		id := a.launch(t, "explorer", description, "go")
+		a.untilStatus(t, id, tool.TaskCompleted)
+		receiveEnd(t, ends)
+	}
+	a.turn(t, "old root")
+	receiveEnd(t, ends)
+	child("old child")
+	a.c.chargeSide()(3)
+	old := a.c.Status()
+	require.Equal(t, 3+3*pigruntimetest.PricedModelCost, old.TotalCost)
+
+	gitDir := filepath.Join(sb.Workspace, ".git")
+	require.NoError(t, os.Mkdir(gitDir, 0o700))
+	head := filepath.Join(gitDir, "HEAD")
+	require.NoError(t, exec.Command(mkfifo, head).Run())
+	reached, release, written := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(written)
+		f, err := os.OpenFile(head, os.O_WRONLY, 0)
+		if !assert.NoError(t, err) {
+			return
+		}
+		defer f.Close()
+		close(reached)
+		<-release
+		_, err = f.WriteString("ref: refs/heads/status\n")
+		assert.NoError(t, err)
+	}()
+	var unblock sync.Once
+	defer func() {
+		unblock.Do(func() { close(release) })
+		wait(t, written)
+	}()
+	result := make(chan Status, 1)
+	go func() { result <- a.c.Status() }()
+	// Opening the writer proves Status has reached the branch read, after
+	// snapshotting the root; Status takes the root and its children in one
+	// critical section, so a switch during the branch read cannot mix the old
+	// root with new children.
+	wait(t, reached)
+
+	require.NoError(t, a.c.NewSession(t.Context()))
+	a.turn(t, "new root one")
+	receiveEnd(t, ends)
+	a.turn(t, "new root two")
+	receiveEnd(t, ends)
+	for range 2 {
+		child("new child")
+	}
+	a.c.chargeSide()(5)
+	// Unlinking leaves the blocked reader on the pipe, but lets later status
+	// calls read the replacement HEAD without blocking.
+	require.NoError(t, os.Remove(head))
+	require.NoError(t, os.WriteFile(head, []byte("ref: refs/heads/status\n"), 0o600))
+	fresh := a.c.Status()
+	assert.NotEqual(t, old.SessionID, fresh.SessionID)
+	assert.Equal(t, 5+6*pigruntimetest.PricedModelCost, fresh.TotalCost)
+	// The writer must close before ReadFile returns.
+	unblock.Do(func() { close(release) })
+	wait(t, written)
+	select {
+	case got := <-result:
+		assert.Equal(t, old.SessionID, got.SessionID)
+		assert.Equal(t, old.TotalCost, got.TotalCost)
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for Status")
+	}
 }
 
 func TestAgentsReportEffortAndUsage(t *testing.T) {

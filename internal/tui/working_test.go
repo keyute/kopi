@@ -85,14 +85,14 @@ func TestWorkingRowWaitsOnBackgroundWork(t *testing.T) {
 		agents, workflows, shells int
 		want                      string
 	}{
-		{1, 0, 0, "Waiting on 1 agent… 0s"},
-		{2, 0, 0, "Waiting on 2 agents… 0s"},
-		{0, 0, 1, "Waiting on 1 shell… 0s"},
-		{0, 0, 3, "Waiting on 3 shells… 0s"},
-		{0, 1, 0, "Waiting on 1 workflow… 0s"},
-		{1, 0, 1, "Waiting on 1 agent, 1 shell… 0s"},
-		{2, 0, 1, "Waiting on 2 agents, 1 shell… 0s"},
-		{2, 1, 1, "Waiting on 2 agents, 1 workflow, 1 shell… 0s"},
+		{1, 0, 0, "1 agent still running"},
+		{2, 0, 0, "2 agents still running"},
+		{0, 0, 1, "1 shell still running"},
+		{0, 0, 3, "3 shells still running"},
+		{0, 1, 0, "1 workflow still running"},
+		{1, 0, 1, "1 agent, 1 shell still running"},
+		{2, 0, 1, "2 agents, 1 shell still running"},
+		{2, 1, 1, "2 agents, 1 workflow, 1 shell still running"},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -106,7 +106,7 @@ func TestWorkingRowWaitsOnBackgroundWork(t *testing.T) {
 	}
 }
 
-func TestWorkingRowWaitingCountsFromWhenItBegan(t *testing.T) {
+func TestWorkingRowWaitingEndsWithTheTasks(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, c := newTestModel(t, 60, 20)
 		idle := m.transcriptHeight()
@@ -115,17 +115,15 @@ func TestWorkingRowWaitingCountsFromWhenItBegan(t *testing.T) {
 		c.status.Agents = 1
 		send(m, event.TasksChanged{})
 		assert.Equal(t, idle-busyRows, m.transcriptHeight())
-		time.Sleep(30 * time.Second)
 		c.status.Agents, c.status.Shells = 2, 1
 		send(m, event.TasksChanged{})
-		assert.Equal(t, "⠋ Waiting on 2 agents, 1 shell… 30s", working(), "a count change keeps the clock")
+		assert.Equal(t, "⠋ 2 agents, 1 shell still running", working())
 
 		send(m, event.TurnStart{Prompt: "go"})
 		assert.Equal(t, "⠋ Working… 0s", working(), "the turn's text wins while busy")
-		time.Sleep(10 * time.Second)
 		c.status = app.Status{Agents: 1}
 		send(m, event.TurnEnd{})
-		assert.Equal(t, "⠋ Waiting on 1 agent… 0s", working(), "the clock restarts after the turn")
+		assert.Equal(t, "⠋ 1 agent still running", working())
 
 		c.status = app.Status{}
 		send(m, event.TasksChanged{})
@@ -141,13 +139,12 @@ func TestWorkingRowActivityWinsOverWaiting(t *testing.T) {
 		working := func() string { s := screen(m); return s[len(s)-6] }
 		c.status.Agents = 1
 		send(m, event.TasksChanged{})
-		time.Sleep(20 * time.Second)
 
 		send(m, event.Activity{Text: "Connecting to MCP servers…"})
 		assert.Equal(t, "⠋ Connecting to MCP servers…", working())
 
 		send(m, event.Activity{})
-		assert.Equal(t, "⠋ Waiting on 1 agent… 20s", working(), "the clock kept running")
+		assert.Equal(t, "⠋ 1 agent still running", working())
 	})
 }
 
@@ -159,10 +156,10 @@ func TestWorkingRowApprovalWinsWhileIdle(t *testing.T) {
 
 		send(m, event.ApprovalRequested{Token: 1, Title: "Edit a.go", Agent: "explore", TaskID: "t1"})
 		assert.Contains(t, screen(m), "⠋ Waiting for you…")
-		assert.NotContains(t, strings.Join(screen(m), "\n"), "Waiting on")
+		assert.NotContains(t, strings.Join(screen(m), "\n"), "still running")
 
 		send(m, event.ApprovalEnded{Token: 1})
-		assert.Contains(t, screen(m), "⠋ Waiting on 1 agent… 0s")
+		assert.Contains(t, screen(m), "⠋ 1 agent still running")
 	})
 }
 
@@ -282,10 +279,10 @@ func TestWorkingRowFollowsTheView(t *testing.T) {
 		send(m, sub("t1", event.TurnEnd{}))
 		c.status.Agents = 1
 		send(m, event.TasksChanged{})
-		assert.NotContains(t, screen(m), "⠋ Waiting on 1 agent… 0s", "waiting shows in main only")
+		assert.NotContains(t, screen(m), "⠋ 1 agent still running", "waiting shows in main only")
 
 		display(m, app.Main)
-		assert.Equal(t, "⠋ Waiting on 1 agent… 0s", working())
+		assert.Equal(t, "⠋ 1 agent still running", working())
 	})
 }
 

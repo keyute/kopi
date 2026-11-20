@@ -160,6 +160,9 @@ type Controller struct {
 	followers map[*WorkQueue]struct{}
 
 	mu sync.Mutex
+	// spent is what the current root session has spent outside its open sessions,
+	// in estimated dollars: side requests and ended workflow agents.
+	spent float64
 	// model is the session model: Config.Model, or the runtime's default once resolved.
 	model  string
 	sessID string
@@ -262,7 +265,7 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	var search []tool.Tool
 	if small := c.SmallModel(); small != "" && c.rt.CanSearch(small) && !c.cfg.Rules.Removes("WebSearch") {
 		search = append(search, tool.NewWebSearch(func(ctx context.Context, system, query string) (tool.SearchResult, error) {
-			return c.rt.Search(ctx, small, system, query)
+			return c.sideSearch(ctx, small, system, query)
 		}))
 		tools = append(tools, search...)
 	}
@@ -757,14 +760,20 @@ func (c *Controller) changeMode(enter func() uint64) {
 }
 
 func (c *Controller) Status() Status {
+	c.queue.Lock()
+	children := maps.Clone(c.children)
 	c.mu.Lock()
 	sess, sessID := c.main.sess, c.sessID
 	busy := c.main.work != nil
+	side := c.spent
 	c.mu.Unlock()
+	c.queue.Unlock()
 
 	mode, _ := c.authority.Snapshot()
-	s := Status{SessionID: sessID, Mode: mode, Model: c.Model(), Busy: busy, Branch: gitBranch(c.cfg.Workspace), Workspace: c.cfg.Workspace}
+	s := Status{SessionID: sessID, Mode: mode, Model: c.Model(), Busy: busy, Branch: gitBranch(c.cfg.Workspace), Workspace: c.cfg.Workspace, TotalCost: side}
 	if sess != nil {
+		_, cost := sess.Usage()
+		s.TotalCost += cost
 		s.MessageCount = sess.MessageCount()
 		if tokens, window, ok := sess.ContextUsage(); ok {
 			s.ContextTokens, s.ContextWindow = tokens, window
@@ -794,6 +803,10 @@ func (c *Controller) Status() Status {
 		}
 	}
 	c.queue.Unlock()
+	for _, r := range children {
+		_, cost := r.sess.Usage()
+		s.TotalCost += cost
+	}
 	s.Foreground = c.cfg.Tasks.Foreground()
 	return s
 }
@@ -1123,6 +1136,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	}
 	c.main.sess, c.sessID, c.main.emit, c.main.bound, c.main.unsubscribe = sess, id, emit, bound, unsubscribe
 	c.main.told = ""
+	c.spent = 0
 	c.deferred = nil
 	c.mu.Unlock()
 	c.queue.Unlock()

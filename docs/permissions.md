@@ -150,4 +150,4 @@ Behaviour with `classifier.enabled`:
 - Command-pattern rules for `Bash`.
 - Approving a call the classifier denied after the fact.
 - Review of sandboxed `Bash` commands.
-- Usage accounting for classifier requests.
+- A separate figure for classifier requests; their cost is counted in the status line's `total`.

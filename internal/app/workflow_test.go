@@ -169,6 +169,41 @@ func TestWorkflowModelOrder(t *testing.T) {
 	})
 }
 
+func TestWorkflowAgentsAreInTheTotalAsEachEnds(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	def := agentDef("explorer")
+	a := newAgentHarness(t, sb, Config{WorkflowModel: sb.PricedModel(t)}, def)
+	gate := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+	})
+	a.child.SetResponses([]ai.FauxResponseStep{gated(gate, "second")})
+	a.rootAcks(1)
+
+	id := a.startWorkflow(t, "audit", `await agent("first"); return await agent("second", {agentType: "explorer"})`)
+
+	a.until(t, func() bool { return a.c.Status().TotalCost == pigruntimetest.PricedModelCost })
+	assert.Equal(t, tool.TaskRunning, a.info(t, id).Status)
+	close(gate)
+	a.untilStatus(t, id, tool.TaskCompleted)
+	assert.Equal(t, pigruntimetest.PricedModelCost, a.c.Status().TotalCost)
+}
+
+func TestWorkflowTotalSumsItsAgents(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	a := newAgentHarness(t, sb, Config{WorkflowModel: sb.PricedModel(t)})
+	a.rootAcks(1)
+
+	id := a.startWorkflow(t, "audit", `return await parallel([() => agent("a"), () => agent("b")])`)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	assert.Equal(t, 2*pigruntimetest.PricedModelCost, a.c.Status().TotalCost)
+}
+
 func TestWorkflowSchemaReturnsTheRecordedObject(t *testing.T) {
 	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
 	requests := make(chan childRequest, 1)
