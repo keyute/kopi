@@ -33,6 +33,9 @@ type TaskInfo struct {
 	// Result is the final message of a completed agent run.
 	Result string
 	Output string
+	// OutputFile is where a command's output is saved in full once it is too
+	// long to keep; "" when nothing was saved.
+	OutputFile string
 }
 
 func (i TaskInfo) StatusText() string {
@@ -401,6 +404,9 @@ func (t *task) infoOutcome(o jobOutcome) TaskInfo {
 	}
 	if !o.started.IsZero() {
 		info.Started = o.started
+	}
+	if t.p != nil {
+		info.OutputFile = t.p.out.file()
 	}
 	return info
 }

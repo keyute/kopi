@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -281,4 +282,48 @@ func TestDialogFieldPrefixDrawsTheFieldBelowTheDetail(t *testing.T) {
 
 	f.ta.SetValue("one\ntwo")
 	assert.Equal(t, []string{"❭ 1. Yes", "  says yes", "  ↳ note: one", "          two", "  2. No"}, plainRows(optionRows(d, 40)))
+}
+
+func TestScrollerWindow(t *testing.T) {
+	var lines []string
+	for i := range 10 {
+		lines = append(lines, fmt.Sprintf("l%d", i+1))
+	}
+	th := mocha()
+	for _, tt := range []struct {
+		name        string
+		off, room   int
+		want        []string
+		below       int
+		cut         bool
+		wantOff     int
+		wantVisible int
+	}{
+		{name: "fits", room: 10, want: lines, wantVisible: 10},
+		{name: "fits from a stale offset", off: 4, room: 12, want: lines, wantVisible: 10},
+		{name: "no room", room: 0},
+		{name: "top", room: 4, want: []string{"l1", "l2", "l3", "… 7 more lines"}, below: 7, cut: true, wantVisible: 2},
+		{name: "middle", off: 4, room: 4, want: []string{"… 4 earlier lines", "l5", "l6", "… 4 more lines"}, below: 4, cut: true, wantOff: 4, wantVisible: 2},
+		{name: "end", off: 100, room: 4, want: []string{"… 7 earlier lines", "l8", "l9", "l10"}, wantOff: 7, cut: true, wantVisible: 2},
+		{name: "last row left out", off: 6, room: 4, want: []string{"… 6 earlier lines", "l7", "l8", "… 2 more lines"}, below: 2, wantOff: 6, cut: true, wantVisible: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := scroller{off: tt.off, below: 99}
+			got := plainRows(s.window(lines, tt.room, th))
+			if tt.want == nil {
+				assert.Empty(t, got)
+			} else {
+				assert.Equal(t, tt.want, got)
+			}
+			assert.Equal(t, tt.below, s.below)
+			assert.Equal(t, tt.wantOff, s.off)
+			assert.Equal(t, tt.wantVisible, s.visible)
+			assert.Equal(t, tt.cut || tt.below > 0, s.cut())
+		})
+	}
+}
+
+func TestScrollerWindowSingularMarkers(t *testing.T) {
+	s := scroller{off: 1}
+	assert.Equal(t, []string{"… 1 earlier line", "b", "… 2 more lines"}, plainRows(s.window([]string{"a", "b", "c", "d"}, 3, mocha())))
 }

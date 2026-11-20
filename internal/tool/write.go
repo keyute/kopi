@@ -4,14 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/keyute/kopi/internal/policy"
 )
-
-// maxPreviewLines bounds each side of an approval preview.
-const maxPreviewLines = 10
 
 type writeArgs struct {
 	FilePath string `json:"file_path"`
@@ -105,13 +101,13 @@ func writeChange(raw json.RawMessage) (string, []PreviewLine) {
 	return fmt.Sprintf("+%d", countLines(args.Content)), changeLines(Added, args.Content)
 }
 
-// changeLines is every line of text as kind, each cut to maxLineChars runes.
+// changeLines is every line of text as kind, each cut to maxLineChars runes
+// and marked when cut.
 func changeLines(kind PreviewKind, text string) []PreviewLine {
-	lines := previewLinesCap(kind, text, math.MaxInt)
+	lines := previewLines(kind, text)
 	for i, l := range lines {
 		if cut := cutRunes(l.Text, maxLineChars); cut != l.Text {
-			// A bare substring would keep the whole decoded content alive.
-			lines[i].Text = strings.Clone(cut)
+			lines[i].Text = cut + lineCutMarker
 		}
 	}
 	return lines
@@ -132,28 +128,14 @@ func pathTitle(ws *Workspace, verb string) func(json.RawMessage) string {
 	}
 }
 
-// previewLines shows up to maxPreviewLines of lines as kind, then a marker
-// counting the rest.
+// previewLines is every line of text as kind.
 func previewLines(kind PreviewKind, text string) []PreviewLine {
-	return previewLinesCap(kind, text, maxPreviewLines)
-}
-
-// previewLinesCap shows up to limit of lines as kind, then a marker counting
-// the rest.
-func previewLinesCap(kind PreviewKind, text string, limit int) []PreviewLine {
-	n := countLines(text)
-	out := make([]PreviewLine, 0, min(n, limit)+1)
-	restText := strings.TrimSuffix(text, "\n")
-	for range min(n, limit) {
-		line, rest, _ := strings.Cut(restText, "\n")
+	out := make([]PreviewLine, 0, countLines(text))
+	rest := strings.TrimSuffix(text, "\n")
+	for range countLines(text) {
+		line, after, _ := strings.Cut(rest, "\n")
 		out = append(out, PreviewLine{Kind: kind, Text: line})
-		restText = rest
-	}
-	switch rest := n - limit; {
-	case rest == 1:
-		out = append(out, PreviewLine{Kind: Context, Text: "… 1 more line"})
-	case rest > 1:
-		out = append(out, PreviewLine{Kind: Context, Text: fmt.Sprintf("… %d more lines", rest)})
+		rest = after
 	}
 	return out
 }

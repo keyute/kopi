@@ -269,3 +269,54 @@ func (d *dialog) text() string {
 	}
 	return ""
 }
+
+// scroller is the offset into rows that do not all fit their dialog.
+type scroller struct {
+	// off is the first row shown, visible the rows of content the last window
+	// gave a cut body and below the rows it left out under it.
+	off, visible, below int
+}
+
+// cut reports whether the last window left rows out.
+func (s *scroller) cut() bool { return s.off > 0 || s.below > 0 }
+
+// window is lines within room rows from the offset; the last row counts the
+// lines left out below and, once scrolled, the first those above.
+func (s *scroller) window(lines []string, room int, th theme) []string {
+	s.below = 0
+	if room < 1 {
+		s.visible = 0
+		return nil
+	}
+	if len(lines) <= room {
+		s.off, s.visible = 0, len(lines)
+		return lines
+	}
+	s.visible = max(1, room-2)
+	s.off = min(max(0, s.off), max(0, len(lines)-(room-1)))
+	content := room
+	if s.off > 0 {
+		content--
+	}
+	if s.off+content < len(lines) {
+		content--
+	}
+	content = max(0, content)
+	s.below = len(lines) - s.off - content
+	var rows []string
+	if s.off > 0 {
+		rows = append(rows, fg(th.dim).Render(elided(s.off, "earlier")))
+	}
+	rows = append(rows, lines[s.off:s.off+content]...)
+	if s.below > 0 {
+		rows = append(rows, fg(th.dim).Render(elided(s.below, "more")))
+	}
+	return rows[:min(len(rows), room)]
+}
+
+func elided(n int, what string) string {
+	if n == 1 {
+		return "… 1 " + what + " line"
+	}
+	return fmt.Sprintf("… %d %s lines", n, what)
+}

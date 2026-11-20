@@ -68,6 +68,7 @@ func (t *Transcript) Apply(ev event.Event) {
 		t.items = append(t.items, item{kind: callItem, call: Call{
 			ID:          ev.CallID,
 			Title:       ev.Title,
+			Command:     ev.Command,
 			Action:      ev.Action,
 			State:       Running,
 			Preview:     ev.Preview,

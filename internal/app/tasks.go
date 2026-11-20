@@ -50,6 +50,9 @@ func notice(info tool.TaskInfo, head string) pigruntime.Notice {
 	if tail := outputTail(info.Output); tail != "" {
 		text += "\n" + tail
 	}
+	if info.OutputFile != "" {
+		text += "\n[Output saved to " + info.OutputFile + "]"
+	}
 	return pigruntime.Notice{Text: text, Shown: taskEnded(info)}
 }
 

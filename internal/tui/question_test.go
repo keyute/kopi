@@ -262,13 +262,13 @@ func TestQuestionRowsCutAPreviewAndScrollIt(t *testing.T) {
 	assert.NotContains(t, first, "earlier lines")
 	assert.Regexp(t, `… \d+ more lines`, first)
 
-	q.scroll += q.visible
+	q.scroll.off += q.scroll.visible
 	scrolled := joined()
 	assert.Contains(t, scrolled, "… 4 earlier lines")
 	assert.NotContains(t, scrolled, "line 0")
 	assert.Contains(t, scrolled, "more lines")
 
-	q.scroll += 100
+	q.scroll.off += 100
 	end := joined()
 	assert.NotContains(t, end, "more lines")
 	assert.Contains(t, end, "line 9")

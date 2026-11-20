@@ -103,7 +103,8 @@ func TestDisplayFillsStartFields(t *testing.T) {
 	change := testTool("Change", policy.Write, nil)
 	change.Unsandboxed = func(args json.RawMessage) bool { return string(args) == "{}" }
 	change.Display = tool.Display{
-		Done: func(json.RawMessage) string { return "Changed" },
+		Done:    func(json.RawMessage) string { return "Changed" },
+		Command: func(json.RawMessage) string { return "the command" },
 		Change: func(json.RawMessage) (string, []tool.PreviewLine) {
 			return "+1 -1", []tool.PreviewLine{{Kind: tool.Added, Text: "line"}}
 		},
@@ -115,6 +116,7 @@ func TestDisplayFillsStartFields(t *testing.T) {
 	assert.Equal(t, "Changed", start.Done)
 	assert.Equal(t, "+1 -1", start.Change)
 	assert.Equal(t, []tool.PreviewLine{{Kind: tool.Added, Text: "line"}}, start.Preview)
+	assert.Equal(t, "the command", start.Command)
 	assert.True(t, start.Solo)
 	assert.True(t, start.Unsandboxed)
 
@@ -122,6 +124,7 @@ func TestDisplayFillsStartFields(t *testing.T) {
 	assert.Empty(t, plain.Done)
 	assert.Empty(t, plain.Change)
 	assert.Nil(t, plain.Preview)
+	assert.Empty(t, plain.Command)
 	assert.False(t, plain.Solo)
 	assert.False(t, plain.Unsandboxed)
 }

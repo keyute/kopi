@@ -82,6 +82,9 @@ type Config struct {
 	// Plans is the root session's plan file; nil means there is none, and no
 	// ExitPlanMode tool.
 	Plans *tool.Plans
+	// Outputs saves the output too long to return whole in the root session's
+	// folder; nil saves nothing.
+	Outputs *tool.Outputs
 }
 
 const maxReferenceEntries = 10000
@@ -1060,6 +1063,12 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 			planErr = fmt.Errorf("failed to select the plan file: %w", err)
 		}
 	}
+	var outputErr error
+	if c.cfg.Outputs != nil {
+		if err := c.cfg.Outputs.Select(id); err != nil {
+			outputErr = fmt.Errorf("failed to select the output folder: %w", err)
+		}
+	}
 	c.queue.Lock()
 	c.mu.Lock()
 	if old != nil {
@@ -1085,6 +1094,9 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	c.relay.emit(changed)
 	if planErr != nil {
 		c.relay.emit(event.Error{Err: planErr})
+	}
+	if outputErr != nil {
+		c.relay.emit(event.Error{Err: outputErr})
 	}
 	for _, ev := range c.startup {
 		c.relay.emit(ev)

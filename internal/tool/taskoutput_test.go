@@ -3,6 +3,7 @@ package tool
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -116,4 +117,19 @@ func TestTaskOutputDisplay(t *testing.T) {
 	assert.Equal(t, "running for 42s", tool.Display.Summary("Task t1 running for 42s.\n(no output)"))
 	assert.Equal(t, "completed (exit code 0)", tool.Display.Summary("Task t1 completed (exit code 0).\nhi\n"))
 	assert.Equal(t, "stopped", tool.Display.Summary("Task t1 stopped.\n(no output)"))
+}
+
+func TestTaskOutputNamesTheSavedFile(t *testing.T) {
+	outputs, dir := newSavedOutputs(t)
+	tasks, events := newTasks(t)
+	_, err := tasks.Start(t.Context(), NewShell(t.TempDir(), nil).WithOutputs(outputs), "seq 1 20000")
+	require.NoError(t, err)
+	nextEvent(t, events)
+	end := nextEvent(t, events)
+
+	out, err := NewTaskOutput(tasks).Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
+
+	require.NoError(t, err)
+	assert.Equal(t, dir, filepath.Dir(end.OutputFile))
+	assert.Contains(t, out.Text, "full output: "+end.OutputFile)
 }

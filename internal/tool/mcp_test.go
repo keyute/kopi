@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -177,4 +179,44 @@ func TestValidateMCPServerName(t *testing.T) {
 	for _, name := range []string{"", "github__other", "github_", "github.", "github..other", "github._other", "café", ".."} {
 		assert.ErrorIs(t, ValidateMCPServerName(name), ErrInvalidMCPServerName, name)
 	}
+}
+
+func TestMCPSavesALongResult(t *testing.T) {
+	outputs, dir := newSavedOutputs(t)
+	long := "head" + strings.Repeat("x", 3*maxOutputPart) + "tail"
+	tl := NewMCP(MCPTool{Server: "s", Tool: "t", Outputs: outputs}, func(context.Context, json.RawMessage) (string, error) { return long, nil })
+
+	out, err := tl.Run(t.Context(), nil, allowTarget)
+
+	require.NoError(t, err)
+	files, err := filepath.Glob(filepath.Join(dir, "*.txt"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	data, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+	assert.Equal(t, long, string(data))
+	assert.Contains(t, out.Text, "full output: "+files[0])
+
+	failed := errors.New("failed")
+	tl = NewMCP(MCPTool{Server: "s", Tool: "t", Outputs: outputs}, func(context.Context, json.RawMessage) (string, error) { return long, failed })
+	_, err = tl.Run(t.Context(), nil, allowTarget)
+	require.ErrorIs(t, err, failed)
+	assert.Contains(t, err.Error(), "full output: ")
+}
+
+func TestMCPSavesIntoTheSessionItWasCalledIn(t *testing.T) {
+	outputs, dir := newSavedOutputs(t)
+	long := strings.Repeat("x", 3*maxOutputPart)
+	tl := NewMCP(MCPTool{Server: "s", Tool: "t", Outputs: outputs}, func(context.Context, json.RawMessage) (string, error) {
+		require.NoError(t, outputs.Select("s2"))
+		return long, nil
+	})
+
+	_, err := tl.Run(t.Context(), nil, allowTarget)
+
+	require.NoError(t, err)
+	files, err := filepath.Glob(filepath.Join(dir, "*.txt"))
+	require.NoError(t, err)
+	assert.Len(t, files, 1)
+	assert.NoDirExists(t, filepath.Join(filepath.Dir(dir), "s2"))
 }

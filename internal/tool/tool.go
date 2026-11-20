@@ -74,6 +74,9 @@ type Display struct {
 	// Failure is the line under a call that ran and failed and the body an
 	// opened row shows.
 	Failure func(output string) (summary, body string)
+	// Command is the command a call runs when Title does not show all of it,
+	// "" when it does.
+	Command func(args json.RawMessage) string
 	// Solo reports that the row records a human decision: it never joins a group.
 	Solo bool
 	// Preview is what an approval prompt shows of the change a call would make.

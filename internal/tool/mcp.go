@@ -56,6 +56,8 @@ type MCPTool struct {
 	// Parameters is the JSON schema object for the arguments.
 	Parameters map[string]any
 	ReadOnly   bool
+	// Outputs saves a result too long to return whole; nil saves nothing.
+	Outputs *Outputs
 }
 
 // NewMCP returns t as a tool whose calls go to call. The caller checks the
@@ -92,8 +94,11 @@ func NewMCP(t MCPTool, call func(ctx context.Context, args json.RawMessage) (str
 			if _, err := admit(policy.Target{}); err != nil {
 				return Result{}, err
 			}
+			// Taken before the call, so a call that outlives its session still
+			// saves into that session's folder.
+			out := t.Outputs.buffer()
+			defer out.close()
 			text, err := call(ctx, args)
-			out := &outputBuffer{}
 			if err != nil {
 				_, _ = out.Write([]byte(err.Error()))
 				if text != "" {

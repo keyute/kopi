@@ -30,7 +30,7 @@ func (p *Plans) Select(sessionID string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.name = ""
-	if sessionID == "" || !filepath.IsLocal(sessionID) || filepath.Base(sessionID) != sessionID || strings.HasPrefix(sessionID, ".") {
+	if !plainName(sessionID) {
 		return fmt.Errorf("session id %q is not usable in a plan file name", sessionID)
 	}
 	if err := os.MkdirAll(p.dir, 0o700); err != nil {
@@ -38,6 +38,11 @@ func (p *Plans) Select(sessionID string) error {
 	}
 	p.name = sessionID + ".md"
 	return nil
+}
+
+// plainName reports whether id is one plain, non-hidden file name.
+func plainName(id string) bool {
+	return id != "" && filepath.IsLocal(id) && filepath.Base(id) == id && !strings.HasPrefix(id, ".")
 }
 
 // Path is the absolute plan file path, or "" when none is selected. It reads
@@ -110,11 +115,19 @@ func (p *Plans) prepare(abs, path string) (*writeDestination, bool, error) {
 	return dest, true, nil
 }
 
-// destination pins the plans directory, which must be a real directory and not
-// a symlink, with the same check, open and verify as prepareWrite. plan is the
-// canonical plan file path, whose leaf is the one pinned.
+// destination pins the plans directory with pinDir. plan is the canonical plan
+// file path, whose leaf is the one pinned.
 func (p *Plans) destination(path, plan string) (*writeDestination, error) {
-	dir := p.dir
+	root, err := pinDir(p.dir, path)
+	if err != nil {
+		return nil, err
+	}
+	return &writeDestination{parent: root, rel: ".", path: path, leaf: filepath.Base(plan), plan: true}, nil
+}
+
+// pinDir opens dir, which must be a real directory and not a symlink, with the
+// same check, open and verify as prepareWrite.
+func pinDir(dir, path string) (*os.Root, error) {
 	before, err := os.Lstat(dir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open %s: %w", path, err)
@@ -131,5 +144,5 @@ func (p *Plans) destination(path, plan string) (*writeDestination, error) {
 		root.Close()
 		return nil, fmt.Errorf("%w: %s", ErrTargetChanged, path)
 	}
-	return &writeDestination{parent: root, rel: ".", path: path, leaf: filepath.Base(plan), plan: true}, nil
+	return root, nil
 }

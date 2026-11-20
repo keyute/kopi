@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -475,4 +476,37 @@ func TestTasksStopRetainsSelectedRunAcrossRestart(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, TaskRunning, info.Status)
 	a.End(TaskCompleted, "", "replacement")
+}
+
+func TestTasksReportTheSavedOutputFile(t *testing.T) {
+	outputs, dir := newSavedOutputs(t)
+	m, events := newTasks(t)
+
+	_, err := m.Start(t.Context(), NewShell(t.TempDir(), nil).WithOutputs(outputs), "seq 1 20000")
+	require.NoError(t, err)
+	assert.Equal(t, TaskRunning, nextEvent(t, events).Status)
+	end := nextEvent(t, events)
+
+	files, err := filepath.Glob(filepath.Join(dir, "*.txt"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	assert.Equal(t, files[0], end.OutputFile)
+	got, err := m.Output("t1")
+	require.NoError(t, err)
+	assert.Equal(t, files[0], got.OutputFile)
+}
+
+func TestTasksWithoutSavedOutputHaveNoOutputFile(t *testing.T) {
+	outputs, _ := newSavedOutputs(t)
+	m, events := newTasks(t)
+
+	_, err := m.Start(t.Context(), NewShell(t.TempDir(), nil).WithOutputs(outputs), "echo hi")
+	require.NoError(t, err)
+	nextEvent(t, events)
+
+	assert.Empty(t, nextEvent(t, events).OutputFile)
+	a := startAgent(m, "look")
+	got, err := m.Output(a.ID())
+	require.NoError(t, err)
+	assert.Empty(t, got.OutputFile)
 }

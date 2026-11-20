@@ -306,7 +306,7 @@ func TestBashDisplayPreview(t *testing.T) {
 	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), nil), NewTasks(), true)
 	oneLine := json.RawMessage(`{"command":"ls"}`)
 	twoLines := json.RawMessage(`{"command":"cd a\nls\n"}`)
-	long, err := json.Marshal(map[string]string{"command": strings.Repeat("echo\n", maxPreviewLines+5)})
+	long, err := json.Marshal(map[string]string{"command": strings.Repeat("echo\n", 15)})
 	require.NoError(t, err)
 	wideCommand := strings.Repeat("x", maxBashTitleRunes+1)
 	wide, err := json.Marshal(map[string]string{"command": wideCommand})
@@ -521,4 +521,37 @@ func TestBashFailureOfRealCommands(t *testing.T) {
 			assert.Equal(t, tc.body, body)
 		})
 	}
+}
+
+func TestBashUnsandboxedShellInheritsOutputs(t *testing.T) {
+	outputs, dir := newSavedOutputs(t)
+	sh := NewShell(t.TempDir(), &sandbox.Sandbox{}).WithOutputs(outputs)
+	tool := NewBash(sh, NewShell(t.TempDir(), nil), NewTasks(), true)
+	execute := func(policy.Target) (policy.Mode, error) { return policy.Execute, nil }
+
+	out, err := tool.Run(t.Context(), json.RawMessage(`{"command":"seq 1 20000","unsandboxed":true}`), execute)
+
+	require.NoError(t, err)
+	files, err := filepath.Glob(filepath.Join(dir, "*.txt"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	assert.Contains(t, out.Text, "full output: "+files[0])
+}
+
+func TestBashDisplayCommand(t *testing.T) {
+	tool, _ := newBashTool(t)
+	command := func(c string) string {
+		raw, err := json.Marshal(map[string]string{"command": c})
+		require.NoError(t, err)
+		return tool.Display.Command(raw)
+	}
+	wide := strings.Repeat("x", maxBashTitleRunes+1)
+
+	assert.Empty(t, command("ls"))
+	assert.Empty(t, command("ls\n\n"), "trailing newlines do not cut the title")
+	assert.Equal(t, "cd a\nls", command("cd a\nls\n"))
+	assert.Equal(t, wide, command(wide+"\n"))
+	assert.Empty(t, command(strings.Repeat("x", maxBashTitleRunes)))
+	assert.Empty(t, tool.Display.Command(json.RawMessage(`{"command":`)))
+	assert.Equal(t, "Bash ls", tool.Display.Title(json.RawMessage(`{"command":"ls\n\n"}`)))
 }

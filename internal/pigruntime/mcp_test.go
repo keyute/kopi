@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1043,4 +1044,32 @@ func TestServersInvalidationPreservesNewerClient(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"newer":true}`, out)
 	assert.Equal(t, 2, fake.Connections())
+}
+
+func TestServerToolsSaveALongResult(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "outputs")
+	outputs := tool.NewOutputs(dir)
+	require.NoError(t, outputs.Select("s1"))
+	long := strings.Repeat("x", 100000)
+	fake := &mcpfake.Server{
+		Tools: []map[string]any{echoTool("big")},
+		Reply: func(string, json.RawMessage) map[string]any {
+			return map[string]any{"content": []any{map[string]any{"type": "text", "text": long}}}
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := startServers(ctx, cancel, ServerOptions{Servers: map[string]config.MCPServer{"srv": {Command: "fake"}}, Version: "1.2.3", Outputs: outputs},
+		func(string, config.MCPServer) (mcp.Transport, error) { return fake.Connect(), nil })
+	t.Cleanup(s.Close)
+
+	out, err := call(t, s.Wait(t.Context())[0].Tools[0], `{}`)
+
+	require.NoError(t, err)
+	files, err := filepath.Glob(filepath.Join(dir, "s1", "*.txt"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	data, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+	assert.Equal(t, long, string(data))
+	assert.Contains(t, out, "full output: "+files[0])
 }

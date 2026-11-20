@@ -113,7 +113,7 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 				"type":        "boolean",
 				"description": "Run this command outside the OS sandbox; plan mode refuses such a call.",
 			}
-			open = NewShell(sh.dir, nil)
+			open = NewShell(sh.dir, nil).WithOutputs(sh.outputs)
 			unsandboxedHook = bashUnsandboxed
 		}
 	}
@@ -223,6 +223,7 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 				return output
 			},
 			Failure: bashFailure,
+			Command: bashFullCommand,
 			Preview: bashPreview,
 			Action:  Action{Verb: "Ran", One: "command", Many: "commands"},
 		},
@@ -331,16 +332,26 @@ func titleLine(s string) string {
 // bashTitleLine returns the command's first line cut to maxBashTitleRunes
 // runes, and whether that shows the whole command.
 func bashTitleLine(command string) (line string, whole bool) {
-	first, rest, _ := strings.Cut(command, "\n")
+	first, rest, _ := strings.Cut(strings.TrimRight(command, "\n"), "\n")
 	if cut := cutRunes(first, maxBashTitleRunes); cut != first {
 		return cut, false
 	}
 	return first, rest == ""
 }
 
-func bashPreview(raw json.RawMessage) []PreviewLine {
-	command := bashCommand(raw)
+// bashFullCommand is the command, without trailing newlines, when the title
+// does not show all of it, else "".
+func bashFullCommand(raw json.RawMessage) string {
+	command := strings.TrimRight(bashCommand(raw), "\n")
 	if _, whole := bashTitleLine(command); whole {
+		return ""
+	}
+	return command
+}
+
+func bashPreview(raw json.RawMessage) []PreviewLine {
+	command := bashFullCommand(raw)
+	if command == "" {
 		return nil
 	}
 	return previewLines(Context, command)

@@ -106,12 +106,15 @@ func renderRow(c transcript.Call, f blockFolds, width int, th theme) []line {
 		text := bodyText(c.Body)
 		head, tail, omitted := capBody(text)
 		var h hit
-		if omitted > 0 {
+		if omitted > 0 || c.Command != "" {
 			h = hit{kind: hitOutput, id: c.ID}
 		}
 		out := withHit(h, hang("• ", fg(th.error), c.Title, none, width))
 		if c.Summary != "" {
 			out = append(out, plain(hang("  ↳ ", fg(th.error), c.Summary, fg(th.error), width))...)
+		}
+		if f.expanded[0] {
+			out = append(out, commandLines(c, width, th)...)
 		}
 		switch {
 		case text == "":
@@ -124,15 +127,22 @@ func renderRow(c transcript.Call, f blockFolds, width int, th theme) []line {
 		}
 		return out
 	case transcript.Denied, transcript.Rejected:
-		out := plain(hang("• ", fg(th.warning), c.Title, none, width))
+		out := withHit(commandHit(c), hang("• ", fg(th.warning), c.Title, none, width))
 		out = append(out, plain(hang("  ↳ ", fg(th.dim), c.Summary, fg(th.dim), width))...)
+		if f.expanded[0] {
+			out = append(out, commandLines(c, width, th)...)
+		}
 		if text := bodyText(c.Body); c.State == transcript.Rejected && text != "" {
 			out = append(out, mutedBody(text, width, th)...)
 		}
 		return out
 	case transcript.Unfinished:
-		out := hang("• ", fg(th.warning), c.Title, none, width)
-		return plain(append(out, hang("  ↳ ", fg(th.dim), "interrupted", fg(th.dim), width)...))
+		out := withHit(commandHit(c), hang("• ", fg(th.warning), c.Title, none, width))
+		out = append(out, plain(hang("  ↳ ", fg(th.dim), "interrupted", fg(th.dim), width))...)
+		if f.expanded[0] {
+			out = append(out, commandLines(c, width, th)...)
+		}
+		return out
 	}
 	return plain(hang("• ", fg(th.muted), c.Title, none, width))
 }
@@ -166,24 +176,43 @@ func renderGroup(g transcript.Group, f blockFolds, width int, th theme) []line {
 // opens to nothing has nothing to toggle.
 func openHit(c transcript.Call) hit {
 	if len(c.Preview) == 0 && bodyText(c.Body) == "" {
+		return commandHit(c)
+	}
+	return hit{kind: hitOutput, id: c.ID}
+}
+
+// commandHit makes a refused or interrupted call's line toggle its command; a
+// call with none has nothing to toggle.
+func commandHit(c transcript.Call) hit {
+	if c.Command == "" {
 		return hit{}
 	}
 	return hit{kind: hitOutput, id: c.ID}
 }
 
-// openedLines is what a successful call opens to, four in: a file change's
-// lines, else its body in full.
+// openedLines is what a successful call opens to, four in: its command when
+// the title cut it, then a file change's lines, else its body in full.
 func openedLines(c transcript.Call, width int, th theme) []line {
+	out := commandLines(c, width, th)
 	if len(c.Preview) == 0 {
-		return mutedBody(bodyText(c.Body), width, th)
+		return append(out, mutedBody(bodyText(c.Body), width, th)...)
 	}
-	var out []string
 	for _, l := range c.Preview {
 		for _, s := range previewLine(l, width-4, th) {
-			out = append(out, "    "+s)
+			out = append(out, line{text: "    " + s})
 		}
 	}
-	return plain(out)
+	return out
+}
+
+// commandLines is the whole command after a "$", nil when the title shows it
+// all. It is not passed through bodyText, which would drop what the command
+// itself holds.
+func commandLines(c transcript.Call, width int, th theme) []line {
+	if c.Command == "" {
+		return nil
+	}
+	return plain(hang("    $ ", fg(th.dim), c.Command, lipgloss.NewStyle(), width))
 }
 
 func mutedBody(text string, width int, th theme) []line {

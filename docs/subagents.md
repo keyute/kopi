@@ -55,7 +55,7 @@ Report file paths and line numbers.
 ## What a subagent gets
 
 - Its prompt is Kopi's own text, then the definition's body, then the instruction files (unless `instructions: false`), then what its MCP servers report.
-- Its tools are the session's tools, or the `tools` list, but never `Agent`, `SendMessage`, `AskUserQuestion`, `ExitPlanMode`, `TaskOutput` or `TaskStop`, and it cannot reach the session's [plan file](tools.md#exitplanmode).
+- Its tools are the session's tools, or the `tools` list, but never `Agent`, `SendMessage`, `AskUserQuestion`, `ExitPlanMode`, `TaskOutput` or `TaskStop`, and it cannot reach the session's [plan file](tools.md#exitplanmode). Its `Read` and `Grep` do reach the session's [saved output](tools.md#saved-output), the root's and other subagents' alike, as its `Bash` output is saved there too.
 - Its `Bash` runs in the foreground only, and a command still running at its timeout is stopped.
 
 ## Permissions

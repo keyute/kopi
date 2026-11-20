@@ -57,7 +57,7 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
 
 ## Read
 
-- A command can read everything except Kopi's home and the `sandbox.denyRead` paths.
+- A command can read everything except Kopi's home and the `sandbox.denyRead` paths; it cannot read [saved output](tools.md#saved-output), which the model reads with `Read`.
 - It also cannot write, rename or remove the `sandbox.denyRead` paths.
 
 ## Network

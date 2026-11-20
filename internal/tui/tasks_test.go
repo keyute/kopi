@@ -242,11 +242,11 @@ func TestTasksOpenShowsTheOutputTail(t *testing.T) {
 		press(m, enter)
 
 		rule := strings.Repeat("─", 60)
-		want := []string{rule, "  t1 · running · 1m 2s · sleep 30", "    … 16 earlier lines"}
+		want := []string{rule, "  t1 · running · 1m 2s · sleep 30", "  … 16 earlier lines"}
 		for i := 17; i <= 25; i++ {
 			want = append(want, fmt.Sprintf("    line %d", i))
 		}
-		want = append(want, "", "❭ 1. Stop", "  2. Back", rule)
+		want = append(want, "  "+scrollHint(&m.keys), "", "❭ 1. Stop", "  2. Back", rule)
 		assert.Equal(t, want, dialogRows(t, m))
 		assert.Len(t, screen(m), 30)
 	})
@@ -458,5 +458,118 @@ func TestTasksChangedRefreshesTheOpenTask(t *testing.T) {
 
 		rows := dialogRows(t, m)
 		assert.Equal(t, []string{"  t1 · failed · 1m 2s · sleep 30", "    boom", "", "❭ 1. Back"}, rows[1:5])
+	})
+}
+
+func numberedOutput(n int) string {
+	var lines []string
+	for i := range n {
+		lines = append(lines, fmt.Sprintf("line %d", i+1))
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func TestTasksPageKeysScrollACutOutput(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		c.outputs["t1"] = numberedOutput(25)
+		submitText(m, "/tasks")
+		press(m, enter)
+		hint := "  " + scrollHint(&m.keys)
+
+		press(m, pgUp)
+		rows := dialogRows(t, m)
+		assert.Equal(t, []string{"  … 8 earlier lines", "    line 9"}, rows[2:4])
+		assert.Equal(t, []string{"    line 16", "  … 9 more lines", hint}, rows[10:13])
+
+		press(m, pgDown)
+		rows = dialogRows(t, m)
+		assert.Equal(t, []string{"  … 16 earlier lines", "    line 17"}, rows[2:4])
+		assert.Equal(t, []string{"    line 25", hint}, rows[11:13])
+		assert.False(t, m.tasks.scrolled, "back at the end it follows again")
+	})
+}
+
+func TestTasksFollowTheOutputUntilScrolledUp(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		c.outputs["t1"] = numberedOutput(25)
+		submitText(m, "/tasks")
+		press(m, enter)
+
+		c.outputs["t1"] = numberedOutput(30)
+		send(m, event.TasksChanged{})
+		rows := dialogRows(t, m)
+		assert.Equal(t, "  … 21 earlier lines", rows[2])
+		assert.Equal(t, "    line 30", rows[11])
+
+		press(m, pgUp)
+		c.outputs["t1"] = numberedOutput(40)
+		send(m, event.TasksChanged{})
+		rows = dialogRows(t, m)
+		assert.Equal(t, []string{"  … 13 earlier lines", "    line 14"}, rows[2:4], "scrolled up it stays put")
+		assert.True(t, m.tasks.scrolled)
+	})
+}
+
+func TestTasksWheelScrollsACutOutput(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		c.outputs["t1"] = numberedOutput(25)
+		submitText(m, "/tasks")
+		press(m, enter)
+
+		m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp, X: 10, Y: m.geo.composerTop})
+
+		assert.Equal(t, "  … 13 earlier lines", dialogRows(t, m)[2])
+	})
+}
+
+func TestTasksPageKeysScrollTheTranscriptWhenTheOutputFits(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := tasksModel(t)
+		notices(m, 40)
+		submitText(m, "/tasks")
+		press(m, enter)
+		require.True(t, m.view().follow)
+
+		press(m, pgUp)
+
+		assert.False(t, m.view().follow)
+		assert.NotContains(t, strings.Join(screen(m), "\n"), "to scroll")
+		assert.Contains(t, strings.Join(screen(m), "\n"), "    two")
+	})
+}
+
+func TestTasksKeepTheOffsetAcrossAWidthChange(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		c.outputs["t1"] = numberedOutput(25)
+		submitText(m, "/tasks")
+		press(m, enter)
+		press(m, pgUp)
+		require.True(t, m.tasks.scrolled)
+
+		m.Update(tea.WindowSizeMsg{Width: 20, Height: 30})
+
+		assert.True(t, m.tasks.scrolled)
+		assert.Equal(t, "  … 8 earlier lines", dialogRows(t, m)[2])
+	})
+}
+
+func TestTasksReopenStartsAtTheEnd(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		c.outputs["t1"] = numberedOutput(25)
+		submitText(m, "/tasks")
+		press(m, enter)
+		press(m, pgUp)
+		require.True(t, m.tasks.scrolled)
+
+		press(m, digit('2'))
+		press(m, enter)
+
+		assert.False(t, m.tasks.scrolled)
+		assert.Equal(t, "  … 16 earlier lines", dialogRows(t, m)[2])
 	})
 }

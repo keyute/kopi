@@ -194,6 +194,25 @@ func TestToolEndSwapsTitleOnSuccessOnly(t *testing.T) {
 	assert.Equal(t, Call{ID: "b", Title: "Write a.go", Summary: "failed", Body: "boom\nbang", State: Failed}, row.Call)
 }
 
+func TestToolEndKeepsTheCommandWhateverTheOutcome(t *testing.T) {
+	for kind, end := range map[string]event.ToolEnd{
+		"ok":          {CallID: "a", Summary: "1 line"},
+		"failed":      {CallID: "a", IsError: true, Summary: "failed"},
+		"denied":      {CallID: "a", IsError: true, Kind: event.EndDenied},
+		"rejected":    {CallID: "a", IsError: true, Kind: event.EndRejected},
+		"interrupted": {CallID: "a", Kind: event.EndInterrupted},
+	} {
+		events := []event.Event{event.ToolStart{CallID: "a", Title: "Bash x …", Command: "x\ny"}, end}
+		var live, restored Transcript
+		for _, ev := range events {
+			live.Apply(ev)
+		}
+		restored.Restore(events)
+		assert.Equal(t, "x\ny", live.Blocks()[0].(Row).Call.Command, kind)
+		assert.Equal(t, live.Blocks(), restored.Blocks(), kind)
+	}
+}
+
 func TestToolEndSummaryJoinsOnlyWhatIsSet(t *testing.T) {
 	for _, tc := range []struct{ change, summary, want string }{
 		{"+1", "", "+1"},

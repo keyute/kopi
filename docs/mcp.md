@@ -31,7 +31,7 @@
 - Print mode waits for the servers before it runs.
 - A server that fails or is late is reported and its tools are absent for the run. The fullscreen interface shows the reasons in the transcript, print mode on stderr.
 - Server instructions are added to the system prompt, at most 2 KB each.
-- Results are text, capped like other tool output; images and other content show as placeholders.
+- Results are text, capped like other tool output, with the whole of a longer result [saved to a file](tools.md#saved-output); images and other content show as placeholders.
 
 ## Tool names
 

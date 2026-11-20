@@ -27,6 +27,7 @@ import (
 	"github.com/keyute/kopi/internal/headless"
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
+	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/sandbox"
 	"github.com/keyute/kopi/internal/tool"
 	"github.com/keyute/kopi/internal/trust"
@@ -472,7 +473,7 @@ func TestSubagentFileToolsNeverReachThePlanFile(t *testing.T) {
 		require.NoError(t, err, "root %s", tl.Name)
 		assert.True(t, target.PlanFile, "root %s", tl.Name)
 	}
-	for _, tl := range agentTools(root, ws, nil, nil, true) {
+	for _, tl := range agentTools(root, ws, nil, nil, nil, true) {
 		target, err := tl.Target(args)
 		require.NoError(t, err, "subagent %s", tl.Name)
 		assert.False(t, target.PlanFile, "subagent %s", tl.Name)
@@ -488,7 +489,7 @@ func TestAgentToolsHonourAllowUnsandboxed(t *testing.T) {
 	root := []tool.Tool{tool.NewBash(shell, planShell, nil, true)}
 
 	for _, allow := range []bool{false, true} {
-		got := agentTools(root, ws, shell, planShell, allow)
+		got := agentTools(root, ws, nil, shell, planShell, allow)
 		require.Len(t, got, 1)
 		properties, ok := got[0].Parameters["properties"].(map[string]any)
 		require.True(t, ok)
@@ -3044,4 +3045,56 @@ func TestConfigShowsSkillsPrefix(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Regexp(t, `skills\.prefix\s+= skill\s+\(default\)`, stdout)
+}
+
+func TestSubagentReadAndGrepReachSavedOutputOnly(t *testing.T) {
+	e := newTestEnv(t)
+	ws, err := tool.NewWorkspace(e.workspace, []string{e.kopiHome})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
+	outputs := tool.NewOutputs(filepath.Join(e.kopiHome, "outputs"))
+	require.NoError(t, outputs.Select("session"))
+	saved := filepath.Join(e.kopiHome, "outputs", "session", "a.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(saved), 0o700))
+	require.NoError(t, os.WriteFile(saved, []byte("saved text\n"), 0o600))
+	// The root builds its Grep with the outputs; subagents get the same tool.
+	root := []tool.Tool{tool.NewRead(ws), tool.NewGrep(ws.WithOutputs(outputs), nil), tool.NewWrite(ws), tool.NewEdit(ws)}
+	argsFor := map[string]map[string]any{
+		"Read":  {"file_path": saved},
+		"Grep":  {"pattern": "saved", "path": saved},
+		"Write": {"file_path": saved, "content": "x"},
+		"Edit":  {"file_path": saved, "old_string": "saved", "new_string": "x"},
+	}
+
+	for _, tl := range agentTools(root, ws, outputs, nil, nil, true) {
+		raw, err := json.Marshal(argsFor[tl.Name])
+		require.NoError(t, err)
+		_, err = tl.Run(t.Context(), raw, func(policy.Target) (policy.Mode, error) { return policy.Execute, nil })
+		if tl.Name == "Read" || tl.Name == "Grep" {
+			assert.NoError(t, err, tl.Name)
+		} else {
+			assert.Error(t, err, tl.Name)
+		}
+	}
+	data, err := os.ReadFile(saved)
+	require.NoError(t, err)
+	assert.Equal(t, "saved text\n", string(data))
+}
+
+func TestRootPrunesOldSavedOutputAtStart(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+	old := filepath.Join(e.kopiHome, "outputs", "old", "a.txt")
+	fresh := filepath.Join(e.kopiHome, "outputs", "new", "b.txt")
+	e.writeFile(t, old, "x")
+	e.writeFile(t, fresh, "x")
+	aged := time.Now().Add(-8 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(old, aged, aged))
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	assert.NoDirExists(t, filepath.Dir(old))
+	assert.FileExists(t, fresh)
 }

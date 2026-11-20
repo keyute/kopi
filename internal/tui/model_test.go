@@ -1482,7 +1482,8 @@ func TestApprovalWithLongPreviewFitsTheTerminal(t *testing.T) {
 	s := screen(m)
 	assert.Len(t, s, 20)
 	assert.Equal(t, []string{"❭ 1. Yes", "  2. Yes, allow all edits this session", "  3. No (esc)  What should change?", strings.Repeat("─", 40)}, s[len(s)-5:len(s)-1])
-	assert.Contains(t, s, "    … 47 more lines")
+	assert.Contains(t, s, "  … 47 more lines")
+	assert.Contains(t, s, "  "+scrollHint(&m.keys))
 	assert.Contains(t, s, "  Edit a.go")
 }
 

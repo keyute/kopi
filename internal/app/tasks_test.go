@@ -1064,3 +1064,13 @@ func TestStatusCountsAgentsSeparately(t *testing.T) {
 	assert.Equal(t, 2, s.Agents)
 	assert.Equal(t, 1, s.Shells)
 }
+
+func TestTaskNoticeNamesTheSavedOutput(t *testing.T) {
+	info := endedTask("t1")
+	head := "Background task t1 completed (exit code 0): make t1"
+
+	assert.Equal(t, endText("t1"), notice(info, head).Text)
+
+	info.OutputFile = "/kopi/outputs/s1/a.txt"
+	assert.Equal(t, endText("t1")+"\n[Output saved to /kopi/outputs/s1/a.txt]", notice(info, head).Text)
+}

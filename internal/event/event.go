@@ -34,10 +34,12 @@ type ThinkingDelta struct{ Text string }
 // and Done names it once it succeeded, "" when Title serves. Change is the
 // line a file change shows under the row and Preview its removed and added
 // lines. Solo marks a row that records a human decision, and Unsandboxed a
-// call that opts out of the OS sandbox.
+// call that opts out of the OS sandbox. Command is the command when Title does
+// not show all of it.
 type ToolStart struct {
 	CallID, Name, Args string
 	Title, Done        string
+	Command            string
 	Action             tool.Action
 	Change             string
 	Preview            []tool.PreviewLine

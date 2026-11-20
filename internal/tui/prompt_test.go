@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"testing/synctest"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -208,4 +210,70 @@ func TestPlanAndLoginRequestsCloseTheTasksDialog(t *testing.T) {
 			assert.Equal(t, pc.kind, m.front())
 		})
 	}
+}
+
+func longApproval(n int) event.ApprovalRequested {
+	ev := editApproval()
+	for i := range n {
+		ev.Preview = append(ev.Preview, tool.PreviewLine{Kind: tool.Added, Text: fmt.Sprintf("line %d", i)})
+	}
+	return ev
+}
+
+var pgUp = tea.KeyPressMsg{Code: tea.KeyPgUp}
+
+func TestPageKeysScrollACutApprovalNotTheTranscript(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	notices(m, 30)
+	send(m, longApproval(50))
+	top := m.top()
+	require.True(t, m.approvalPreview.cut())
+
+	press(m, pgDown)
+	assert.Contains(t, strings.Join(screen(m), "\n"), "earlier lines")
+	assert.Equal(t, top, m.top())
+
+	press(m, pgUp)
+	assert.NotContains(t, strings.Join(screen(m), "\n"), "earlier lines")
+	assert.Equal(t, top, m.top())
+}
+
+func TestPageKeysScrollACutApprovalFromTheNoRowAndKeepTheDraft(t *testing.T) {
+	m, c := newTestModel(t, 40, 20)
+	send(m, longApproval(50))
+	m.approvalDialog.move(2)
+	m.approvalDialog.paste("one\ntwo\nthree")
+
+	press(m, pgDown)
+
+	assert.Equal(t, "one\ntwo\nthree", m.approvalDialog.text())
+	assert.Positive(t, m.approvalPreview.off)
+	assert.Empty(t, c.answers)
+}
+
+func TestPageKeysScrollTheTranscriptWhenTheApprovalPreviewFits(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	notices(m, 30)
+	send(m, editApproval())
+	require.False(t, m.approvalPreview.cut())
+	require.True(t, m.view().follow)
+
+	press(m, pgUp)
+	assert.False(t, m.view().follow)
+	assert.Zero(t, m.approvalPreview.off)
+	press(m, pgDown)
+	assert.True(t, m.view().follow)
+}
+
+func TestTheNextApprovalStartsAtTheTopOfItsPreview(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	send(m, longApproval(50))
+	press(m, pgDown)
+	require.Positive(t, m.approvalPreview.off)
+
+	ev := longApproval(50)
+	ev.Token = 2
+	send(m, ev)
+	send(m, event.ApprovalEnded{Token: 1})
+	assert.Zero(t, m.approvalPreview.off)
 }

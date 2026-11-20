@@ -42,6 +42,9 @@ func (d *display) apply(ev event.Event) event.Event {
 		if t.Display.Change != nil {
 			e.Change, e.Preview = t.Display.Change(args)
 		}
+		if t.Display.Command != nil {
+			e.Command = t.Display.Command(args)
+		}
 		e.Solo = t.Display.Solo
 		e.Unsandboxed = t.Unsandboxed != nil && t.Unsandboxed(args)
 		return e

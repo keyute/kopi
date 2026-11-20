@@ -107,7 +107,7 @@ func TestWriteDisplayChange(t *testing.T) {
 	assert.Equal(t, "+14", summary)
 	require.Len(t, lines, 14)
 	assert.Equal(t, PreviewLine{Kind: Added, Text: "line 13"}, lines[12])
-	assert.Equal(t, strings.Repeat("é", maxLineChars), lines[13].Text)
+	assert.Equal(t, strings.Repeat("é", maxLineChars)+lineCutMarker, lines[13].Text)
 
 	summary, lines = tool.Display.Change(json.RawMessage(`{"file_path":"a.txt","content":""}`))
 	assert.Equal(t, "+0", summary)
@@ -128,12 +128,11 @@ func TestWriteDisplayPreview(t *testing.T) {
 	args, err := json.Marshal(map[string]string{"file_path": "a.txt", "content": numberedLines(13)})
 	require.NoError(t, err)
 	preview := tool.Display.Preview(args)
-	require.Len(t, preview, 12)
+	require.Len(t, preview, 14)
 	assert.Equal(t, PreviewLine{Kind: Context, Text: "13 lines"}, preview[0])
-	for i, l := range preview[1:11] {
+	for i, l := range preview[1:] {
 		assert.Equal(t, PreviewLine{Kind: Added, Text: fmt.Sprintf("line %d", i+1)}, l)
 	}
-	assert.Equal(t, PreviewLine{Kind: Context, Text: "… 3 more lines"}, preview[11])
 }
 
 func TestWriteTarget(t *testing.T) {
@@ -220,20 +219,9 @@ func TestPreviewLineBoundaries(t *testing.T) {
 			assert.Equal(t, len(lines), countLines(text))
 			for _, kind := range []PreviewKind{Added, Removed} {
 				preview := previewLines(kind, text)
-				wantLen := min(len(lines), 10)
-				if len(lines) > 10 {
-					wantLen++
-				}
-				require.Len(t, preview, wantLen)
-				for i := range min(len(lines), 10) {
+				require.Len(t, preview, len(lines))
+				for i := range lines {
 					assert.Equal(t, PreviewLine{Kind: kind, Text: lines[i]}, preview[i])
-				}
-				if len(lines) > 10 {
-					want := fmt.Sprintf("… %d more lines", len(lines)-10)
-					if len(lines) == 11 {
-						want = "… 1 more line"
-					}
-					assert.Equal(t, PreviewLine{Kind: Context, Text: want}, preview[len(preview)-1])
 				}
 			}
 			writeRaw, err := json.Marshal(map[string]string{"content": text})
