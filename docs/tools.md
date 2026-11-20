@@ -35,7 +35,7 @@
 - A `path` inside `.git` or inside an ignored directory is searched.
 - None of `Glob`, `Grep` and `LS` follows a symlink it finds while searching or listing (`LS` lists them, except one whose destination cannot be resolved). A `path` that is itself a symlink is resolved, as for `Read`.
 - `Write` creates a file or replaces its whole content.
-- A file tool's row shows its path relative to the start directory, `plan` for the session's [plan file](#exitplanmode), and the path as written outside the start directory. `Read` adds the lines it was asked for (`Read a.go:40-89`), `Write` its line count (`+40`) and `Edit` the lines removed and added (`+3 -1`, with ` · 2 occurrences` when `replace_all` replaced several). See [Transcript](usage.md#transcript).
+- A file tool's row shows its path relative to the start directory, `plan` for the session's [plan file](#exitplanmode), and the path as written outside the start directory. `Read` adds the lines it was asked for (`Read a.go:40-89`), `Write` its line count (`+40`) and `Edit` the lines removed and added (`+3 -1`, with `· 2 occurrences` when `replace_all` replaced several). See [Transcript](usage.md#transcript).
 - `Edit` replaces a string that must match exactly once unless `replace_all` is set, in a text file of up to 10 MiB.
 - `Write` and `Edit` work inside the start directory, replace the file atomically and keep its mode.
 - `Read`, `Write` and `Edit` refuse Kopi's home, including paths there that do not exist yet, except the session's [plan file](#exitplanmode).
@@ -50,7 +50,7 @@
 - On interrupt a foreground command's whole process group is killed (on Windows, only the shell).
 - Returns stdout and stderr combined, keeping the first and last 15,000 bytes.
 - A non-zero exit is an error reporting the exit code; its row reads `↳ exit code 1 · 84 lines`, with the output under it.
-- Its row reads `Ran <command>` once it succeeded, `Started <command> in background` for `run_in_background`, and ends ` · unsandboxed` when the call set `unsandboxed`.
+- Its row reads `Ran <command>` once it succeeded, `Started <command> in background` for `run_in_background`, and ends `· unsandboxed` when the call set `unsandboxed`.
 - Runs in the [sandbox](sandbox.md), unless the call sets `unsandboxed` (offered only when sandboxed and `sandbox.allowUnsandboxed` is true), which asks like `Bash` without the sandbox, see [outside the sandbox](sandbox.md#outside-the-sandbox). With `sandbox.allowDomains` the output ends with the hosts the proxy refused, see [network](sandbox.md#network).
 
 ## Background tasks

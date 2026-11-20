@@ -872,6 +872,9 @@ func TestCancelledTurnMarksAbortedCallInterrupted(t *testing.T) {
 	go func() {
 		<-hooked
 		cancel()
+		// Send forwards the cancel to PiG on its own goroutine (context.AfterFunc);
+		// release the hook only once PiG's run context is cancelled.
+		<-sess.inner.Agent().Signal().Done()
 		close(cancelled)
 	}()
 

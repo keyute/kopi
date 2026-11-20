@@ -72,7 +72,7 @@ Defaults; change them with [`keys`](configuration.md#keys).
 
 Each tool call is a row. It names the call by the tool while it runs, while it waits for approval and when it did not succeed, and by a past-tense verb once it succeeded. A path shows relative to the start directory, and the session's plan file as `plan`.
 
-```
+```text
 • Ran go test ./...
   ↳ 84 lines
 • Edited internal/app/app.go
@@ -82,7 +82,7 @@ Each tool call is a row. It names the call by the tool while it runs, while it w
 ```
 
 - A run of successful calls folds into a group, `Read 3 files, ran 2 commands`; click it or press Ctrl+O to list its calls. A call that did not succeed, and the question and plan-approval rows below, are never in a group.
-- A group counts the commands that ran outside the [sandbox](sandbox.md#outside-the-sandbox): `ran 9 commands (1 unsandboxed)`. A succeeded command's own row ends ` · unsandboxed`.
+- A group counts the commands that ran outside the [sandbox](sandbox.md#outside-the-sandbox): `ran 9 commands (1 unsandboxed)`. A succeeded command's own row ends `· unsandboxed`.
 - A question you answered (`Asked about …`) and a plan decision (`Plan approval`) stay visible, with your answer or decision on the line under them.
 
 A call that did not succeed is one of:
