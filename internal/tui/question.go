@@ -41,10 +41,9 @@ type questionDialog struct {
 	// notice is a warning row, cleared by the next key.
 	notice string
 	// scroll is the offset into a cut preview or review body, reset when the
-	// tab or the focused option changes; scrollAt is what it was last reset
-	// for and visible the rows of content the last render gave a cut body.
-	scroll, visible int
-	scrollAt        [2]int
+	// tab or the focused option changes; scrollAt is what it was last reset for.
+	scroll   scroller
+	scrollAt [2]int
 	// previews are rendered previews by tab and option, for previewWidth and
 	// previewTheme.
 	previews     map[[2]int][]string
@@ -183,7 +182,7 @@ func binding(b key.Binding, verb string) string {
 	return ""
 }
 
-// hint is the key hints row; cut adds scrolling, which the note editor lacks.
+// hint is the key hints row; cut adds the scroll hint, which the note editor's row omits.
 func (q *questionDialog) hint(cut bool) string {
 	km := q.km
 	var parts []string
@@ -267,7 +266,7 @@ func (q *questionDialog) rows(width, maxPreview, maxRows int, th theme) []string
 	}
 	d := q.current()
 	if at := [2]int{q.tab, d.sel}; at != q.scrollAt {
-		q.scroll, q.scrollAt = 0, at
+		q.scroll.off, q.scrollAt = 0, at
 	}
 	strip := q.strip(width, th)
 	head, avail := 1, maxRows
@@ -302,47 +301,6 @@ func (q *questionDialog) rows(width, maxPreview, maxRows int, th theme) []string
 	room := maxRows - head - 1
 	start := max(head, min(d.optionStarts[d.sel], len(rows)-1-room))
 	return clip(d, rows, head, start, start+room)
-}
-
-// window is lines within room rows from the scroll offset; the last row
-// counts the lines left out below and, once scrolled, the first those above.
-func (q *questionDialog) window(lines []string, room int, th theme) []string {
-	if room < 1 {
-		q.visible = 0
-		return nil
-	}
-	if len(lines) <= room {
-		q.scroll, q.visible = 0, len(lines)
-		return lines
-	}
-	q.visible = max(1, room-2)
-	q.scroll = min(max(0, q.scroll), max(0, len(lines)-(room-1)))
-	s := q.scroll
-	content := room
-	if s > 0 {
-		content--
-	}
-	more := s+content < len(lines)
-	if more {
-		content--
-	}
-	content = max(0, content)
-	var rows []string
-	if s > 0 {
-		rows = append(rows, fg(th.dim).Render(elided(s, "earlier")))
-	}
-	rows = append(rows, lines[s:s+content]...)
-	if s+content < len(lines) {
-		rows = append(rows, fg(th.dim).Render(elided(len(lines)-s-content, "more")))
-	}
-	return rows[:min(len(rows), room)]
-}
-
-func elided(n int, what string) string {
-	if n == 1 {
-		return "… 1 " + what + " line"
-	}
-	return fmt.Sprintf("… %d %s lines", n, what)
 }
 
 // pageRows is the shown question's page within avail rows, without the strip:
@@ -453,7 +411,7 @@ func (q *questionDialog) previewBox(lines []string, bw, room, indent int, th the
 	frame, pad := fg(th.frame), strings.Repeat(" ", indent)
 	bar := strings.Repeat("─", inner)
 	out := []string{pad + frame.Render("┌"+bar+"┐")}
-	for _, l := range q.window(lines, room, th) {
+	for _, l := range q.scroll.window(lines, room, th) {
 		l = ansi.Truncate(l, text, "")
 		out = append(out, pad+frame.Render("│")+" "+l+strings.Repeat(" ", text-ansi.StringWidth(l)+1)+frame.Render("│"))
 	}
@@ -565,7 +523,7 @@ func (q *questionDialog) reviewRows(width, maxPreview, avail int, th theme) []st
 		room = min(maxPreview, avail-3-len(foot))
 	}
 	rows := []string{fg(th.frame).Render(strings.Repeat("─", width))}
-	for _, r := range q.window(body, room, th) {
+	for _, r := range q.scroll.window(body, room, th) {
 		rows = append(rows, "  "+r)
 	}
 	d.optionStarts = []int{1, len(rows)}
@@ -636,10 +594,6 @@ func (m *model) reviewKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.c.AnswerQuestion(q.token, q.answers())
 	case plainKey(msg, tea.KeyLeft):
 		return q.goTo(len(q.qs) - 1)
-	case key.Matches(msg, km.pageUp):
-		q.scroll -= q.visible
-	case key.Matches(msg, km.pageDown):
-		q.scroll += q.visible
 	}
 	return nil
 }
@@ -714,10 +668,6 @@ func (m *model) pageKey(msg tea.KeyPressMsg) tea.Cmd {
 		return q.goTo(q.tab - 1)
 	case several && plainKey(msg, tea.KeyRight):
 		return q.goTo(q.tab + 1)
-	case key.Matches(msg, km.pageUp):
-		q.scroll -= q.visible
-	case key.Matches(msg, km.pageDown):
-		q.scroll += q.visible
 	default:
 		_, cmd := d.key(msg, km)
 		return cmd

@@ -1488,7 +1488,8 @@ func TestApprovalWithLongPreviewFitsTheTerminal(t *testing.T) {
 	s := screen(m)
 	assert.Len(t, s, 20)
 	assert.Equal(t, []string{"❭ 1. Yes", "  2. Yes, allow all edits this session", "  3. No (esc)  What should change?", strings.Repeat("─", 40)}, s[len(s)-5:len(s)-1])
-	assert.Contains(t, s, "    … 47 more lines")
+	assert.Contains(t, s, "  … 47 more lines")
+	assert.Contains(t, s, "  "+scrollHint(&m.keys))
 	assert.Contains(t, s, "  Edit a.go")
 }
 
@@ -1575,4 +1576,16 @@ func TestChangesEventRendersInStatusLine(t *testing.T) {
 	send(m, event.Changes{})
 	assert.NotContains(t, statusText(m), "+12")
 	assert.Empty(t, body(m), "footer counts are not transcript events")
+}
+
+func TestPageKeyDropsAgentFocusAndScrollsTheTranscript(t *testing.T) {
+	m, _ := focused(t, explorer("t1"))
+	notices(m, 40)
+	require.True(t, m.focus.on)
+	require.True(t, m.view().follow)
+
+	press(m, pgUp)
+
+	assert.False(t, m.focus.on)
+	assert.False(t, m.view().follow)
 }

@@ -32,6 +32,7 @@ type ServerOptions struct {
 	Servers map[string]config.MCPServer // as configured; not yet validated or expanded
 	CWD     string                      // working directory for stdio servers
 	Version string                      // Kopi's version, reported to servers as the client version
+	Outputs *tool.Outputs               // saves a result too long to return whole; nil saves nothing
 }
 
 type ServerStatus struct {
@@ -63,6 +64,7 @@ type server struct {
 	rawURL  string // as configured, before expansion
 	cfg     config.MCPServer
 	version string
+	outputs *tool.Outputs
 	dial    dialFunc
 	life    context.Context // ends at close; bounds a reconnect
 	stop    context.CancelFunc
@@ -88,7 +90,7 @@ func startServers(ctx context.Context, cancel context.CancelFunc, o ServerOption
 	prefixes := map[string]string{}
 	for _, name := range slices.Sorted(maps.Keys(o.Servers)) {
 		life, stop := context.WithCancel(context.Background())
-		srv := &server{name: name, version: o.Version, dial: dial, life: life, stop: stop, done: make(chan struct{}), closeDone: make(chan struct{}), status: ServerStatus{Name: name}}
+		srv := &server{name: name, version: o.Version, outputs: o.Outputs, dial: dial, life: life, stop: stop, done: make(chan struct{}), closeDone: make(chan struct{}), status: ServerStatus{Name: name}}
 		s.servers = append(s.servers, srv)
 		if err := tool.ValidateMCPServerName(name); err != nil {
 			srv.fail(fmt.Errorf("failed to name tools: %w", err))
@@ -311,6 +313,7 @@ func (s *server) tools(listed []mcp.Tool) ([]tool.Tool, []string) {
 			Description: mt.Description,
 			Parameters:  parameters(mt.InputSchema),
 			ReadOnly:    mt.Annotations != nil && mt.Annotations.ReadOnlyHint != nil && *mt.Annotations.ReadOnlyHint,
+			Outputs:     s.outputs,
 		}, s.call(mt.Name)))
 	}
 	slices.SortFunc(tools, func(a, b tool.Tool) int { return strings.Compare(a.Name, b.Name) })

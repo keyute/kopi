@@ -116,6 +116,9 @@ func edit(ctx context.Context, ws *Workspace, args editArgs, admit func(policy.T
 		return Result{}, err
 	}
 	defer func() { dest.parent.Close() }()
+	if dest.output {
+		return Result{}, fmt.Errorf("%w: %s", ErrProtected, args.FilePath)
+	}
 	f, err := dest.open()
 	if err != nil {
 		return Result{}, err

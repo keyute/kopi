@@ -35,11 +35,11 @@
 - A `path` inside `.git` or inside an ignored directory is searched.
 - None of `Glob`, `Grep` and `LS` follows a symlink it finds while searching or listing (`LS` lists them, except one whose destination cannot be resolved). A `path` that is itself a symlink is resolved, as for `Read`.
 - `Write` creates a file or replaces its whole content.
-- A file tool's row shows its path relative to the start directory, `plan` for the session's [plan file](#exitplanmode), and the path as written outside the start directory. `Read` adds the lines it was asked for (`Read a.go:40-89`), `Write` its line count (`+40`) and `Edit` the lines removed and added (`+3 -1`, with `· 2 occurrences` when `replace_all` replaced several). See [Transcript](usage.md#transcript).
+- A file tool's row shows its path relative to the start directory, `plan` for the session's [plan file](#exitplanmode), `output <name>` for a [saved output file](#saved-output), and the path as written outside the start directory. `Read` adds the lines it was asked for (`Read a.go:40-89`), `Write` its line count (`+40`) and `Edit` the lines removed and added (`+3 -1`, with `· 2 occurrences` when `replace_all` replaced several). See [Transcript](usage.md#transcript).
 - `Edit` replaces a string that must match exactly once unless `replace_all` is set, in a text file of up to 10 MiB.
 - `Write` and `Edit` work inside the start directory, replace the file atomically and keep its mode.
-- `Read`, `Write` and `Edit` refuse Kopi's home, including paths there that do not exist yet, except the session's [plan file](#exitplanmode).
-- `Glob`, `Grep` and `LS` refuse a path there and leave Kopi's home out of what they search or list.
+- `Read`, `Write` and `Edit` refuse Kopi's home, including paths there that do not exist yet, except the session's [plan file](#exitplanmode); `Read` also reaches the session's [saved output](#saved-output).
+- `Glob`, `Grep` and `LS` refuse a path there and leave Kopi's home out of what they search or list; `Grep` also searches one saved output file when `path` names it.
 
 ## Bash
 
@@ -48,16 +48,26 @@
 - `timeout` is in milliseconds, default 120000, at most 600000.
 - A command still running at its timeout keeps running as a [background task](#background-tasks), as does one started with `run_in_background` or moved with the `background` key. The result names the task, and the row reads `↳ task t1` for a command started in the background and `↳ moved to background · task t1` for one moved there.
 - On interrupt a foreground command's whole process group is killed (on Windows, only the shell).
-- Returns stdout and stderr combined, keeping the first and last 15,000 bytes.
+- The row's title is the command's first line, at most 80 characters, ending ` …` when the command is longer or has more lines.
+- Returns stdout and stderr combined, keeping the first and last 15,000 bytes; when more was printed, the rest is [saved to a file](#saved-output).
 - A non-zero exit is an error reporting the exit code; its row reads `↳ exit code 1 · 84 lines`, with the output under it.
 - Its row reads `Ran <command>` once it succeeded, `Started <command> in background` for `run_in_background`, and ends `· unsandboxed` when the call set `unsandboxed`.
 - Runs in the [sandbox](sandbox.md), unless the call sets `unsandboxed` (offered only when sandboxed and `sandbox.allowUnsandboxed` is true), which asks like `Bash` without the sandbox, see [outside the sandbox](sandbox.md#outside-the-sandbox). With `sandbox.allowDomains` the output ends with the hosts the proxy refused, see [network](sandbox.md#network).
+
+## Saved output
+
+- `Bash`, background commands and MCP tool results keep the first and last 15,000 bytes. When the output is longer, the whole of it is also written to `outputs/<session id>/<random name>.txt` in Kopi's home, and the cut notice names the file and the line to continue from: `[… 70000 bytes cut; full output: /home/me/.kopi/outputs/<session id>/<name>.txt; use Read with offset=140 to continue …]`.
+- The file is created at the first write that would cut the output, so output that fits is never saved. It is mode `0600` in a `0700` folder, and holds at most 64 MiB; past that the notice reads `first <n> bytes of output` in place of `full output`, and the end of the output is only in the result. If the file cannot be created the notice is the plain `[… 70000 bytes cut …]`.
+- `Read` reaches the file with `offset` and `limit`, and `Grep` searches it when `path` names it. Only the session's own files are reachable, one at a time, and read only: `Write` and `Edit` refuse them, and so does everything else in Kopi's home, including the `outputs/` folder itself. The root session, its [subagents](subagents.md) and [workflow agents](workflows.md#workflow-agents) share one folder, and its files show as `output <name>` in a row.
+- A resumed session keeps its folder; a new session gets a new one. Kopi removes files older than a week, and the folders left empty, when it starts, so a resumed session older than that names a file that is gone.
+- The end notice of a background command ends with `[Output saved to <path>]` when its output was saved.
 
 ## Background tasks
 
 - Tasks are background commands, [subagents](subagents.md) and [workflows](workflows.md), numbered `t1`, `t2`, … per run in one sequence.
 - They have no time limit. A command keeps the sandbox profile of the mode it started in; a subagent follows the session's mode unless its definition pins plan mode.
-- `TaskOutput` returns a task's status and its output so far, kept like `Bash` output; for a subagent, its activity so far, and for a workflow, a line for each agent's start and end.
+- `/tasks` shows an open task's output from its end and follows new output; PgUp/PgDn or the mouse wheel over the dialog scroll it when it does not fit, and scrolling back to the end follows again. Otherwise those keys scroll the transcript.
+- `TaskOutput` returns a task's status and its output so far, kept and [saved](#saved-output) like `Bash` output; for a subagent, its activity so far, and for a workflow, a line for each agent's start and end.
 - `TaskStop` kills a command task's process group (on Windows, only the shell), whichever mode it started in, and stops a subagent or a workflow.
 - When a task completes or fails, the model is told, for a command, its status and its last 20 non-empty output lines, for a subagent its final message, and for a workflow the value it returned or its error, at the next boundary of the running turn, or in a new turn when none runs. After an interrupt such notices wait for the next prompt; they never return to the input.
 - A task stopped from `/tasks` is reported to the model along with the next prompt or the next task notice, without starting a turn. One the model stops is not reported again.
@@ -101,7 +111,6 @@
 | Options | Enter | Single-select: choose the focused option and go on. Multi-select: go on |
 | Options | Tab | Open a note on the focused option |
 | Options | Left, Right | Previous or next question; Right from the last opens the review |
-| Options | PgUp, PgDn | Scroll a cut preview (the mouse wheel over the dialog does too) |
 | `Type something.` | Enter | Answer with the typed text and go on; blank text asks you to answer unless a multi-select question already has an option chosen, which goes on |
 | `Type something.` | Up on the first row | Back to the options |
 | `Type something.` | Left, Right | Switch questions while the field is empty, else move the cursor |
@@ -109,7 +118,7 @@
 | Note | Esc | Discard the edit and close the note |
 | Review | Enter | Submit; with a gap, jump to the first unanswered question |
 | Review | Left | Back to the last question |
-| Review | PgUp, PgDn | Scroll a cut review (the mouse wheel over the dialog does too) |
+| Any | PgUp, PgDn | Scroll a cut preview or review, in a note too (the mouse wheel over the dialog does too); they do not move the cursor in a text field |
 | Any | Esc | Dismiss the questions (in a note, close the note) |
 
 ## ExitPlanMode
@@ -144,7 +153,7 @@
 - Fetches one http or https page on a public host and has [`smallModel`](configuration.md#smallmodel) answer the call's prompt from it.
 - The main model gets the answer and the page's final URL, not the page.
 - HTML is converted to markdown from its main content; text, JSON and XML pass through; other content types are refused.
-- Pages are up to 5 MiB, fetched within 30 seconds and without JavaScript. The small model reads their first 100,000 characters.
+- Pages are up to 5 MiB, fetched within 30 seconds and without JavaScript. The small model reads 100,000 characters per call, starting at the optional `offset` (characters to skip, default 0). When more of the page remains, the result carries `[Read characters 0 to 100000 of 250000; use offset=100000 to continue.]` before the source line. Each call fetches the page again; nothing is cached.
 - Redirects on the same host (a leading `www.` and http to https count as the same) are followed, at most 5. Any other redirect is returned for the model to fetch in a new call.
 - Refused: `localhost`, names without a dot, `.localhost`, `.local` and `.internal` names, and non-public addresses, including ones a name resolves to.
 - Asks by default, in both modes: see [precedence](permissions.md#precedence).
@@ -171,9 +180,13 @@
 - `Read` refuses absolute symlinks, even ones pointing inside the start directory.
 - `Grep` shows only the first 2000 characters of a line; a match past that shows the line cut to that prefix.
 - Outside the Linux sandbox, a background process a command leaves running (`cmd &`) can outlive the call and its background task, and a running command or background task keeps running if Kopi is killed. In the Linux sandbox everything a command started ends when it does, or when Kopi does.
-- Background tasks and their output live only in memory and do not survive a restart.
+- `/tasks` re-reads an open task's output only when a task starts or ends or the task is reopened, not as it prints.
+- Background tasks live only in memory and do not survive a restart; a command's [saved output](#saved-output) stays on disk for a week.
+- `Read` cuts a line at 2000 characters, so a saved output that is one long line stays mostly unreachable.
+- A saved output file with a NUL in its first 8 KiB is refused as binary.
+- A saved output file holds the raw bytes, while the text returned inline has invalid UTF-8 replaced.
 - `WebFetch` connects directly and ignores `HTTP_PROXY` and `HTTPS_PROXY`; `sandbox.network` and `sandbox.allowDomains` do not govern it.
-- An approved `WebFetch` URL is requested from its host, and the call's prompt and up to 100,000 characters of the page go to `smallModel`'s provider.
+- An approved `WebFetch` URL is requested from its host, and the call's prompt and up to 100,000 characters of the page (from `offset`) go to `smallModel`'s provider.
 - `WebFetch` runs no JavaScript, and only the `Content-Type` header decides a page's charset; without one, the type is sniffed from the body and it is read as UTF-8 unless it starts with a UTF-16 byte-order mark.
 - `WebSearch`'s query goes to `smallModel`'s provider, which runs the search.
   - Hosted search is offered by protocol, so an endpoint that speaks one of those protocols but lacks the hosted tool fails at call time with the provider's error.
@@ -200,4 +213,5 @@
 - A tool that lets the model enter plan mode.
 - Plan approval in print mode.
 - Deleting old plan files.
+- `Glob` and `LS` on saved output, and searching the `outputs/` folder as a whole; paths come from the notices.
 - A configurable plans directory.

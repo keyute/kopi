@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/transcript"
 )
 
 var ctrlO = tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl}
@@ -273,4 +274,20 @@ func TestClickAfterScrollingUpMapsToTheRightLine(t *testing.T) {
 		assert.Contains(t, screen(m), "▾ Read 2 files")
 		assert.Contains(t, screen(m), "  ↳ a.go · 3 lines")
 	})
+}
+
+func TestFoldsOfARowHaveStateOnceItIsNotRunning(t *testing.T) {
+	f := newFolds()
+	f.expanded["a"] = true
+	for state, want := range map[transcript.State]bool{
+		transcript.Running: false, transcript.OK: true, transcript.Failed: true, transcript.Unfinished: true,
+		transcript.Denied: true, transcript.Rejected: true,
+	} {
+		got := f.of(transcript.Row{Call: transcript.Call{ID: "a", State: state}})
+		if want {
+			assert.Equal(t, []bool{true}, got.expanded, "state %d", state)
+		} else {
+			assert.Empty(t, got.expanded, "state %d", state)
+		}
+	}
 }

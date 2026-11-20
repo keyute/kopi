@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -281,4 +282,95 @@ func TestDialogFieldPrefixDrawsTheFieldBelowTheDetail(t *testing.T) {
 
 	f.ta.SetValue("one\ntwo")
 	assert.Equal(t, []string{"❭ 1. Yes", "  says yes", "  ↳ note: one", "          two", "  2. No"}, plainRows(optionRows(d, 40)))
+}
+
+func TestScrollerWindow(t *testing.T) {
+	var lines []string
+	for i := range 10 {
+		lines = append(lines, fmt.Sprintf("l%d", i+1))
+	}
+	th := mocha()
+	for _, tt := range []struct {
+		name        string
+		off, room   int
+		want        []string
+		below       int
+		cut         bool
+		wantOff     int
+		wantVisible int
+	}{
+		{name: "fits", room: 10, want: lines, wantVisible: 10},
+		{name: "fits from a stale offset", off: 4, room: 12, want: lines, wantVisible: 10},
+		{name: "no room", room: 0},
+		{name: "top", room: 4, want: []string{"l1", "l2", "l3", "… 7 more lines"}, below: 7, cut: true, wantVisible: 2},
+		{name: "middle", off: 4, room: 4, want: []string{"… 4 earlier lines", "l5", "l6", "… 4 more lines"}, below: 4, cut: true, wantOff: 4, wantVisible: 2},
+		{name: "end", off: 100, room: 4, want: []string{"… 7 earlier lines", "l8", "l9", "l10"}, wantOff: 7, cut: true, wantVisible: 2},
+		{name: "last row left out", off: 6, room: 4, want: []string{"… 6 earlier lines", "l7", "l8", "… 2 more lines"}, below: 2, wantOff: 6, cut: true, wantVisible: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := scroller{off: tt.off, below: 99}
+			got := plainRows(s.window(lines, tt.room, th))
+			if tt.want == nil {
+				assert.Empty(t, got)
+			} else {
+				assert.Equal(t, tt.want, got)
+			}
+			assert.Equal(t, tt.below, s.below)
+			assert.Equal(t, tt.wantOff, s.off)
+			assert.Equal(t, tt.wantVisible, s.visible)
+			assert.Equal(t, tt.cut || tt.below > 0, s.cut())
+		})
+	}
+}
+
+func TestScrollerWindowSingularMarkers(t *testing.T) {
+	s := scroller{off: 1}
+	assert.Equal(t, []string{"… 1 earlier line", "b", "… 2 more lines"}, plainRows(s.window([]string{"a", "b", "c", "d"}, 3, mocha())))
+}
+
+func TestScrollerWindowWithoutRoomResetsTheOffset(t *testing.T) {
+	s := scroller{off: 3}
+	assert.Nil(t, s.window([]string{"a", "b", "c", "d", "e"}, 0, mocha()))
+	assert.False(t, s.cut())
+}
+
+func scrollDialog(n int) *dialog {
+	d := &dialog{title: "Pick", note: "why", options: []option{{label: "Yes"}}}
+	for i := range n {
+		d.body = append(d.body, fmt.Sprintf("l%d", i+1))
+	}
+	return d
+}
+
+func TestDialogScrollRowsJoinsTheHintToTheNoteWhenCut(t *testing.T) {
+	d := scrollDialog(10)
+	body := d.body
+	rows := plainRows(d.scrollRows(40, 100, 1, 4, "pgup/pgdn to scroll", mocha()))
+	assert.Contains(t, rows, "  why · pgup/pgdn to scroll")
+	assert.Contains(t, rows, "  … 7 more lines")
+	assert.Equal(t, body, d.body)
+	assert.Equal(t, "why", d.note)
+
+	d = scrollDialog(2)
+	assert.NotContains(t, strings.Join(plainRows(d.scrollRows(40, 100, 1, 4, "pgup/pgdn to scroll", mocha())), "\n"), "pgup")
+
+	d = scrollDialog(10)
+	d.note = ""
+	assert.Contains(t, plainRows(d.scrollRows(40, 100, 1, 4, "pgup/pgdn to scroll", mocha())), "  pgup/pgdn to scroll")
+	assert.Empty(t, d.note)
+}
+
+func TestDialogScrollRowsWithNoBodyIsRows(t *testing.T) {
+	d := scrollDialog(0)
+	assert.Equal(t, d.rows(40, 100, 1, mocha()), d.scrollRows(40, 100, 1, 4, "pgup/pgdn to scroll", mocha()))
+}
+
+func TestDialogScrollRowsReachesTheEndWhenTheBudgetBinds(t *testing.T) {
+	d := scrollDialog(10)
+	d.note = "" // the hint takes a row of its own
+	d.scroll.off = 100
+	rows := plainRows(d.scrollRows(40, 8, 1, 100, "pgup/pgdn to scroll", mocha()))
+	assert.LessOrEqual(t, len(rows), 8)
+	assert.Contains(t, rows, "  l10")
+	assert.Equal(t, 9, d.scroll.off)
 }

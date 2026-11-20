@@ -32,6 +32,7 @@ Permission rules in `config.json` allow, ask about or deny calls:
 ### Precedence
 
 - The session's [plan file](tools.md#exitplanmode) is the one file in Kopi's home that `Read`, `Write` and `Edit` reach, in both modes, and it does not ask by default. Deny and ask rules apply to it first; plan mode's refusal of `Write` and `Edit` does not.
+- The session's [saved output](tools.md#saved-output) files are the other files in Kopi's home that `Read` and `Grep` reach, one at a time, in both modes and without asking by default; rules apply to them as to any other `Read`. `Write` and `Edit` refuse them.
 - Plan mode refuses `Write`, `Edit`, unsandboxed `Bash` (including a sandboxed `Bash` call that sets `unsandboxed`) and MCP tools not marked read-only before any rule; otherwise rules apply to `Bash` the same in both modes.
 - Deny beats ask, and ask beats allow.
 - With no rule matching:
@@ -57,18 +58,19 @@ Permission rules in `config.json` allow, ask about or deny calls:
 
 The fullscreen interface asks before a call that needs approval.
 
-- It shows the change or the command; the status line's `sandbox` segment shows whether `Bash` runs sandboxed by default, and an `unsandboxed` call's title reads `Bash (unsandboxed) …`.
+- It shows the whole change, command or arguments. A preview that does not fit scrolls, with `… N earlier lines` and `… N more lines` counting the screen rows left out and the scroll hint on the note row. The status line's `sandbox` segment shows whether `Bash` runs sandboxed by default, and an `unsandboxed` call's title reads `Bash (unsandboxed) …`.
 - Options:
   - `Yes`
   - `Yes, allow all edits this session` (for `Write` and `Edit` when no rule asked)
   - `No`, which takes an optional reason typed on its row
 - While it waits, the working row reads `Waiting for you…`.
 - `No` with a reason refuses the call, gives the model the reason and lets the turn go on. A blank `No` stops the turn.
-- In the transcript a call you refused is `↳ rejected` with your reason under it. A call a rule, the mode or the [classifier](#classifier) refused is `↳ denied` followed by why (`denied by rule …`, `denied · plan mode`, `denied by the classifier: <reason>`, `denied · this run cannot ask for approval`), with nothing under it. Both have the call's name as the title (`Bash rm -rf build`), not a past-tense verb. See [Transcript](usage.md#transcript).
+- In the transcript a call you refused is `↳ rejected` with your reason under it. A call a rule, the mode or the [classifier](#classifier) refused is `↳ denied` followed by why (`denied by rule …`, `denied · plan mode`, `denied by the classifier: <reason>`, `denied · this run cannot ask for approval`), with nothing under it. Both have the call's name as the title (`Bash rm -rf build`), not a past-tense verb; a `Bash` title that cut its command opens to the whole command. See [Transcript](usage.md#transcript).
 - Keys:
   - The `menu-up` and `menu-down` keys choose and `submit` answers.
   - A digit answers with that option, or moves to `No` to type the reason.
   - `interrupt` answers `No` without a reason.
+  - The `page-up` and `page-down` keys, or the mouse wheel over the dialog, scroll a preview that does not fit; when it fits they scroll the transcript, and they never move in the reason.
   - In the reason, `newline` starts a line, `paste` and terminal paste insert text, and digits are text.
 - Allowing all edits never overrides a deny or ask rule, never covers `Bash`, and lasts until the session ends.
 - When the [classifier](#classifier) left a call to the user, the dialog shows why and does not offer `Yes, allow all edits this session`:
@@ -138,6 +140,7 @@ Behaviour with `classifier.enabled`:
 - Permission rules are not an OS boundary: they match the path a call names. Only `Bash` runs under the OS [sandbox](sandbox.md).
 - Kopi refuses no credential locations outside its home; deny them with rules, such as `*(~/.ssh)`, and to `Bash` with `sandbox.denyRead`.
 - Symlinks in rule paths, the start directory and the home directory are resolved once, at start; in sandbox paths too on macOS, and before each command on Linux.
+- A preview needs 3 or more rows to scroll; on a screen too short for that, the part that does not fit is not reachable.
 - With `classifier.enabled`, the session's prompts, recent tool-call arguments and the call under review go to `classifier.model`'s provider. The classifier can be wrong in both directions, and a review can hold the turn for up to a minute.
 
 ## Not implemented

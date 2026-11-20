@@ -39,6 +39,16 @@ type Workspace struct {
 	// plans, when set, makes the root session's plan file reachable although it
 	// lies in a protected store.
 	plans *Plans
+	// outputs, when set, makes the session's saved output files reachable, read
+	// only, although they lie in a protected store.
+	outputs *Outputs
+}
+
+// WithOutputs returns a copy of w that also reaches o's saved output files.
+func (w *Workspace) WithOutputs(o *Outputs) *Workspace {
+	c := *w
+	c.outputs = o
+	return &c
 }
 
 // WithPlans returns a copy of w that also reaches plans' current plan file.
@@ -120,6 +130,9 @@ func (w *Workspace) Target(path string) (policy.Target, error) {
 	if t, ok, err := w.plans.target(abs); ok {
 		return t, err
 	}
+	if t, ok, err := w.outputs.target(abs); ok {
+		return t, err
+	}
 	// A path inside the workspace is walked from realDir, as Open and WriteFile
 	// walk it, so a repointed workspace symlink cannot split the two.
 	start, rest := string(filepath.Separator), path
@@ -153,6 +166,9 @@ func (w *Workspace) WriteFile(path string, data []byte) error {
 func (w *Workspace) prepare(path string) (*writeDestination, error) {
 	abs := w.absolute(path)
 	if dest, ok, err := w.plans.prepare(abs, path); ok {
+		return dest, err
+	}
+	if dest, ok, err := w.outputs.prepare(abs, path); ok {
 		return dest, err
 	}
 	rel, err := w.relative(path)
@@ -200,6 +216,8 @@ type writeDestination struct {
 	missing         []string
 	// plan marks the plan file, which lies in a protected store on purpose.
 	plan bool
+	// output marks a saved output file: outside the workspace and read only.
+	output bool
 }
 
 // prepareWrite pins the existing parent prefix without modifying the filesystem.
@@ -296,6 +314,9 @@ func (d *writeDestination) checkDestination(w *Workspace, remaining []string) er
 }
 
 func (d *writeDestination) write(w *Workspace, data []byte) error {
+	if d.output {
+		return fmt.Errorf("%w: %s", ErrProtected, d.path)
+	}
 	for i, name := range d.missing {
 		if err := d.checkDestination(w, append(slices.Clone(d.missing[i:]), d.leaf)); err != nil {
 			return err
@@ -433,6 +454,9 @@ func (w *Workspace) inProtectedPath(target string) (bool, error) {
 func (w *Workspace) shown(path string) string {
 	if p := w.plans.Path(); p != "" && filepath.Clean(w.absolute(path)) == filepath.Clean(p) {
 		return "plan"
+	}
+	if _, ok := w.outputs.holds(w.absolute(path)); ok {
+		return "output " + filepath.Base(path)
 	}
 	if rel, err := w.relative(path); err == nil {
 		return rel
@@ -689,7 +713,7 @@ func (d *writeDestination) checkUnchanged() error {
 // checkRead retains os.Root's traversal restrictions on the original path,
 // while content is read only from the prepared leaf handle.
 func (w *Workspace) checkRead(dest *writeDestination, f *os.File, path string) error {
-	if dest.plan {
+	if dest.plan || dest.output {
 		return nil
 	}
 	rel, err := w.relative(path)

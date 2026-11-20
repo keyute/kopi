@@ -27,6 +27,7 @@ A workflow is a JavaScript script the main agent writes to start agents and comb
 - A workflow agent is not a [subagent](subagents.md). Each `agent()` call opens a session, sends it the one prompt, takes the reply and closes the session. It has no task of its own, cannot be sent a message, does not restart, ends with no notice and no row, and does not count towards the 20 running subagents.
 - Without `agentType` the agent has every tool a subagent can have, the instruction files and the default effort. With one, it has that [definition](subagents.md#format)'s effort, tools, `instructions` setting, `mode` and prompt. An unknown name makes `agent()` reject. Workflow agents work with no definitions.
 - An agent never gets `Workflow`, `Agent`, `SendMessage`, `AskUserQuestion`, `ExitPlanMode`, `TaskOutput` or `TaskStop`.
+- Its `Read` and `Grep` reach the session's [saved output](tools.md#saved-output), as a subagent's do.
 - Its model is the definition's `model`, else [`workflows.model`](configuration.md#workflows), else the session's model.
 - Its preamble says it is a workflow agent in place of the subagent sentence.
 

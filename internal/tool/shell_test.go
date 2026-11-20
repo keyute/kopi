@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -210,4 +211,43 @@ func TestRefusedNote(t *testing.T) {
 func TestShellFiltersNetwork(t *testing.T) {
 	assert.False(t, NewShell(t.TempDir(), nil).FiltersNetwork())
 	assert.False(t, NewShell(t.TempDir(), &sandbox.Sandbox{}).FiltersNetwork())
+}
+
+func newSavedOutputs(t *testing.T) (*Outputs, string) {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "outputs")
+	o := NewOutputs(dir)
+	require.NoError(t, o.Select("s1"))
+	return o, filepath.Join(dir, "s1")
+}
+
+func TestShellSavesLongOutputToAFile(t *testing.T) {
+	outputs, dir := newSavedOutputs(t)
+	sh := NewShell(t.TempDir(), nil).WithOutputs(outputs)
+
+	out, err := runShell(t, sh, "seq 1 20000")
+
+	require.NoError(t, err)
+	files, err := filepath.Glob(filepath.Join(dir, "*.txt"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	data, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+	var want strings.Builder
+	for i := 1; i <= 20000; i++ {
+		fmt.Fprintf(&want, "%d\n", i)
+	}
+	assert.Equal(t, want.String(), string(data))
+	assert.Contains(t, out, "full output: "+files[0]+"; use Read with offset=")
+}
+
+func TestShellSavesNothingForShortOutput(t *testing.T) {
+	outputs, dir := newSavedOutputs(t)
+	sh := NewShell(t.TempDir(), nil).WithOutputs(outputs)
+
+	out, err := runShell(t, sh, "seq 1 100")
+
+	require.NoError(t, err)
+	assert.NotContains(t, out, "cut")
+	assert.NoDirExists(t, dir)
 }

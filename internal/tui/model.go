@@ -130,6 +130,8 @@ type model struct {
 	// drawn in place of the composer; front says which prompt that is.
 	approval       *event.ApprovalRequested
 	approvalDialog *dialog
+	// approvalPreview is the shown approval's preview rows.
+	approvalPreview approvalPreview
 	// queued asks wait behind approval, in arrival order.
 	approvalQueue []event.ApprovalRequested
 	// login is the pending login question; loginDialog is its prompt, non-nil
@@ -299,6 +301,14 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	if m.exitArmed {
 		m.exitArmed, m.flashText = false, ""
 	}
+	switch {
+	case key.Matches(msg, km.pageUp):
+		m.pageFront(-1)
+		return nil
+	case key.Matches(msg, km.pageDown):
+		m.pageFront(1)
+		return nil
+	}
 	switch m.front() {
 	case promptApproval:
 		return m.approvalKey(msg)
@@ -331,12 +341,6 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case key.Matches(msg, km.quit) && m.composer.empty():
 		return tea.Quit
-	case key.Matches(msg, km.pageUp):
-		m.scroll(-m.transcriptHeight())
-		return nil
-	case key.Matches(msg, km.pageDown):
-		m.scroll(m.transcriptHeight())
-		return nil
 	case key.Matches(msg, km.submit):
 		return m.submit()
 	case key.Matches(msg, km.sendNow):
@@ -402,7 +406,7 @@ func (m *model) dropApprovals(drop func(event.ApprovalRequested) bool) {
 		m.approvalQueue = keep[1:]
 		return
 	}
-	m.approval, m.approvalDialog, m.approvalQueue = nil, nil, nil
+	m.approval, m.approvalDialog, m.approvalQueue, m.approvalPreview = nil, nil, nil, approvalPreview{}
 	if len(keep) > 0 {
 		m.showApproval(keep[0])
 		m.approvalQueue = keep[1:]
@@ -411,7 +415,7 @@ func (m *model) dropApprovals(drop func(event.ApprovalRequested) bool) {
 
 // showApproval makes a the shown approval, with its prompt.
 func (m *model) showApproval(a event.ApprovalRequested) {
-	m.approval, m.approvalDialog = &a, newApprovalDialog(&a, &m.keys, m.th)
+	m.approval, m.approvalDialog, m.approvalPreview = &a, newApprovalDialog(&a, &m.keys, m.th), approvalPreview{}
 }
 
 // loginKey goes to the login prompt like approvalKey: a pick answers with the
@@ -782,7 +786,7 @@ func (m *model) place() {
 	front := m.front()
 	switch front {
 	case promptApproval:
-		m.prompt = approvalRows(m.approvalDialog, m.approval, m.width, max(2, m.height/3), free+2, m.th)
+		m.prompt = approvalRows(m.approvalDialog, &m.approvalPreview, m.approval, &m.keys, m.width, max(2, m.height/3), free+2, m.th)
 	case promptQuestion:
 		m.prompt = m.question.rows(m.width, max(2, m.height/3), free+2, m.th)
 	case promptPlan:

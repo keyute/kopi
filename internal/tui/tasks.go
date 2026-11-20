@@ -18,10 +18,12 @@ import (
 // taskDialog is the /tasks dialog, drawn in the composer's slot: the
 // background tasks, or one task's output while open names it.
 type taskDialog struct {
-	d    *dialog
-	list []tool.TaskInfo
-	open string
-	info tool.TaskInfo
+	d *dialog
+	// scrolled is set when the human moves the open output off its end.
+	scrolled bool
+	list     []tool.TaskInfo
+	open     string
+	info     tool.TaskInfo
 	// out is info's output as body rows for outWidth and outTheme, kept
 	// across renders.
 	out      []string
@@ -43,7 +45,7 @@ func (m *model) showTasks() tea.Cmd {
 
 // tasksKey goes to the dialog: interrupt leaves the task for the list and
 // the list for the composer. Enter on a subagent's task shows its session.
-// Keys it has no use for are swallowed.
+// Other keys it has no use for are swallowed.
 func (m *model) tasksKey(msg tea.KeyPressMsg) tea.Cmd {
 	t := m.tasks
 	if key.Matches(msg, m.keys.interrupt) {
@@ -110,7 +112,7 @@ func (m *model) openTask(id string) {
 		return
 	}
 	if id != t.open {
-		t.d.sel = 0
+		t.d.sel, t.d.scroll, t.scrolled = 0, scroller{}, false
 	}
 	t.open, t.info, t.out = id, info, nil
 	t.setOptions(m.width)
@@ -127,6 +129,7 @@ func (m *model) taskList(id string) {
 	}
 	sel := slices.IndexFunc(list, func(i tool.TaskInfo) bool { return i.ID == id })
 	t.list, t.open, t.d.sel = list, "", max(0, sel)
+	t.d.scroll, t.scrolled = scroller{}, false
 	t.setOptions(m.width)
 }
 
@@ -161,7 +164,8 @@ func (t *taskDialog) setOptions(width int) {
 }
 
 // rows draws the dialog within maxRows; an open task's output fills what
-// the other rows leave, at most maxBody rows, from its end.
+// the other rows leave, at most maxBody rows, from its end until it is
+// scrolled.
 func (t *taskDialog) rows(width, maxBody, maxRows int, km *keyMap, th theme) []string {
 	if maxRows <= 0 {
 		return nil
@@ -175,9 +179,14 @@ func (t *taskDialog) rows(width, maxBody, maxRows int, km *keyMap, th theme) []s
 	}
 	t.d.body = nil
 	if t.open != "" {
-		t.d.body = t.tail(min(maxBody, maxRows-len(t.d.rows(width, maxRows, 1, th))), width-2, th)
+		t.d.body = t.wrapped(width-2, th)
+		// The view follows the end until the human scrolls up.
+		if !t.scrolled {
+			t.d.scroll.off = len(t.d.body)
+		}
 	}
-	rows := t.d.rows(width, maxRows, 1, th)
+	rows := t.d.scrollRows(width, maxRows, 1, maxBody, scrollHint(km), th)
+	t.scrolled = t.d.scroll.below > 0
 	if t.open == "" && len(rows) > maxRows {
 		head := len(rows) - len(t.d.options) - 1
 		room := maxRows - head - 1
@@ -190,25 +199,13 @@ func (t *taskDialog) rows(width, maxBody, maxRows int, km *keyMap, th theme) []s
 	return rows[max(0, len(rows)-maxRows):]
 }
 
-// tail is the last limit rows of the output; when it does not all fit, the
-// first row counts the rows left out.
-func (t *taskDialog) tail(limit, width int, th theme) []string {
-	if limit < 1 {
-		return nil
-	}
+// wrapped is the output as body rows for width and th.
+func (t *taskDialog) wrapped(width int, th theme) []string {
 	if t.out == nil || t.outWidth != width || t.outTheme != th {
 		t.out = hang("  ", fg(th.muted), strings.TrimRight(t.info.Output, "\n"), fg(th.muted), width)
 		t.outWidth, t.outTheme = width, th
 	}
-	if len(t.out) <= limit {
-		return t.out
-	}
-	n := len(t.out) - limit + 1
-	more := fmt.Sprintf("… %d earlier lines", n)
-	if n == 1 {
-		more = "… 1 earlier line"
-	}
-	return append([]string{hang("  ", fg(th.dim), more, fg(th.dim), width)[0]}, t.out[len(t.out)-limit+1:]...)
+	return t.out
 }
 
 // taskLine is "t1 · running · 1m 2s · <command's first line>", an agent's

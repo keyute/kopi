@@ -1,12 +1,16 @@
 package tool
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +33,7 @@ const (
 type Shell struct {
 	dir, shell string
 	sb         *sandbox.Sandbox
+	outputs    *Outputs
 }
 
 // NewShell runs commands from dir; a nil sb runs them unsandboxed.
@@ -38,6 +43,14 @@ func NewShell(dir string, sb *sandbox.Sandbox) *Shell {
 		shell = "/bin/sh"
 	}
 	return &Shell{dir: dir, shell: shell, sb: sb}
+}
+
+// WithOutputs returns a copy of s whose output too long to return whole is
+// saved to outputs.
+func (s *Shell) WithOutputs(o *Outputs) *Shell {
+	c := *s
+	c.outputs = o
+	return &c
 }
 
 func (s *Shell) Sandboxed() bool { return s.sb != nil }
@@ -98,7 +111,7 @@ func (s *Shell) start(ctx context.Context, command string) (*process, error) {
 		release()
 		return nil, fmt.Errorf("failed to run command: %w", err)
 	}
-	p := &process{out: &outputBuffer{}, stopCh: make(chan error, 1), done: make(chan struct{})}
+	p := &process{out: s.outputs.buffer(), stopCh: make(chan error, 1), done: make(chan struct{})}
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)
@@ -123,7 +136,10 @@ func (p *process) supervise(cmd *exec.Cmd, r *os.File, drained <-chan struct{}, 
 	defer close(p.done)
 	// start returned while the command runs, so release must follow the reap.
 	// It runs before p.done closes, and so before anything reads p.out.
-	defer func() { _, _ = io.WriteString(p.out, refusedNote(release())) }()
+	defer func() {
+		_, _ = io.WriteString(p.out, refusedNote(release()))
+		p.out.close()
+	}()
 	defer func() { p.ended = time.Now() }()
 	var exitErr error
 	select {
@@ -203,16 +219,36 @@ func exitReason(e *exec.ExitError) string {
 
 // outputBuffer keeps the first maxOutputPart bytes written and a sliding
 // window of the last maxOutputPart, so memory stays bounded however much a
-// command prints.
+// command prints. With a dir, the output is also saved to a file from the first
+// write that would cut it. The zero value saves nothing.
 type outputBuffer struct {
 	mu         sync.Mutex
 	head, tail []byte
 	total      int
+
+	// dir is where the file is created, "" once there is nothing left to try.
+	dir string
+	// limit is the most bytes the file takes.
+	limit   int
+	f       *os.File
+	path    string
+	written int
+	// partial means the file stopped short of the end of the output.
+	partial bool
 }
 
+// Write always reports len(p) and no error: io.Copy stops draining on one, and
+// the command would block on a full pipe.
 func (b *outputBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.dir != "" && b.total+len(p) > 2*maxOutputPart {
+		// Head and tail still hold every byte written before p.
+		b.create()
+		b.save(b.head)
+		b.save(b.tail)
+	}
+	b.save(p)
 	b.total += len(p)
 	n := min(len(p), maxOutputPart-len(b.head))
 	b.head = append(b.head, p[:n]...)
@@ -228,6 +264,80 @@ func (b *outputBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// create opens the file, once. A failure is logged and the buffer carries on
+// without a file.
+func (b *outputBuffer) create() {
+	dir := b.dir
+	b.dir = ""
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		slog.Warn("failed to create the output folder", "dir", dir, "err", err)
+		return
+	}
+	root, err := pinSession(dir, dir, true)
+	if err != nil {
+		slog.Warn("failed to create the output folder", "dir", dir, "err", err)
+		return
+	}
+	defer root.Close()
+	name := rand.Text() + ".txt"
+	path := filepath.Join(dir, name)
+	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		slog.Warn("failed to create an output file", "path", path, "err", err)
+		return
+	}
+	b.f, b.path = f, path
+}
+
+// save appends data to the file, which it closes at the limit or on a write
+// failure, leaving the bytes before that in it.
+func (b *outputBuffer) save(data []byte) {
+	if b.f == nil || len(data) == 0 {
+		return
+	}
+	if room := b.limit - b.written; len(data) > room {
+		data = data[:max(room, 0)]
+		b.partial = true
+	}
+	n, err := b.f.Write(data)
+	b.written += n
+	if err != nil {
+		slog.Warn("failed to write an output file", "path", b.path, "err", err)
+		b.partial = true
+	}
+	if b.partial {
+		_ = b.f.Close()
+		b.f = nil
+	}
+}
+
+// close ends the file; later writes only reach memory.
+func (b *outputBuffer) close() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.dir = ""
+	if b.f != nil {
+		_ = b.f.Close()
+		b.f = nil
+	}
+}
+
+// file is the saved output's path, "" when none was created.
+func (b *outputBuffer) file() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.saved() {
+		return ""
+	}
+	return b.path
+}
+
+// saved reports whether the file holds more than the head, so that the notice
+// can point into it.
+func (b *outputBuffer) saved() bool {
+	return b.path != "" && (!b.partial || b.written > len(b.head))
+}
+
 func (b *outputBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -236,7 +346,15 @@ func (b *outputBuffer) String() string {
 	}
 	s := string(b.head)
 	if cut := b.total - len(b.head) - len(b.tail); cut > 0 {
-		s += fmt.Sprintf("\n[… %d bytes cut …]\n", cut)
+		if !b.saved() {
+			s += fmt.Sprintf("\n[… %d bytes cut …]\n", cut)
+		} else {
+			what := "full output"
+			if b.partial {
+				what = fmt.Sprintf("first %d bytes of output", b.written)
+			}
+			s += fmt.Sprintf("\n[… %d bytes cut; %s: %s; use Read with offset=%d to continue …]\n", cut, what, b.path, bytes.Count(b.head, []byte("\n"))+1)
+		}
 	}
 	return strings.ToValidUTF8(s+string(b.tail), "�")
 }

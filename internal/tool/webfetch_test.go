@@ -134,7 +134,73 @@ func TestWebFetchCutsLongPages(t *testing.T) {
 	prompt := (*calls)[0].prompt
 	assert.Contains(t, prompt, ">\n"+strings.Repeat("é", maxPageChars)+"\n</page-")
 	assert.NotContains(t, prompt, "TAIL")
-	assert.Contains(t, prompt, "\n[The page was cut: only its first 100,000 of 100004 characters are shown.]\n")
+	assert.Contains(t, prompt, "\n[The page has 100004 characters; characters 0 to 100000 are shown.]\n")
+}
+
+func fetchOffset(t *testing.T, page, args string) (string, []answerCall, error) {
+	t.Helper()
+	srv := textServer(t, page)
+	answer, calls := recordAnswers("ok")
+	tool := newWebFetch(routedFetcher(srv), answer)
+	out, err := tool.Run(t.Context(), json.RawMessage(`{"url":"http://example.com/p","prompt":"p"`+args+`}`), admitRead)
+	return out.Text, *calls, err
+}
+
+func TestWebFetchNamesTheUnreadPart(t *testing.T) {
+	text, calls, err := fetchOffset(t, strings.Repeat("é", maxPageChars)+"TAIL", "")
+
+	require.NoError(t, err)
+	require.Len(t, calls, 1)
+	assert.Equal(t, "ok\n\n[Read characters 0 to 100000 of 100004; use offset=100000 to continue.]\n\nSource: http://example.com/p", text)
+	assert.Equal(t, "5 lines", NewWebFetch("Kopi/test", nil).Display.Summary(text))
+}
+
+func TestWebFetchExactPageHasNoLine(t *testing.T) {
+	text, calls, err := fetchOffset(t, strings.Repeat("a", maxPageChars), "")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok\n\nSource: http://example.com/p", text)
+	assert.NotContains(t, calls[0].prompt, "[The page has")
+}
+
+func TestWebFetchOffsetContinues(t *testing.T) {
+	page := strings.Repeat("é", 5) + strings.Repeat("a", maxPageChars) + "TAIL"
+
+	text, calls, err := fetchOffset(t, page, `,"offset":5`)
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok\n\n[Read characters 5 to 100005 of 100009; use offset=100005 to continue.]\n\nSource: http://example.com/p", text)
+	assert.Contains(t, calls[0].prompt, ">\n"+strings.Repeat("a", maxPageChars)+"\n</page-")
+	assert.NotContains(t, calls[0].prompt, "é")
+	assert.Contains(t, calls[0].prompt, "\n[The page has 100009 characters; characters 5 to 100005 are shown.]\n")
+
+	text, calls, err = fetchOffset(t, page, `,"offset":100005`)
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok\n\nSource: http://example.com/p", text)
+	assert.Contains(t, calls[0].prompt, ">\nTAIL\n</page-")
+	assert.Contains(t, calls[0].prompt, "\n[The page has 100009 characters; characters 100005 to 100009 are shown.]\n")
+}
+
+func TestWebFetchOffsetPastTheEnd(t *testing.T) {
+	for _, offset := range []string{"5", "9"} {
+		text, calls, err := fetchOffset(t, "éééé", `,"offset":`+offset)
+
+		require.NoError(t, err)
+		assert.Equal(t, "(offset "+offset+" is past the end of the page, which has 4 characters)\n\nSource: http://example.com/p", text)
+		assert.Empty(t, calls)
+	}
+	text, _, err := fetchOffset(t, "éééé", `,"offset":4`)
+	require.NoError(t, err)
+	assert.Contains(t, text, "past the end")
+	assert.Equal(t, "3 lines", NewWebFetch("Kopi/test", nil).Display.Summary(text))
+}
+
+func TestWebFetchRejectsNegativeOffset(t *testing.T) {
+	_, calls, err := fetchOffset(t, "page", `,"offset":-1`)
+
+	require.ErrorIs(t, err, ErrInvalidArgs)
+	assert.Empty(t, calls)
 }
 
 func TestWebFetchReturnsCrossHostRedirect(t *testing.T) {
@@ -197,5 +263,10 @@ func TestWebFetchDisplay(t *testing.T) {
 		{Kind: Context, Text: "https://go.dev/doc/devel/release"},
 		{Kind: Context, Text: "Prompt: What changed?"},
 	}, d.Preview(json.RawMessage(`{"url":"https://go.dev/doc/devel/release","prompt":"What changed?"}`)))
+	assert.Equal(t, []PreviewLine{
+		{Kind: Context, Text: "https://go.dev/"},
+		{Kind: Context, Text: "Prompt: p"},
+		{Kind: Context, Text: "Offset: 500"},
+	}, d.Preview(json.RawMessage(`{"url":"https://go.dev/","prompt":"p","offset":500}`)))
 	assert.Equal(t, "3 lines", d.Summary("Line one.\n\nSource: https://go.dev/"))
 }

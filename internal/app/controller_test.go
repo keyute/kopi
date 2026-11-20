@@ -2941,3 +2941,68 @@ func TestOpenReportsPlanFileSelectionFailure(t *testing.T) {
 	assert.ErrorContains(t, errs[0].Err, "failed to select the plan file")
 	assert.Empty(t, h.c.PlanFile())
 }
+
+func TestSessionsSelectTheirOutputFolder(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	outputsDir := filepath.Join(sb.Home, "outputs")
+	outputs := tool.NewOutputs(outputsDir)
+	// No plan file: a print-mode run has none, and still saves output.
+	h := newHarness(t, sb, Config{Outputs: outputs})
+	reaches := reachesOutputs(t, outputs, outputsDir)
+
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	first := h.c.Status().SessionID
+	require.NotEmpty(t, first)
+	assert.True(t, reaches(first))
+	h.userTexts(t, "one")
+
+	require.NoError(t, h.c.NewSession(t.Context()))
+	second := h.c.Status().SessionID
+	require.NotEqual(t, first, second)
+	assert.True(t, reaches(second))
+	assert.False(t, reaches(first))
+
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{ResumeID: first}))
+	assert.True(t, reaches(first))
+	assert.False(t, reaches(second))
+}
+
+// reachesOutputs returns a func that reports whether Read, through a workspace
+// with outputs, reaches a file in the folder of the session id.
+func reachesOutputs(t *testing.T, outputs *tool.Outputs, dir string) func(id string) bool {
+	t.Helper()
+	ws, err := tool.NewWorkspace(t.TempDir(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { ws.Close() })
+	read := tool.NewRead(ws.WithOutputs(outputs))
+	return func(id string) bool {
+		path := filepath.Join(dir, id, "x.txt")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		require.NoError(t, os.WriteFile(path, []byte("saved\n"), 0o600))
+		raw, err := json.Marshal(map[string]string{"file_path": path})
+		require.NoError(t, err)
+		_, err = read.Run(t.Context(), raw, func(policy.Target) (policy.Mode, error) { return policy.Plan, nil })
+		return err == nil
+	}
+}
+
+func TestResumeRestoresACutCommand(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	show := testTool("Show", policy.Read, func(context.Context, json.RawMessage) (string, error) { return "out", nil })
+	show.Display.Command = func(json.RawMessage) string { return "the whole command" }
+	cfg := Config{Tools: []tool.Tool{show}}
+	h := newHarness(t, sb, cfg)
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Show", "call-1")), pigruntimetest.Text("done")})
+	h.turn(t, "show")
+	require.Equal(t, "the whole command", ofType[event.ToolStart](h.rec.all())[0].Command)
+	id := h.c.Status().SessionID
+	require.NoError(t, h.c.Close(t.Context()))
+
+	fresh := newHarness(t, sb, cfg)
+	require.NoError(t, fresh.c.Open(t.Context(), OpenRequest{ResumeID: id}))
+
+	starts := ofType[event.ToolStart](ofType[event.SessionChanged](fresh.rec.all())[0].History)
+	require.Len(t, starts, 1)
+	assert.Equal(t, "the whole command", starts[0].Command)
+}

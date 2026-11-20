@@ -262,13 +262,13 @@ func TestQuestionRowsCutAPreviewAndScrollIt(t *testing.T) {
 	assert.NotContains(t, first, "earlier lines")
 	assert.Regexp(t, `… \d+ more lines`, first)
 
-	q.scroll += q.visible
+	q.scroll.off += q.scroll.visible
 	scrolled := joined()
 	assert.Contains(t, scrolled, "… 4 earlier lines")
 	assert.NotContains(t, scrolled, "line 0")
 	assert.Contains(t, scrolled, "more lines")
 
-	q.scroll += 100
+	q.scroll.off += 100
 	end := joined()
 	assert.NotContains(t, end, "more lines")
 	assert.Contains(t, end, "line 9")
@@ -795,4 +795,20 @@ func TestQuestionRowsDrawTheNoteEditorBelowTheDetail(t *testing.T) {
 	rows := plainRows(q.rows(40, 6, 100, mocha()))
 	assert.Equal(t, []string{"❭ 1. A", "  about A", "  ↳ note: a long note that goes on and"}, rows[3:6])
 	assert.True(t, strings.HasPrefix(rows[6], "          "), "continuation rows hang under the text: %q", rows[6])
+}
+
+func TestQuestionPageKeysScrollACutPreviewFromTheNoteEditor(t *testing.T) {
+	var lines []string
+	for i := range 60 {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	m, _ := openQuestion(t, previewQuestion(strings.Join(lines, "\n"))...)
+	press(m, tab)
+	typeKeys(m, "abc")
+	require.True(t, m.question.scroll.cut())
+
+	press(m, pgDown)
+
+	assert.Positive(t, m.question.scroll.off)
+	assert.Equal(t, "abc", m.question.pages[0].note.value())
 }

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -292,6 +293,125 @@ func TestSoloRowBreaksAGroup(t *testing.T) {
 		event.ToolEnd{CallID: "q", Name: "AskUserQuestion", Summary: "all"},
 		start("c"), ok("c", "1 line"))
 	assert.Equal(t, []string{"", "▸ Read 2 files", "", "• Asked about scope", "  ↳ all", "", "• c.go", "  ↳ 1 line"}, body(m))
+}
+
+func bashStart(id, command string) event.ToolStart {
+	return event.ToolStart{CallID: id, Name: "Bash", Title: "Bash first …", Command: command, Action: tool.Action{Verb: "Ran", One: "command", Many: "commands"}}
+}
+
+func TestOpenedBashRowShowsTheWholeCommandBeforeItsOutput(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 40, 30)
+		send(m, bashStart("a", "first\nsecond line"), event.ToolEnd{CallID: "a", Name: "Bash", Summary: "1 line", Body: "out"})
+		require.Equal(t, []string{"", "• Bash first …", "  ↳ 1 line"}, body(m))
+
+		clickText(t, m, "• Bash first …")
+
+		assert.Equal(t, []string{"", "• Bash first …", "  ↳ 1 line", "    $ first", "      second line", "    out"}, body(m))
+	})
+}
+
+func TestBashRowWithACutCommandAndNoOutputOpens(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 40, 30)
+		send(m, bashStart("a", "first\nsecond"), event.ToolEnd{CallID: "a", Name: "Bash", Summary: "no output"})
+
+		clickText(t, m, "• Bash first …")
+
+		assert.Equal(t, []string{"", "• Bash first …", "  ↳ no output", "    $ first", "      second"}, body(m))
+	})
+}
+
+func TestCommandLinesKeepWhatBodyTextWouldDrop(t *testing.T) {
+	th := mocha()
+	c := transcript.Call{ID: "a", Command: "echo a\rb\n\n  c"}
+	assert.Equal(t, []string{"    $ echo ab", "", "        c"}, plainRows(lineTexts(commandLines(c, 40, th))))
+	assert.Nil(t, commandLines(transcript.Call{}, 40, th))
+}
+
+func TestRefusedAndFailedRowsOpenToTheCommand(t *testing.T) {
+	for name, end := range map[string]event.ToolEnd{
+		"failed":      {CallID: "a", Name: "Bash", IsError: true, Summary: "exit status 1", Output: "boom", Body: "boom"},
+		"denied":      {CallID: "a", Name: "Bash", IsError: true, Kind: event.EndDenied, Summary: "denied", Body: "refused"},
+		"rejected":    {CallID: "a", Name: "Bash", IsError: true, Kind: event.EndRejected, Summary: "rejected"},
+		"interrupted": {CallID: "a", Name: "Bash", Kind: event.EndInterrupted},
+	} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				m, _ := newTestModel(t, 40, 30)
+				send(m, bashStart("a", "first\nsecond"), end)
+				closed := body(m)
+				require.Equal(t, "• Bash first …", closed[1])
+
+				clickText(t, m, "• Bash first …")
+				open := body(m)
+				at := slices.Index(open, "    $ first")
+				require.Greater(t, at, 2, "the command follows the summary")
+				assert.Equal(t, "      second", open[at+1])
+
+				clickText(t, m, "• Bash first …")
+				assert.Equal(t, closed, body(m))
+
+				press(m, ctrlO)
+				assert.Equal(t, open, body(m))
+			})
+		})
+	}
+}
+
+func TestRefusedRowsWithoutACommandStayInert(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		for _, end := range []event.ToolEnd{
+			{CallID: "a", IsError: true, Kind: event.EndDenied, Summary: "denied"},
+			{CallID: "a", IsError: true, Kind: event.EndRejected, Summary: "rejected"},
+			{CallID: "a", Kind: event.EndInterrupted},
+		} {
+			m, _ := newTestModel(t, 40, 30)
+			send(m, start("a"), end)
+			want := body(m)
+			for _, l := range m.view().lines {
+				assert.Equal(t, hit{}, l.hit)
+			}
+
+			clickText(t, m, "• a.go")
+			press(m, ctrlO)
+
+			assert.Equal(t, want, body(m))
+		}
+	})
+}
+
+func TestFailedRowWithACommandAndAShortBodyOpens(t *testing.T) {
+	th := mocha()
+	c := transcript.Call{ID: "a", State: transcript.Failed, Title: "t", Summary: "failed", Body: "boom", Command: "a\nb"}
+	got := renderRow(c, blockFolds{expanded: []bool{false}}, 40, th)
+	assert.Equal(t, hit{kind: hitOutput, id: "a"}, got[0].hit)
+	assert.Equal(t, []string{"• t", "  ↳ failed", "    boom"}, plainRows(lineTexts(got)))
+
+	got = renderRow(c, blockFolds{expanded: []bool{true}}, 40, th)
+	assert.Equal(t, []string{"• t", "  ↳ failed", "    $ a", "      b", "    boom"}, plainRows(lineTexts(got)))
+}
+
+func lineTexts(ls []line) []string {
+	out := make([]string, len(ls))
+	for i, l := range ls {
+		out[i] = l.text
+	}
+	return out
+}
+
+func TestOpenedGroupMemberShowsItsCommand(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 60, 30)
+		send(m, bashStart("a", "first\nsecond"), event.ToolEnd{CallID: "a", Name: "Bash", Summary: "1 line", Body: "out"},
+			bashStart("b", "x"), event.ToolEnd{CallID: "b", Name: "Bash", Summary: "1 line", Body: "out"},
+			event.TextDelta{Text: "Done."})
+		clickText(t, m, "▸ Ran 2 commands")
+
+		clickText(t, m, "  ↳ Bash first … · 1 line")
+
+		assert.Equal(t, []string{"", "▾ Ran 2 commands", "  ↳ Bash first … · 1 line", "    $ first", "      second", "    out", "  ↳ Bash first … · 1 line", "", "Done."}, body(m))
+	})
 }
 
 func TestShadedBoxStylesSpansOnWrappedRows(t *testing.T) {

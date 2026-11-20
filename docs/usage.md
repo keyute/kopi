@@ -64,13 +64,13 @@ Defaults; change them with [`keys`](configuration.md#keys).
   - With none running, Ctrl+B keeps its meaning in the input.
 - Ctrl+G, while an [`ExitPlanMode`](tools.md#exitplanmode) plan is open, opens the plan file in `$VISUAL`, else `$EDITOR`.
 - Ctrl+V pastes text or an image from the clipboard.
-- Mouse wheel or PgUp/PgDn scrolls the transcript; while an [`AskUserQuestion`](tools.md#askuserquestion) dialog is open PgUp/PgDn scroll its cut preview or review instead.
+- Mouse wheel or PgUp/PgDn scrolls the transcript; while an [`AskUserQuestion`](tools.md#askuserquestion) dialog is open PgUp/PgDn scroll its cut preview or review instead, and while an [approval](permissions.md#approval-dialog) preview or a `/tasks` output is cut, they scroll that. PgUp/PgDn never move the cursor in a dialog's text field.
 - Keys while the model asks you a question are listed under [`AskUserQuestion`](tools.md#askuserquestion).
 - Ctrl+O opens every group and every row that opens, and every capped failure, until pressed again; see [Transcript](#transcript).
 
 ## Transcript
 
-Each tool call is a row. It names the call by the tool while it runs, while it waits for approval and when it did not succeed, and by a past-tense verb once it succeeded. A path shows relative to the start directory, and the session's plan file as `plan`.
+Each tool call is a row. It names the call by the tool while it runs, while it waits for approval and when it did not succeed, and by a past-tense verb once it succeeded. A path shows relative to the start directory, the session's plan file as `plan`, and a saved output file as `output <name>`.
 
 ```text
 • Ran go test ./...
@@ -98,6 +98,8 @@ Rejected, denied and interrupted rows have a warning-coloured bullet, a failed r
 
 - A failed command's output shows under its line: in full up to 5 lines, otherwise its first two and last two lines around `… N more lines`. Click the row or press Ctrl+O for all of it.
 - A successful row opens to the result as the model received it. An `Edit` or `Write` row shows `+3 -1` or `+40` and opens to its removed lines and its added lines.
+- A `Bash` row whose title cut the command (a second line, or more than 80 characters) opens to the whole command after `$ `, above its output, whatever the outcome; a rejected, denied or interrupted row opens to it under its summary, and a cut command with no output still opens.
+- Lines of an opened `Edit` or `Write` longer than 2000 characters end ` [line truncated]`.
 - A row that has nothing to add to its title and summary does not open: a command with no output, a file that is empty, a search with no match, a launched agent. A question's answers are on its row.
 - A plan revision you asked for opens to your feedback.
 - An opened result is the model's text, so it includes notices written to the model, such as `use offset=2001 to continue`.

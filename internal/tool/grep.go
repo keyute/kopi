@@ -107,14 +107,37 @@ func NewGrep(ws *Workspace, hidden Hidden) Tool {
 			if args.Path == "" {
 				args.Path = "."
 			}
-			root, rel, info, err := ws.searchRoot(args.Path)
-			if err != nil {
+			var (
+				root  policy.Target
+				rel   string
+				info  fs.FileInfo
+				saved *os.File
+			)
+			if dest, ok, err := ws.outputs.prepare(ws.absolute(args.Path), args.Path); ok {
+				// A saved output file is opened the way Read opens it, and is the
+				// whole search: the walk never sees Kopi's home.
+				if err != nil {
+					return Result{}, err
+				}
+				defer func() { dest.parent.Close() }()
+				if saved, err = dest.open(); err != nil {
+					return Result{}, err
+				}
+				defer saved.Close()
+				if info, err = saved.Stat(); err != nil {
+					return Result{}, fmt.Errorf("failed to stat %s: %w", args.Path, err)
+				}
+				if !info.Mode().IsRegular() {
+					return Result{}, fmt.Errorf("%w: %s", ErrNotRegular, args.Path)
+				}
+				root, rel = dest.target, dest.target.Path
+			} else if root, rel, info, err = ws.searchRoot(args.Path); err != nil {
 				return Result{}, err
 			}
 			if _, err := admit(root); err != nil {
 				return Result{}, err
 			}
-			return grep(ctx, ws, hidden, args, re, match, root, rel, info)
+			return grep(ctx, ws, hidden, args, re, match, root, rel, info, saved)
 		},
 		Display: Display{
 			Title:   searchTitle(ws, "Grep", false),
@@ -253,7 +276,7 @@ func readGrepLine(ctx context.Context, r *bufio.Reader, re *regexp.Regexp, mode 
 	return grepLine{text: l.text.String(), cut: l.cut, matched: matched}, nil
 }
 
-func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *regexp.Regexp, match func(string) bool, root policy.Target, rel string, info fs.FileInfo) (Result, error) {
+func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *regexp.Regexp, match func(string) bool, root policy.Target, rel string, info fs.FileInfo, saved *os.File) (Result, error) {
 	mode := args.OutputMode
 	if mode == "" {
 		mode = grepFiles
@@ -416,9 +439,12 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 	}
 
 	if info.Mode().IsRegular() {
-		f, err := ws.openWalked(rel, info)
-		if err != nil {
-			return Result{}, err
+		f := saved
+		if f == nil {
+			var err error
+			if f, err = ws.openWalked(rel, info); err != nil {
+				return Result{}, err
+			}
 		}
 		searchFile(rel, f, info)
 		if readErr != nil {

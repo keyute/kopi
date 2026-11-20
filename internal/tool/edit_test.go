@@ -193,13 +193,13 @@ func TestEditDisplayPreview(t *testing.T) {
 	args, err := json.Marshal(map[string]string{"old_string": numberedLines(11), "new_string": numberedLines(12)})
 	require.NoError(t, err)
 	preview := tool.Display.Preview(args)
-	require.Len(t, preview, 22)
-	for i := range 10 {
+	require.Len(t, preview, 23)
+	for i := range 11 {
 		assert.Equal(t, PreviewLine{Kind: Removed, Text: fmt.Sprintf("line %d", i+1)}, preview[i])
+	}
+	for i := range 12 {
 		assert.Equal(t, PreviewLine{Kind: Added, Text: fmt.Sprintf("line %d", i+1)}, preview[11+i])
 	}
-	assert.Equal(t, PreviewLine{Kind: Context, Text: "… 1 more line"}, preview[10])
-	assert.Equal(t, PreviewLine{Kind: Context, Text: "… 2 more lines"}, preview[21])
 }
 
 func TestEditDisplayChange(t *testing.T) {
@@ -224,6 +224,15 @@ func TestEditDisplayChange(t *testing.T) {
 	summary, lines = tool.Display.Change(json.RawMessage(`{"old_string":"a","new_string":""}`))
 	assert.Equal(t, "+0 -1", summary)
 	assert.Equal(t, []PreviewLine{{Kind: Removed, Text: "a"}}, lines)
+
+	long := strings.Repeat("é", maxLineChars+1)
+	args, err = json.Marshal(map[string]string{"old_string": long, "new_string": strings.Repeat("é", maxLineChars)})
+	require.NoError(t, err)
+	_, lines = tool.Display.Change(args)
+	assert.Equal(t, []PreviewLine{
+		{Kind: Removed, Text: strings.Repeat("é", maxLineChars) + lineCutMarker},
+		{Kind: Added, Text: strings.Repeat("é", maxLineChars)},
+	}, lines, "a line at the limit is not marked")
 }
 
 func TestEditTarget(t *testing.T) {

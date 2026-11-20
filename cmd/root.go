@@ -330,7 +330,9 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	defer signal.Stop(interrupts)
 	// workRunning is set when Close leaves work running; see below.
 	var workRunning bool
-	servers := pigruntime.StartServers(pigruntime.ServerOptions{Servers: set.servers, CWD: cwd, Version: kopiVersion()})
+	outputs := tool.NewOutputs(paths.OutputsDir)
+	outputs.Prune(time.Now())
+	servers := pigruntime.StartServers(pigruntime.ServerOptions{Servers: set.servers, CWD: cwd, Version: kopiVersion(), Outputs: outputs})
 	// Closed even under running work: stdio servers would outlive the process,
 	// and a call they are serving can fail as the process exits anyway.
 	defer servers.Close()
@@ -374,15 +376,8 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// rules is set below; the search tools consult it only when they run.
 	var rules *policy.Rules
 	hidden := func(name string, root, t policy.Target) bool { return rules.Hides(name, root, t) }
-	shell, planShell := tool.NewShell(cwd, sb), tool.NewShell(cwd, planSB)
-	// Only the root's file tools reach the plan file.
-	rootWS := ws.WithPlans(plans)
-	tools := []tool.Tool{
-		tool.NewRead(rootWS), tool.NewGlob(ws, hidden), tool.NewGrep(ws, hidden), tool.NewLS(ws, hidden),
-		tool.NewWrite(rootWS), tool.NewEdit(rootWS), tool.NewBash(shell, planShell, tasks, resolved.Config.Sandbox.AllowUnsandboxed),
-		tool.NewTaskOutput(tasks), tool.NewTaskStop(tasks),
-		tool.NewWebFetch("Kopi/"+kopiVersion(), answer),
-	}
+	shell, planShell := tool.NewShell(cwd, sb).WithOutputs(outputs), tool.NewShell(cwd, planSB).WithOutputs(outputs)
+	tools := rootTools(ws, plans, outputs, hidden, shell, planShell, tasks, resolved.Config.Sandbox.AllowUnsandboxed, answer)
 	// A subagent can have every built-in the root can, whether or not this run
 	// offers it, except the tools of the shared task registry.
 	taskToolNames := []string{"TaskOutput", "TaskStop"}
@@ -479,7 +474,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// Only the fullscreen interface has a human to answer approvals.
 	cfg := app.Config{
 		Model: resolved.Config.Model, SmallModel: resolved.Config.SmallModel, ConfigFile: paths.ConfigFile, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
-		Errors: slices.Concat(set.errs, instructionErrs, skillErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review,
+		Errors: slices.Concat(set.errs, instructionErrs, skillErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review, Outputs: outputs,
 		Skills: skills, SkillPrefix: resolved.Config.Skills.Prefix,
 		WorkflowModel: resolved.Config.Workflows.Model, MaxWorkflows: resolved.Config.Workflows.MaxWorkflows, MaxAgents: resolved.Config.Workflows.MaxAgents,
 	}
@@ -488,7 +483,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		cfg.Plans = plans
 	}
 	cfg.Agents = agents
-	cfg.AgentTools = agentTools(tools, ws, shell, planShell, resolved.Config.Sandbox.AllowUnsandboxed)
+	cfg.AgentTools = agentTools(tools, ws, outputs, shell, planShell, resolved.Config.Sandbox.AllowUnsandboxed)
 	if len(set.servers) > 0 {
 		cfg.Servers = func(ctx context.Context) ([]pigruntime.ServerStatus, error) { return waitServers(ctx, servers) }
 	}
@@ -565,16 +560,31 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	return errors.Join(runErr, closeErr)
 }
 
+// rootTools is the root session's built-in tools. Read and Grep reach saved
+// output; only the root's Read, Write and Edit reach the plan file.
+func rootTools(ws *tool.Workspace, plans *tool.Plans, outputs *tool.Outputs, hidden tool.Hidden, shell, planShell *tool.Shell, tasks *tool.Tasks, allowUnsandboxed bool, answer func(ctx context.Context, system, prompt string) (string, error)) []tool.Tool {
+	readWS := ws.WithOutputs(outputs)
+	rootWS := ws.WithPlans(plans)
+	return []tool.Tool{
+		tool.NewRead(rootWS.WithOutputs(outputs)), tool.NewGlob(ws, hidden), tool.NewGrep(readWS, hidden), tool.NewLS(ws, hidden),
+		tool.NewWrite(rootWS), tool.NewEdit(rootWS), tool.NewBash(shell, planShell, tasks, allowUnsandboxed),
+		tool.NewTaskOutput(tasks), tool.NewTaskStop(tasks),
+		tool.NewWebFetch("Kopi/"+kopiVersion(), answer),
+	}
+}
+
 // agentTools is tools with the file and shell tools rebound for a subagent.
 // ws is the plain workspace: only the root's own file tools reach the plan file.
-func agentTools(tools []tool.Tool, ws *tool.Workspace, shell, planShell *tool.Shell, allowUnsandboxed bool) []tool.Tool {
+// Read and Grep also reach the session's saved output.
+func agentTools(tools []tool.Tool, ws *tool.Workspace, outputs *tool.Outputs, shell, planShell *tool.Shell, allowUnsandboxed bool) []tool.Tool {
+	readWS := ws.WithOutputs(outputs)
 	var out []tool.Tool
 	for _, t := range tools {
 		switch t.Name {
 		case "Bash":
 			out = append(out, tool.NewBash(shell, planShell, nil, allowUnsandboxed))
 		case "Read":
-			out = append(out, tool.NewRead(ws))
+			out = append(out, tool.NewRead(readWS))
 		case "Write":
 			out = append(out, tool.NewWrite(ws))
 		case "Edit":
