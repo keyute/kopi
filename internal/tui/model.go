@@ -143,9 +143,10 @@ type model struct {
 	plan     *planDialog
 	prompt   []string
 	menu     menu
-	// seen is the draft and cursor syncInput last reconciled.
+	// seen is the draft, shown session and cursor syncInput last reconciled.
 	seen struct {
 		value     string
+		shown     string
 		line, col int
 	}
 }
@@ -278,10 +279,10 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 func (m *model) syncInput(wasHeld bool) tea.Cmd {
 	value, line, col := m.composer.value(), m.composer.ta.Line(), m.composer.ta.Column()
 	changed := value != m.seen.value || line != m.seen.line || col != m.seen.col
-	if value != m.seen.value {
+	if value != m.seen.value || m.shown != m.seen.shown {
 		m.composer.spans = m.c.Spans(m.shown, value)
 	}
-	m.seen.value, m.seen.line, m.seen.col = value, line, col
+	m.seen.value, m.seen.shown, m.seen.line, m.seen.col = value, m.shown, line, col
 	if m.holding() || (!changed && !wasHeld) {
 		return nil
 	}
