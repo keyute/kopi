@@ -130,6 +130,9 @@ func TestSpansWithKeyword(t *testing.T) {
 		})
 	}
 	assert.Nil(t, Spans("ultracode", nil, false), "not offered")
+
+	set, _ := skill.NewSet("skill", []skill.Skill{{Name: "ultracode-review"}}, nil)
+	assert.Equal(t, []Span{cmd(0, 0, 23)}, Spans("/skill:ultracode-review now", set, true), "keyword inside a skill command")
 }
 
 func TestSpansManyReferences(t *testing.T) {

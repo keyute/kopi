@@ -57,7 +57,7 @@ func Spans(text string, skills *skill.Set, ultracode bool) []Span {
 		}
 	}
 	if ultracode {
-		spans = append(spans, keywordSpans(text)...)
+		spans = append(spans, keywordSpans(text, skills)...)
 	}
 	slices.SortStableFunc(spans, func(a, b Span) int { return cmp.Or(cmp.Compare(a.Line, b.Line), cmp.Compare(a.Start, b.Start)) })
 	return spans
@@ -67,9 +67,10 @@ func Spans(text string, skills *skill.Set, ultracode bool) []Span {
 const keyword = "ultracode"
 
 // keywordSpans returns the runs of the whole word keyword, ignoring case, outside
-// @ references.
-func keywordSpans(text string) []Span {
+// @ references and skill commands.
+func keywordSpans(text string, skills *skill.Set) []Span {
 	var spans []Span
+	tokens := skills.Tokens(text)
 	for i, l := range strings.Split(text, "\n") {
 		line := []rune(l)
 		refs := references(line)
@@ -81,7 +82,8 @@ func keywordSpans(text string) []Span {
 			if !strings.EqualFold(string(line[start:end]), keyword) || word(start-1) || word(end) {
 				continue
 			}
-			if !slices.ContainsFunc(refs, func(r [2]int) bool { return r[0] <= start && start < r[1] }) {
+			inToken := slices.ContainsFunc(tokens, func(t skill.Token) bool { return t.Line == i && t.Start <= start && start < t.End })
+			if !inToken && !slices.ContainsFunc(refs, func(r [2]int) bool { return r[0] <= start && start < r[1] }) {
 				spans = append(spans, Span{Line: i, Start: start, End: end, Kind: KindCommand})
 			}
 		}

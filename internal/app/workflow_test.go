@@ -546,6 +546,16 @@ func TestKeywordMakesWorkflowCallableForThatPrompt(t *testing.T) {
 	}
 }
 
+func TestKeywordInsideASkillCommandDoesNotMakeWorkflowCallable(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), skillConfig("skill", "ultracode-review"))
+	requests := make(chan pigruntimetest.Request, 1)
+	a.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "ok")})
+
+	a.turn(t, "/skill:ultracode-review now")
+
+	assert.NotContains(t, receive(t, requests).ToolNames, "Workflow")
+}
+
 func TestKeywordStaysOnForTheSession(t *testing.T) {
 	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{})
 	requests := make(chan pigruntimetest.Request, 2)

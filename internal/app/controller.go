@@ -564,7 +564,7 @@ func (c *Controller) input(ctx context.Context, session, text string, paths []st
 		return nil, err
 	}
 	p := pigruntime.Prompt{Text: prompt, Images: images, Skills: skills}
-	if target == c.main && c.workflowOffered() && len(keywordSpans(text)) > 0 {
+	if target == c.main && c.workflowOffered() && len(keywordSpans(text, c.skills)) > 0 {
 		p.Tools = []string{"Workflow"}
 	}
 	return target.submitLocked(ctx, p, now)
