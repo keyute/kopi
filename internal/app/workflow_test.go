@@ -872,35 +872,41 @@ func TestWorkflowSnapshotFollowsACallFromQueuedToEnded(t *testing.T) {
 	id := a.startWorkflow(t, "audit", `phase("Survey")
 const first = agent("a1", {label: "first"})
 const second = agent("b1", {label: "second", phase: "Review"})
-const third = agent("c1", {agentType: "nope", label: "third"})
-return await Promise.all([first, second, third.catch(e => e.message)])`)
+const third = first.then(() => agent("c1", {agentType: "nope", label: "third"})).catch(e => e.message)
+return await Promise.all([first, second, third])`)
 	receiveChild(t, requests)
-	a.until(t, func() bool { return len(a.workflowAgents(id)) == 3 && a.workflowAgents(id)[1].State == WorkflowQueued })
+	a.until(t, func() bool {
+		agents := a.workflowAgents(id)
+		return len(agents) == 2 && (agents[0].State == WorkflowQueued) != (agents[1].State == WorkflowQueued)
+	})
 
 	status, agents, ok := a.c.Workflow(id)
 	require.True(t, ok)
+	require.Len(t, agents, 2)
+	running, queued := agents[0], agents[1]
+	if running.State == WorkflowQueued {
+		running, queued = queued, running
+	}
 	assert.Equal(t, tool.TaskRunning, status.State)
 	assert.Equal(t, "audit", status.Description)
 	assert.False(t, status.Started.IsZero())
 	assert.True(t, status.Ended.IsZero())
 	assert.Equal(t, WorkflowStatus{
 		ID: id, Description: "audit", State: tool.TaskRunning, Started: status.Started,
-		Running: 1, Queued: 2, Phase: "Survey",
+		Running: 1, Queued: 1, Phase: running.Phase,
 	}, status)
-	running := agents[0]
-	assert.Equal(t, 1, running.N)
 	assert.Equal(t, tool.TaskRunning, running.State)
-	assert.Equal(t, "first", running.Description)
-	assert.Equal(t, "Survey", running.Phase)
 	assert.Equal(t, childProvider+"/faux-1", running.Model)
 	assert.NotEmpty(t, running.ID)
 	assert.False(t, running.Started.IsZero())
-	assert.Equal(t, WorkflowQueued, agents[1].State)
+	assert.Empty(t, queued.ID)
+	assert.True(t, queued.Started.IsZero())
+	assert.Equal(t, 1, agents[0].N)
+	assert.Equal(t, "first", agents[0].Description)
+	assert.Equal(t, "Survey", agents[0].Phase)
+	assert.Equal(t, 2, agents[1].N)
+	assert.Equal(t, "second", agents[1].Description)
 	assert.Equal(t, "Review", agents[1].Phase, "the option overrides the heading")
-	assert.Empty(t, agents[1].ID)
-	assert.True(t, agents[1].Started.IsZero())
-	assert.Equal(t, "nope", agents[2].Agent)
-	assert.Equal(t, "Survey", agents[2].Phase)
 	assert.Equal(t, []WorkflowStatus{status}, a.c.Workflows())
 
 	close(gate)
@@ -921,8 +927,10 @@ return await Promise.all([first, second, third.catch(e => e.message)])`)
 		assert.Equal(t, want, agents[i].State)
 		assert.False(t, agents[i].Ended.IsZero())
 	}
-	assert.Equal(t, childProvider+"/faux-1", agents[0].Model, "the record keeps what it was when the agent closed")
-	assert.Equal(t, running.ID, agents[0].ID)
+	assert.Equal(t, "nope", agents[2].Agent)
+	assert.Equal(t, "Survey", agents[2].Phase)
+	assert.Equal(t, running.ID, agents[running.N-1].ID)
+	assert.Equal(t, childProvider+"/faux-1", agents[running.N-1].Model, "the record keeps what it was when the agent closed")
 	assert.Empty(t, agents[0].Reason)
 	assert.Contains(t, agents[2].Reason, "unknown agent type: nope")
 	assert.Empty(t, agents[2].ID)
@@ -1150,10 +1158,16 @@ func TestWorkflowHistoryRefusesAQueuedAgent(t *testing.T) {
 	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1"))})
 	id := a.startWorkflow(t, "audit", `return await Promise.all([agent("one"), agent("two")])`)
 	wait(t, started)
-	a.until(t, func() bool { return len(a.workflowAgents(id)) == 2 })
-	require.Equal(t, WorkflowQueued, a.workflowAgents(id)[1].State)
+	a.until(t, func() bool {
+		agents := a.workflowAgents(id)
+		return len(agents) == 2 && (agents[0].State == WorkflowQueued) != (agents[1].State == WorkflowQueued)
+	})
+	queued := a.workflowAgents(id)[0]
+	if queued.State != WorkflowQueued {
+		queued = a.workflowAgents(id)[1]
+	}
 
-	_, err := a.c.WorkflowHistory(id, 2)
+	_, err := a.c.WorkflowHistory(id, queued.N)
 
 	assert.ErrorIs(t, err, ErrAgentRunning)
 	_, err = a.tasks.Stop(id)
