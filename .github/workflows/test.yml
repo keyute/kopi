@@ -123,9 +123,13 @@ jobs:
               if (!(await isCurrent())) return core.notice('Head moved or PR closed; nothing to do');
               try {
                 await github.rest.pulls.merge({ ...context.repo, pull_number: pr.number, merge_method: 'squash', sha: head });
-                return core.notice(`${head} merged`);
               } catch (e) {
                 reason = `merge of ${head} failed: ${e.message}`;
+              }
+              if (reason === null) {
+                // GitHub's "Automatically delete head branches" skips merges made with GITHUB_TOKEN.
+                await github.rest.git.deleteRef({ ...context.repo, ref: `heads/${pr.head.ref}` });
+                return core.notice(`${head} merged`);
               }
             }
 
