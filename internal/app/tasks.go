@@ -119,7 +119,7 @@ func (c *Controller) StopTask(id string) error {
 	}
 	c.queue.Lock()
 	child := c.children[id]
-	_, workflow := c.workflowRuns[id]
+	run := c.workflows[id]
 	var w *Work
 	if child != nil {
 		w = c.interruptByHumanLocked(child)
@@ -140,17 +140,21 @@ func (c *Controller) StopTask(id string) error {
 	}
 	head := fmt.Sprintf("Background task %s stopped by the user: %s", info.ID, commandLine(info.Command))
 	switch {
-	case workflow:
+	case run != nil:
 		head = fmt.Sprintf("Workflow %s stopped by the user: %s", info.ID, commandLine(info.Command))
 	case info.Agent != "":
 		head = agentStoppedHead(info)
+	}
+	n := notice(info, head)
+	if run != nil {
+		n.Shown = run.taskEnded(info)
 	}
 	c.queue.Lock()
 	defer c.queue.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.closed && owner != nil && c.main.sess == owner {
-		c.main.notices = append(c.main.notices, notice(info, head))
+		c.main.notices = append(c.main.notices, n)
 	}
 	return nil
 }

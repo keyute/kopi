@@ -469,6 +469,86 @@ func TestWorkflowLimitIsFreedBySessionSwitch(t *testing.T) {
 	a.untilStatus(t, second, tool.TaskCompleted)
 }
 
+func TestWorkflowPhaseCoercesItsArgumentToAString(t *testing.T) {
+	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("r")})
+	a.rootAcks(1)
+
+	id := a.startWorkflow(t, "audit", `phase(1); return await agent("go")`)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	agents := a.workflowAgents(id)
+	require.Len(t, agents, 1)
+	assert.Equal(t, tool.TaskCompleted, agents[0].State)
+	assert.Equal(t, "1", agents[0].Phase)
+}
+
+func TestWorkflowPerCallPhaseOptionCoercesToAString(t *testing.T) {
+	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("r")})
+	a.rootAcks(1)
+
+	id := a.startWorkflow(t, "audit", `return await agent("go", {phase: 2})`)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	agents := a.workflowAgents(id)
+	require.Len(t, agents, 1)
+	assert.Equal(t, tool.TaskCompleted, agents[0].State)
+	assert.Equal(t, "2", agents[0].Phase)
+}
+
+func TestWorkflowPhaseNullClearsThePhase(t *testing.T) {
+	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("r")})
+	a.rootAcks(1)
+
+	id := a.startWorkflow(t, "audit", `phase("A"); phase(null); return await agent("go")`)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	agents := a.workflowAgents(id)
+	require.Len(t, agents, 1)
+	assert.Equal(t, tool.TaskCompleted, agents[0].State)
+	assert.Empty(t, agents[0].Phase)
+}
+
+func TestWorkflowLabelAndPhaseKeepOnlyTheirFirstLine(t *testing.T) {
+	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("r")})
+	a.rootAcks(1)
+
+	id := a.startWorkflow(t, "audit", `return await agent("go", {label: "first\nsecond", phase: "A\nB"})`)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	agents := a.workflowAgents(id)
+	require.Len(t, agents, 1)
+	assert.Equal(t, "first", agents[0].Description)
+	assert.Equal(t, "A", agents[0].Phase)
+}
+
+func TestWorkflowAgentWhoseTurnFailsIsRecordedFailedAndItsSessionClosed(t *testing.T) {
+	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
+	evs := recordEvents(a.c)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ProviderError("boom")})
+	a.rootAcks(1)
+
+	id := a.startWorkflow(t, "audit", `return await agent("go").catch(() => "caught")`)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	agents := a.workflowAgents(id)
+	require.Len(t, agents, 1)
+	assert.Equal(t, tool.TaskFailed, agents[0].State)
+	assert.NotEmpty(t, agents[0].ID)
+	assert.Contains(t, agents[0].Reason, "boom")
+	assert.False(t, agents[0].Ended.IsZero())
+	var closed []string
+	for len(evs) > 0 {
+		if e, ok := (<-evs).(event.SessionClosed); ok {
+			closed = append(closed, e.ID)
+		}
+	}
+	assert.Equal(t, []string{agents[0].ID}, closed)
+}
+
 func TestWorkflowAgentsPendingApprovalEndsOnceBeforeSessionChangedOnASwitch(t *testing.T) {
 	ran := new(atomic.Int32)
 	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{probeTool(ran)}})
@@ -629,7 +709,13 @@ func TestRunningWorkflowIsNotASubagentAndRefusesLogin(t *testing.T) {
 
 	_, err = a.tasks.Stop(id)
 	require.NoError(t, err)
+	a.untilStatus(t, id, tool.TaskStopped)
 	assert.Zero(t, a.c.Status().Workflows)
+	a.c.queue.Lock()
+	a.c.live = 0
+	a.c.queue.Unlock()
+	_, err = a.c.Submit(t.Context(), Main, "/login "+loginProvider)
+	assert.NotErrorIs(t, err, ErrWorkStillRunning, "a login is no longer refused once the workflow has ended")
 }
 
 func TestTwentyRunningSubagentsDoNotDelayAWorkflowAgent(t *testing.T) {
@@ -762,4 +848,347 @@ func TestKeywordSetsPromptToolsOnlyForTheMainSessionWhenOffered(t *testing.T) {
 			assert.Equal(t, tc.want, target.pending[0].Tools)
 		})
 	}
+}
+
+// workflowAgents is the agents of workflow run id.
+func (a *agentHarness) workflowAgents(id string) []WorkflowAgent {
+	_, agents, _ := a.c.Workflow(id)
+	return agents
+}
+
+func TestWorkflowSnapshotFollowsACallFromQueuedToEnded(t *testing.T) {
+	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{MaxAgents: 1})
+	requests, gate := make(chan childRequest, 2), make(chan struct{})
+	a.child.SetResponses([]ai.FauxResponseStep{captureChild(requests, gate, "r"), captureChild(requests, gate, "r")})
+	a.rootAcks(1)
+	t.Cleanup(func() {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+	})
+
+	id := a.startWorkflow(t, "audit", `phase("Survey")
+const first = agent("a1", {label: "first"})
+const second = agent("b1", {label: "second", phase: "Review"})
+const third = first.then(() => agent("c1", {agentType: "nope", label: "third"})).catch(e => e.message)
+return await Promise.all([first, second, third])`)
+	receiveChild(t, requests)
+	a.until(t, func() bool {
+		agents := a.workflowAgents(id)
+		return len(agents) == 2 && (agents[0].State == WorkflowQueued) != (agents[1].State == WorkflowQueued)
+	})
+
+	status, agents, ok := a.c.Workflow(id)
+	require.True(t, ok)
+	require.Len(t, agents, 2)
+	running, queued := agents[0], agents[1]
+	if running.State == WorkflowQueued {
+		running, queued = queued, running
+	}
+	assert.Equal(t, tool.TaskRunning, status.State)
+	assert.Equal(t, "audit", status.Description)
+	assert.False(t, status.Started.IsZero())
+	assert.True(t, status.Ended.IsZero())
+	assert.Equal(t, WorkflowStatus{
+		ID: id, Description: "audit", State: tool.TaskRunning, Started: status.Started,
+		Running: 1, Queued: 1, Phase: running.Phase,
+	}, status)
+	assert.Equal(t, tool.TaskRunning, running.State)
+	assert.Equal(t, childProvider+"/faux-1", running.Model)
+	assert.NotEmpty(t, running.ID)
+	assert.False(t, running.Started.IsZero())
+	assert.Empty(t, queued.ID)
+	assert.True(t, queued.Started.IsZero())
+	assert.Equal(t, 1, agents[0].N)
+	assert.Equal(t, "first", agents[0].Description)
+	assert.Equal(t, "Survey", agents[0].Phase)
+	assert.Equal(t, 2, agents[1].N)
+	assert.Equal(t, "second", agents[1].Description)
+	assert.Equal(t, "Review", agents[1].Phase, "the option overrides the heading")
+	assert.Equal(t, []WorkflowStatus{status}, a.c.Workflows())
+
+	close(gate)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	assert.Empty(t, a.c.Workflows(), "only running runs")
+	status, agents, ok = a.c.Workflow(id)
+	require.True(t, ok)
+	assert.Equal(t, tool.TaskCompleted, status.State)
+	assert.False(t, status.Ended.IsZero())
+	assert.Equal(t, 2, status.Done)
+	assert.Equal(t, 1, status.Failed)
+	assert.Zero(t, status.Running+status.Queued)
+	assert.Empty(t, status.Phase)
+	require.Len(t, agents, 3)
+	for i, want := range []tool.TaskStatus{tool.TaskCompleted, tool.TaskCompleted, tool.TaskFailed} {
+		assert.Equal(t, i+1, agents[i].N)
+		assert.Equal(t, want, agents[i].State)
+		assert.False(t, agents[i].Ended.IsZero())
+	}
+	assert.Equal(t, "nope", agents[2].Agent)
+	assert.Equal(t, "Survey", agents[2].Phase)
+	assert.Equal(t, running.ID, agents[running.N-1].ID)
+	assert.Equal(t, childProvider+"/faux-1", agents[running.N-1].Model, "the record keeps what it was when the agent closed")
+	assert.Empty(t, agents[0].Reason)
+	assert.Contains(t, agents[2].Reason, "unknown agent type: nope")
+	assert.Empty(t, agents[2].ID)
+
+	require.NoError(t, a.c.NewSession(t.Context()))
+	_, _, ok = a.c.Workflow(id)
+	assert.False(t, ok, "a session switch forgets the run")
+}
+
+func TestWorkflowPhaseHoldsUntilTheNextPhaseCall(t *testing.T) {
+	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
+	requests, gate := make(chan childRequest, 3), make(chan struct{})
+	a.child.SetResponses([]ai.FauxResponseStep{captureChild(requests, gate, "r"), captureChild(requests, gate, "r"), captureChild(requests, gate, "r")})
+	a.rootAcks(1)
+	t.Cleanup(func() {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+	})
+
+	id := a.startWorkflow(t, "audit", `phase("A"); const x = agent("one"); phase("B"); const y = agent("two", {phase: "C"}); const z = agent("three"); return await Promise.all([x, y, z])`)
+	for range 3 {
+		receiveChild(t, requests)
+	}
+
+	status, agents, _ := a.c.Workflow(id)
+	require.Len(t, agents, 3)
+	var phases []string
+	for _, agent := range agents {
+		phases = append(phases, agent.Phase)
+	}
+	assert.Equal(t, []string{"A", "C", "B"}, phases)
+	assert.Equal(t, "B", status.Phase, "the phase of the latest running call")
+	close(gate)
+	a.untilStatus(t, id, tool.TaskCompleted)
+}
+
+func TestStopWorkflowAgentStopsOnlyThatQueuedOrRunningCall(t *testing.T) {
+	a, started := blockingHarness(t, Config{MaxAgents: 1})
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1"))})
+	a.rootAcks(1)
+	ends := subscribeTo[event.TaskEnded](a.c)
+
+	id := a.startWorkflow(t, "audit", `const ts = [agent("a"), agent("b")]; return await Promise.all(ts.map(t => t.catch(e => e.message)))`)
+	wait(t, started)
+	a.until(t, func() bool {
+		agents := a.workflowAgents(id)
+		return len(agents) == 2 && (agents[0].State == WorkflowQueued) != (agents[1].State == WorkflowQueued)
+	})
+	byState := func(state tool.TaskStatus) WorkflowAgent {
+		for _, agent := range a.workflowAgents(id) {
+			if agent.State == state {
+				return agent
+			}
+		}
+		return WorkflowAgent{}
+	}
+	runningCall, queuedCall := byState(tool.TaskRunning), byState(WorkflowQueued)
+	require.NotZero(t, runningCall.N)
+	require.NotZero(t, queuedCall.N)
+
+	a.c.StopWorkflowAgent(id, queuedCall.N)
+	a.c.StopWorkflowAgent(id, 99)
+	a.c.StopWorkflowAgent("t99", 1)
+	a.until(t, func() bool { return byState(tool.TaskStopped).N == queuedCall.N })
+
+	assert.Equal(t, tool.TaskRunning, byState(tool.TaskRunning).State, "the running call is untouched")
+	assert.Equal(t, tool.TaskRunning, a.info(t, id).Status)
+	assert.True(t, byState(tool.TaskStopped).Started.IsZero(), "it never started")
+
+	a.c.StopWorkflowAgent(id, runningCall.N)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	status, agents, _ := a.c.Workflow(id)
+	assert.Equal(t, 2, status.Failed, "stopped calls count as failed")
+	for _, agent := range agents {
+		assert.Equal(t, tool.TaskStopped, agent.State)
+		assert.Empty(t, agent.Reason)
+	}
+	a.c.StopWorkflowAgent(id, runningCall.N)
+	assert.JSONEq(t, `["`+ErrAgentStopped.Error()+`", "`+ErrAgentStopped.Error()+`"]`, a.info(t, id).Result)
+	ended := receiveEvent(t, ends)
+	assert.Equal(t, 2, ended.Agents)
+	assert.Equal(t, 2, ended.Failed)
+}
+
+func TestWorkflowTaskEndedCarriesCountsReasonAndResult(t *testing.T) {
+	t.Run("completed", func(t *testing.T) {
+		a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
+		a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("fine")})
+		a.rootAcks(1)
+		ends := subscribeTo[event.TaskEnded](a.c)
+
+		id := a.startWorkflow(t, "audit", `const ok = await agent("go"); await agent("x", {agentType: "nope"}).catch(() => 0); return ok`)
+		a.untilStatus(t, id, tool.TaskCompleted)
+
+		ended := receiveEvent(t, ends)
+		assert.Equal(t, 2, ended.Agents)
+		assert.Equal(t, 1, ended.Failed)
+		assert.Equal(t, `"fine"`, ended.Result)
+		assert.Empty(t, ended.Reason)
+	})
+	t.Run("failed", func(t *testing.T) {
+		a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
+		a.rootAcks(1)
+		ends := subscribeTo[event.TaskEnded](a.c)
+
+		id := a.startWorkflow(t, "audit", `throw new Error("boom")`)
+		a.untilStatus(t, id, tool.TaskFailed)
+
+		ended := receiveEvent(t, ends)
+		assert.Zero(t, ended.Agents)
+		assert.Contains(t, ended.Reason, "boom")
+		assert.Empty(t, ended.Result)
+	})
+	t.Run("StopTask", func(t *testing.T) {
+		a, started := blockingHarness(t, Config{})
+		a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1"))})
+		id := a.startWorkflow(t, "audit", `return await agent("go")`)
+		wait(t, started)
+
+		require.NoError(t, a.c.StopTask(id))
+
+		notices := a.queuedNotices()
+		require.Len(t, notices, 1)
+		assert.Equal(t, 1, notices[0].Shown.Agents)
+		assert.Equal(t, 1, notices[0].Shown.Failed, "the call that has not yet noticed the stop counts as stopped")
+		a.untilStatus(t, id, tool.TaskStopped)
+		a.until(t, func() bool { return a.workflowAgents(id)[0].State != tool.TaskRunning })
+		agents := a.workflowAgents(id)
+		require.Len(t, agents, 1)
+		assert.Equal(t, tool.TaskStopped, agents[0].State)
+		assert.Empty(t, agents[0].Reason)
+	})
+}
+
+func TestWorkflowAgentEventsArriveWrappedThenSessionClosed(t *testing.T) {
+	look := testTool("Look", policy.Read, func(context.Context, json.RawMessage) (string, error) { return "looked", nil })
+	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{look}})
+	evs := recordEvents(a.c)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Look", "c1")), pigruntimetest.Text("found it")})
+	a.rootAcks(1)
+
+	id := a.startWorkflow(t, "audit", `return await agent("look around")`)
+	a.untilStatus(t, id, tool.TaskCompleted)
+	sessionID := a.workflowAgents(id)[0].ID
+	require.NotEmpty(t, sessionID)
+
+	var got []event.Event
+	for len(evs) > 0 {
+		got = append(got, <-evs)
+	}
+	own := sessionOf(got, sessionID)
+	require.NotEmpty(t, own)
+	assert.Equal(t, event.TurnStart{Prompt: "look around"}, own[0])
+	assert.Contains(t, own, event.Event(event.TextDelta{Text: "found it"}))
+	assert.True(t, slices.ContainsFunc(own, func(ev event.Event) bool { _, ok := ev.(event.ToolStart); return ok }), "the tool call arrived wrapped")
+	end, ok := own[len(own)-1].(event.TurnEnd)
+	require.True(t, ok)
+	assert.Equal(t, event.Completed, end.Outcome.Status)
+	var closed []int
+	for i, ev := range got {
+		switch e := ev.(type) {
+		case event.SessionClosed:
+			assert.Equal(t, sessionID, e.ID)
+			closed = append(closed, i)
+		case event.ToolStart, event.ToolEnd, event.UserMessage:
+			t.Errorf("an agent's %T arrived bare", e)
+		}
+	}
+	require.Len(t, closed, 1)
+	for i, ev := range got {
+		if s, ok := ev.(event.Session); ok && s.ID == sessionID {
+			assert.Less(t, i, closed[0], "nothing of the session follows its close")
+		}
+	}
+}
+
+func TestWorkflowHistoryReturnsAClosedAgentsTranscriptAsDisplayEvents(t *testing.T) {
+	look := testTool("Look", policy.Read, func(context.Context, json.RawMessage) (string, error) { return "looked", nil })
+	look.Display.Title = func(json.RawMessage) string { return "Looked around" }
+	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{look}})
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Look", "c1")), pigruntimetest.Text("done")})
+	a.rootAcks(1)
+
+	id := a.startWorkflow(t, "audit", `try { await agent("x", {agentType: "nope"}) } catch (e) {} return await agent("go")`)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	got, err := a.c.WorkflowHistory(id, 2)
+
+	require.NoError(t, err)
+	var titles []string
+	for _, ev := range got {
+		if start, ok := ev.(event.ToolStart); ok {
+			titles = append(titles, start.Title)
+		}
+	}
+	assert.Equal(t, []string{"Looked around"}, titles)
+	assert.Contains(t, got, event.Event(event.TextDelta{Text: "done"}))
+	_, err = a.c.WorkflowHistory(id, 1)
+	assert.ErrorIs(t, err, pigruntime.ErrNotSaved, "an agent that never opened has none")
+	_, err = a.c.WorkflowHistory(id, 99)
+	assert.ErrorIs(t, err, tool.ErrUnknownTask)
+	_, err = a.c.WorkflowHistory("t99", 1)
+	assert.ErrorIs(t, err, tool.ErrUnknownTask)
+}
+
+func TestWorkflowHistoryRefusesARunningAgent(t *testing.T) {
+	a, started := blockingHarness(t, Config{})
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1"))})
+	id := a.startWorkflow(t, "audit", `return await agent("go")`)
+	wait(t, started)
+
+	_, err := a.c.WorkflowHistory(id, 1)
+
+	assert.ErrorIs(t, err, ErrAgentRunning)
+	_, err = a.tasks.Stop(id)
+	require.NoError(t, err)
+}
+
+func TestWorkflowHistoryRefusesAQueuedAgent(t *testing.T) {
+	a, started := blockingHarness(t, Config{MaxAgents: 1})
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1"))})
+	id := a.startWorkflow(t, "audit", `return await Promise.all([agent("one"), agent("two")])`)
+	wait(t, started)
+	a.until(t, func() bool {
+		agents := a.workflowAgents(id)
+		return len(agents) == 2 && (agents[0].State == WorkflowQueued) != (agents[1].State == WorkflowQueued)
+	})
+	queued := a.workflowAgents(id)[0]
+	if queued.State != WorkflowQueued {
+		queued = a.workflowAgents(id)[1]
+	}
+
+	_, err := a.c.WorkflowHistory(id, queued.N)
+
+	assert.ErrorIs(t, err, ErrAgentRunning)
+	_, err = a.tasks.Stop(id)
+	require.NoError(t, err)
+}
+
+func TestControlsRefuseAWorkflowAgentsSession(t *testing.T) {
+	a, started := blockingHarness(t, Config{})
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1"))})
+	id := a.startWorkflow(t, "audit", `return await agent("go")`)
+	wait(t, started)
+	sessionID := a.workflowAgents(id)[0].ID
+	require.NotEmpty(t, sessionID)
+
+	_, err := a.c.Submit(t.Context(), sessionID, "hello")
+	assert.ErrorIs(t, err, tool.ErrUnknownTask)
+	assert.ErrorIs(t, a.c.SendNow(t.Context(), sessionID, "hello"), tool.ErrUnknownTask)
+	assert.Nil(t, a.c.TakeQueued(sessionID))
+	assert.False(t, a.c.Interrupt(sessionID))
+	assert.Len(t, a.c.Agents(), 1, "only the main session")
+
+	_, err = a.tasks.Stop(id)
+	require.NoError(t, err)
 }

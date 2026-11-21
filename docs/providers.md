@@ -25,13 +25,17 @@
 ## Models
 
 - A model is `provider/id`. The ids a provider offers are built into Kopi, so a model released after your Kopi build is unknown until Kopi is updated or its list is fetched.
-- Kopi fetches a provider's list only when a configured model of that provider is unknown, the provider has a credential, and the provider has not been fetched in this process. The fetch happens at start, once per provider per process, and waits at most 5 seconds per provider, so unknown ids under several providers add up.
-- The list comes from `pi-in-go.dev`. That request carries the provider id and a user agent with PiG's name and version, the OS, its release and the architecture; it carries no credential.
+- At every start, in the background, Kopi refreshes the lists of the providers of the models this run uses (the session model, `smallModel`, `workflows.model`, `classifier.model` and the models of subagent definitions) that have a credential. A list checked under four hours ago is not requested. The refresh has 15 seconds, does not delay the start, and quitting stops it.
+- Separately, a configured model that is unknown fetches its provider's list before the session opens, whatever the list's age, once per provider per process and for at most 5 seconds per provider, so unknown ids under several providers add up.
+- The list comes from `pi-in-go.dev`. That request carries the provider id, `types=chat,image,classifier`, `If-None-Match` with the ETag when a list is saved (not for `openrouter`), and a user agent with PiG's name and version, the OS, its release and the architecture; it carries no credential.
 - A provider that serves its own list is also asked for it, with its own credential:
-  - `openrouter`: `/models/user`. The result replaces openrouter's whole built-in list, narrowed to the models its key may use, and does so on later starts too.
-  - `radius`: its own catalog, in place of `pi-in-go.dev`.
-- An expired sign-in of the provider is renewed before the fetch; for `github-copilot` the renewal also reads the account's available models.
-- The fetched list is saved in `agent/models-store.json`. A later start reads it without a request, and its entries replace the built-in ones of that provider, base URL included, while it is newer than the list built into Kopi. `PIG_OFFLINE` set to `1`, `true` or `yes`, or `PI_OFFLINE` set to any value, stops the fetch; the saved list is still read.
+  - `openrouter`: `/models/user`. The result replaces openrouter's whole built-in list, narrowed to the models its key may use, and does so on later starts too. It has no four-hour window, so it is asked on every start that uses it.
+  - `radius`: its own catalog, in place of `pi-in-go.dev`. It has no four-hour window, so it is asked on every start that uses it.
+- An expired sign-in of the provider is renewed before the request, even when the list is fresh; for `github-copilot` the renewal also reads the account's available models.
+- The list is saved in `agent/models-store.json`. Every start reads the saved list first, and its entries replace the built-in ones of that provider, base URL included, while it is newer than the list built into Kopi. `PIG_OFFLINE` set to `1`, `true` or `yes`, or `PI_OFFLINE` set to any value, stops both the background refresh and the fetch; the saved list is still read.
+- A refreshed list applies to the running session (context window, prices, base URL); the status line shows a new context window after the next tool call or turn.
+- A model known only from a saved list, and any `openrouter` model, is unknown once a refreshed list leaves it out: at the next start, or in the fullscreen interface when the session opens after the refresh.
+- A provider signed in to during the session is refreshed at the next start.
 - A model still unknown after the fetch stops the start, naming `agent/models.json`; if the fetch failed, the message says the list could not be refreshed. The outcome of a fetch is kept for the process, so a later check in the same process does not repeat it; a fetch cut short by cancelling the start is not kept.
 - Declare a model yourself in `agent/models.json`. Under a built-in provider whose models carry an API and base URL, the entry takes both from them and uses the provider's credential:
 
@@ -55,7 +59,7 @@
 
 ## Plan limits
 
-- The `limit_<window>` and `reset_<window>` segments of the [status line](configuration.md#status-line) show one usage window of the main session's model's provider: `limit_` the share used, `reset_` when it resets, as a local time (`15:04` under a day away, `Mon 15:04` from a day, `Jan 2` from a week). A `limit_` segment at 90% or more shows in the warning colour. Each is absent when the provider has no such window, and in a subagent's view on another provider; `reset_` is also absent when the window has no reset.
+- The `limit_<window>` and `reset_<window>` segments of the [status line](configuration.md#status-line) show one usage window of the main session's model's provider: `limit_` the share used, `reset_` when it resets, as a local time (`15:04` under a day away, `Mon 15:04` from a day, `Jan 2` from a week). A `limit_` segment at 90% or more shows in the warning colour. Each is absent when the provider has no such window, and in a subagent's or workflow agent's view on another provider; `reset_` is also absent when the window has no reset.
 - A provider has plan limits only where Kopi's usage draws from the subscription's own windows. Elsewhere `cost` and `total` are the figure to read.
 
 | Provider | Windows | Host called | Credential sent |
@@ -87,3 +91,5 @@
 - Plan limits for `openai` and `meta`, and for a subagent's or workflow agent's provider.
 - Kimi's `limits[]` and `usage` counts: only the `usages` ratios are read, so on a plan whose ratios read 0 its `limit_` segments show 0%.
 - A Kopi provider identity.
+- A command to refresh the model lists on demand.
+- A key for the four-hour window.

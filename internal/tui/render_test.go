@@ -127,6 +127,77 @@ func TestWorkflowTaskRow(t *testing.T) {
 	assert.Equal(t, []string{"", "• workflow finished · audit concurrency · 2m 14s"}, body(m))
 }
 
+func workflowEnd(status string, agents, failed int, reason, result string) event.TaskEnded {
+	return event.TaskEnded{ID: "t3", Agent: "workflow", Command: "audit route handlers", Status: status, Elapsed: 363 * time.Second, Agents: agents, Failed: failed, Reason: reason, Result: result}
+}
+
+func TestWorkflowEndRowShowsItsAgents(t *testing.T) {
+	th := mocha()
+	for name, tc := range map[string]struct {
+		ev   event.TaskEnded
+		want []string
+	}{
+		"finished": {workflowEnd("completed", 9, 0, "", ""), []string{"• workflow finished · audit route handlers · 6m 3s", "  ↳ 9 agents"}},
+		"one":      {workflowEnd("completed", 1, 0, "", ""), []string{"• workflow finished · audit route handlers · 6m 3s", "  ↳ 1 agent"}},
+		"failures": {workflowEnd("completed", 9, 1, "", ""), []string{"• workflow finished · audit route handlers · 6m 3s", "  ↳ 9 agents · 1 failed"}},
+		"failed": {
+			workflowEnd("failed", 2, 2, "first line of why\nsecond line of why is long enough to wrap around the width", ""),
+			[]string{
+				"• workflow failed · audit route handlers · 6m 3s", "  ↳ 2 agents · 2 failed", "  first line of why",
+				"  second line of why is long enough to wrap around the width",
+			},
+		},
+		"stopped":   {workflowEnd("stopped", 3, 3, "", ""), []string{"• workflow stopped · audit route handlers · 6m 3s", "  ↳ 3 agents · 3 failed"}},
+		"no agents": {workflowEnd("completed", 0, 0, "", ""), []string{"• workflow finished · audit route handlers · 6m 3s"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, _ := newTestModel(t, 60, 20)
+			send(m, tc.ev)
+			assert.Equal(t, append([]string{""}, tc.want...), body(m))
+		})
+	}
+
+	ls := renderTask(transcript.Task{Status: "failed", Agents: 1, Reason: "why"}, false, 40, th)
+	require.Len(t, ls, 3)
+	assert.Equal(t, fg(th.dim).Render("  ↳ ")+fg(th.dim).Render("1 agent"), ls[1].text)
+	assert.Equal(t, fg(th.error).Render("  ")+fg(th.error).Render("why"), ls[2].text)
+}
+
+func TestTaskWithAResultOpensToItVerbatim(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 60, 30)
+		send(m, workflowEnd("completed", 2, 0, "", "line one\n  indented line two that is long enough to wrap"))
+		head := []string{"", "• workflow finished · audit route handlers · 6m 3s", "  ↳ 2 agents"}
+		require.Equal(t, head, body(m))
+
+		clickText(t, m, "• workflow finished · audit route handlers · 6m 3s")
+		assert.Equal(t, append(head, "    line one", "      indented line two that is long enough to wrap"), body(m))
+
+		clickText(t, m, "• workflow finished · audit route handlers · 6m 3s")
+		assert.Equal(t, head, body(m))
+	})
+}
+
+func TestTaskWithoutAResultIsInert(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	send(m, workflowEnd("completed", 2, 0, "", ""))
+	assert.Equal(t, hit{}, m.view().lines[len(m.view().lines)-2].hit)
+}
+
+func TestWorkflowLaunchRowOpensToTheScript(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		script := []tool.PreviewLine{{Kind: tool.Context, Text: "const a = 1"}, {Kind: tool.Context, Text: "await agent(a)"}}
+		m, _ := newTestModel(t, 40, 30)
+		send(m, event.ToolStart{CallID: "w", Name: "Workflow", Title: "Workflow › audit", Done: "Launched workflow › audit", Preview: script},
+			event.ToolEnd{CallID: "w", Name: "Workflow", Summary: "launched"})
+		collapsed := []string{"", "• Launched workflow › audit", "  ↳ launched"}
+		require.Equal(t, collapsed, body(m))
+
+		clickText(t, m, "• Launched workflow › audit")
+		assert.Equal(t, append(collapsed, "      const a = 1", "      await agent(a)"), body(m))
+	})
+}
+
 func TestAgentTaskRowCutsALongDescription(t *testing.T) {
 	m, _ := newTestModel(t, 40, 20)
 	send(m, event.TaskEnded{ID: "t3", Agent: "explore", Command: strings.Repeat("x", 100), Status: "completed", Elapsed: time.Minute})

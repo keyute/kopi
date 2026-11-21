@@ -47,6 +47,12 @@ type Runtime struct {
 	// provider's fetch in flight ends.
 	refreshed map[string]error
 	fetching  map[string]chan struct{}
+	// used holds the providers whose models this process resolved. stopRefresh
+	// and refreshDone are set once StartModelListRefresh has run; refreshDone
+	// closes when its goroutine returns.
+	used        map[string]struct{}
+	stopRefresh context.CancelFunc
+	refreshDone chan struct{}
 	// openURL opens a sign-in URL in the user's browser.
 	openURL func(string) error
 	// limitsClient sends the plan-limit requests.
@@ -108,6 +114,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		modelsPath:       modelsPath,
 		refreshed:        map[string]error{},
 		fetching:         map[string]chan struct{}{},
+		used:             map[string]struct{}{},
 	}, nil
 }
 
@@ -424,6 +431,9 @@ func (r *Runtime) usableModel(ctx context.Context, ref string) (*ai.Model, error
 		}
 		return nil, fmt.Errorf("provider %q: %w", provider, ErrNoCredential)
 	}
+	r.refreshMu.Lock()
+	r.used[provider] = struct{}{}
+	r.refreshMu.Unlock()
 	if model != nil {
 		return model, nil
 	}
@@ -458,6 +468,15 @@ func (r *Runtime) hasCredential(ctx context.Context, provider string) (bool, err
 
 // Close must follow Close of every Session opened on r.
 func (r *Runtime) Close() {
+	// The refresh must have returned before the runtime it calls is closed; PiG's
+	// close then joins any store write it left (PiG v0.7.0; recheck on a bump).
+	r.refreshMu.Lock()
+	stop, done := r.stopRefresh, r.refreshDone
+	r.refreshMu.Unlock()
+	if stop != nil {
+		stop()
+		<-done
+	}
 	if err := r.rt.Close(); err != nil {
 		slog.Warn("failed to close pig runtime", "error", err)
 	}

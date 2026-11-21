@@ -95,7 +95,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `quit` | `ctrl+d` |
 | `toggle-mode` | `shift+tab` |
 | `background` | `ctrl+b` |
-| `stop-agent` | `x` (stops the running subagent selected in the [agent rows](subagents.md#agent-rows) or the `/tasks` list) |
+| `stop-agent` | `x` (stops the running subagent or workflow selected in the [agent rows](subagents.md#agent-rows) or the `/tasks` list, or the agent selected in a workflow's progress dialog) |
 | `edit-plan` | `ctrl+g` |
 | `paste` | `ctrl+v` |
 | `history-prev`, `history-next` | `up`, `down` |
@@ -163,7 +163,7 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 | `tokens` | The session's context size (`22.1k tokens`); absent until known |
 | `cost` | The session's cost (`$0.42`); absent while zero |
 | `total` | The whole session's estimated cost (`$1.87`): the main session, its subagents, workflow agents that have ended, and the classifier, `WebFetch` and `WebSearch` requests; absent while zero |
-| `limit_<window>` | The share used of one usage window of the provider's subscription plan (`12%`); absent when the provider has no such window, with an API key, until read and in a subagent's view on another provider |
+| `limit_<window>` | The share used of one usage window of the provider's subscription plan (`12%`); absent when the provider has no such window, with an API key, until read and in a subagent's or workflow agent's view on another provider |
 | `reset_<window>` | When that window resets (`14:30`, `Wed 09:00`, `Dec 1`); absent in the same cases and when the window has no reset |
 | `cwd` | The workspace, with your home directory as `~` |
 | `notice` | Transient hints such as `Copied` |
@@ -212,7 +212,7 @@ A segment in `segments`:
 
 ## Agent rows
 
-`agentline` lists the `left` and `right` entries of the [agent rows](subagents.md#agent-rows) shown under the status line. Entries use the status line's [format syntax](#formats).
+`agentline` lists the `left` and `right` entries of the [agent rows](subagents.md#agent-rows) shown under the status line. Entries use the status line's [format syntax](#formats). A [workflow](workflows.md#footer-row)'s row has a fixed format.
 
 - Defaults: left `$agent`, `$model`, `$tokens`; right none.
 - `separator` goes between entries (default ` · `, `""` for none; no control characters).

@@ -158,9 +158,9 @@ type Controller struct {
 	// changed closes, and is replaced, whenever a turn starts or ends or a
 	// subagent's run ends; queue guards it.
 	changed chan struct{}
-	// workflowRuns are the task ids of the running workflows of the current
-	// session; queue guards it.
-	workflowRuns map[string]struct{}
+	// workflows are the runs of the current session by task id, running and
+	// ended; queue guards the map and each run's ended.
+	workflows map[string]*workflowRun
 	// followers retain turns only for frontends that consume their results.
 	followers map[*WorkQueue]struct{}
 
@@ -801,7 +801,7 @@ func (c *Controller) Status() Status {
 		if info.Status != tool.TaskRunning {
 			continue
 		}
-		_, workflow := c.workflowRuns[info.ID]
+		_, workflow := c.workflows[info.ID]
 		switch {
 		case workflow:
 			s.Workflows++

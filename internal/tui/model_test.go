@@ -72,6 +72,24 @@ type fakeController struct {
 	outputs map[string]string
 	// stops logs StopTask, which marks the task stopped.
 	stops []string
+	// stopErr is what StopTask returns.
+	stopErr error
+	// workflows is what Workflows returns; runs is what Workflow returns by id,
+	// counted in workflowReads.
+	workflows     []app.WorkflowStatus
+	runs          map[string]fakeRun
+	workflowReads int
+	// agentStops logs StopWorkflowAgent as "<id>#<n>".
+	agentStops []string
+}
+
+// fakeRun is a workflow run the fake knows: its status and agents, and each
+// ended agent's saved events by number or the error reading them gives.
+type fakeRun struct {
+	status     app.WorkflowStatus
+	agents     []app.WorkflowAgent
+	history    map[int][]event.Event
+	historyErr error
 }
 
 type answer struct {
@@ -206,7 +224,24 @@ func (f *fakeController) StopTask(id string) error {
 			f.tasks[i].Status, f.tasks[i].Ended = tool.TaskStopped, time.Now()
 		}
 	}
-	return nil
+	return f.stopErr
+}
+
+func (f *fakeController) Workflows() []app.WorkflowStatus { return slices.Clone(f.workflows) }
+
+func (f *fakeController) Workflow(id string) (app.WorkflowStatus, []app.WorkflowAgent, bool) {
+	f.workflowReads++
+	run, ok := f.runs[id]
+	return run.status, slices.Clone(run.agents), ok
+}
+
+func (f *fakeController) StopWorkflowAgent(id string, n int) {
+	f.agentStops = append(f.agentStops, fmt.Sprintf("%s#%d", id, n))
+}
+
+func (f *fakeController) WorkflowHistory(id string, n int) ([]event.Event, error) {
+	run := f.runs[id]
+	return run.history[n], run.historyErr
 }
 
 // testOptions are the options config's defaults resolve to.

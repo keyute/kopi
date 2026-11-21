@@ -384,12 +384,13 @@ func agentNotice(info tool.TaskInfo, unread []string) pigruntime.Notice {
 }
 
 // closeChildren ends the children of the session being replaced or closed:
-// their tasks have been stopped, so no run is left. A switch or Close
-// registers no child concurrently, so none is missed.
+// their tasks have been stopped, so no child or workflow run is left. A switch
+// or Close registers no child concurrently, so none is missed.
 func (c *Controller) closeChildren() {
 	c.queue.Lock()
 	children := c.children
 	c.children = nil
+	c.workflows = nil
 	c.mu.Lock()
 	c.approvals = slices.DeleteFunc(c.approvals, func(p *pendingApproval) bool { return p.runner != c.main })
 	c.mu.Unlock()
