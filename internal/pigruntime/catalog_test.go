@@ -474,6 +474,18 @@ func TestForcedFetchAfterBackgroundRefreshIgnoresFreshList(t *testing.T) {
 	assert.Len(t, s.requests, 1)
 }
 
+func TestRefreshAfterForcedFetchMakesNoRequest(t *testing.T) {
+	_, s, r := catalogSetup(t, http.StatusOK, "catalog-new-1")
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogModel}))
+	require.NotEmpty(t, s.requests)
+	drainRequests(s)
+
+	r.StartModelListRefresh()
+	<-r.refreshDone
+
+	assert.Empty(t, s.requests)
+}
+
 func TestCloseStopsHeldRefresh(t *testing.T) {
 	sb := newSandbox(t)
 	withMistralKey(t, sb)

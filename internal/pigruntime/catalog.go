@@ -79,10 +79,10 @@ func (r *Runtime) fetchModels(ctx context.Context, provider string) error {
 // StartModelListRefresh refreshes in the background the model lists of the
 // providers whose models this process has resolved, so a known model's window,
 // prices and base URL follow the catalog. Failures are only logged. It runs
-// once, after the start checks and never while a forced fetch can be in
-// flight; Close cancels it and waits.
+// after the start checks and never while a forced fetch can be in flight;
+// Close cancels it and waits.
 //
-// It relies on PiG v0.7.0: a nil or empty Providers selects every provider,
+// It relies on PiG v0.7.0: a nil Providers selects every provider,
 // hence the return on no used provider; a later refresh of a provider cancels
 // one in flight and the cancelled one reports no error, so a refresh begun
 // during a forced fetch would make that fetch return no list; an unset Force
@@ -92,15 +92,13 @@ func (r *Runtime) fetchModels(ctx context.Context, provider string) error {
 func (r *Runtime) StartModelListRefresh() {
 	r.refreshMu.Lock()
 	defer r.refreshMu.Unlock()
-	if r.refreshDone != nil {
-		return
-	}
 	providers := slices.Sorted(maps.Keys(r.used))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), modelListRefreshTimeout)
 	done := make(chan struct{})
 	r.stopRefresh, r.refreshDone = cancel, done
 	go func() {
 		defer close(done)
+		defer cancel()
 		if len(providers) == 0 {
 			return
 		}
@@ -109,16 +107,14 @@ func (r *Runtime) StartModelListRefresh() {
 }
 
 func (r *Runtime) refreshModelList(ctx context.Context, providers []string) {
-	timed, cancel := context.WithTimeout(ctx, modelListRefreshTimeout)
-	defer cancel()
-	res := r.svcs.ModelRuntime().Refresh(timed, ai.ModelsRefreshOptions{Providers: providers})
-	if ctx.Err() != nil {
+	res := r.svcs.ModelRuntime().Refresh(ctx, ai.ModelsRefreshOptions{Providers: providers})
+	if errors.Is(ctx.Err(), context.Canceled) {
 		return
 	}
 	for _, provider := range slices.Sorted(maps.Keys(res.Errors)) {
 		slog.Debug("failed to refresh the model list", "provider", provider, "error", reword(res.Errors[provider]))
 	}
-	if res.Aborted && errors.Is(timed.Err(), context.DeadlineExceeded) {
+	if res.Aborted && ctx.Err() != nil {
 		slog.Debug("model list refresh timed out", "providers", providers)
 	}
 }

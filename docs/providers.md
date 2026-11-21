@@ -30,7 +30,7 @@
 - The list comes from `pi-in-go.dev`. That request carries the provider id, `types=chat,image,classifier`, `If-None-Match` with the ETag when a list is saved (not for `openrouter`), and a user agent with PiG's name and version, the OS, its release and the architecture; it carries no credential.
 - A provider that serves its own list is also asked for it, with its own credential:
   - `openrouter`: `/models/user`. The result replaces openrouter's whole built-in list, narrowed to the models its key may use, and does so on later starts too. It has no four-hour window, so it is asked on every start that uses it.
-  - `radius`: its own catalog, in place of `pi-in-go.dev`.
+  - `radius`: its own catalog, in place of `pi-in-go.dev`. It has no four-hour window, so it is asked on every start that uses it.
 - An expired sign-in of the provider is renewed before the request, even when the list is fresh; for `github-copilot` the renewal also reads the account's available models.
 - The list is saved in `agent/models-store.json`. Every start reads the saved list first, and its entries replace the built-in ones of that provider, base URL included, while it is newer than the list built into Kopi. `PIG_OFFLINE` set to `1`, `true` or `yes`, or `PI_OFFLINE` set to any value, stops both the background refresh and the fetch; the saved list is still read.
 - A refreshed list applies to the running session (context window, prices, base URL); the status line shows a new context window after the next tool call or turn.
