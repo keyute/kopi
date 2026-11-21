@@ -578,6 +578,17 @@ func TestDialogTailFollowsTheEndUntilScrolledOffIt(t *testing.T) {
 	assert.Contains(t, rows(), "  l32", "back at the end it follows again")
 }
 
+func TestDialogRowsKeepTheCursorRowOfAHeadedDrawnOptionWhenHeadRowsFillTheHeight(t *testing.T) {
+	d := drawnDialog(5)
+	d.head = []string{"  head 0", "  head 1"}
+	d.sel = 4
+
+	rows := plainRows(d.rows(20, 5, 5, mocha()))
+
+	require.LessOrEqual(t, len(rows), 5)
+	assert.Contains(t, rows, "❭   • w4")
+}
+
 func TestDialogRowsSecondFrameAllocationsDoNotGrowWithTheBody(t *testing.T) {
 	if raceEnabled {
 		t.Skip("sync.Pool randomly drops items under -race, so allocation counts vary")

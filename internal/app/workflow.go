@@ -20,7 +20,7 @@ import (
 // line, so the script's line numbers stay its own, and defines agent, parallel,
 // pipeline and phase over the host global.
 const (
-	workflowPrefix = `let __n=0,__p;const agent=(prompt,o)=>host({phase:__p,...o,prompt,n:++__n}),phase=t=>{__p=t},parallel=ts=>Promise.all(ts.map(t=>Promise.resolve().then(()=>typeof t==="function"?t():t).catch(()=>null))),pipeline=(items,...stages)=>parallel(items.map((item,i)=>async()=>{let v=item;for(const s of stages)v=await s(v,item,i);return v}));return(async()=>{`
+	workflowPrefix = `let __n=0,__p;const agent=(prompt,o)=>host({phase:__p,...o,prompt,n:++__n}),phase=t=>{__p=t==null?t:String(t)},parallel=ts=>Promise.all(ts.map(t=>Promise.resolve().then(()=>typeof t==="function"?t():t).catch(()=>null))),pipeline=(items,...stages)=>parallel(items.map((item,i)=>async()=>{let v=item;for(const s of stages)v=await s(v,item,i);return v}));return(async()=>{`
 	workflowSuffix = "\n})()"
 )
 
@@ -125,16 +125,13 @@ func (r *workflowRun) taskEnded(info tool.TaskInfo) event.TaskEnded {
 	shown := taskEnded(info)
 	r.c.mu.Lock()
 	defer r.c.mu.Unlock()
-	shown.Agents = len(r.agents)
+	var n agentCounts
 	for _, a := range r.agents {
-		switch a.State {
-		case tool.TaskFailed, tool.TaskStopped:
-			shown.Failed++
-		case WorkflowQueued, tool.TaskRunning:
-			if info.Status == tool.TaskStopped {
-				shown.Failed++
-			}
-		}
+		n.add(a.State)
+	}
+	shown.Agents, shown.Failed = len(r.agents), n.Failed
+	if info.Status == tool.TaskStopped {
+		shown.Failed += n.Running + n.Queued
 	}
 	shown.Reason, shown.Result = info.Reason, info.Result
 	return shown
@@ -213,14 +210,12 @@ func (r *workflowRun) call(ctx context.Context, raw json.RawMessage) (result jso
 
 	var run *runner
 	slotted := false
+	// state is decided once the call has ended, after send or by the defer.
+	var state tool.TaskStatus
+	var reason string
 	defer func() {
-		state, reason := tool.TaskCompleted, ""
-		switch {
-		case err == nil:
-		case errors.Is(err, ErrAgentStopped) || callCtx.Err() != nil:
-			state = tool.TaskStopped
-		default:
-			state, reason = tool.TaskFailed, err.Error()
+		if state == "" {
+			state, reason = callOutcome(callCtx, err)
 		}
 		if err != nil && errors.Is(context.Cause(callCtx), ErrAgentStopped) {
 			err = ErrAgentStopped
@@ -293,15 +288,29 @@ func (r *workflowRun) call(ctx context.Context, raw json.RawMessage) (result jso
 
 	r.writeLine(head + ": started")
 	result, err = r.send(callCtx, run, emit, arg.Prompt, arg.Schema != nil, &recorded)
-	switch {
-	case err == nil:
+	state, reason = callOutcome(callCtx, err)
+	switch state {
+	case tool.TaskCompleted:
 		r.writeLine(fmt.Sprintf("%s: completed · %s", head, time.Since(rec.Started).Round(time.Second)))
-	case errors.Is(err, ErrAgentStopped) || callCtx.Err() != nil:
+	case tool.TaskStopped:
 		r.writeLine(head + ": stopped")
 	default:
-		r.writeLine(head + ": failed: " + err.Error())
+		r.writeLine(head + ": failed: " + reason)
 	}
 	return result, err
+}
+
+// callOutcome is the state a call that returned err ends in, and its reason
+// when it failed.
+func callOutcome(ctx context.Context, err error) (tool.TaskStatus, string) {
+	switch {
+	case err == nil:
+		return tool.TaskCompleted, ""
+	case errors.Is(err, ErrAgentStopped) || ctx.Err() != nil:
+		return tool.TaskStopped, ""
+	default:
+		return tool.TaskFailed, err.Error()
+	}
 }
 
 // send gives run's session its one prompt and returns the agent's result: the
@@ -397,65 +406,67 @@ func (r *workflowRun) copyAgents() []workflowCall {
 func (c *Controller) workflowStatus(info tool.TaskInfo, calls []workflowCall) (WorkflowStatus, []WorkflowAgent) {
 	s := WorkflowStatus{ID: info.ID, Description: info.Command, State: info.Status, Started: info.Started, Ended: info.Ended}
 	agents := make([]WorkflowAgent, 0, len(calls))
+	var n agentCounts
 	for _, call := range calls {
 		a := call.WorkflowAgent
 		a.AgentStatus = c.agentStatus(a.AgentStatus, call.sess)
 		agents = append(agents, a)
-		switch a.State {
-		case tool.TaskCompleted:
-			s.Done++
-		case tool.TaskFailed, tool.TaskStopped:
-			s.Failed++
-		case tool.TaskRunning:
-			s.Running++
-			if a.Phase != "" {
-				s.Phase = a.Phase
-			}
-		case WorkflowQueued:
-			s.Queued++
+		n.add(a.State)
+		if a.State == tool.TaskRunning && a.Phase != "" {
+			s.Phase = a.Phase
 		}
 	}
+	s.Done, s.Failed, s.Running, s.Queued = n.Done, n.Failed, n.Running, n.Queued
 	return s, agents
+}
+
+// agentCounts tallies a run's calls by state; a stopped call counts as failed.
+type agentCounts struct{ Done, Failed, Running, Queued int }
+
+func (n *agentCounts) add(state tool.TaskStatus) {
+	switch state {
+	case tool.TaskCompleted:
+		n.Done++
+	case tool.TaskFailed, tool.TaskStopped:
+		n.Failed++
+	case tool.TaskRunning:
+		n.Running++
+	case WorkflowQueued:
+		n.Queued++
+	}
+}
+
+// lookupCall is a copy of call n of workflow run id.
+func (c *Controller) lookupCall(id string, n int) (workflowCall, bool) {
+	c.queue.Lock()
+	run := c.workflows[id]
+	c.queue.Unlock()
+	if run == nil {
+		return workflowCall{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	i, ok := slices.BinarySearchFunc(run.agents, n, func(a *workflowCall, n int) int { return cmp.Compare(a.N, n) })
+	if !ok {
+		return workflowCall{}, false
+	}
+	return *run.agents[i], true
 }
 
 // StopWorkflowAgent stops call n of workflow run id, queued or running, and
 // nothing else. A call that is unknown or has ended is left alone.
 func (c *Controller) StopWorkflowAgent(id string, n int) {
-	c.queue.Lock()
-	run := c.workflows[id]
-	c.queue.Unlock()
-	if run == nil {
-		return
-	}
-	c.mu.Lock()
-	var stop context.CancelCauseFunc
-	for _, a := range run.agents {
-		if a.N == n && (a.State == WorkflowQueued || a.State == tool.TaskRunning) {
-			stop = a.stop
-		}
-	}
-	c.mu.Unlock()
-	if stop != nil {
-		stop(ErrAgentStopped)
+	if a, ok := c.lookupCall(id, n); ok && (a.State == WorkflowQueued || a.State == tool.TaskRunning) {
+		a.stop(ErrAgentStopped)
 	}
 }
 
 // WorkflowHistory is the saved transcript of call n of workflow run id as
 // display events, once the agent has ended.
 func (c *Controller) WorkflowHistory(id string, n int) ([]event.Event, error) {
-	c.queue.Lock()
-	run := c.workflows[id]
-	c.queue.Unlock()
-	var call *workflowCall
-	if run != nil {
-		for _, a := range run.copyAgents() {
-			if a.N == n {
-				call = &a
-			}
-		}
-	}
+	call, found := c.lookupCall(id, n)
 	switch {
-	case call == nil:
+	case !found:
 		return nil, fmt.Errorf("failed to find workflow agent %s #%d: %w", id, n, tool.ErrUnknownTask)
 	case call.State == WorkflowQueued || call.State == tool.TaskRunning:
 		return nil, fmt.Errorf("failed to read workflow agent %s #%d: %w", id, n, ErrAgentRunning)

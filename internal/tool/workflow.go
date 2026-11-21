@@ -88,8 +88,6 @@ func NewWorkflow(defs []subagent.Definition, w Workflows, maxWorkflows, maxAgent
 				}
 				return ""
 			},
-			Body: func(string) string { return "" },
-			// The opened row shows the script.
 			Change: func(raw json.RawMessage) (string, []PreviewLine) {
 				var args workflowArgs
 				_ = json.Unmarshal(raw, &args)

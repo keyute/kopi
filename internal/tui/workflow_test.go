@@ -319,7 +319,7 @@ func TestWorkflowDialogDismissWhileWatchingReturnsToTheListOnTheSameAgent(t *tes
 
 		assert.False(t, w.watching)
 		assert.Equal(t, app.Main, m.shown)
-		assert.Equal(t, 2, w.selN)
+		assert.Equal(t, 2, m.workflowSel[w.id])
 		assert.Zero(t, m.watched.ID)
 		assert.Contains(t, strings.Join(workflowBox(t, m), "\n"), "❭   • reviewer › users.ts")
 		assert.Contains(t, m.views, "s2", "a running agent's view stays")
@@ -421,7 +421,7 @@ func TestWorkflowDialogReopensOnTheAgentLeft(t *testing.T) {
 
 		w := openFromRow(t, m)
 
-		assert.Equal(t, 3, w.selN)
+		assert.Equal(t, 3, m.workflowSel[w.id])
 		assert.Equal(t, 2, w.d.sel)
 	})
 }
@@ -444,7 +444,7 @@ func TestWorkflowDialogTasksChangedReadsAgainAndKeepsTheSelectedAgent(t *testing
 		assert.Equal(t, reads+1, c.workflowReads, "one read for the change")
 		m.arrange()
 		assert.Equal(t, reads+1, c.workflowReads, "and none for the frames after it")
-		assert.Equal(t, 3, w.selN)
+		assert.Equal(t, 3, m.workflowSel[w.id])
 		assert.Equal(t, 3, w.d.sel)
 		assert.Contains(t, strings.Join(workflowBox(t, m), "\n"), "❭   • reviewer › pay.ts")
 	})
@@ -484,6 +484,25 @@ func TestSessionChangeClosesTheWorkflowDialogAndWatching(t *testing.T) {
 	})
 }
 
+func TestLeavingAWatchedAgentWhoseSessionClosedDeletesItsView(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := workflowModel(t, 60)
+		send(m, sub("s2", event.TurnStart{Prompt: "review"}))
+		openFromRow(t, m)
+		press(m, down)
+		press(m, enter)
+		require.Equal(t, "s2", m.shown)
+
+		send(m, event.SessionClosed{ID: "s2"})
+		require.True(t, m.views["s2"].closed)
+
+		press(m, escape)
+
+		assert.Equal(t, app.Main, m.shown)
+		assert.NotContains(t, m.views, "s2")
+	})
+}
+
 func TestAPlanLeavesWatchingButKeepsTheListOpen(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, _ := workflowModel(t, 60)
@@ -503,7 +522,7 @@ func TestAPlanLeavesWatchingButKeepsTheListOpen(t *testing.T) {
 		send(m, event.PlanEnded{Token: 1})
 
 		assert.Equal(t, promptWorkflow, frontKind(m))
-		assert.Equal(t, 3, w.selN)
+		assert.Equal(t, 3, m.workflowSel[w.id])
 	})
 }
 

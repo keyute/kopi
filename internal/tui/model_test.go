@@ -71,6 +71,8 @@ type fakeController struct {
 	outputs map[string]string
 	// stops logs StopTask, which marks the task stopped.
 	stops []string
+	// stopErr is what StopTask returns.
+	stopErr error
 	// workflows is what Workflows returns; runs is what Workflow returns by id,
 	// counted in workflowReads.
 	workflows     []app.WorkflowStatus
@@ -221,7 +223,7 @@ func (f *fakeController) StopTask(id string) error {
 			f.tasks[i].Status, f.tasks[i].Ended = tool.TaskStopped, time.Now()
 		}
 	}
-	return nil
+	return f.stopErr
 }
 
 func (f *fakeController) Workflows() []app.WorkflowStatus { return slices.Clone(f.workflows) }

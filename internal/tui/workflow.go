@@ -30,7 +30,7 @@ const (
 // progressBar is the workflow's calls as barCells cells, stacked done, failed,
 // running and queued; the ends are proportional to the counts.
 func progressBar(s app.WorkflowStatus, th theme) string {
-	n := s.Done + s.Failed + s.Running + s.Queued
+	n := workflowCalls(s)
 	if n == 0 {
 		return fg(th.dim).Render(strings.Repeat("▱", barCells))
 	}
@@ -51,14 +51,23 @@ func progressBar(s app.WorkflowStatus, th theme) string {
 	return b.String()
 }
 
+// workflowCalls is all the workflow's calls, whatever their state.
+func workflowCalls(s app.WorkflowStatus) int {
+	return s.Done + s.Failed + s.Running + s.Queued
+}
+
+// failedSuffix is " · 1 failed", empty when none did.
+func failedSuffix(failed int) string {
+	if failed == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" · %d failed", failed)
+}
+
 // workflowCounts is "5/9", done of all calls, and " · 1 failed" when any call
 // ended without completing.
 func workflowCounts(s app.WorkflowStatus) string {
-	text := fmt.Sprintf("%d/%d", s.Done, s.Done+s.Failed+s.Running+s.Queued)
-	if s.Failed > 0 {
-		text += fmt.Sprintf(" · %d failed", s.Failed)
-	}
-	return text
+	return fmt.Sprintf("%d/%d", s.Done, workflowCalls(s)) + failedSuffix(s.Failed)
 }
 
 // workflowRow is a running workflow's agent row. The description shrinks to
@@ -110,8 +119,6 @@ type workflowDialog struct {
 	stale  bool
 	run    app.WorkflowStatus
 	agents []app.WorkflowAgent
-	// selN is the number of the selected agent, -1 before one is.
-	selN int
 	// order is the index in agents of each option; options' drawn rows are
 	// subslices of rows.
 	order []int
@@ -127,10 +134,10 @@ type workflowDialog struct {
 	clock bool
 
 	watching bool
-	// prev is the view shown before watching began, watchID and watchN the
-	// watched agent's session and number.
-	prev, watchID string
-	watchN        int
+	// prev is the view shown before watching began, watchN the watched agent's
+	// number.
+	prev   string
+	watchN int
 	// hint is the dialog shown while watching, drawn for hintWidth, and
 	// watchWhat the watched agent's agentWhat.
 	hint      *dialog
@@ -153,11 +160,8 @@ func (m *model) openWorkflow(id string) bool {
 		return false
 	}
 	w := &workflowDialog{
-		m: m, d: &dialog{}, id: id, run: run, agents: agents, selN: -1,
+		m: m, d: &dialog{}, id: id, run: run, agents: agents,
 		cache: map[int]drawnAgent{}, hint: &dialog{},
-	}
-	if n, ok := m.workflowSel[id]; ok {
-		w.selN = n
 	}
 	w.d.head = w.head[:]
 	m.open(promptWorkflow, w)
@@ -282,11 +286,11 @@ func (w *workflowDialog) build() {
 		d.options[j] = option{drawn: w.rows[starts[j]:end:end]}
 	}
 	d.sel = 0
-	if j := slices.IndexFunc(w.order, func(i int) bool { return w.agents[i].N == w.selN }); j >= 0 {
+	if j := slices.IndexFunc(w.order, func(i int) bool { return w.agents[i].N == w.selN() }); j >= 0 {
 		d.sel = j
 	}
 	if len(w.order) > 0 {
-		w.selN = w.agents[w.order[d.sel]].N
+		w.m.workflowSel[w.id] = w.agents[w.order[d.sel]].N
 	}
 	w.header()
 }
@@ -364,6 +368,14 @@ func (w *workflowDialog) drawAgent(a app.WorkflowAgent) string {
 	return ansi.Truncate(lead+what+strings.Repeat(" ", gap)+fg(w.th.muted).Render(text), w.width, "")
 }
 
+// selN is the number of the selected agent, -1 before one is.
+func (w *workflowDialog) selN() int {
+	if n, ok := w.m.workflowSel[w.id]; ok {
+		return n
+	}
+	return -1
+}
+
 // selected is the selected agent, false without agents.
 func (w *workflowDialog) selected() (app.WorkflowAgent, bool) {
 	if len(w.order) == 0 {
@@ -409,7 +421,6 @@ func (w *workflowDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	}
 	picked, cmd := w.d.key(msg, &m.keys)
 	a, _ = w.selected()
-	w.selN = a.N
 	m.workflowSel[w.id] = a.N
 	if picked {
 		return w.watchSelected(m), true
@@ -422,7 +433,7 @@ func (w *workflowDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 // agent. An agent that never opened a session flashes why.
 func (w *workflowDialog) watchSelected(m *model) tea.Cmd {
 	_, agents, _ := m.c.Workflow(w.id)
-	i := findAgent(agents, w.selN)
+	i := findAgent(agents, w.selN())
 	if i < 0 {
 		return nil
 	}
@@ -443,7 +454,7 @@ func (w *workflowDialog) watchSelected(m *model) tea.Cmd {
 		v.closed = true
 		m.views[a.ID] = v
 	}
-	w.watching, w.prev, w.watchID, w.watchN = true, m.shown, a.ID, a.N
+	w.watching, w.prev, w.watchN = true, m.shown, a.N
 	w.watchWhat, w.hintWidth = agentWhat(a), 0
 	m.watched = a.AgentStatus
 	return m.show(a.ID)
@@ -452,11 +463,12 @@ func (w *workflowDialog) watchSelected(m *model) tea.Cmd {
 // leave ends watching: the view shown before comes back, and the watched one
 // goes if its session had closed.
 func (w *workflowDialog) leave(m *model) tea.Cmd {
+	id := m.watched.ID
 	w.watching, w.stale = false, true
 	m.watched = app.AgentStatus{}
 	cmd := m.show(w.prev)
-	if v := m.views[w.watchID]; v != nil && v.closed {
-		delete(m.views, w.watchID)
+	if v := m.views[id]; v != nil && v.closed {
+		delete(m.views, id)
 	}
 	return cmd
 }

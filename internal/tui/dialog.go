@@ -367,6 +367,8 @@ func (d *dialog) squeeze(s *shape, noteRows, footRows []string, gap, maxRows int
 	w := len(all)
 	if overflow {
 		sel, span = starts[d.sel], starts[d.sel+1]-starts[d.sel]
+		// A drawn option carries the cursor on its last row, which is the row kept
+		// first; the rows above it follow as room allows.
 		w = take(1)
 	} else {
 		room -= len(all)
@@ -389,7 +391,11 @@ func (d *dialog) squeeze(s *shape, noteRows, footRows []string, gap, maxRows int
 	start := 0
 	if overflow {
 		w += room
-		start = around(sel, kept, w, len(all))
+		at := sel
+		if len(d.options[d.sel].drawn) > 0 {
+			at = starts[d.sel+1] - kept
+		}
+		start = around(at, kept, w, len(all))
 	}
 
 	rows := append([]string{s.rule}, d.head[:kh]...)

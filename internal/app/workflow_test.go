@@ -469,6 +469,44 @@ func TestWorkflowLimitIsFreedBySessionSwitch(t *testing.T) {
 	a.untilStatus(t, second, tool.TaskCompleted)
 }
 
+func TestWorkflowPhaseCoercesItsArgumentToAString(t *testing.T) {
+	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("r")})
+	a.rootAcks(1)
+
+	id := a.startWorkflow(t, "audit", `phase(1); return await agent("go")`)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	agents := a.workflowAgents(id)
+	require.Len(t, agents, 1)
+	assert.Equal(t, tool.TaskCompleted, agents[0].State)
+	assert.Equal(t, "1", agents[0].Phase)
+}
+
+func TestWorkflowAgentWhoseTurnFailsIsRecordedFailedAndItsSessionClosed(t *testing.T) {
+	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
+	evs := recordEvents(a.c)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ProviderError("boom")})
+	a.rootAcks(1)
+
+	id := a.startWorkflow(t, "audit", `return await agent("go").catch(() => "caught")`)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	agents := a.workflowAgents(id)
+	require.Len(t, agents, 1)
+	assert.Equal(t, tool.TaskFailed, agents[0].State)
+	assert.NotEmpty(t, agents[0].ID)
+	assert.Contains(t, agents[0].Reason, "boom")
+	assert.False(t, agents[0].Ended.IsZero())
+	var closed []string
+	for len(evs) > 0 {
+		if e, ok := (<-evs).(event.SessionClosed); ok {
+			closed = append(closed, e.ID)
+		}
+	}
+	assert.Equal(t, []string{agents[0].ID}, closed)
+}
+
 func TestWorkflowAgentsPendingApprovalEndsOnceBeforeSessionChangedOnASwitch(t *testing.T) {
 	ran := new(atomic.Int32)
 	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{probeTool(ran)}})
@@ -966,6 +1004,12 @@ func TestWorkflowTaskEndedCarriesCountsReasonAndResult(t *testing.T) {
 		require.Len(t, notices, 1)
 		assert.Equal(t, 1, notices[0].Shown.Agents)
 		assert.Equal(t, 1, notices[0].Shown.Failed, "the call that has not yet noticed the stop counts as stopped")
+		a.untilStatus(t, id, tool.TaskStopped)
+		a.until(t, func() bool { return a.workflowAgents(id)[0].State != tool.TaskRunning })
+		agents := a.workflowAgents(id)
+		require.Len(t, agents, 1)
+		assert.Equal(t, tool.TaskStopped, agents[0].State)
+		assert.Empty(t, agents[0].Reason)
 	})
 }
 

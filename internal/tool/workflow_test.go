@@ -123,7 +123,6 @@ func TestWorkflowDisplay(t *testing.T) {
 	assert.Equal(t, "Workflow", tool.Display.Title(json.RawMessage(`{`)))
 	assert.Equal(t, "launched", tool.Display.Summary("Workflow t3 started."))
 	assert.Empty(t, tool.Display.Summary("too many"))
-	assert.Empty(t, tool.Display.Body("Workflow t3 started."))
 	assert.Nil(t, tool.Display.Done)
 }
 

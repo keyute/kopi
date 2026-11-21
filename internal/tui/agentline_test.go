@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -750,6 +751,21 @@ func TestStopKeyOnAWorkflowRowStopsTheTask(t *testing.T) {
 		assert.Equal(t, []string{"w1"}, c.stops)
 		assert.Zero(t, c.interrupts)
 		assert.True(t, m.focus.on, "the cursor stays")
+	})
+}
+
+func TestStopKeyOnAWorkflowRowShowsAFailedStop(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := workflowRows(t)
+		c.stopErr = errors.New("task is gone")
+		press(m, down)
+		press(m, down)
+		press(m, down)
+
+		press(m, keyX)
+
+		assert.Equal(t, []string{"w1"}, c.stops)
+		assert.Contains(t, strings.Join(screen(m), "\n"), "task is gone")
 	})
 }
 

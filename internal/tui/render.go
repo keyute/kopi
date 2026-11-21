@@ -300,10 +300,7 @@ func renderTask(t transcript.Task, expanded bool, width int, th theme) []line {
 	}
 	out := withHit(h, hang("• ", ps, head+command+tail, ts, width))
 	if t.Agents > 0 {
-		text := countText(t.Agents, "agent")
-		if t.Failed > 0 {
-			text += fmt.Sprintf(" · %d failed", t.Failed)
-		}
+		text := countText(t.Agents, "agent") + failedSuffix(t.Failed)
 		out = append(out, plain(hang("  ↳ ", fg(th.dim), text, fg(th.dim), width))...)
 	}
 	if t.Reason != "" {
