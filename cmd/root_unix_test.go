@@ -809,17 +809,18 @@ func TestRootFullscreenTitleRequest(t *testing.T) {
 			logger := slog.Default()
 			t.Cleanup(func() { slog.SetDefault(logger) })
 			e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), tc.config)
-			// Without a title request the responses go to the turns in order. A title
-			// request that leaked would reach the server during the second turn's full
-			// round trip, instead of racing the quit.
+			// Replies are fullscreen-response until the first one is rendered and
+			// second-response after. Without a title request a second turn runs, so a
+			// title request that leaked would reach the server during that turn's full
+			// round trip and be counted, instead of racing the quit.
 			second := tc.titles == 0
-			var served atomic.Int32
+			var later atomic.Bool
 			server := newMockProvider(t, func(w http.ResponseWriter) {
-				if served.Add(1) == 1 {
-					streamText(w, "fullscreen-response")
+				if later.Load() {
+					streamText(w, "second-response")
 					return
 				}
-				streamText(w, "second-response")
+				streamText(w, "fullscreen-response")
 			})
 			e.writeMockModels(t, server.URL)
 			master, slave := openTestTerminal(t)
@@ -879,6 +880,7 @@ func TestRootFullscreenTitleRequest(t *testing.T) {
 			wait(answered)
 			requests := tc.requests
 			if second {
+				later.Store(true)
 				_, err = io.WriteString(master, "second prompt\r")
 				require.NoError(t, err)
 				wait(answeredAgain)
