@@ -55,18 +55,18 @@
 
 ## Plan limits
 
-- The `limits` segment of the [status line](configuration.md#status-line) shows each usage window of the main session's model's provider: the share used and when it resets, as a local time (`15:04` under a day away, `Mon 15:04` from a day, `Jan 2` from a week). A window at 90% or more shows in the warning colour. It is absent when the provider reports none, and in a subagent's view on another provider.
+- The `limit_<window>` and `reset_<window>` segments of the [status line](configuration.md#status-line) show one usage window of the main session's model's provider: `limit_` the share used, `reset_` when it resets, as a local time (`15:04` under a day away, `Mon 15:04` from a day, `Jan 2` from a week). A `limit_` segment at 90% or more shows in the warning colour. Each is absent when the provider has no such window, and in a subagent's view on another provider; `reset_` is also absent when the window has no reset.
 - A provider has plan limits only where Kopi's usage draws from the subscription's own windows. Elsewhere `cost` and `total` are the figure to read.
 
 | Provider | Windows | Host called | Credential sent |
 | --- | --- | --- | --- |
-| `openai-codex` | by length, `5h` and `wk`; some plans have only one | `chatgpt.com` | the sign-in's access token and its ChatGPT account id |
-| `github-copilot` | `premium` and `chat`, unless unlimited | `api.github.com`, or `api.` plus the enterprise domain of the sign-in | the GitHub token of the sign-in, not the short-lived Copilot token |
-| `kimi-coding` | `5h`, `wk`, `mo` and `mo code` | `api.kimi.com` | the sign-in's access token |
-| `xai` | the billing period's credits, labelled by its length | `cli-chat-proxy.grok.com` | the sign-in's access token |
+| `openai-codex` | `5h`, `wk`; some plans have only one | `chatgpt.com` | the sign-in's access token and its ChatGPT account id |
+| `github-copilot` | `premium`, `chat`, unless unlimited | `api.github.com`, or `api.` plus the enterprise domain of the sign-in | the GitHub token of the sign-in, not the short-lived Copilot token |
+| `kimi-coding` | `5h`, `wk`, `mo`, `mo_code` | `api.kimi.com` | the sign-in's access token |
+| `xai` | `wk` or `mo`, by the billing period's length | `cli-chat-proxy.grok.com` | the sign-in's access token |
 
 - The endpoints are undocumented, so their answers can change without notice.
-- Kopi calls them only in the fullscreen interface, with `limits` in the layout and an account sign-in for the provider; an API key has no plan to read. Headless use never calls.
+- Kopi calls them only in the fullscreen interface, with a `limit_` or `reset_` segment in the layout and an account sign-in for the provider; an API key has no plan to read. Headless use never calls.
 - A read follows activity, such as a turn starting or ending, at most once a minute, and never while idle, so a reset time that has passed stays until the next activity.
 - A failed read keeps the last values.
 - Requests carry only the credential and an `Accept` header, with Go's default user agent.
@@ -77,11 +77,13 @@
 - Importing PiG changes the TLS settings of Go's process-wide default HTTP transport.
 - `agent/models.json` is trusted configuration: PiG reads it, and its `apiKey` can run a shell command.
 - Provider requests identify as PiG, not Kopi.
+- Codex and xAI name a window by its length, so one that is not five hours, a week or a month has no segment and is not shown.
+- Naming a window the model's provider does not have still makes Kopi call that provider.
 
 ## Not implemented
 
 - `/usage`, and a way to force a fresh read of the plan limits.
 - Plan limits for `anthropic`: its third-party usage is billed as extra usage, not from the plan's windows, so read `cost` and `total`; there is no extra-usage figure either.
 - Plan limits for `openai` and `meta`, and for a subagent's or workflow agent's provider.
-- Kimi's `limits[]` and `usage` counts: only the `usages` ratios are read, so on a plan whose ratios read 0 the segment shows 0%.
+- Kimi's `limits[]` and `usage` counts: only the `usages` ratios are read, so on a plan whose ratios read 0 its `limit_` segments show 0%.
 - A Kopi provider identity.

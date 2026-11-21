@@ -37,8 +37,12 @@ var KeyActions = []string{
 	"menu-close",
 }
 
+// LimitSegments lists the status segments that read a plan window: its used
+// share and its reset time, for each window label.
+var LimitSegments = []string{"limit_5h", "reset_5h", "limit_wk", "reset_wk", "limit_mo", "reset_mo", "limit_mo_code", "reset_mo_code", "limit_premium", "reset_premium", "limit_chat", "reset_chat"}
+
 // StatusSegments lists every segment the status line can show.
-var StatusSegments = []string{"model", "effort", "context", "tools", "cost", "total", "limits", "branch", "mode", "notice", "sandbox", "agents", "shells", "workflows", "tokens", "changes", "cwd"}
+var StatusSegments = slices.Concat([]string{"model", "effort", "context", "tools", "cost", "total", "branch", "mode", "notice", "sandbox", "agents", "shells", "workflows", "tokens", "changes", "cwd"}, LimitSegments)
 
 // AgentSegments lists every segment an agent row can show.
 var AgentSegments = []string{"agent", "tokens", "model", "effort", "context", "tools", "cost", "elapsed", "state", "activity", "id"}

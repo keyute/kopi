@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -329,6 +330,26 @@ func TestResolveRejectsTheTasksSegment(t *testing.T) {
 	assert.Contains(t, err.Error(), `statusline.right: unknown segment "tasks"`)
 }
 
+func TestResolveRejectsTheLimitsSegment(t *testing.T) {
+	_, err := Resolve(Defaults(), globalLayer(t, `{"statusline": {"right": ["$limits"]}}`))
+	require.ErrorIs(t, err, ErrInvalidValue)
+	assert.Contains(t, err.Error(), `statusline.right: unknown segment "limits"`)
+}
+
+func TestResolveAcceptsTheLimitSegmentsOnlyInTheStatusLine(t *testing.T) {
+	entries := make([]string, len(LimitSegments))
+	for i, name := range LimitSegments {
+		entries[i] = "$" + name
+	}
+	r, err := Resolve(Defaults(), globalLayer(t, `{"statusline": {"left": ["`+strings.Join(entries, `", "`)+`"]}}`))
+	require.NoError(t, err)
+	assert.Equal(t, entries, r.Config.StatusLine.Left)
+
+	_, err = Resolve(Defaults(), globalLayer(t, `{"agentline": {"left": ["$limit_5h"]}}`))
+	require.ErrorIs(t, err, ErrInvalidValue)
+	assert.Contains(t, err.Error(), `agentline.left: unknown segment "limit_5h"`)
+}
+
 func TestResolveRejectsInvalidEntries(t *testing.T) {
 	for _, tc := range []struct{ name, entry, want string }{
 		{"unknown segment", `$weather`, `unknown segment "weather"`},
@@ -533,6 +554,7 @@ func TestResolveRejectsInvalidStatusSegment(t *testing.T) {
 		{"index out of range", `"x": {"text": "a", "color": "256"}`},
 		{"signed index", `"x": {"text": "a", "color": "+5"}`},
 		{"built-in name", `"model": {"text": "a"}`},
+		{"built-in limit name", `"reset_wk": {"text": "a"}`},
 		{"newline in text", `"x": {"text": "a\nb"}`},
 		{"escape in text", `"x": {"text": "\u001b[31ma"}`},
 	} {

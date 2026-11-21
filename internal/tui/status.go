@@ -23,10 +23,6 @@ const contextWarnPercent = 90
 // limitWarnPercent is the plan limit use from which a window warns.
 const limitWarnPercent = 90
 
-// limitsSeparator joins the windows of the limits segment, whatever the
-// layout's separator is.
-const limitsSeparator = " · "
-
 // statusInput is what a segment draws from: the session status with the open
 // view's effort, tool calls and cost (Effort is empty when the model does not
 // reason; Cost is in dollars), the current transient hint (empty when none shows), the home directory shown
@@ -74,21 +70,18 @@ var segments = map[string]segment{
 		text := costText(s.TotalCost)
 		return fg(th.text).Render(text), text != ""
 	},
-	"limits": func(s statusInput, th theme) (string, bool) {
-		l := s.Limits
-		if len(l.Windows) == 0 || modelProvider(s.Model) != l.Provider {
-			return "", false
-		}
-		parts := make([]string, len(l.Windows))
-		for i, w := range l.Windows {
-			c := th.text
-			if math.Round(w.UsedPercent) >= limitWarnPercent {
-				c = th.warning
-			}
-			parts[i] = fg(c).Render(windowText(w, l.At))
-		}
-		return strings.Join(parts, fg(th.dim).Render(limitsSeparator)), true
-	},
+	"limit_5h":      limitSegment("5h"),
+	"reset_5h":      resetSegment("5h"),
+	"limit_wk":      limitSegment("wk"),
+	"reset_wk":      resetSegment("wk"),
+	"limit_mo":      limitSegment("mo"),
+	"reset_mo":      resetSegment("mo"),
+	"limit_mo_code": limitSegment("mo code"),
+	"reset_mo_code": resetSegment("mo code"),
+	"limit_premium": limitSegment("premium"),
+	"reset_premium": resetSegment("premium"),
+	"limit_chat":    limitSegment("chat"),
+	"reset_chat":    resetSegment("chat"),
 	"branch": func(s statusInput, th theme) (string, bool) {
 		return fg(th.accent).Render(s.Branch), s.Branch != ""
 	},
@@ -164,14 +157,40 @@ func costText(cost float64) string {
 	return fmt.Sprintf("$%.2f", cost)
 }
 
-// windowText is a plan window as its label, use and reset, such as
-// "5h 12% 14:30".
-func windowText(w quota.Window, read time.Time) string {
-	text := fmt.Sprintf("%s %.0f%%", w.Label, w.UsedPercent)
-	if reset := resetText(w.ResetsAt, read); reset != "" {
-		text += " " + reset
+// planWindow is the plan window with the label, when the open view's model
+// belongs to the provider the reading is from.
+func planWindow(s statusInput, label string) (quota.Window, bool) {
+	l := s.Limits
+	if modelProvider(s.Model) != l.Provider {
+		return quota.Window{}, false
 	}
-	return text
+	i := slices.IndexFunc(l.Windows, func(w quota.Window) bool { return w.Label == label })
+	if i < 0 {
+		return quota.Window{}, false
+	}
+	return l.Windows[i], true
+}
+
+// limitSegment draws the share used of the labelled plan window, warning from
+// limitWarnPercent.
+func limitSegment(label string) segment {
+	return func(s statusInput, th theme) (string, bool) {
+		w, ok := planWindow(s, label)
+		c := th.text
+		if math.Round(w.UsedPercent) >= limitWarnPercent {
+			c = th.warning
+		}
+		return fg(c).Render(fmt.Sprintf("%.0f%%", w.UsedPercent)), ok
+	}
+}
+
+// resetSegment draws when the labelled plan window resets.
+func resetSegment(label string) segment {
+	return func(s statusInput, th theme) (string, bool) {
+		w, ok := planWindow(s, label)
+		text := resetText(w.ResetsAt, s.Limits.At)
+		return fg(th.text).Render(text), ok && text != ""
+	}
 }
 
 // resetText is the local time a window resets, by how far off it was when

@@ -95,7 +95,7 @@ func TestStatusLineShowsLimits(t *testing.T) {
 	}
 	fiveHour := quota.Window{Label: "5h", UsedPercent: 12, ResetsAt: time.Date(2026, 11, 23, 14, 30, 0, 0, time.Local)}
 	week := quota.Window{Label: "wk", UsedPercent: 40, ResetsAt: time.Date(2026, 11, 25, 9, 0, 0, 0, time.Local)}
-	layout := layoutOf([]string{"$model", "$limits"}, nil)
+	layout := layoutOf([]string{"$model", "(5h $limit_5h( $reset_5h))", "(wk $limit_wk( $reset_wk))", "(premium $limit_premium( $reset_premium))"}, nil)
 	for _, tc := range []struct {
 		name string
 		s    app.Status
@@ -104,6 +104,7 @@ func TestStatusLineShowsLimits(t *testing.T) {
 		{"two windows", limits("openai-codex", fiveHour, week), "  gpt-5.2-codex · 5h 12% 14:30 · wk 40% Wed 09:00"},
 		{"one window", limits("openai-codex", week), "  gpt-5.2-codex · wk 40% Wed 09:00"},
 		{"no reset", limits("openai-codex", quota.Window{Label: "premium", UsedPercent: 34}), "  gpt-5.2-codex · premium 34%"},
+		{"a window outside the set", limits("openai-codex", quota.Window{Label: "3d", UsedPercent: 5}), "  gpt-5.2-codex"},
 		{"no windows", limits("openai-codex"), "  gpt-5.2-codex"},
 		{"never read", app.Status{Model: "openai-codex/gpt-5.2-codex"}, "  gpt-5.2-codex"},
 		{"another provider", limits("github-copilot", week), "  gpt-5.2-codex"},
@@ -115,17 +116,24 @@ func TestStatusLineShowsLimits(t *testing.T) {
 	}
 }
 
-func TestStatusLineLimitsJoinWithoutTheLayoutSeparator(t *testing.T) {
-	s := app.Status{Model: "p/m", Limits: quota.Limits{Provider: "p", Windows: []quota.Window{{Label: "5h", UsedPercent: 12}, {Label: "wk", UsedPercent: 40}}}}
-	layout := newStatusLayout(config.StatusLine{Left: []string{"$limits"}})
+func TestStatusLineLimitsDrawOnlyTheirValuesInTheFormatsOrder(t *testing.T) {
+	read := time.Date(2026, 11, 23, 10, 0, 0, 0, time.Local)
+	other := quota.Window{Label: "other", UsedPercent: 99, ResetsAt: time.Date(2026, 11, 23, 11, 0, 0, 0, time.Local)}
+	for suffix, label := range map[string]string{"5h": "5h", "wk": "wk", "mo": "mo", "mo_code": "mo code", "premium": "premium", "chat": "chat"} {
+		t.Run(suffix, func(t *testing.T) {
+			target := quota.Window{Label: label, UsedPercent: 12, ResetsAt: time.Date(2026, 11, 23, 14, 30, 0, 0, time.Local)}
+			s := app.Status{Model: "p/m", Limits: quota.Limits{Provider: "p", Windows: []quota.Window{other, target}, At: read}}
+			layout := newStatusLayout(config.StatusLine{Left: []string{"$reset_" + suffix + " $limit_" + suffix}})
 
-	assert.Equal(t, "  5h 12% · wk 40%", strings.TrimRight(ansi.Strip(statusLine(statusInput{Status: s}, layout, 40, mocha())), " "))
+			assert.Equal(t, "  14:30 12%", strings.TrimRight(ansi.Strip(statusLine(statusInput{Status: s}, layout, 40, mocha())), " "))
+		})
+	}
 }
 
 func TestStatusLineLimitsFollowTheOpenView(t *testing.T) {
 	week := quota.Window{Label: "wk", UsedPercent: 40}
 	s := app.Status{Limits: quota.Limits{Provider: "openai-codex", Windows: []quota.Window{week}}}
-	layout := layoutOf([]string{"$limits"}, nil)
+	layout := layoutOf([]string{"(wk $limit_wk)"}, nil)
 
 	s.Model = "openai-codex/a"
 	assert.Contains(t, ansi.Strip(statusLine(statusInput{Status: s}, layout, 30, mocha())), "wk 40%")
@@ -135,18 +143,22 @@ func TestStatusLineLimitsFollowTheOpenView(t *testing.T) {
 
 func TestStatusLineWarnsOnALimitNearlyUsed(t *testing.T) {
 	th := mocha()
-	layout := layoutOf([]string{"$limits"}, nil)
-	s := app.Status{Model: "p/m", Limits: quota.Limits{Provider: "p", Windows: []quota.Window{
-		{Label: "5h", UsedPercent: 89},
-		{Label: "wk", UsedPercent: 90},
-		{Label: "mo", UsedPercent: 89.6},
-	}}}
+	layout := layoutOf([]string{"(wk $limit_wk( $reset_wk))"}, nil)
+	status := func(used float64) statusInput {
+		resets := time.Date(2026, 11, 23, 14, 30, 0, 0, time.Local)
+		read := time.Date(2026, 11, 23, 10, 0, 0, 0, time.Local)
+		return statusInput{Status: app.Status{Model: "p/m", Limits: quota.Limits{Provider: "p", At: read, Windows: []quota.Window{{Label: "wk", UsedPercent: used, ResetsAt: resets}}}}}
+	}
 
-	got := statusLine(statusInput{Status: s}, layout, 40, th)
+	assert.Contains(t, statusLine(status(89), layout, 40, th), fg(th.text).Render("89%"))
+	assert.Contains(t, statusLine(status(90), layout, 40, th), fg(th.warning).Render("90%"))
+	assert.Contains(t, statusLine(status(89.6), layout, 40, th), fg(th.warning).Render("90%"), "a window warns by the percentage it shows")
 
-	assert.Contains(t, got, fg(th.text).Render("5h 89%"))
-	assert.Contains(t, got, fg(th.warning).Render("wk 90%"))
-	assert.Contains(t, got, fg(th.warning).Render("mo 90%"), "a window warns by the percentage it shows")
+	got := statusLine(status(90), layout, 40, th)
+	assert.Contains(t, got, fg(th.text).Render("14:30"))
+	assert.Contains(t, got, "wk")
+	assert.NotContains(t, got, fg(th.warning).Render("14:30"))
+	assert.NotContains(t, got, fg(th.warning).Render("wk"))
 }
 
 func TestResetText(t *testing.T) {

@@ -451,7 +451,7 @@ func TestStatusRefreshesOnEventsThatChangeIt(t *testing.T) {
 
 func TestStatusRefreshesOnALimitsReading(t *testing.T) {
 	opts := testOptions()
-	opts.StatusLine = config.StatusLine{Left: []string{"$limits"}, Right: []string{"$mode"}, Separator: " "}
+	opts.StatusLine = config.StatusLine{Left: []string{"(wk $limit_wk)"}, Right: []string{"$mode"}, Separator: " "}
 	m, c := newTestModelWith(t, 40, 20, opts)
 	last := func() string { return screen(m)[len(screen(m))-1] }
 	assert.Equal(t, strings.Repeat(" ", 34)+"plan", last())
