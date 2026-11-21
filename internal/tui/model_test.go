@@ -837,6 +837,17 @@ func TestMixedThinkingBatchRebuildsVisibleLayout(t *testing.T) {
 	assert.Len(t, batch, 2, "mixed turn start still starts the spinner and rearms the bridge")
 }
 
+func TestInitAsksForStatusSupportOnlyWithTheTitle(t *testing.T) {
+	for _, title := range []bool{true, false} {
+		opts := testOptions()
+		opts.Terminal.Title = title
+		m, _ := newTestModelWith(t, 30, 20, opts)
+		batch, ok := m.Init()().(tea.BatchMsg)
+		require.True(t, ok)
+		assert.Len(t, batch, map[bool]int{true: 3, false: 2}[title], "title %v", title)
+	}
+}
+
 func TestInitWaitsForEvents(t *testing.T) {
 	m, _ := newTestModel(t, 30, 20)
 	m.bridge.push(event.Notice{Text: "early"})

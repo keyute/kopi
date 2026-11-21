@@ -151,8 +151,8 @@ Fullscreen only; print mode sends none of this. Kopi derives one state for the w
 
 What Kopi sends:
 
-- **Program status** (OSC 7501): `app=kopi` and the state: working, waiting on you with its kind (`permission` for an approval or a plan, `question`, `auth` for a login), done, failed or idle. Terminals that read it show it per tab. It is cleared when Kopi exits.
-- **Tab title**: a glyph for the state (`◐` working, `✋` waiting, `✓` done, `✗` failed, `κ` idle) and the session's title, else the workspace folder. A session with no title gets one from [`smallModel`](configuration.md#smallmodel), once, from the first prompt given to it: the first 2000 bytes of the prompt go to that model, and the title is stored with the session so a resumed one shows it again. With no `smallModel` the title stays the folder and no model is called. Turn it off with `terminal.title`.
+- **Program status** (OSC 7501): `app=kopi` and the state: working, waiting on you with its kind (`permission` for an approval or a plan, `question`, `auth` for a login), done, failed or idle. Terminals that read it show it per tab. Each running subagent and each running workflow also has a record beneath it: its task id, `working`, titled `<agent> › <description>`, removed when it ends. A workflow is one record whatever agents it starts; shells have none. All are cleared when Kopi exits.
+- **Tab title**: `κ`, then the session's title followed by ` · ` and the workspace folder (`κ Fix flaky test · kopi.osc`), else the folder alone. Kopi asks the terminal once at start whether it reads OSC 7501; until it answers, or where it never does, a glyph for the state (`◐` working, `✋` waiting, `✓` done, `✗` failed, `κ` idle) replaces the `κ`. A session with no title gets one from [`smallModel`](configuration.md#smallmodel), once, from the first prompt given to it: the first 2000 bytes of the prompt go to that model, and the title is stored with the session so a resumed one shows it again. With no `smallModel` the title stays the folder and no model is called. Turn it off with `terminal.title`.
 - **Progress bar** (OSC 9;4): an indeterminate bar while working. Off by default (`terminal.progress`); older iTerm2 and Kitty show the sequence as a notification.
 - **Notification**: once, when the session starts waiting for an approval, a plan or an answer, or finishes or fails, while the terminal is not focused. It reads `Waiting for you: <title>`, `Finished: <title>` or `Failed: <title>`; a login sends none. The channel is `terminal.notifications`, see [configuration](configuration.md#terminal).
 
@@ -164,7 +164,7 @@ Limits:
 
 ## Not implemented
 
-- A status record per subagent or workflow agent.
+- A status record per workflow agent, or a state other than working on a subagent's or workflow's record.
 - A progress percentage.
 - Naming or renaming a session by hand.
 - A session title that follows a change of topic.

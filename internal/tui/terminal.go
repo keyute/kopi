@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"maps"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -38,7 +40,7 @@ func (m *model) programStatus() tea.ProgramStatus {
 func (m *model) terminalLabel() string {
 	label := m.title
 	if label == "" {
-		label = filepath.Base(m.status.Workspace)
+		label = m.terminalFolder()
 	}
 	label = oneLine(label)
 	if label == "" || label == "." || label == string(filepath.Separator) {
@@ -47,7 +49,23 @@ func (m *model) terminalLabel() string {
 	return label
 }
 
+// terminalFolder is the workspace folder's name on one line, "" when it has none.
+func (m *model) terminalFolder() string {
+	folder := oneLine(filepath.Base(m.status.Workspace))
+	if folder == "." || folder == string(filepath.Separator) {
+		return ""
+	}
+	return folder
+}
+
 func (m *model) terminalTitle(state tea.ProgramState) string {
+	label := m.terminalLabel()
+	if folder := m.terminalFolder(); oneLine(m.title) != "" && folder != "" {
+		label += " · " + folder
+	}
+	if m.readsStatus {
+		return "κ " + label
+	}
 	glyph := "κ"
 	switch state {
 	case tea.ProgramStateWorking:
@@ -59,7 +77,38 @@ func (m *model) terminalTitle(state tea.ProgramState) string {
 	case tea.ProgramStateError:
 		glyph = "✗"
 	}
-	return glyph + " " + m.terminalLabel()
+	return glyph + " " + label
+}
+
+// syncRecords reports a record for each running subagent and workflow that is
+// new or retitled, and clears each that ended, in one write sorted by id.
+func (m *model) syncRecords() tea.Cmd {
+	live := make(map[string]string, len(m.status.Running))
+	for _, r := range m.status.Running {
+		live[r.ID] = agentTitle(r.Agent, r.Description)
+	}
+	ids := slices.Sorted(maps.Keys(live))
+	for id := range m.records {
+		if _, ok := live[id]; !ok {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	var out strings.Builder
+	for _, id := range ids {
+		title, ok := live[id]
+		switch {
+		case !ok:
+			out.WriteString(ansi.ClearProgramStatusID(id))
+		case m.records[id] != title:
+			out.WriteString(ansi.SetProgramStatus(ansi.ProgramStatus{State: ansi.ProgramStateWorking, ID: id, App: "kopi", Title: title}))
+		}
+	}
+	m.records = live
+	if out.Len() == 0 {
+		return nil
+	}
+	return m.raw(out.String())
 }
 
 // attend follows the terminal's focus, keeps unseen, and returns the

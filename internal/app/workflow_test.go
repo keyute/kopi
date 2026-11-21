@@ -619,6 +619,7 @@ func TestRunningWorkflowIsNotASubagentAndRefusesLogin(t *testing.T) {
 	assert.Equal(t, "t1", id, "one task, none for the agent")
 	assert.Equal(t, 1, a.c.Status().Workflows)
 	assert.Zero(t, a.c.Status().Agents)
+	assert.Equal(t, []RunningAgent{{ID: id, Agent: tool.WorkflowAgent, Description: "audit"}}, a.c.Status().Running)
 	assert.Len(t, a.c.Agents(), 1, "only the main session")
 	a.c.queue.Lock()
 	assert.Empty(t, a.c.children)
@@ -630,6 +631,7 @@ func TestRunningWorkflowIsNotASubagentAndRefusesLogin(t *testing.T) {
 	_, err = a.tasks.Stop(id)
 	require.NoError(t, err)
 	assert.Zero(t, a.c.Status().Workflows)
+	assert.Empty(t, a.c.Status().Running)
 }
 
 func TestTwentyRunningSubagentsDoNotDelayAWorkflowAgent(t *testing.T) {

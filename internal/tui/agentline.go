@@ -47,6 +47,16 @@ func newAgentLayout(line config.AgentLine) agentLayout {
 	return agentLayout{left: parseFormats(line.Left), right: parseFormats(line.Right), separator: line.Separator}
 }
 
+// agentTitle is a subagent's or workflow's name and, cut to a width, what it was
+// started for.
+func agentTitle(agent, description string) string {
+	name, desc := oneLine(agent), strings.Join(strings.Fields(oneLine(description)), " ")
+	if desc == "" {
+		return name
+	}
+	return name + " › " + cutWords(desc, descriptionWidth)
+}
+
 // agentSegment renders one part of an agent row; false draws nothing.
 type agentSegment func(entry, theme) (string, bool)
 
@@ -56,11 +66,7 @@ var agentSegments = map[string]agentSegment{
 		if e.ID == app.Main {
 			return "main", true
 		}
-		name, desc := oneLine(e.Agent), strings.Join(strings.Fields(oneLine(e.Description)), " ")
-		if desc == "" {
-			return name, true
-		}
-		return name + " › " + cutWords(desc, descriptionWidth), true
+		return agentTitle(e.Agent, e.Description), true
 	},
 	"tokens": func(e entry, _ theme) (string, bool) { return tokensText(e.ContextTokens), e.ContextTokens > 0 },
 	"model":  func(e entry, _ theme) (string, bool) { return modelID(e.Model), e.Model != "" },

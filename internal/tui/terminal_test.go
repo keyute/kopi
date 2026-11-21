@@ -137,18 +137,73 @@ func TestWindowTitle(t *testing.T) {
 	send(m, turnStart)
 	assert.Equal(t, "◐ kopi.osc", title())
 	send(m, event.SessionNamed{Name: "Fix flaky test"})
-	assert.Equal(t, "◐ Fix flaky test", title())
+	assert.Equal(t, "◐ Fix flaky test · kopi.osc", title())
 	send(m, editApproval())
-	assert.Equal(t, "✋ Fix flaky test", title())
+	assert.Equal(t, "✋ Fix flaky test · kopi.osc", title())
 	send(m, event.ApprovalEnded{Token: 1}, turnEnd(event.Interrupted))
 
 	send(m, event.SessionChanged{Name: "Other"})
-	assert.Equal(t, "κ Other", title())
+	assert.Equal(t, "κ Other · kopi.osc", title())
 	send(m, event.SessionChanged{})
 	assert.Equal(t, "κ kopi.osc", title(), "a session with no name shows the folder")
 
 	m.status.Workspace = ""
 	assert.Equal(t, "κ kopi", title())
+	c.status.Workspace = ""
+	send(m, event.SessionChanged{Name: "Other"})
+	assert.Equal(t, "κ Other", title(), "no folder, no separator")
+}
+
+func TestWindowTitleDropsTheGlyphOnceTheTerminalReadsStatus(t *testing.T) {
+	m, _ := newTestModel(t, 60, 20)
+	m.status.Workspace = "/work/kopi.osc"
+	title := func() string { return m.View().WindowTitle }
+
+	send(m, turnStart)
+	assert.Equal(t, "◐ kopi.osc", title())
+	m.Update(tea.ProgramStatusSupportMsg{})
+	assert.Equal(t, "κ kopi.osc", title())
+	send(m, editApproval())
+	assert.Equal(t, "κ kopi.osc", title())
+}
+
+func TestChildRecordsFollowRunningAgentsAndWorkflows(t *testing.T) {
+	m, c := newTestModel(t, 60, 20)
+	raw := recordRaw(m)
+	report := func(id, title string) string {
+		return ansi.SetProgramStatus(ansi.ProgramStatus{State: ansi.ProgramStateWorking, ID: id, App: "kopi", Title: title})
+	}
+	researcher := app.RunningAgent{ID: "t1", Agent: "researcher", Description: "peer survey"}
+	workflow := app.RunningAgent{ID: "t2", Agent: tool.WorkflowAgent, Description: "review changes"}
+
+	c.status.Running = []app.RunningAgent{researcher, workflow}
+	send(m, event.TasksChanged{})
+	assert.Equal(t, []any{report("t1", "researcher › peer survey") + report("t2", "workflow › review changes")}, *raw)
+
+	*raw = nil
+	send(m, event.TasksChanged{})
+	assert.Empty(t, *raw, "nothing changed")
+
+	c.status.Running = []app.RunningAgent{workflow}
+	send(m, event.TasksChanged{})
+	assert.Equal(t, []any{ansi.ClearProgramStatusID("t1")}, *raw)
+
+	*raw = nil
+	c.status.Running = nil
+	send(m, event.SessionChanged{})
+	assert.Equal(t, []any{ansi.ClearProgramStatusID("t2")}, *raw)
+}
+
+func TestChildRecordTitleIsTheAgentRowsText(t *testing.T) {
+	m, c := newTestModel(t, 60, 20)
+	raw := recordRaw(m)
+	r := app.RunningAgent{ID: "t1", Agent: "researcher", Description: "a long description of what this agent was started to look into"}
+	c.status.Running = []app.RunningAgent{r}
+	send(m, event.TasksChanged{})
+
+	text, ok := agentSegments["agent"](entry{AgentStatus: app.AgentStatus{ID: r.ID, Agent: r.Agent, Description: r.Description}}, theme{})
+	require.True(t, ok)
+	assert.Equal(t, []any{ansi.SetProgramStatus(ansi.ProgramStatus{State: ansi.ProgramStateWorking, ID: "t1", App: "kopi", Title: text})}, *raw)
 }
 
 func TestWindowTitleStripsControlCharacters(t *testing.T) {

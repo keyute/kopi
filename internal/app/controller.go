@@ -813,8 +813,10 @@ func (c *Controller) Status() Status {
 		switch {
 		case workflow:
 			s.Workflows++
+			s.Running = append(s.Running, RunningAgent{info.ID, info.Agent, info.Command})
 		case info.Agent != "":
 			s.Agents++
+			s.Running = append(s.Running, RunningAgent{info.ID, info.Agent, info.Command})
 		default:
 			s.Shells++
 		}

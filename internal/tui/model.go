@@ -99,6 +99,10 @@ type model struct {
 	unseen    tea.ProgramState
 	ended     *event.Status
 	mainEnded bool
+	// readsStatus is set once the terminal answers the OSC 7501 query. records
+	// holds the child records the terminal has, by id, with their titles.
+	readsStatus bool
+	records     map[string]string
 
 	// views holds each session's state by id, main's under app.Main; shown is
 	// the id of the one drawn and acted on.
@@ -179,7 +183,11 @@ func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.bridge.wait(), tea.RequestBackgroundColor)
+	cmds := []tea.Cmd{m.bridge.wait(), tea.RequestBackgroundColor}
+	if m.terminal.Title {
+		cmds = append(cmds, tea.RequestProgramStatusSupport)
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *model) statusInput() statusInput {
@@ -194,7 +202,7 @@ func (m *model) statusInput() statusInput {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	held, was := m.holding(), m.programStatus()
 	cmd := m.update(msg)
-	cmd = tea.Batch(cmd, m.syncInput(held), m.attend(msg, was))
+	cmd = tea.Batch(cmd, m.syncInput(held), m.attend(msg, was), m.syncRecords())
 	m.syncFocus()
 	m.arrange()
 	m.syncFocus()
@@ -209,6 +217,8 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.drag = drag{}
 		m.composer.resize(m.width, m.height)
 		m.relayout()
+	case tea.ProgramStatusSupportMsg:
+		m.readsStatus = true
 	case tea.BackgroundColorMsg:
 		if !msg.IsDark() {
 			m.th = m.themes.light

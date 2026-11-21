@@ -1038,12 +1038,14 @@ func TestStopTaskOnAgentQueuesAgentNotice(t *testing.T) {
 	var at *tool.AgentTask
 	at = h.tasks.StartAgent("reviewer", "check the diff\nmore", func() { at.End(tool.TaskStopped, "", "") })
 	assert.Equal(t, 1, h.c.Status().Agents)
+	assert.Equal(t, []RunningAgent{{ID: at.ID(), Agent: "reviewer", Description: "check the diff\nmore"}}, h.c.Status().Running)
 
 	require.NoError(t, h.c.StopTask(at.ID()))
 
 	assert.True(t, h.idle(), "a human stop does not wake the model")
 	assert.Zero(t, h.faux.CallCount())
 	assert.Zero(t, h.c.Status().Agents)
+	assert.Empty(t, h.c.Status().Running)
 	queued := h.queuedNotices()
 	require.Len(t, queued, 1)
 	assert.Equal(t, "Agent "+at.ID()+" (reviewer) stopped by the user: check the diff\n(no output)", queued[0].Text)

@@ -252,7 +252,7 @@ Segments:
 
 ## Terminal
 
-- `terminal.title` (default `true`): sets the terminal's title to a state glyph and the session's name, see [usage](usage.md#terminal). With `false`, Kopi leaves the title alone and asks no model for a session name.
+- `terminal.title` (default `true`): sets the terminal's title to `κ`, or a state glyph where the terminal does not read OSC 7501, then the session's name and the workspace folder, see [usage](usage.md#terminal). With `false`, Kopi leaves the title alone, does not ask the terminal whether it reads OSC 7501, and asks no model for a session name.
 - `terminal.progress` (default `false`): shows the terminal's indeterminate progress bar while the session works.
 - `terminal.notifications` (default `auto`): how Kopi notifies you while the terminal is not focused.
   - `osc9`: a desktop notification (OSC 9).
