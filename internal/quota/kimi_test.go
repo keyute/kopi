@@ -27,6 +27,19 @@ func TestKimi(t *testing.T) {
 	assert.Equal(t, "Bearer tok", f.reqs[0].Header.Get("Authorization"))
 }
 
+func TestKimiNullRatioAndZero(t *testing.T) {
+	client, _ := fakeClient(http.StatusOK, `{"usages":{"limit_5h":{"used_ratio":null},"limit_7d":{"used_ratio":0},"limit_month_total":{"used_ratio":"0"}}}`)
+
+	got, err := Kimi(t.Context(), client, "tok")
+
+	require.NoError(t, err)
+	require.Len(t, got, 2, "null ratios are dropped but zero ratios are retained")
+	assert.Equal(t, "wk", got[0].Label)
+	assert.Zero(t, got[0].UsedPercent)
+	assert.Equal(t, "mo", got[1].Label)
+	assert.Zero(t, got[1].UsedPercent)
+}
+
 func TestKimiRatioAsStringAndInvalid(t *testing.T) {
 	client, _ := fakeClient(http.StatusOK, `{"usages":{"limit_5h":{"used_ratio":"0.25"},"limit_7d":{"used_ratio":"lots"},"limit_month_total":{"reset_time":"2026-12-01T00:00:00Z"},"limit_month_code":{"used_ratio":0.5,"reset_time":"soon"}}}`)
 

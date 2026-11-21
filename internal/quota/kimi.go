@@ -1,6 +1,7 @@
 package quota
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"math"
@@ -42,6 +43,9 @@ func Kimi(ctx context.Context, client *http.Client, token string) ([]Window, err
 }
 
 func parseRatio(raw json.RawMessage) (float64, bool) {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return 0, false
+	}
 	var f float64
 	if err := json.Unmarshal(raw, &f); err != nil {
 		var s string
