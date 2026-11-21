@@ -180,10 +180,15 @@ type SessionChanged struct {
 	SessionID    string
 	Resumed      bool
 	MessageCount int
+	// Name is the session's name; empty when it has none.
+	Name string
 	// History replays a resumed session's stored conversation, in order;
 	// nil for a new session.
 	History []Event
 }
+
+// SessionNamed reports the name the main session was just given.
+type SessionNamed struct{ Name string }
 
 // StatusCommandResult is ephemeral footer output, not session history.
 type StatusCommandResult struct {
@@ -231,6 +236,7 @@ func (TasksChanged) isEvent()        {}
 func (LimitsChanged) isEvent()       {}
 func (ModeChanged) isEvent()         {}
 func (SessionChanged) isEvent()      {}
+func (SessionNamed) isEvent()        {}
 func (StatusCommandResult) isEvent() {}
 func (Changes) isEvent()             {}
 func (Error) isEvent()               {}

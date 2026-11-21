@@ -30,7 +30,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `version` | `1` |
 | `model` | `provider/id` of the model, optional, see [`model`](#model) |
 | `mode` | Mode sessions start in, see [`mode`](#mode) |
-| `smallModel` | Model that answers `WebFetch` and `WebSearch`, see [`smallModel`](#smallmodel) |
+| `smallModel` | Model that answers `WebFetch` and `WebSearch` and writes session titles, see [`smallModel`](#smallmodel) |
 | `instructionFallbacks` | Fallback names for project instruction files, see [`instructionFallbacks`](#instructionfallbacks) |
 | `skills` | `skills.prefix`, see [`skills.prefix`](#skillsprefix) |
 | `workflows` | `workflows.model`, `workflows.maxWorkflows` and `workflows.maxAgents`, see [`workflows`](#workflows) |
@@ -38,6 +38,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `statusline` | Status line entries, see [Status line](#status-line) |
 | `agentline` | Agent row entries, see [Agent rows](#agent-rows) |
 | `theme` | Colour themes, see [Theme](#theme) |
+| `terminal` | What Kopi tells the terminal, see [Terminal](#terminal) |
 | `permissions` | Allow, ask and deny rules, see [permissions](permissions.md#rules) |
 | `classifier` | Reviewer of calls that would ask, see [permissions](permissions.md#classifier) |
 | `sandbox` | The OS sandbox `Bash` runs in, see [sandbox](sandbox.md#configuration) |
@@ -56,8 +57,8 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 ## `smallModel`
 
-- `provider/id` of the model that answers `WebFetch` and `WebSearch` calls.
-- Unset, it is the session model, so set it to a cheaper model.
+- `provider/id` of the model that answers `WebFetch` and `WebSearch` calls and writes the session title shown in the terminal tab, see [terminal](usage.md#terminal).
+- Unset, it is the session model for `WebFetch` and `WebSearch`, so set it to a cheaper model; no title is generated, with no fallback to the session model; a stored title still shows.
 - A wrong value, an unknown model or one whose provider has no credential fails at start.
 - In the fullscreen interface, a `smallModel` that shares the provider of a configured `model` without a credential gets the first-run login instead when that provider offers a sign-in or an API key and the id is one Kopi knows; an unknown id fails at start with the login hint.
 
@@ -162,7 +163,7 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 | `tools` | The tool calls the session has made (`12 tools`); absent until the first |
 | `tokens` | The session's context size (`22.1k tokens`); absent until known |
 | `cost` | The session's cost (`$0.42`); absent while zero |
-| `total` | The whole session's estimated cost (`$1.87`): the main session, its subagents, workflow agents that have ended, and the classifier, `WebFetch` and `WebSearch` requests; absent while zero |
+| `total` | The whole session's estimated cost (`$1.87`): the main session, its subagents, workflow agents that have ended, and the classifier, `WebFetch`, `WebSearch` and session-title requests; absent while zero |
 | `limit_<window>` | The share used of one usage window of the provider's subscription plan (`12%`); absent when the provider has no such window, with an API key, until read and in a subagent's or workflow agent's view on another provider |
 | `reset_<window>` | When that window resets (`14:30`, `Wed 09:00`, `Dec 1`); absent in the same cases and when the window has no reset |
 | `cwd` | The workspace, with your home directory as `~` |
@@ -260,6 +261,21 @@ Segments:
 
 ```json
 { "base": "dracula", "colors": { "accent": "#ff79c6", "dim": "244" }, "codeTheme": "monokai" }
+```
+
+## Terminal
+
+- `terminal.title` (default `true`): sets the terminal's title to `κ`, or a state glyph where the terminal does not read OSC 7501, then the session's name and the workspace folder, see [usage](usage.md#terminal). With `false`, Kopi leaves the title alone, does not ask the terminal whether it reads OSC 7501, and asks no model for a session name.
+- `terminal.progress` (default `false`): shows the terminal's indeterminate progress bar while the session works.
+- `terminal.notifications` (default `auto`): how Kopi notifies you while the terminal is not focused.
+  - `osc9`: a desktop notification (OSC 9).
+  - `bell`: the terminal bell.
+  - `off`: nothing.
+  - `auto`: OSC 9 when `TERM_PROGRAM` is `ghostty`, `iTerm.app`, `WarpTerminal` or `WezTerm`, or `TERM` is `xterm-kitty` or `xterm-ghostty`; the bell otherwise, including under tmux.
+- Any other value stops Kopi at start with an error naming the config layer.
+
+```json
+{ "version": 1, "terminal": { "progress": true, "notifications": "bell" } }
 ```
 
 ## Not implemented

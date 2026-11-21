@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -789,5 +790,123 @@ func TestRootFullscreenTrustPromptStartsTheProjectServers(t *testing.T) {
 		require.NoError(t, err)
 	case <-time.After(waitLimit):
 		t.Fatal("timed out waiting for fullscreen exit")
+	}
+}
+
+func TestRootFullscreenTitleRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name, config string
+		requests     int
+		titles       int
+	}{
+		{"small model set", fmt.Sprintf(`{"smallModel":%q}`, mockModel), 2, 1},
+		{"title off", fmt.Sprintf(`{"smallModel":%q,"terminal":{"title":false}}`, mockModel), 1, 0},
+		{"no small model", `{}`, 1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			t.Setenv("TERM", "xterm-256color")
+			logger := slog.Default()
+			t.Cleanup(func() { slog.SetDefault(logger) })
+			e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), tc.config)
+			// Replies are fullscreen-response until the first one is rendered and
+			// second-response after. Without a title request a second turn runs, so a
+			// title request that leaked would reach the server during that turn's full
+			// round trip and be counted, instead of racing the quit.
+			second := tc.titles == 0
+			var later atomic.Bool
+			server := newMockProvider(t, func(w http.ResponseWriter) {
+				if later.Load() {
+					streamText(w, "second-response")
+					return
+				}
+				streamText(w, "fullscreen-response")
+			})
+			e.writeMockModels(t, server.URL)
+			master, slave := openTestTerminal(t)
+			ready, answered, answeredAgain, drained := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
+			go func() {
+				defer close(drained)
+				var output strings.Builder
+				buf := make([]byte, 4096)
+				var sawReady, sawAnswer, sawAgain bool
+				for {
+					n, err := master.Read(buf)
+					output.Write(buf[:n])
+					// The title travels in an escape sequence, which Strip removes, so only the transcript matches.
+					plain := ansi.Strip(output.String())
+					if !sawReady && strings.Contains(plain, "kopi") {
+						sawReady = true
+						close(ready)
+					}
+					if !sawAnswer && strings.Contains(plain, "fullscreen-response") {
+						sawAnswer = true
+						close(answered)
+					}
+					if !sawAgain && strings.Contains(plain, "second-response") {
+						sawAgain = true
+						close(answeredAgain)
+					}
+					if err != nil {
+						return
+					}
+				}
+			}()
+			root := newRoot()
+			root.SetIn(slave)
+			root.SetOut(slave)
+			var stderr bytes.Buffer
+			root.SetErr(&stderr)
+			root.SetArgs([]string{"--model", mockModel})
+			done := make(chan error, 1)
+			go func() { done <- root.ExecuteContext(t.Context()) }()
+			t.Cleanup(func() {
+				// Close the slave first: closing a master with a blocked read can hang on Darwin.
+				_ = slave.Close()
+				<-drained
+				_ = master.Close()
+			})
+			wait := func(ch <-chan struct{}) {
+				t.Helper()
+				select {
+				case <-ch:
+				case <-time.After(waitLimit):
+					t.Fatal("timed out waiting for the fullscreen interface")
+				}
+			}
+			wait(ready)
+			_, err := io.WriteString(master, "fullscreen prompt\r")
+			require.NoError(t, err)
+			wait(answered)
+			requests := tc.requests
+			if second {
+				later.Store(true)
+				_, err = io.WriteString(master, "second prompt\r")
+				require.NoError(t, err)
+				wait(answeredAgain)
+				requests++
+			}
+			var titles int
+			for range requests {
+				if isTitleRequest(server.next(t)) {
+					titles++
+				}
+			}
+			_, err = master.Write([]byte{4}) // ctrl-d quits with an empty composer.
+			require.NoError(t, err)
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(waitLimit):
+				t.Fatal("timed out waiting for fullscreen exit")
+			}
+			// Close has waited for the title worker, so no request is still to come.
+			for len(server.requests) > 0 {
+				if isTitleRequest(<-server.requests) {
+					titles++
+				}
+			}
+			assert.Equal(t, tc.titles, titles)
+		})
 	}
 }

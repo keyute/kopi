@@ -32,6 +32,7 @@ func withDefaults(c Config) Config {
 	c.StatusLine.Segments = map[string]StatusSegment{}
 	c.AgentLine = DefaultAgentLine()
 	c.Theme = DefaultTheme()
+	c.Terminal = DefaultTerminal()
 	c.Permissions = Permissions{Allow: []string{}, Ask: []string{}, Deny: []string{}}
 	c.Sandbox = Sandbox{AllowWrite: []string{}, DenyRead: []string{}, AllowDomains: []string{}, DenyDomains: []string{}, AllowUnsandboxed: true}
 	c.Skills = Skills{Prefix: "skill"}
@@ -517,6 +518,30 @@ func TestResolveThemeDefaultsAndNames(t *testing.T) {
 	}
 }
 
+func TestResolveTerminalDefaultsAndOverride(t *testing.T) {
+	r, err := Resolve(Defaults())
+	require.NoError(t, err)
+	assert.Equal(t, Terminal{Title: true, Notifications: "auto"}, r.Config.Terminal)
+
+	global := globalLayer(t, `{"terminal": {"title": false, "progress": true, "notifications": "osc9"}}`)
+	r, err = Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Equal(t, Terminal{Progress: true, Notifications: "osc9"}, r.Config.Terminal)
+	assert.Equal(t, global.Name, r.Origins["terminal.notifications"])
+}
+
+func TestResolveRejectsInvalidNotificationsNamingLayer(t *testing.T) {
+	for _, value := range []string{"", "beep", "OSC9"} {
+		t.Run(value, func(t *testing.T) {
+			global := globalLayer(t, fmt.Sprintf(`{"terminal": {"notifications": %q}}`, value))
+			_, err := Resolve(Defaults(), global)
+			require.ErrorIs(t, err, ErrInvalidValue)
+			assert.Contains(t, err.Error(), global.Name)
+			assert.Contains(t, err.Error(), "terminal.notifications")
+		})
+	}
+}
+
 func TestResolveSeparatorHonoursExplicitEmpty(t *testing.T) {
 	r, err := Resolve(Defaults())
 	require.NoError(t, err)
@@ -895,7 +920,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	r, err := Resolve(Defaults())
 	require.NoError(t, err)
 	entries := r.Entries()
-	assert.Len(t, entries, 30+len(KeyActions))
+	assert.Len(t, entries, 33+len(KeyActions))
 	assert.IsIncreasing(t, entryKeys(entries))
 	assert.Contains(t, entries, Entry{Key: "model", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "smallModel", Value: "", Origin: "unset"})
@@ -906,6 +931,9 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "keys.newline", Value: `["shift+enter","alt+enter","ctrl+j"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "statusline.left", Value: `["$model","$context","$branch( $changes)"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "statusline.right", Value: `["$notice","$shells","$workflows","$sandbox","$mode"]`, Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "terminal.title", Value: "true", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "terminal.progress", Value: "false", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "terminal.notifications", Value: "auto", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "permissions.allow", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "permissions.ask", Value: "[]", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "permissions.deny", Value: "[]", Origin: "default"})

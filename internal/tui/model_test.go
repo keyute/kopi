@@ -246,7 +246,7 @@ func (f *fakeController) WorkflowHistory(id string, n int) ([]event.Event, error
 
 // testOptions are the options config's defaults resolve to.
 func testOptions() Options {
-	return Options{Version: "v1.2.3", Keys: config.DefaultKeys(), StatusLine: config.DefaultStatusLine(), AgentLine: config.DefaultAgentLine(), Themes: testThemes}
+	return Options{Version: "v1.2.3", Keys: config.DefaultKeys(), StatusLine: config.DefaultStatusLine(), AgentLine: config.DefaultAgentLine(), Themes: testThemes, Terminal: config.DefaultTerminal()}
 }
 
 var testThemes = Themes{dark: mocha(), light: latte()}
@@ -884,6 +884,23 @@ func TestMixedThinkingBatchRebuildsVisibleLayout(t *testing.T) {
 	batch, ok := cmd().(tea.BatchMsg)
 	require.True(t, ok)
 	assert.Len(t, batch, 2, "mixed turn start still starts the spinner and rearms the bridge")
+}
+
+func TestInitAsksForStatusSupportOnlyWithTheTitle(t *testing.T) {
+	for _, title := range []bool{true, false} {
+		opts := testOptions()
+		opts.Terminal.Title = title
+		m, _ := newTestModelWith(t, 30, 20, opts)
+		m.bridge.push(event.Notice{Text: "early"}) // lets the bridge wait return
+		batch, ok := m.Init()().(tea.BatchMsg)
+		require.True(t, ok)
+		assert.Len(t, batch, map[bool]int{true: 3, false: 2}[title], "title %v", title)
+		var msgs []tea.Msg
+		for _, cmd := range batch {
+			msgs = append(msgs, cmd())
+		}
+		assert.Equal(t, title, slices.Contains(msgs, tea.RequestProgramStatusSupport()), "title %v", title)
+	}
 }
 
 func TestInitWaitsForEvents(t *testing.T) {

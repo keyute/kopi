@@ -46,6 +46,7 @@ type Config struct {
 	StatusLine  StatusLine           `koanf:"statusline"`
 	AgentLine   AgentLine            `koanf:"agentline"`
 	Theme       Theme                `koanf:"theme"`
+	Terminal    Terminal             `koanf:"terminal"`
 	Permissions Permissions          `koanf:"permissions"`
 	Sandbox     Sandbox              `koanf:"sandbox"`
 	Skills      Skills               `koanf:"skills"`
@@ -212,6 +213,11 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 				if err := validateThemeName(name.key, name.value); err != nil {
 					return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 				}
+			}
+		}
+		if k.Exists("terminal.notifications") {
+			if err := validateNotifications(c.Terminal.Notifications); err != nil {
+				return nil, fmt.Errorf("config layer %s: %w", l.Name, err)
 			}
 		}
 		if err := validatePermissions(c.Permissions); err != nil {
@@ -472,6 +478,9 @@ func (r *Resolved) Entries() []Entry {
 		"agentline.separator":      c.AgentLine.Separator,
 		"theme.dark":               c.Theme.Dark,
 		"theme.light":              c.Theme.Light,
+		"terminal.title":           c.Terminal.Title,
+		"terminal.progress":        c.Terminal.Progress,
+		"terminal.notifications":   c.Terminal.Notifications,
 		"permissions.allow":        c.Permissions.Allow,
 		"permissions.ask":          c.Permissions.Ask,
 		"permissions.deny":         c.Permissions.Deny,

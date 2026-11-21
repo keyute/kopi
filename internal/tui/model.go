@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/app"
+	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 )
 
@@ -29,6 +30,9 @@ const (
 	// below it.
 	busyRows = 2
 	flashFor = 2 * time.Second
+	// barEvery is under Ghostty's removal of a progress bar 15 s after its last
+	// report.
+	barEvery = 10 * time.Second
 )
 
 // geometry is the row heights and field areas arrange last computed, which
@@ -54,6 +58,9 @@ type interruptMsg struct{}
 
 // flashMsg ends the flash numbered seq; a later flash outlives it.
 type flashMsg struct{ seq int }
+
+// barMsg is a tick of the progress bar's keepalive.
+type barMsg struct{}
 
 type model struct {
 	// ctx is Run's context, passed to Submit.
@@ -82,9 +89,32 @@ type model struct {
 	geo                       geometry
 	clip                      clipboard
 	imageDir                  string
-	// getenv and execProcess are os.Getenv and tea.ExecProcess, replaced in tests.
+	// getenv, execProcess and raw are os.Getenv, tea.ExecProcess and tea.Raw,
+	// replaced in tests.
 	getenv      func(string) string
 	execProcess func(*exec.Cmd, tea.ExecCallback) tea.Cmd
+	raw         func(any) tea.Cmd
+	terminal    config.Terminal
+	// title is the session's name, "" when it has none.
+	title string
+	// away is set while the terminal reports it is not focused. unseen is the
+	// done or error state a run left while it was, until focus returns or work
+	// starts; ended is how the main session's last turn ended as a program state,
+	// "" before one or when it was interrupted.
+	// mainEnded records that a main turn ended in the update in progress.
+	away      bool
+	unseen    tea.ProgramState
+	ended     tea.ProgramState
+	mainEnded bool
+	// barBeating is set while a barMsg is due, so one chain runs at a time;
+	// barBeat is the bar's value, flipped on each so Bubble Tea writes it again.
+	barBeating bool
+	barBeat    int
+	// readsStatus is set once the terminal answers the OSC 7501 query. records
+	// holds the child records the terminal has, by id, with their titles.
+	readsStatus    bool
+	records        map[string]string
+	recordsWriting bool
 
 	// views holds each session's state by id, main's under app.Main; shown is
 	// the id of the one drawn and acted on.
@@ -166,15 +196,20 @@ func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model
 		workflows:    c.Workflows(),
 		workflowSel:  map[string]int{},
 		pickVerb:     randomVerb,
+		terminal:     opts.Terminal,
 	}
 	m.composer.setHistory(c.History())
 	m.home, _ = os.UserHomeDir()
-	m.getenv, m.execProcess = os.Getenv, tea.ExecProcess
+	m.getenv, m.execProcess, m.raw = os.Getenv, tea.ExecProcess, tea.Raw
 	return m
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.bridge.wait(), tea.RequestBackgroundColor)
+	cmds := []tea.Cmd{m.bridge.wait(), tea.RequestBackgroundColor}
+	if m.terminal.Title {
+		cmds = append(cmds, tea.RequestProgramStatusSupport)
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *model) statusInput() statusInput {
@@ -191,9 +226,9 @@ func (m *model) statusInput() statusInput {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	held := m.holding()
+	held, was := m.holding(), m.attention()
 	cmd := m.update(msg)
-	cmd = tea.Batch(cmd, m.syncInput(held))
+	cmd = tea.Batch(cmd, m.syncInput(held), m.attend(msg, was), m.syncRecords(), m.beat())
 	m.syncFocus()
 	m.arrange()
 	m.syncFocus()
@@ -208,6 +243,11 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.drag = drag{}
 		m.composer.resize(m.width, m.height)
 		m.relayout()
+	case tea.ProgramStatusSupportMsg:
+		m.readsStatus = true
+	case recordsWrittenMsg:
+		m.records = msg
+		m.recordsWriting = false
 	case tea.BackgroundColorMsg:
 		if !msg.IsDark() {
 			m.th = m.themes.light
@@ -233,6 +273,9 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return m.cancel()
 	case editorDoneMsg:
 		m.editorDone(msg)
+	case barMsg:
+		m.barBeating = false
+		m.barBeat = 1 - m.barBeat
 	case flashMsg:
 		if msg.seq == m.flashSeq {
 			m.flashText, m.exitArmed = "", false
@@ -382,6 +425,22 @@ func (m *model) cancel() tea.Cmd {
 	return m.flash(k + " again to exit")
 }
 
+// barWanted reports whether the progress bar shows: the option is on and the
+// session is working.
+func (m *model) barWanted() bool {
+	return m.terminal.Progress && m.attention().State == tea.ProgramStateWorking
+}
+
+// beat starts the progress bar's keepalive when the bar shows and none is due;
+// a due tick that finds the bar gone is not followed by another.
+func (m *model) beat() tea.Cmd {
+	if !m.barWanted() || m.barBeating {
+		return nil
+	}
+	m.barBeating = true
+	return tea.Tick(barEvery, func(time.Time) tea.Msg { return barMsg{} })
+}
+
 // flash shows text on the status line for flashFor.
 func (m *model) flash(text string) tea.Cmd {
 	m.flashSeq++
@@ -499,6 +558,9 @@ func (m *model) apply(ev event.Event) *view {
 	case event.Changes:
 		m.added, m.removed = ev.Added, ev.Removed
 		return nil
+	case event.SessionNamed:
+		m.title = ev.Name
+		return nil
 	case event.SessionChanged:
 		// A turn running across the switch keeps its working row.
 		main := newView()
@@ -518,6 +580,8 @@ func (m *model) apply(ev event.Event) *view {
 			unsent = append(unsent, m.views[id].unsent...)
 		}
 		m.views, m.shown = map[string]*view{app.Main: main}, app.Main
+		m.title = ev.Name
+		m.unseen, m.ended, m.mainEnded = "", "", false
 		m.composer.restore(unsent)
 		if len(ev.History) > 0 {
 			m.view().tr.Restore(ev.History)
@@ -573,6 +637,9 @@ func (m *model) apply(ev event.Event) *view {
 		v.queued = ev.Pending
 		return v
 	case event.TurnStart:
+		if id == app.Main {
+			m.unseen = ""
+		}
 		v.busy = true
 		v.turnStart = time.Now()
 		v.verb = m.pickVerb()
@@ -584,6 +651,15 @@ func (m *model) apply(ev event.Event) *view {
 			v.folds.verbs[blocks[len(blocks)-1].Key()] = v.verb
 		}
 		v.busy = false
+		if id == app.Main {
+			m.ended, m.mainEnded = "", true
+			switch ev.Outcome.Status {
+			case event.Completed:
+				m.ended = tea.ProgramStateDone
+			case event.Failed:
+				m.ended = tea.ProgramStateError
+			}
+		}
 		if id == m.shown {
 			m.composer.restore(ev.Unsent)
 		} else {
@@ -769,7 +845,16 @@ func (m *model) selected(r region, i int) string {
 }
 
 func (m *model) View() tea.View {
-	v := tea.View{AltScreen: true, MouseMode: tea.MouseModeCellMotion}
+	v := tea.View{AltScreen: true, MouseMode: tea.MouseModeCellMotion, ReportFocus: true}
+	attention := m.attention()
+	status := m.programStatus(attention)
+	v.ProgramStatus = &status
+	if m.terminal.Title {
+		v.WindowTitle = m.terminalTitle(attention.State)
+	}
+	if m.terminal.Progress && attention.State == tea.ProgramStateWorking {
+		v.ProgressBar = tea.NewProgressBar(tea.ProgressBarIndeterminate, m.barBeat)
+	}
 	if m.width == 0 || m.height == 0 {
 		return v
 	}

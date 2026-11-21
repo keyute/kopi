@@ -94,6 +94,9 @@ type Config struct {
 	// Limits reads the plan limits of the session model's provider on
 	// activity, for Status.Limits.
 	Limits bool
+	// Title names a session that has no name from its first prompt, using the
+	// small model.
+	Title bool
 }
 
 const maxReferenceEntries = 10000
@@ -104,10 +107,10 @@ const Main = ""
 // Controller holds all frontend-neutral behaviour: frontends pass input in
 // and render the events they subscribe to.
 //
-// Lock order is life, then queue, then mu. mu is never held while calling
-// into PiG or delivering events; life is held across both and queue across
-// delivering events, which is safe because subscribers must not call back into
-// the Controller. Neither queue nor mu is held while calling Config.Tasks,
+// Lock order is life, then titleCommit, then queue, then mu. mu is never held
+// while calling into PiG or delivering events; life is held across both and
+// queue across delivering events, which is safe because subscribers must not
+// call back into the Controller. Neither queue nor mu is held while calling Config.Tasks,
 // whose callback takes both, except for starting an agent task and its
 // AgentTask.Run and End, which a subagent's or a workflow's run makes with
 // queue held, and Tasks.List, which Status calls with queue held. That is
@@ -133,6 +136,13 @@ type Controller struct {
 	// limits is nil unless Config.Limits.
 	limits *limits
 	wg     sync.WaitGroup
+	// titleCtx ends when Close starts, which stops a title request in flight.
+	titleCtx  context.Context
+	titleStop context.CancelFunc
+	// titleCommit serialises title persistence and announcement with opening
+	// and installing a replacement, including a resume of the same session.
+	// It is never held across wg.Wait: title workers need it to finish.
+	titleCommit sync.Mutex
 	// startup is what the first open that succeeds reports, so a failed first
 	// open does not lose it; life guards it once a session can be opened.
 	startup []event.Event
@@ -171,6 +181,9 @@ type Controller struct {
 	// model is the session model: Config.Model, or the runtime's default once resolved.
 	model  string
 	sessID string
+	// titled is set once the current main session's title has been decided on,
+	// whether or not it was asked for.
+	titled bool
 	// main drives the main session; its sess, emit, unsubscribe and work are
 	// guarded by mu.
 	main *runner
@@ -217,6 +230,7 @@ func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
 		cfg.Tasks = tool.NewTasks()
 	}
 	c := &Controller{rt: rt, cfg: cfg, model: cfg.Model, authority: policy.NewAuthority()}
+	c.titleCtx, c.titleStop = context.WithCancel(context.Background())
 	c.main = &runner{c: c, role: mainRole{c}}
 	var reserved []string
 	for _, cmd := range commandTable() {
@@ -769,6 +783,9 @@ func (c *Controller) changeMode(enter func() uint64) {
 }
 
 func (c *Controller) Status() Status {
+	// Busy is read under queue: the final TurnEnd and the Work's deregistration
+	// are one queue section, so a frontend refreshing on a TurnEnd sees Busy
+	// false for a finished Work and true for one that continues.
 	c.queue.Lock()
 	children := maps.Clone(c.children)
 	c.mu.Lock()
@@ -867,6 +884,7 @@ func (c *Controller) Close(ctx context.Context) error {
 	defer c.life.Unlock()
 	defer c.relay.shut()
 	defer c.limits.close()
+	c.titleStop()
 
 	c.queue.Lock()
 	c.mu.Lock()
@@ -1065,6 +1083,8 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	if c.cfg.Classifier != nil {
 		rec = &classifier.Record{}
 	}
+	c.titleCommit.Lock()
+	defer c.titleCommit.Unlock()
 	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
 		Model:        c.Model(),
 		ResumeID:     req.ResumeID,
@@ -1147,6 +1167,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	}
 	c.main.sess, c.sessID, c.main.emit, c.main.bound, c.main.unsubscribe = sess, id, emit, bound, unsubscribe
 	c.main.told = ""
+	c.titled = sess.Name() != ""
 	c.spent = 0
 	c.deferred = nil
 	c.mu.Unlock()
@@ -1155,6 +1176,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		SessionID:    id,
 		Resumed:      req.ResumeID != "" || req.Continue,
 		MessageCount: sess.MessageCount(),
+		Name:         sess.Name(),
 	}
 	if changed.Resumed {
 		for _, ev := range sess.History() {

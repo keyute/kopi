@@ -1033,3 +1033,20 @@ func TestChildOpenedFromParallelToolCallsDoesNotRace(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, event.Outcome{Status: event.Completed}, res.Outcome)
 }
+
+func TestSetNameSurvivesResume(t *testing.T) {
+	r, faux := newTestRuntime(t, newSandbox(t))
+	faux.SetResponses([]ai.FauxResponseStep{reply("ok")})
+	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	assert.Empty(t, sess.Name())
+
+	require.NoError(t, sess.SetName("Fix the build"))
+	assert.Equal(t, "Fix the build", sess.Name())
+	require.Error(t, sess.SetName(" "))
+	_, err = sess.Send(t.Context(), Prompt{Text: "hi"}, nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, sess.Close(t.Context()))
+
+	assert.Equal(t, "Fix the build", resume(t, r, sess.ID()).Name())
+}
