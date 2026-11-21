@@ -39,3 +39,12 @@ func TestXAINoPeriod(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
+
+func TestXAIUnparsablePeriod(t *testing.T) {
+	client, _ := fakeClient(http.StatusOK, `{"config":{"currentPeriod":{"start":"x","end":"2026-11-24T00:00:00Z"}}}`)
+
+	got, err := XAI(t.Context(), client, "tok")
+
+	require.Error(t, err)
+	assert.Nil(t, got)
+}

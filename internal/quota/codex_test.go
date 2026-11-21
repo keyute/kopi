@@ -65,3 +65,13 @@ func TestCodexErrorHasNoToken(t *testing.T) {
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "secret-token")
 }
+
+func TestCodexSkipsAWindowWithoutALength(t *testing.T) {
+	client, _ := fakeClient(http.StatusOK, `{"rate_limit":{"primary_window":{"used_percent":3,"limit_window_seconds":0,"reset_at":1785269351},"secondary_window":`+codexWeek+`}}`)
+
+	got, err := Codex(t.Context(), client, "tok", "acct")
+
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "wk", got[0].Label)
+}

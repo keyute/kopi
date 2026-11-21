@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -177,6 +178,26 @@ func TestLimitsWaitForAProvider(t *testing.T) {
 	})
 }
 
+func TestLimitsNoProviderAttemptDoesNotCountAsRead(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newFakeLimits()
+		var provider atomic.Value
+		provider.Store("")
+		l := newLimits(f.read, func() string { return provider.Load().(string) }, func(event.Event) {})
+		t.Cleanup(l.close)
+
+		l.observe(event.TurnEnd{})
+		synctest.Wait()
+		require.Empty(t, f.started)
+
+		provider.Store("codex")
+		l.observe(event.TurnEnd{})
+		synctest.Wait()
+
+		assert.Equal(t, "codex", <-f.started)
+	})
+}
+
 func TestLimitsCloseCancelsAndJoins(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newFakeLimits()
@@ -201,8 +222,6 @@ func TestLimitsCloseCancelsAndJoins(t *testing.T) {
 func TestNilLimitsDoNothing(t *testing.T) {
 	var l *limits
 
-	l.observe(event.TurnEnd{})
-	l.refresh()
 	l.close()
 
 	assert.Equal(t, quota.Limits{}, l.get())

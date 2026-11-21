@@ -23,6 +23,10 @@ const contextWarnPercent = 90
 // limitWarnPercent is the plan limit use from which a window warns.
 const limitWarnPercent = 90
 
+// limitsSeparator joins the windows of the limits segment, whatever the
+// layout's separator is.
+const limitsSeparator = " · "
+
 // statusInput is what a segment draws from: the session status with the open
 // view's effort, tool calls and cost (Effort is empty when the model does not
 // reason; Cost is in dollars), the current transient hint (empty when none shows), the home directory shown
@@ -37,8 +41,6 @@ type statusInput struct {
 	notice         string
 	home           string
 	commands       map[string]string
-	// separator is the layout's, set when a segment is looked up.
-	separator string
 }
 
 // segment renders one part of the status line; false draws nothing.
@@ -85,7 +87,7 @@ var segments = map[string]segment{
 			}
 			parts[i] = fg(c).Render(windowText(w, l.At))
 		}
-		return strings.Join(parts, fg(th.dim).Render(s.separator)), true
+		return strings.Join(parts, fg(th.dim).Render(limitsSeparator)), true
 	},
 	"branch": func(s statusInput, th theme) (string, bool) {
 		return fg(th.accent).Render(s.Branch), s.Branch != ""
@@ -261,7 +263,6 @@ func renderEntries(fs []config.Format, lookup func(string) (string, bool), liter
 }
 
 func (l statusLayout) lookup(in statusInput, th theme) func(string) (string, bool) {
-	in.separator = l.separator
 	return func(name string) (string, bool) {
 		if seg, builtin := segments[name]; builtin {
 			return seg(in, th)

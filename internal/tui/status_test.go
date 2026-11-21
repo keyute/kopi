@@ -115,6 +115,13 @@ func TestStatusLineShowsLimits(t *testing.T) {
 	}
 }
 
+func TestStatusLineLimitsJoinWithoutTheLayoutSeparator(t *testing.T) {
+	s := app.Status{Model: "p/m", Limits: quota.Limits{Provider: "p", Windows: []quota.Window{{Label: "5h", UsedPercent: 12}, {Label: "wk", UsedPercent: 40}}}}
+	layout := newStatusLayout(config.StatusLine{Left: []string{"$limits"}})
+
+	assert.Equal(t, "  5h 12% · wk 40%", strings.TrimRight(ansi.Strip(statusLine(statusInput{Status: s}, layout, 40, mocha())), " "))
+}
+
 func TestStatusLineLimitsFollowTheOpenView(t *testing.T) {
 	week := quota.Window{Label: "wk", UsedPercent: 40}
 	s := app.Status{Limits: quota.Limits{Provider: "openai-codex", Windows: []quota.Window{week}}}

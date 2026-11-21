@@ -83,4 +83,5 @@
 - `/usage`, and a way to force a fresh read of the plan limits.
 - Plan limits for `anthropic`: its third-party usage is billed as extra usage, not from the plan's windows, so read `cost` and `total`; there is no extra-usage figure either.
 - Plan limits for `openai` and `meta`, and for a subagent's or workflow agent's provider.
+- Kimi's `limits[]` and `usage` counts: only the `usages` ratios are read, so on a plan whose ratios read 0 the segment shows 0%.
 - A Kopi provider identity.

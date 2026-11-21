@@ -35,7 +35,7 @@ func Codex(ctx context.Context, client *http.Client, token, account string) ([]W
 	}
 	var found []codexWindow
 	for _, w := range []*codexWindow{usage.RateLimit.Primary, usage.RateLimit.Secondary} {
-		if w != nil {
+		if w != nil && w.LimitWindowSeconds > 0 {
 			found = append(found, *w)
 		}
 	}

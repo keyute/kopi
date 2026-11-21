@@ -151,3 +151,13 @@ func TestLimitsFailureIsWrapped(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to read the plan limits of kimi-coding")
 	assert.NotContains(t, err.Error(), "kimi-secret")
 }
+
+func TestLimitsCredentialWithoutATokenSendsNothing(t *testing.T) {
+	r, f := newLimitsRuntime(t, "xai", func(ai.Credential) (ai.ModelAuth, error) { return ai.ModelAuth{}, nil }, http.StatusOK, `{}`)
+	storeCredential(t, r, "xai", oauthCredential("xai-token", "r"))
+
+	_, err := r.Limits(t.Context(), "xai")
+
+	require.ErrorIs(t, err, ErrNoCredential)
+	assert.Empty(t, f.requests())
+}
