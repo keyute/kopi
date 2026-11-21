@@ -28,68 +28,43 @@ func newPlanDialog(ev event.PlanRequested, km *keyMap, th theme) *planDialog {
 	return &planDialog{token: ev.Token, d: d}
 }
 
-// planRows draws d in place of the composer within maxRows, its field growing
-// to maxField rows. Both rules surround a window containing the selection.
-func planRows(d *dialog, width, maxField, maxRows int, th theme) []string {
-	if maxRows <= 0 {
-		d.areas = nil
-		return nil
-	}
-	rows := d.rows(width, maxRows, max(1, maxField), th)
-	if len(rows) <= maxRows {
-		return rows
-	}
-	if maxRows < 3 {
-		return squeeze(d, rows, maxRows)
-	}
-	room := maxRows - 2
-	start := max(1, min(d.optionStarts[d.sel], len(rows)-1-room))
-	return clip(d, rows, 1, start, start+room)
-}
+// dialog is the plan's own, which has nothing that depends on width.
+func (p *planDialog) dialog(int, theme) *dialog { return p.d }
 
-// squeeze is rows for a dialog that overflows maxRows of 2 or fewer: both
-// rules when there are two, else the top rows.
-func squeeze(d *dialog, rows []string, maxRows int) []string {
-	d.areas = nil
-	if maxRows == 2 {
-		return []string{rows[0], rows[len(rows)-1]}
-	}
-	return rows[:maxRows]
-}
-
-// clip is the first head rows of rows, rows[start:end] and the last row, with
-// d's field areas moved to the window and those outside it dropped.
-func clip(d *dialog, rows []string, head, start, end int) []string {
-	var areas []fieldArea
-	for _, fa := range d.areas {
-		top, bottom := max(fa.y, start), min(fa.y+fa.h, end)
-		if top < bottom {
-			fa.y, fa.h = top-start+head, bottom-top
-			areas = append(areas, fa)
-		}
-	}
-	d.areas = areas
-	return append(append(slices.Clone(rows[:head]), rows[start:end]...), rows[len(rows)-1])
-}
-
-// planKey goes to the dialog: Yes approves, No answers with the typed changes,
-// which the Controller treats as a dismissal like interrupt when blank. Keys it has no use for are swallowed.
-// The dialog stays until its PlanEnded arrives.
-func (m *model) planKey(msg tea.KeyPressMsg) tea.Cmd {
-	p, km := m.plan, &m.keys
+// key answers: Yes approves, No answers with the typed changes, which the
+// Controller treats as a dismissal like the dismiss key when blank. Keys it has no
+// use for are swallowed. The dialog stays until its PlanEnded arrives.
+func (p *planDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	km := &m.keys
 	switch {
-	case key.Matches(msg, km.interrupt):
+	case key.Matches(msg, km.dismiss):
 		m.c.AnswerPlan(p.token, tool.PlanAnswer{})
-		return nil
+		return nil, true
 	case key.Matches(msg, km.editPlan):
-		return m.openEditor(m.c.PlanFile())
-	case key.Matches(msg, km.paste) && p.d.field() != nil:
-		return readClipboardText(m.clip, p.d.field())
+		return m.openEditor(m.c.PlanFile()), true
 	}
 	picked, cmd := p.d.key(msg, km)
-	if !picked {
-		return cmd
+	if picked {
+		m.c.AnswerPlan(p.token, tool.PlanAnswer{Approved: p.d.sel == 0, Feedback: p.d.text()})
 	}
-	m.c.AnswerPlan(p.token, tool.PlanAnswer{Approved: p.d.sel == 0, Feedback: p.d.text()})
-	return cmd
+	return cmd, true
+}
+
+// owns reports a repeat of the dialog's own request.
+func (p *planDialog) owns(ev event.Event) bool {
+	r, ok := ev.(event.PlanRequested)
+	return ok && r.Token == p.token
+}
+
+// seen ends the dialog with its PlanEnded. A repeat of its own request keeps it,
+// and what was typed in it; the editor's exit has the Controller read the plan
+// again.
+func (p *planDialog) seen(m *model, msg tea.Msg) bool {
+	switch ev := msg.(type) {
+	case event.PlanEnded:
+		return ev.Token != p.token
+	case editorDoneMsg:
+		m.c.RefreshPlan(p.token)
+	}
+	return true
 }

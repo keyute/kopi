@@ -73,7 +73,8 @@ func TestProgramStatusStates(t *testing.T) {
 			m, _ := tasksModel(t)
 			typeText(m, "/tasks")
 			press(m, enter)
-			require.NotNil(t, m.tasks)
+			require.NotNil(t, m.front())
+			assert.Equal(t, promptTasks, m.front().kind)
 			return m
 		}, tea.ProgramStatus{App: "kopi", State: tea.ProgramStateIdle}},
 		{"subagent", func(t *testing.T) *model {

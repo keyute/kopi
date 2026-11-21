@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"testing/synctest"
 
@@ -124,9 +125,20 @@ func TestPlanCancelledBySessionSwitchLeavesModeAlone(t *testing.T) {
 	h := modeHarness(t)
 	w, req := planCall(t, h, "# Plan\n", pigruntimetest.Text("unreached"))
 
+	oldID := h.c.Status().SessionID
+
 	require.NoError(t, h.c.NewSession(t.Context()))
 	wait(t, w.Done())
 
+	evs := h.rec.all()
+	ended := event.Event(event.PlanEnded{Token: req.Token})
+	assert.Len(t, slices.DeleteFunc(slices.Clone(evs), func(ev event.Event) bool { return ev != ended }), 1)
+	changedAt := slices.IndexFunc(evs, func(ev event.Event) bool {
+		changed, ok := ev.(event.SessionChanged)
+		return ok && changed.SessionID != oldID
+	})
+	require.GreaterOrEqual(t, changedAt, 0)
+	assert.Less(t, slices.Index(evs, ended), changedAt)
 	assert.False(t, h.c.AnswerPlan(req.Token, tool.PlanAnswer{Approved: true}))
 	assert.Equal(t, policy.Plan, h.c.Status().Mode)
 }

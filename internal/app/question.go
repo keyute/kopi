@@ -8,7 +8,7 @@ import (
 )
 
 func (c *Controller) askQuestion(ctx context.Context, qs []tool.Question) ([]tool.Answer, error) {
-	return request(c, ctx, &c.question, &c.questionSeq,
+	return request(c, ctx, &c.question,
 		func(token uint64) event.Event { return event.QuestionRequested{Token: token, Questions: qs} },
 		func(token uint64) event.Event { return event.QuestionEnded{Token: token} })
 }

@@ -38,7 +38,7 @@ func newSearchRuntime(t *testing.T, api, key string, serve func(http.ResponseWri
 	}))
 	t.Cleanup(server.Close)
 	writeAgentFile(t, sb, "models.json", fmt.Sprintf(
-		`{"providers":{"kopi-search":{"baseUrl":%q,"api":%q,"apiKey":%q,"models":[{"id":"search-1","reasoning":true}]}}}`, server.URL, api, key,
+		`{"providers":{"kopi-search":{"baseUrl":%q,"api":%q,"apiKey":%q,"models":[{"id":"search-1","reasoning":true,"cost":{"input":1000000,"output":3000000,"cacheRead":0,"cacheWrite":0}}]}}}`, server.URL, api, key,
 	))
 	r, err := New(t.Context(), Options{Home: sb.kopiHome, AgentDir: sb.agentDir, CWD: sb.ws})
 	require.NoError(t, err)
@@ -105,7 +105,7 @@ func TestSearchResponsesAddsHostedToolAndReturnsCitedSources(t *testing.T) {
 		}})
 	})
 
-	got, err := r.Search(t.Context(), searchModel, "system text", "latest Go release")
+	got, _, err := r.Search(t.Context(), searchModel, "system text", "latest Go release")
 
 	require.NoError(t, err)
 	assert.Equal(t, tool.SearchResult{Answer: "Go 1.27 is out.", Sources: []tool.Source{
@@ -120,6 +120,17 @@ func TestSearchResponsesAddsHostedToolAndReturnsCitedSources(t *testing.T) {
 	assert.Contains(t, fmt.Sprint(req.body["input"]), "system text")
 }
 
+func TestSearchReturnsTheRequestsCost(t *testing.T) {
+	r, _ := newSearchRuntime(t, "openai-responses", "synthetic-key", func(w http.ResponseWriter) {
+		responsesStream(w, "An answer.", nil)
+	})
+
+	_, cost, err := r.Search(t.Context(), searchModel, "system", "q")
+
+	require.NoError(t, err)
+	assert.Equal(t, 4.0, cost)
+}
+
 func TestSearchFallsBackToConsultedSources(t *testing.T) {
 	r, _ := newSearchRuntime(t, "openai-responses", "synthetic-key", func(w http.ResponseWriter) {
 		responsesStream(w, "An answer.", nil, map[string]any{"type": "response.output_item.done", "output_index": 0, "item": map[string]any{
@@ -132,7 +143,7 @@ func TestSearchFallsBackToConsultedSources(t *testing.T) {
 		}})
 	})
 
-	got, err := r.Search(t.Context(), searchModel, "system", "q")
+	got, _, err := r.Search(t.Context(), searchModel, "system", "q")
 
 	require.NoError(t, err)
 	assert.Equal(t, []tool.Source{{URL: "https://one.example/"}, {URL: "https://two.example/"}}, got.Sources)
@@ -182,7 +193,7 @@ func TestSearchAnthropicJoinsSplitTextAndReadsCitations(t *testing.T) {
 		)
 	})
 
-	got, err := r.Search(t.Context(), searchModel, "system", "latest Go release")
+	got, _, err := r.Search(t.Context(), searchModel, "system", "latest Go release")
 
 	require.NoError(t, err)
 	assert.Equal(t, tool.SearchResult{Answer: "Go 1.27 is out. Really.", Sources: []tool.Source{
@@ -206,7 +217,7 @@ func TestSearchAnthropicBreaksTheAnswerAfterASearch(t *testing.T) {
 		)
 	})
 
-	got, err := r.Search(t.Context(), searchModel, "system", "q")
+	got, _, err := r.Search(t.Context(), searchModel, "system", "q")
 
 	require.NoError(t, err)
 	assert.Equal(t, "preamble\n\nGo 1.27 is out.", got.Answer)
@@ -234,7 +245,7 @@ func TestSearchResponsesJoinsMessagesWithNewline(t *testing.T) {
 		)
 	})
 
-	got, err := r.Search(t.Context(), searchModel, "system", "q")
+	got, _, err := r.Search(t.Context(), searchModel, "system", "q")
 
 	require.NoError(t, err)
 	assert.Equal(t, "I'll search.\nAnswer.", got.Answer)
@@ -255,7 +266,7 @@ func TestSearchAnthropicReadsConsultedSourcesAndSkipsErrorResults(t *testing.T) 
 		)
 	})
 
-	got, err := r.Search(t.Context(), searchModel, "system", "q")
+	got, _, err := r.Search(t.Context(), searchModel, "system", "q")
 
 	require.NoError(t, err)
 	assert.Equal(t, tool.SearchResult{Answer: "Answer.", Sources: []tool.Source{{Title: "One", URL: "https://one.example/"}}}, got)
@@ -289,7 +300,7 @@ func TestSearchGoogleEnablesGroundingAndTheLastMetadataWins(t *testing.T) {
 		}
 	})
 
-	got, err := r.Search(t.Context(), searchModel, "system", "q")
+	got, _, err := r.Search(t.Context(), searchModel, "system", "q")
 
 	require.NoError(t, err)
 	assert.Equal(t, tool.SearchResult{Answer: "Go 1.27 is out.", Sources: []tool.Source{
@@ -310,7 +321,7 @@ data: {"candidates":[{"finishReason":"STOP"}]}
 `)
 	})
 
-	got, err := r.Search(t.Context(), searchModel, "system", "q")
+	got, _, err := r.Search(t.Context(), searchModel, "system", "q")
 
 	require.NoError(t, err)
 	assert.Equal(t, tool.SearchResult{Answer: "Answer.", Sources: []tool.Source{{Title: "B", URL: "https://b.example/"}}}, got)
@@ -381,10 +392,11 @@ func TestSearchEmptyAnswerFails(t *testing.T) {
 		responsesStream(w, " ", nil)
 	})
 
-	_, err := r.Search(t.Context(), searchModel, "system", "q")
+	_, cost, err := r.Search(t.Context(), searchModel, "system", "q")
 
 	require.ErrorIs(t, err, ErrNoAnswer)
 	assert.Contains(t, err.Error(), searchModel)
+	assert.Equal(t, 4.0, cost)
 }
 
 func TestSearchReportsProviderError(t *testing.T) {
@@ -394,7 +406,7 @@ func TestSearchReportsProviderError(t *testing.T) {
 		_, _ = io.WriteString(w, `{"error":{"message":"web_search is not supported","type":"invalid_request_error"}}`)
 	})
 
-	_, err := r.Search(t.Context(), searchModel, "system", "q")
+	_, _, err := r.Search(t.Context(), searchModel, "system", "q")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "web_search is not supported")
@@ -405,7 +417,7 @@ func TestSearchRefusesModelWithoutHostedSearch(t *testing.T) {
 
 	assert.False(t, r.CanSearch(fauxModel))
 	assert.False(t, r.CanSearch(fauxProvider+"/missing"))
-	_, err := r.Search(t.Context(), fauxModel, "system", "q")
+	_, _, err := r.Search(t.Context(), fauxModel, "system", "q")
 	require.ErrorIs(t, err, ErrNoSearch)
 }
 

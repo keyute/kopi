@@ -12,7 +12,7 @@ import (
 )
 
 func (c *Controller) reviewPlan(ctx context.Context, plan string) (tool.PlanAnswer, policy.Mode, error) {
-	a, err := request(c, ctx, &c.plan, &c.planSeq,
+	a, err := request(c, ctx, &c.plan,
 		func(token uint64) event.Event {
 			return event.PlanRequested{Token: token, Path: c.cfg.Plans.Path(), Plan: plan}
 		},

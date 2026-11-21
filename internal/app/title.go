@@ -73,7 +73,7 @@ func (c *Controller) title(ctx context.Context, prompt string) (string, error) {
 	if r := []rune(prompt); len(r) > titlePromptRunes {
 		prompt = string(r[:titlePromptRunes])
 	}
-	reply, err := c.rt.Answer(ctx, c.SmallModel(), pigruntime.LowestEffort, titleSystem, prompt)
+	reply, err := c.SideAnswer(ctx, c.SmallModel(), pigruntime.LowestEffort, titleSystem, prompt)
 	if err != nil {
 		return "", fmt.Errorf("failed to ask for a title: %w", err)
 	}

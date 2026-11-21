@@ -98,10 +98,11 @@ func (m *model) mouse(msg tea.MouseMsg) tea.Cmd {
 		return m.release()
 	case tea.MouseWheelMsg:
 		if msg.Y >= m.geo.composerTop-1 && msg.Y < m.geo.composerTop-1+len(m.prompt) {
+			d := m.frontDialog()
 			switch {
-			case msg.Button == tea.MouseWheelUp && m.scrollFront(-wheelStep, false):
+			case msg.Button == tea.MouseWheelUp && m.scrollFront(d, -wheelStep, false):
 				return nil
-			case msg.Button == tea.MouseWheelDown && m.scrollFront(wheelStep, false):
+			case msg.Button == tea.MouseWheelDown && m.scrollFront(d, wheelStep, false):
 				return nil
 			}
 		}

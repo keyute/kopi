@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/app"
+	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/tool"
 )
@@ -55,7 +56,7 @@ func TestTasksWithNoTasksFlashesAndOpensNothing(t *testing.T) {
 
 		assert.NotNil(t, submitText(m, "/tasks"), "the flash expires")
 
-		assert.Nil(t, m.tasks)
+		assert.Nil(t, tasksOf(m))
 		assert.Empty(t, m.composer.value())
 		assert.Contains(t, statusText(m), "no background tasks")
 		assert.True(t, strings.HasPrefix(screen(m)[m.composerTop()], "❯"))
@@ -132,11 +133,11 @@ func TestTasksOpenAgentWithASessionShowsItsView(t *testing.T) {
 		c.agents = []app.AgentStatus{{ID: app.Main}, {ID: "t1", Agent: "explore"}}
 		send(m, event.TasksChanged{}, event.Session{ID: "t1", Event: event.TurnStart{Prompt: "dig"}})
 		submitText(m, "/tasks")
-		require.NotNil(t, m.tasks)
+		require.NotNil(t, tasksOf(m))
 
 		press(m, enter)
 
-		assert.Nil(t, m.tasks)
+		assert.Nil(t, tasksOf(m))
 		assert.Equal(t, "t1", m.shown)
 		assert.Contains(t, body(m), "❯ dig")
 	})
@@ -155,10 +156,10 @@ func TestTasksListStopsTheSelectedRunningAgent(t *testing.T) {
 		press(m, keyX)
 
 		assert.Equal(t, []string{"t2"}, c.stops)
-		require.NotNil(t, m.tasks)
-		assert.Empty(t, m.tasks.open)
-		assert.Equal(t, "t2", m.tasks.list[m.tasks.d.sel].ID)
-		assert.Equal(t, tool.TaskStopped, m.tasks.list[m.tasks.d.sel].Status)
+		require.NotNil(t, tasksOf(m))
+		assert.Empty(t, tasksOf(m).open)
+		assert.Equal(t, "t2", tasksOf(m).list[tasksOf(m).d.sel].ID)
+		assert.Equal(t, tool.TaskStopped, tasksOf(m).list[tasksOf(m).d.sel].Status)
 		assert.NotContains(t, strings.Join(screen(m), "\n"), "to stop agent")
 		assert.Equal(t, app.Main, m.shown)
 		assert.Zero(t, c.interrupts, "list stopping uses StopTask, not Interrupt")
@@ -166,7 +167,7 @@ func TestTasksListStopsTheSelectedRunningAgent(t *testing.T) {
 		press(m, keyX)
 		assert.Equal(t, []string{"t2"}, c.stops, "an ended agent is not stopped again")
 		press(m, enter)
-		assert.Nil(t, m.tasks)
+		assert.Nil(t, tasksOf(m))
 		assert.Equal(t, "t2", m.shown, "Enter still opens the stopped agent's view")
 	})
 }
@@ -206,8 +207,8 @@ func TestTasksListStopAgentDoesNothingForACompletedTask(t *testing.T) {
 		press(m, down)
 		press(m, keyX)
 		assert.Empty(t, c.stops)
-		assert.Empty(t, m.tasks.open)
-		assert.Equal(t, "t2", m.tasks.list[m.tasks.d.sel].ID)
+		assert.Empty(t, tasksOf(m).open)
+		assert.Equal(t, "t2", tasksOf(m).list[tasksOf(m).d.sel].ID)
 		assert.NotContains(t, strings.Join(screen(m), "\n"), "to stop agent")
 	})
 }
@@ -218,10 +219,10 @@ func TestTasksListStopAgentLeavesShellControlsUnchanged(t *testing.T) {
 		submitText(m, "/tasks")
 		press(m, keyX)
 		assert.Empty(t, c.stops)
-		assert.Empty(t, m.tasks.open)
+		assert.Empty(t, tasksOf(m).open)
 		assert.NotContains(t, strings.Join(screen(m), "\n"), "to stop agent")
 		press(m, enter)
-		assert.Equal(t, "t1", m.tasks.open)
+		assert.Equal(t, "t1", tasksOf(m).open)
 		press(m, keyX)
 		assert.Empty(t, c.stops, "the output view still uses its Stop option")
 		press(m, enter)
@@ -301,7 +302,7 @@ func TestTasksBackAndInterruptNavigate(t *testing.T) {
 		assert.Equal(t, "❭ 1. t1 · running · 1m 2s · sleep 30", dialogRows(t, m)[3], "interrupt goes back to the list")
 
 		press(m, escape)
-		assert.Nil(t, m.tasks)
+		assert.Nil(t, tasksOf(m))
 		assert.Zero(t, c.interrupts, "interrupt only closes the dialog")
 		assert.True(t, strings.HasPrefix(screen(m)[m.composerTop()], "❯"))
 	})
@@ -318,7 +319,7 @@ func TestTasksSwallowsOtherInput(t *testing.T) {
 		pasteText(m, "pasted")
 		press(m, shiftTab)
 
-		assert.NotNil(t, m.tasks)
+		assert.NotNil(t, tasksOf(m))
 		assert.Empty(t, m.composer.value())
 		assert.Zero(t, c.backgrounds)
 		assert.Zero(t, c.toggles)
@@ -337,18 +338,34 @@ func TestTasksOpensMidTurn(t *testing.T) {
 	})
 }
 
-func TestApprovalAndSessionChangeCloseTasks(t *testing.T) {
-	for _, ev := range []event.Event{editApproval(), event.SessionChanged{SessionID: "s2"}} {
-		synctest.Test(t, func(t *testing.T) {
-			m, _ := tasksModel(t)
-			submitText(m, "/tasks")
+func TestApprovalCoversTasksAndTheyReturn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := tasksModel(t)
+		submitText(m, "/tasks")
 
-			send(m, ev)
+		send(m, editApproval())
 
-			assert.Nil(t, m.tasks)
-			assert.NotContains(t, screen(m), "  Background tasks")
-		})
-	}
+		assert.NotNil(t, tasksOf(m))
+		assert.Equal(t, promptApproval, frontKind(m))
+		assert.NotContains(t, screen(m), "  Background tasks")
+
+		send(m, event.ApprovalEnded{Token: 1})
+
+		assert.Equal(t, promptTasks, frontKind(m))
+		assert.Contains(t, screen(m), "  Background tasks")
+	})
+}
+
+func TestSessionChangeClosesTasks(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := tasksModel(t)
+		submitText(m, "/tasks")
+
+		send(m, event.SessionChanged{SessionID: "s2"})
+
+		assert.Nil(t, tasksOf(m))
+		assert.NotContains(t, screen(m), "  Background tasks")
+	})
 }
 
 func TestTurnEndLeavesTasksOpen(t *testing.T) {
@@ -374,6 +391,37 @@ func TestTasksChangedRefreshesKeepingTheSelection(t *testing.T) {
 
 		rows := dialogRows(t, m)
 		assert.Equal(t, []string{"  1. t0 · failed · 0s · true", "  2. t1 · running · 1m 2s · sleep 30", "❭ 3. t2 · completed · 5s · make build"}, rows[3:6])
+	})
+}
+
+func TestTasksChangedWhileCoveredRefreshesTheListBehindThePrompt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		submitText(m, "/tasks")
+		press(m, down)
+		send(m, approvalCase.open)
+
+		c.tasks = c.tasks[1:]
+		send(m, event.TasksChanged{})
+		send(m, approvalCase.end)
+
+		require.NotNil(t, m.front())
+		assert.Equal(t, promptTasks, m.front().kind)
+		assert.Equal(t, []string{"❭ 1. t2 · completed · 5s · make build"}, dialogRows(t, m)[3:4])
+	})
+}
+
+func TestTasksChangedWhileCoveredClosesTheListWhenNoTasksRemain(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		submitText(m, "/tasks")
+		send(m, approvalCase.open)
+
+		c.tasks = nil
+		send(m, event.TasksChanged{})
+		send(m, approvalCase.end)
+
+		assert.Nil(t, m.front())
 	})
 }
 
@@ -419,17 +467,17 @@ func TestTasksOverflowKeepsTheSelectedOptionVisible(t *testing.T) {
 				}
 				check(20)
 				press(m, enter)
-				assert.Equal(t, "t20", m.tasks.open, "Enter opens the visible global selection")
+				assert.Equal(t, "t20", tasksOf(m).open, "Enter opens the visible global selection")
 				press(m, escape)
 				check(20)
 
 				c.tasks = append([]tool.TaskInfo{{ID: "t0", Command: "true", Started: time.Now(), Ended: time.Now(), Status: tool.TaskCompleted}}, c.tasks...)
 				send(m, event.TasksChanged{})
-				assert.Equal(t, "t20", m.tasks.list[m.tasks.d.sel].ID)
+				assert.Equal(t, "t20", tasksOf(m).list[tasksOf(m).d.sel].ID)
 				assert.Contains(t, dialogRows(t, m), "❭ 21. t20 · completed · 0s · true")
 				for _, height := range []int{10, 30, 15} {
 					m.Update(tea.WindowSizeMsg{Width: size.width, Height: height})
-					assert.Equal(t, 20, m.tasks.d.sel)
+					assert.Equal(t, 20, tasksOf(m).d.sel)
 					rows := dialogRows(t, m)
 					assert.Contains(t, rows, "❭ 21. t20 · completed · 0s · true")
 					assert.Equal(t, strings.Repeat("─", m.width), rows[0])
@@ -440,7 +488,7 @@ func TestTasksOverflowKeepsTheSelectedOptionVisible(t *testing.T) {
 				}
 
 				press(m, digit('2'))
-				assert.Equal(t, "t1", m.tasks.open, "digits still pick global options, not visible row numbers")
+				assert.Equal(t, "t1", tasksOf(m).open, "digits still pick global options, not visible row numbers")
 			})
 		})
 	}
@@ -486,7 +534,7 @@ func TestTasksPageKeysScrollACutOutput(t *testing.T) {
 		rows = dialogRows(t, m)
 		assert.Equal(t, []string{"  … 16 earlier lines", "    line 17"}, rows[2:4])
 		assert.Equal(t, []string{"    line 25", hint}, rows[11:13])
-		assert.False(t, m.tasks.scrolled, "back at the end it follows again")
+		assert.Zero(t, tasksOf(m).d.scroll.below, "back at the end it follows again")
 	})
 }
 
@@ -508,7 +556,7 @@ func TestTasksFollowTheOutputUntilScrolledUp(t *testing.T) {
 		send(m, event.TasksChanged{})
 		rows = dialogRows(t, m)
 		assert.Equal(t, []string{"  … 13 earlier lines", "    line 14"}, rows[2:4], "scrolled up it stays put")
-		assert.True(t, m.tasks.scrolled)
+		assert.Positive(t, tasksOf(m).d.scroll.below)
 	})
 }
 
@@ -548,11 +596,11 @@ func TestTasksKeepTheOffsetAcrossAWidthChange(t *testing.T) {
 		submitText(m, "/tasks")
 		press(m, enter)
 		press(m, pgUp)
-		require.True(t, m.tasks.scrolled)
+		require.Positive(t, tasksOf(m).d.scroll.below)
 
 		m.Update(tea.WindowSizeMsg{Width: 20, Height: 30})
 
-		assert.True(t, m.tasks.scrolled)
+		assert.Positive(t, tasksOf(m).d.scroll.below)
 		assert.Equal(t, "  … 8 earlier lines", dialogRows(t, m)[2])
 	})
 }
@@ -564,12 +612,12 @@ func TestTasksReopenStartsAtTheEnd(t *testing.T) {
 		submitText(m, "/tasks")
 		press(m, enter)
 		press(m, pgUp)
-		require.True(t, m.tasks.scrolled)
+		require.Positive(t, tasksOf(m).d.scroll.below)
 
 		press(m, digit('2'))
 		press(m, enter)
 
-		assert.False(t, m.tasks.scrolled)
+		assert.Zero(t, tasksOf(m).d.scroll.below)
 		assert.Equal(t, "  … 16 earlier lines", dialogRows(t, m)[2])
 	})
 }
@@ -582,15 +630,29 @@ func TestTasksPageKeysScrollTheTranscriptFromTheListAfterAScrolledOutput(t *test
 		submitText(m, "/tasks")
 		press(m, enter)
 		press(m, pgUp)
-		require.True(t, m.tasks.scrolled)
+		require.Positive(t, tasksOf(m).d.scroll.below)
 		require.True(t, m.view().follow)
 
 		press(m, escape)
-		require.Empty(t, m.tasks.open)
+		require.Empty(t, tasksOf(m).open)
 		press(m, pgUp)
 
 		assert.False(t, m.view().follow)
-		assert.False(t, m.tasks.scrolled)
-		assert.Zero(t, m.tasks.d.scroll.off)
+		assert.Zero(t, tasksOf(m).d.scroll.below)
+		assert.Zero(t, tasksOf(m).d.scroll.off)
 	})
+}
+
+func TestTasksSecondFrameAllocationsDoNotGrowWithTheOutput(t *testing.T) {
+	if raceEnabled {
+		t.Skip("sync.Pool randomly drops items under -race, so allocation counts vary")
+	}
+	km := newKeyMap(config.DefaultKeys())
+	allocs := func(n int) float64 {
+		info := tool.TaskInfo{ID: "t1", Command: "make", Status: tool.TaskCompleted, Output: numberedOutput(n)}
+		td := &taskDialog{d: &dialog{}, km: &km, open: "t1", info: info}
+		td.dialog(60, mocha()).rows(60, 100, 10, mocha())
+		return testing.AllocsPerRun(10, func() { td.dialog(60, mocha()).rows(60, 100, 10, mocha()) })
+	}
+	assert.LessOrEqual(t, allocs(5000), allocs(50)+2)
 }

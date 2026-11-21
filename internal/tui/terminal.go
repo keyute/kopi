@@ -24,14 +24,14 @@ func (m *model) working() bool {
 // failed run not yet seen, idle.
 func (m *model) programStatus() tea.ProgramStatus {
 	s := tea.ProgramStatus{App: "kopi", State: tea.ProgramStateIdle}
-	switch m.front() {
-	case promptApproval, promptPlan:
+	switch front := m.front(); {
+	case front != nil && (front.kind == promptApproval || front.kind == promptPlan):
 		s.State, s.Kind = tea.ProgramStateBlocked, tea.ProgramStatusKindPermission
-	case promptQuestion:
+	case front != nil && front.kind == promptQuestion:
 		s.State, s.Kind = tea.ProgramStateBlocked, tea.ProgramStatusKindQuestion
-	case promptLogin:
+	case front != nil && front.kind == promptLogin:
 		s.State, s.Kind = tea.ProgramStateBlocked, tea.ProgramStatusKindAuth
-	case promptTasks, promptNone:
+	default:
 		switch {
 		case m.working():
 			s.State = tea.ProgramStateWorking
@@ -89,7 +89,7 @@ func (m *model) attend(msg tea.Msg, was tea.ProgramStatus) tea.Cmd {
 	switch front := m.front(); {
 	case !m.away || m.working():
 		m.unseen = ""
-	case was.State == tea.ProgramStateWorking && (front == promptTasks || front == promptNone):
+	case was.State == tea.ProgramStateWorking && (front == nil || front.kind == promptTasks):
 		switch m.ended {
 		case event.Completed:
 			m.unseen = tea.ProgramStateDone

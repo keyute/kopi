@@ -166,6 +166,9 @@ type Controller struct {
 	followers map[*WorkQueue]struct{}
 
 	mu sync.Mutex
+	// spent is what the current root session has spent outside its open sessions,
+	// in estimated dollars: side requests and ended workflow agents.
+	spent float64
 	// model is the session model: Config.Model, or the runtime's default once resolved.
 	model  string
 	sessID string
@@ -182,20 +185,21 @@ type Controller struct {
 	// leaves the mode alone and delivers no events.
 	closed bool
 	// approvals are the calls waiting for Answer, oldest first.
-	approvals   []*pendingApproval
-	approvalSeq uint64
+	approvals []*pendingApproval
 	// question is the AskUserQuestion call waiting for AnswerQuestion; nil when none is.
-	question    *pendingQuestion
-	questionSeq uint64
+	question *pendingQuestion
 	// plan is the ExitPlanMode call waiting for AnswerPlan; nil when none is.
-	plan    *pendingPlan
-	planSeq uint64
+	plan *pendingPlan
 	// login is the running login; nil when none is. A login and a turn or a
 	// running subagent or workflow never run together: each is refused while the other is
 	// registered. The login's questions and an approval would otherwise share
 	// the one dialog the frontend has.
-	login    *loginRun
-	loginSeq uint64
+	login *loginRun
+	// requestSeq numbers the requests of every kind, so a token names one
+	// request for the Controller's lifetime; requests holds the end of each
+	// request still open, by token. Both are guarded by mu.
+	requestSeq uint64
+	requests   map[uint64]func()
 	// deferred is the first open that Start put off for a login; cleared once
 	// any session opens.
 	deferred *OpenRequest
@@ -271,7 +275,7 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	var search []tool.Tool
 	if small := c.SmallModel(); small != "" && c.rt.CanSearch(small) && !c.cfg.Rules.Removes("WebSearch") {
 		search = append(search, tool.NewWebSearch(func(ctx context.Context, system, query string) (tool.SearchResult, error) {
-			return c.rt.Search(ctx, small, system, query)
+			return c.sideSearch(ctx, small, system, query)
 		}))
 		tools = append(tools, search...)
 	}
@@ -770,15 +774,19 @@ func (c *Controller) Status() Status {
 	// are one queue section, so a frontend refreshing on a TurnEnd sees Busy
 	// false for a finished Work and true for one that continues.
 	c.queue.Lock()
+	children := maps.Clone(c.children)
 	c.mu.Lock()
 	sess, sessID := c.main.sess, c.sessID
 	busy := c.main.work != nil
+	side := c.spent
 	c.mu.Unlock()
 	c.queue.Unlock()
 
 	mode, _ := c.authority.Snapshot()
-	s := Status{SessionID: sessID, Mode: mode, Model: c.Model(), Busy: busy, Branch: gitBranch(c.cfg.Workspace), Workspace: c.cfg.Workspace}
+	s := Status{SessionID: sessID, Mode: mode, Model: c.Model(), Busy: busy, Branch: gitBranch(c.cfg.Workspace), Workspace: c.cfg.Workspace, TotalCost: side}
 	if sess != nil {
+		_, cost := sess.Usage()
+		s.TotalCost += cost
 		s.MessageCount = sess.MessageCount()
 		if tokens, window, ok := sess.ContextUsage(); ok {
 			s.ContextTokens, s.ContextWindow = tokens, window
@@ -808,6 +816,10 @@ func (c *Controller) Status() Status {
 		}
 	}
 	c.queue.Unlock()
+	for _, r := range children {
+		_, cost := r.sess.Usage()
+		s.TotalCost += cost
+	}
 	s.Foreground = c.cfg.Tasks.Foreground()
 	return s
 }
@@ -857,7 +869,7 @@ func (c *Controller) Close(ctx context.Context) error {
 	c.life.Lock()
 	defer c.life.Unlock()
 	defer c.relay.shut()
-	//c.titleStop()
+	c.titleStop()
 
 	c.queue.Lock()
 	c.mu.Lock()
@@ -1074,7 +1086,16 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	if w != nil {
 		c.releaseSwitch(w, oldEmit, true)
 	}
+	// A child's emitter stays bound to the old epoch, so its pending asks end
+	// before the advance drops them, and an ended ask is no longer answerable.
+	// One queue section keeps a child's ask from registering in between.
+	c.queue.Lock()
+	c.endRequests()
+	c.mu.Lock()
+	c.approvals = nil
+	c.mu.Unlock()
 	c.relay.advance()
+	c.queue.Unlock()
 	if old != nil {
 		oldUnsubscribe()
 		// The old session is released even if the caller's ctx has ended:
@@ -1130,6 +1151,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	c.main.sess, c.sessID, c.main.emit, c.main.bound, c.main.unsubscribe = sess, id, emit, bound, unsubscribe
 	c.main.told = ""
 	c.titled = false
+	c.spent = 0
 	c.deferred = nil
 	c.mu.Unlock()
 	c.queue.Unlock()
@@ -1178,4 +1200,40 @@ func (c *Controller) releaseSwitch(w *Work, emit func(event.Event), committed bo
 // workflowOffered reports that the main session has the Workflow tool.
 func (c *Controller) workflowOffered() bool {
 	return !c.cfg.Unattended && !c.cfg.Rules.Removes("Workflow")
+}
+
+// openRequestLocked numbers a request and registers end, which emits its
+// *Ended event; the returned end runs it once, however often it is called and
+// whoever calls first, and deregisters the request. It must be called with mu
+// held.
+func (c *Controller) openRequestLocked(end func(token uint64)) (uint64, func()) {
+	c.requestSeq++
+	token := c.requestSeq
+	done := sync.OnceFunc(func() {
+		end(token)
+		c.mu.Lock()
+		delete(c.requests, token)
+		c.mu.Unlock()
+	})
+	if c.requests == nil {
+		c.requests = map[uint64]func(){}
+	}
+	c.requests[token] = done
+	return token, done
+}
+
+// endRequests ends every open request, oldest first. It runs the ends with mu
+// released, since an end takes it, and with queue held, so no request registers
+// meanwhile.
+func (c *Controller) endRequests() {
+	c.mu.Lock()
+	tokens := slices.Sorted(maps.Keys(c.requests))
+	ends := make([]func(), len(tokens))
+	for i, token := range tokens {
+		ends[i] = c.requests[token]
+	}
+	c.mu.Unlock()
+	for _, end := range ends {
+		end()
+	}
 }

@@ -343,34 +343,250 @@ func scrollDialog(n int) *dialog {
 }
 
 func TestDialogScrollRowsJoinsTheHintToTheNoteWhenCut(t *testing.T) {
+	const hint = "pgup/pgdn to scroll"
 	d := scrollDialog(10)
+	d.hint = hint
 	body := d.body
-	rows := plainRows(d.scrollRows(40, 100, 1, 4, "pgup/pgdn to scroll", mocha()))
+	rows := plainRows(d.rows(40, 100, 4, mocha()))
 	assert.Contains(t, rows, "  why · pgup/pgdn to scroll")
 	assert.Contains(t, rows, "  … 7 more lines")
 	assert.Equal(t, body, d.body)
 	assert.Equal(t, "why", d.note)
 
 	d = scrollDialog(2)
-	assert.NotContains(t, strings.Join(plainRows(d.scrollRows(40, 100, 1, 4, "pgup/pgdn to scroll", mocha())), "\n"), "pgup")
+	d.hint = hint
+	assert.NotContains(t, strings.Join(plainRows(d.rows(40, 100, 4, mocha())), "\n"), "pgup")
 
 	d = scrollDialog(10)
+	d.hint = hint
 	d.note = ""
-	assert.Contains(t, plainRows(d.scrollRows(40, 100, 1, 4, "pgup/pgdn to scroll", mocha())), "  pgup/pgdn to scroll")
+	assert.Contains(t, plainRows(d.rows(40, 100, 4, mocha())), "  pgup/pgdn to scroll")
 	assert.Empty(t, d.note)
 }
 
 func TestDialogScrollRowsWithNoBodyIsRows(t *testing.T) {
 	d := scrollDialog(0)
-	assert.Equal(t, d.rows(40, 100, 1, mocha()), d.scrollRows(40, 100, 1, 4, "pgup/pgdn to scroll", mocha()))
+	want := d.rows(40, 100, 4, mocha())
+	d.hint = "pgup/pgdn to scroll"
+	assert.Equal(t, want, d.rows(40, 100, 4, mocha()))
+}
+
+func TestDialogScrollRowsKeepTheMarkerWithoutTheHintWhenTheHintWouldStarveTheBody(t *testing.T) {
+	d := scrollDialog(10)
+	d.note = ""
+	d.hint = "pgup/pgdn to scroll"
+	rows := plainRows(d.rows(40, 6, 4, mocha()))
+	assert.Equal(t, []string{"  Pick", "  … 10 more lines"}, rows[1:3])
+	assert.NotContains(t, strings.Join(rows, "\n"), "pgup")
+	assert.True(t, d.scroll.cut())
+}
+
+func TestDialogRowsResetTheScrollWhenNothingIsWindowed(t *testing.T) {
+	lines := make([]string, 30)
+	d := &dialog{title: "Pick", options: []option{{label: "Yes"}}, pane: &pane{lines: lines}}
+	d.rows(40, 100, 6, mocha())
+	require.True(t, d.scroll.cut())
+
+	d.rows(40, 8, 6, mocha())
+	assert.Equal(t, scroller{}, d.scroll, "the pane has no room")
+
+	d.rows(40, 100, 6, mocha())
+	require.True(t, d.scroll.cut())
+	d.pane.lines = nil
+	d.rows(40, 100, 6, mocha())
+	assert.Equal(t, scroller{}, d.scroll, "the pane has no lines")
 }
 
 func TestDialogScrollRowsReachesTheEndWhenTheBudgetBinds(t *testing.T) {
 	d := scrollDialog(10)
 	d.note = "" // the hint takes a row of its own
+	d.hint = "pgup/pgdn to scroll"
 	d.scroll.off = 100
-	rows := plainRows(d.scrollRows(40, 8, 1, 100, "pgup/pgdn to scroll", mocha()))
+	rows := plainRows(d.rows(40, 8, 100, mocha()))
 	assert.LessOrEqual(t, len(rows), 8)
 	assert.Contains(t, rows, "  l10")
 	assert.Equal(t, 9, d.scroll.off)
+}
+
+func TestDialogRowsDrawOnlyRulesWhenTheHeightIsTiny(t *testing.T) {
+	d := scrollDialog(3)
+	rule := strings.Repeat("─", 20)
+	assert.Empty(t, d.rows(20, 0, 5, mocha()))
+	assert.Equal(t, []string{rule}, plainRows(d.rows(20, 1, 5, mocha())))
+	assert.Equal(t, []string{rule, rule}, plainRows(d.rows(20, 2, 5, mocha())))
+	assert.Empty(t, d.areas)
+}
+
+func TestDialogRowsShrinkTheBodyBeforeTheFields(t *testing.T) {
+	d := fieldDialog()
+	d.move(1)
+	d.paste("a\nb\nc")
+	full := len(d.rows(30, 100, 5, mocha()))
+	d.body = []string{"l1", "l2", "l3", "l4", "l5", "l6"}
+
+	rows := plainRows(d.rows(30, full, 5, mocha()))
+	assert.Len(t, rows, full)
+	assert.NotContains(t, rows, "  l1", "the fields keep what they had")
+	assert.Equal(t, []string{"  a", "  b", "  c"}, rows[len(rows)-4:len(rows)-1])
+
+	assert.Contains(t, plainRows(d.rows(30, full+3, 5, mocha())), "  l1")
+
+	rows = plainRows(d.rows(30, full-1, 5, mocha()))
+	assert.Len(t, rows, full-1)
+	assert.Equal(t, []string{"  b", "  c"}, rows[len(rows)-3:len(rows)-1], "then the field gives rows up")
+}
+
+func TestDialogRowsKeepEveryOptionThatFitsAndGiveTheRestToTheText(t *testing.T) {
+	d := &dialog{head: []string{"tabs"}, title: "Title", note: "note", foot: "foot", options: []option{{label: "A"}, {label: "B"}, {label: "C"}}}
+	rule := strings.Repeat("─", 20)
+	opts := []string{"❭ 1. A", "  2. B", "  3. C"}
+	for height, want := range map[int][]string{
+		5:  {rule, opts[0], opts[1], opts[2], rule},
+		6:  {rule, "tabs", opts[0], opts[1], opts[2], rule},
+		7:  {rule, "tabs", "  Title", opts[0], opts[1], opts[2], rule},
+		8:  {rule, "tabs", "  Title", "  note", opts[0], opts[1], opts[2], rule},
+		9:  {rule, "tabs", "  Title", "  note", opts[0], opts[1], opts[2], "  foot", rule},
+		10: {rule, "tabs", "  Title", "  note", "", opts[0], opts[1], opts[2], "  foot", rule},
+		11: {rule, "tabs", "  Title", "  note", "", opts[0], opts[1], opts[2], "", "  foot", rule},
+	} {
+		assert.Equal(t, want, plainRows(d.rows(20, height, 5, mocha())), "height %d", height)
+	}
+}
+
+func TestDialogRowsDrawTheFootWholeOrNotAtAll(t *testing.T) {
+	d := &dialog{title: "Pick", foot: strings.Repeat("hint ", 4), sel: 3}
+	for i := range 8 {
+		d.options = append(d.options, option{label: fmt.Sprintf("o%d", i+1)})
+	}
+	for height := 3; height < 14; height++ {
+		rows := strings.Join(plainRows(d.rows(12, height, 5, mocha())), "\n")
+		if n := strings.Count(rows, "hint"); n != 0 {
+			assert.Equal(t, 4, n, "height %d", height)
+		}
+	}
+}
+
+func TestDialogRowsKeepTheSelectionAndCountWhenTheOptionsDoNotFit(t *testing.T) {
+	d := &dialog{title: "Pick", sel: 3}
+	for i := range 8 {
+		d.options = append(d.options, option{label: fmt.Sprintf("o%d", i+1)})
+	}
+	rule := strings.Repeat("─", 20)
+	for height, want := range map[int][]string{
+		3: {rule, "❭ 4. o4", rule},
+		4: {rule, "❭ 4. o4", "  4 of 8", rule},
+		5: {rule, "  Pick", "❭ 4. o4", "  4 of 8", rule},
+		8: {rule, "  Pick", "", "  3. o3", "❭ 4. o4", "  5. o5", "  4 of 8", rule},
+	} {
+		assert.Equal(t, want, plainRows(d.rows(20, height, 5, mocha())), "height %d", height)
+	}
+	d.rows(20, 8, 5, mocha())
+	assert.Equal(t, []int{-1, -1, 3, 4, 5, -1, -1, -1, 6}, d.optionStarts, "options left out have no row")
+}
+
+func TestDialogRowsKeepTheFirstAndLastSelectionWhenTheOptionsDoNotFit(t *testing.T) {
+	for _, sel := range []int{0, 7} {
+		d := &dialog{title: "Pick", sel: sel}
+		for i := range 8 {
+			d.options = append(d.options, option{label: fmt.Sprintf("o%d", i+1)})
+		}
+		for height := 3; height <= 8; height++ {
+			rows := plainRows(d.rows(20, height, 5, mocha()))
+			require.LessOrEqual(t, len(rows), height, "sel %d height %d", sel, height)
+			assert.Contains(t, rows, fmt.Sprintf("❭ %d. o%d", sel+1, sel+1), "sel %d height %d", sel, height)
+			if height >= 4 {
+				assert.Contains(t, rows, fmt.Sprintf("  %d of 8", sel+1), "sel %d height %d", sel, height)
+			}
+		}
+	}
+}
+
+func TestDialogRowsNeverPassTheHeightAndRecordWhatIsDrawn(t *testing.T) {
+	th := mocha()
+	rule := strings.Repeat("─", 30)
+	for name, d := range map[string]*dialog{
+		"field beside":  fieldDialog("Later", "More"),
+		"field below":   fieldDialog("Later", "More"),
+		"body and note": scrollDialog(20),
+	} {
+		d.title = strings.Repeat("Long title ", 4)
+		d.head, d.foot = []string{"tabs"}, "enter to choose"
+		if name != "body and note" {
+			d.move(1)
+		}
+		if name == "field below" {
+			d.paste("a\nb")
+		}
+		for height := range 20 {
+			rows := plainRows(d.rows(30, height, 5, th))
+			require.LessOrEqual(t, len(rows), height, "%s at %d", name, height)
+			if height >= 2 {
+				assert.Equal(t, rule, rows[0])
+				assert.Equal(t, rule, rows[len(rows)-1])
+			}
+			for _, a := range d.areas {
+				require.Positive(t, a.y)
+				require.LessOrEqual(t, a.y+a.h, len(rows)-1)
+				for _, row := range rows[a.y : a.y+a.h] {
+					assert.Contains(t, []string{"What should change?", "a", "b"}, strings.TrimSpace(row[min(a.x, len(row)):]), "%s at %d", name, height)
+				}
+			}
+			for i, at := range d.optionStarts[:max(0, len(d.optionStarts)-1)] {
+				if at >= 0 {
+					assert.Contains(t, rows[at], fmt.Sprintf("%d. ", i+1), "%s at %d", name, height)
+				}
+			}
+		}
+	}
+}
+
+func TestDialogRowsWithAPaneNeverPassTheHeight(t *testing.T) {
+	th := mocha()
+	rule := strings.Repeat("─", 30)
+	lines := make([]string, 30)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("p%d", i+1)
+	}
+	for _, list := range []int{0, 12} {
+		d := fieldDialog("Later", "More")
+		d.head, d.foot = []string{"tabs"}, "enter to choose"
+		d.pane = &pane{lines: lines, width: 10, most: 30, list: list}
+		for height := 2; height < 40; height++ {
+			rows := plainRows(d.rows(30, height, 5, th))
+			require.LessOrEqual(t, len(rows), height, "list %d at %d", list, height)
+			assert.Equal(t, rule, rows[0], "list %d at %d", list, height)
+			assert.Equal(t, rule, rows[len(rows)-1], "list %d at %d", list, height)
+		}
+	}
+}
+
+func TestDialogTailFollowsTheEndUntilScrolledOffIt(t *testing.T) {
+	th := mocha()
+	d := scrollDialog(30)
+	d.tail, d.note = true, ""
+	rows := func() []string { return plainRows(d.rows(40, 10, 5, th)) }
+	assert.Contains(t, rows(), "  l30")
+
+	d.scroll.off -= d.scroll.visible
+	assert.NotContains(t, rows(), "  l30")
+	d.body = append(d.body, "l31")
+	assert.NotContains(t, rows(), "  l31", "scrolled up it stays put")
+
+	d.scroll.off += 100
+	rows()
+	d.body = append(d.body, "l32")
+	assert.Contains(t, rows(), "  l32", "back at the end it follows again")
+}
+
+func TestDialogRowsSecondFrameAllocationsDoNotGrowWithTheBody(t *testing.T) {
+	if raceEnabled {
+		t.Skip("sync.Pool randomly drops items under -race, so allocation counts vary")
+	}
+	allocs := func(n int) float64 {
+		d := scrollDialog(n)
+		d.hint = "pgup/pgdn to scroll"
+		d.rows(40, 20, 5, mocha())
+		return testing.AllocsPerRun(10, func() { d.rows(40, 20, 5, mocha()) })
+	}
+	assert.LessOrEqual(t, allocs(5000), allocs(50)+2)
 }

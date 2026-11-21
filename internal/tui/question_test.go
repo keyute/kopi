@@ -30,7 +30,7 @@ func plainQuestionRows(qs []tool.Question, tab, width, maxPreview, maxRows int) 
 	km := newKeyMap(config.DefaultKeys())
 	q := newQuestionDialog(event.QuestionRequested{Token: 1, Questions: qs}, &km, mocha())
 	q.tab = tab
-	return plainRows(q.rows(width, maxPreview, maxRows, mocha()))
+	return plainRows(q.dialog(width, mocha()).rows(width, maxRows, maxPreview, mocha()))
 }
 
 func TestQuestionRowsShowTitleOptionsDescriptionsAndTheCustomRow(t *testing.T) {
@@ -55,7 +55,7 @@ func TestQuestionRowsMarkMultiSelectOptions(t *testing.T) {
 	qs := []tool.Question{choice("db", true, "A", "B")}
 	q := newQuestionDialog(event.QuestionRequested{Questions: qs}, &km, mocha())
 	q.pages[0].picked[1] = true
-	rows := plainRows(q.rows(80, 6, 100, mocha()))
+	rows := plainRows(q.dialog(80, mocha()).rows(80, 100, 6, mocha()))
 	assert.Equal(t, "  space to toggle · enter to continue · tab to add a note · esc to dismiss", rows[len(rows)-2])
 	assert.Equal(t, []string{"❭ 1. [ ] A", "  about A", "  2. [✔] B", "  about B", "  3. [ ] Type something."}, rows[3:8])
 }
@@ -83,7 +83,7 @@ func TestQuestionRowsMarkAnsweredTabs(t *testing.T) {
 	qs := []tool.Question{choice("One", false, "A", "B"), choice("Two", false, "A", "B")}
 	q := newQuestionDialog(event.QuestionRequested{Questions: qs}, &km, mocha())
 	q.pages[1].chosen = 0
-	assert.Equal(t, "   ☐ One  ☑ Two  ✔ Submit", plainRows(q.rows(60, 6, 100, mocha()))[1])
+	assert.Equal(t, "   ☐ One  ☑ Two  ✔ Submit", plainRows(q.dialog(60, mocha()).rows(60, 100, 6, mocha()))[1])
 }
 
 func TestQuestionRowsReviewShowAnswersAndGaps(t *testing.T) {
@@ -95,7 +95,7 @@ func TestQuestionRowsReviewShowAnswersAndGaps(t *testing.T) {
 	q.pages[1].picked = []bool{true, true}
 	q.pages[1].custom().paste("mine")
 	q.tab = 3
-	rows := plainRows(q.rows(70, 20, 100, mocha()))
+	rows := plainRows(q.dialog(70, mocha()).rows(70, 100, 20, mocha()))
 	assert.Equal(t, []string{
 		"",
 		"  1. Which One?",
@@ -118,7 +118,7 @@ func TestQuestionRowsKeepTheSelectionAndRulesWhenShort(t *testing.T) {
 	for _, sel := range []int{0, 2, 3, 4} {
 		q.pages[0].d.move(sel)
 		for _, maxRows := range []int{4, 5, 6, 9} {
-			rows := plainRows(q.rows(40, 6, maxRows, mocha()))
+			rows := plainRows(q.dialog(40, mocha()).rows(40, maxRows, 6, mocha()))
 			require.LessOrEqual(t, len(rows), maxRows)
 			assert.Equal(t, rule40, rows[0])
 			assert.Equal(t, rule40, rows[len(rows)-1])
@@ -126,12 +126,12 @@ func TestQuestionRowsKeepTheSelectionAndRulesWhenShort(t *testing.T) {
 			assert.Contains(t, strings.Join(rows, "\n"), fmt.Sprintf("❭ %d. ", sel+1))
 		}
 	}
-	assert.Equal(t, []string{rule40, rule40}, plainRows(q.rows(40, 6, 3, mocha())), "a strip needs four rows")
-	assert.Empty(t, q.current().areas)
-	assert.Equal(t, []string{rule40, rule40}, plainRows(q.rows(40, 6, 2, mocha())))
+	assert.Equal(t, []string{rule40, "❭ 5. Type something.", rule40}, plainRows(q.dialog(40, mocha()).rows(40, 3, 6, mocha())), "the selected option fits between the rules")
+	assert.Equal(t, []fieldArea{{c: q.pages[0].custom(), x: 5, y: 1, h: 1}}, q.current().areas)
+	assert.Equal(t, []string{rule40, rule40}, plainRows(q.dialog(40, mocha()).rows(40, 2, 6, mocha())))
 
 	one := newQuestionDialog(event.QuestionRequested{Questions: qs[:1]}, &km, mocha())
-	assert.Len(t, one.rows(40, 6, 3, mocha()), 3)
+	assert.Len(t, one.dialog(40, mocha()).rows(40, 3, 6, mocha()), 3)
 }
 
 func TestQuestionRowsTrimFieldAreasToTheWindow(t *testing.T) {
@@ -139,7 +139,7 @@ func TestQuestionRowsTrimFieldAreasToTheWindow(t *testing.T) {
 	q := newQuestionDialog(event.QuestionRequested{Questions: []tool.Question{choice("One", false, "A", "B", "C")}}, &km, mocha())
 	d := q.pages[0].d
 	d.move(3)
-	rows := plainRows(q.rows(40, 6, 4, mocha()))
+	rows := plainRows(q.dialog(40, mocha()).rows(40, 4, 6, mocha()))
 	require.Len(t, d.areas, 1)
 	assert.Contains(t, rows[d.areas[0].y], "Type something.")
 }
@@ -226,7 +226,7 @@ func TestQuestionRowsKeepThePreviewBoxWidthAsFocusMoves(t *testing.T) {
 	q.Options[1].Preview = "ab"
 	dlg := newQuestionDialog(event.QuestionRequested{Questions: []tool.Question{q}}, &km, mocha())
 	edges := func() (int, int) {
-		top := plainRows(dlg.rows(80, 6, 100, mocha()))[3]
+		top := plainRows(dlg.dialog(80, mocha()).rows(80, 100, 6, mocha()))[3]
 		return cellOf(top, "┌"), cellOf(top, "┐")
 	}
 	left, right := edges()
@@ -248,6 +248,57 @@ func TestQuestionRowsGrowBesideTheListForALongPreview(t *testing.T) {
 	assert.Contains(t, rows[len(rows)-4], "└")
 }
 
+func TestQuestionSecondFrameAllocationsDoNotGrowWithThePreview(t *testing.T) {
+	if raceEnabled {
+		t.Skip("sync.Pool randomly drops items under -race, so allocation counts vary")
+	}
+	km := newKeyMap(config.DefaultKeys())
+	allocs := func(n int) float64 {
+		lines := make([]string, n)
+		for i := range lines {
+			lines[i] = fmt.Sprintf("line %d", i)
+		}
+		q := newQuestionDialog(event.QuestionRequested{Questions: previewQuestion(strings.Join(lines, "\n\n"))}, &km, mocha())
+		q.dialog(80, mocha()).rows(80, 100, 6, mocha())
+		return testing.AllocsPerRun(10, func() { q.dialog(80, mocha()).rows(80, 100, 6, mocha()) })
+	}
+	assert.LessOrEqual(t, allocs(5000), allocs(500)+2)
+}
+
+func TestQuestionDialogMeasuresThePreviewsOncePerWidthAndTheme(t *testing.T) {
+	km := newKeyMap(config.DefaultKeys())
+	q := newQuestionDialog(event.QuestionRequested{Questions: previewQuestion("one\n\ntwo")}, &km, mocha())
+	size := func() [2]int {
+		d := q.dialog(80, mocha())
+		return [2]int{d.pane.width, d.pane.most}
+	}
+	measured := size()
+	require.Equal(t, [2]int{3, 3}, measured)
+
+	q.sizes[0] = [2]int{7, 9}
+	assert.Equal(t, [2]int{7, 9}, size(), "a repeat call reads the kept measure")
+
+	q.dialog(90, mocha())
+	assert.Equal(t, measured, size(), "a new width measures again")
+}
+
+func TestQuestionDialogRendersTheReviewOncePerWidthThemeAndKey(t *testing.T) {
+	m, _ := openQuestion(t, choice("One", false, "A", "B"), choice("Two", false, "C", "D"))
+	q := questionOf(m)
+	q.tab = 2
+	body := func(width int) []string { return q.dialog(width, mocha()).body }
+	require.Contains(t, body(70)[0], "1. Which One?")
+
+	q.review.body[0] = "kept"
+	assert.Equal(t, "kept", body(70)[0], "a repeat call reads the kept body")
+	assert.Contains(t, body(60)[0], "1. Which One?", "a new width renders again")
+
+	q.review.body[0] = "kept"
+	press(m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	q.tab = 2
+	assert.Contains(t, body(60)[0], "1. Which One?", "a key renders again")
+}
+
 func TestQuestionRowsCutAPreviewAndScrollIt(t *testing.T) {
 	km := newKeyMap(config.DefaultKeys())
 	var lines []string
@@ -255,20 +306,20 @@ func TestQuestionRowsCutAPreviewAndScrollIt(t *testing.T) {
 		lines = append(lines, fmt.Sprintf("line %d", i))
 	}
 	q := newQuestionDialog(event.QuestionRequested{Questions: previewQuestion(strings.Join(lines, "\n\n"))}, &km, mocha())
-	joined := func() string { return strings.Join(plainRows(q.rows(80, 6, 100, mocha())), "\n") }
+	joined := func() string { return strings.Join(plainRows(q.dialog(80, mocha()).rows(80, 100, 6, mocha())), "\n") }
 
 	first := joined()
 	assert.Contains(t, first, "line 0")
 	assert.NotContains(t, first, "earlier lines")
 	assert.Regexp(t, `… \d+ more lines`, first)
 
-	q.scroll.off += q.scroll.visible
+	q.current().scroll.off += q.current().scroll.visible
 	scrolled := joined()
 	assert.Contains(t, scrolled, "… 4 earlier lines")
 	assert.NotContains(t, scrolled, "line 0")
 	assert.Contains(t, scrolled, "more lines")
 
-	q.scroll.off += 100
+	q.current().scroll.off += 100
 	end := joined()
 	assert.NotContains(t, end, "more lines")
 	assert.Contains(t, end, "line 9")
@@ -286,7 +337,7 @@ func TestQuestionRowsKeepTheLayoutWhateverIsFocused(t *testing.T) {
 	d := q.pages[0].d
 	for _, sel := range []int{0, 1, 2} {
 		d.move(sel)
-		for _, r := range q.rows(80, 6, 100, mocha()) {
+		for _, r := range q.dialog(80, mocha()).rows(80, 100, 6, mocha()) {
 			assert.LessOrEqual(t, ansi.StringWidth(r), 80)
 		}
 		assert.Equal(t, 3, d.optionStarts[0], "the options start on the same row")
@@ -307,7 +358,7 @@ func openQuestion(t *testing.T, qs ...tool.Question) (*model, *fakeController) {
 	t.Helper()
 	m, c := newTestModel(t, 70, 30)
 	send(m, event.QuestionRequested{Token: 7, Questions: qs})
-	require.NotNil(t, m.question)
+	require.NotNil(t, questionOf(m))
 	return m, c
 }
 
@@ -339,7 +390,7 @@ func TestQuestionEnterChoosesTheFocusedOption(t *testing.T) {
 	press(m, down)
 	press(m, enter)
 	assert.Equal(t, []tool.Answer{{Picks: []tool.Pick{{Option: 1}}}}, sent(t, c, qs))
-	assert.NotNil(t, m.question, "the dialog stays until QuestionEnded")
+	assert.NotNil(t, questionOf(m), "the dialog stays until QuestionEnded")
 }
 
 func TestQuestionDigitChoosesAnOption(t *testing.T) {
@@ -390,7 +441,7 @@ func TestQuestionBlankEnterOnTheCustomRowShowsANotice(t *testing.T) {
 func TestQuestionTypedAnswerReplacesAChosenOption(t *testing.T) {
 	qs := choice("db", false, "A", "B")
 	m, c := openQuestion(t, qs)
-	m.question.pages[0].chosen = 0
+	questionOf(m).pages[0].chosen = 0
 	press(m, digit('3'))
 	typeKeys(m, "own")
 	press(m, enter)
@@ -424,9 +475,9 @@ func TestQuestionMultiSelectTogglesAndContinues(t *testing.T) {
 	press(m, digit('1'))
 	assert.Contains(t, strings.Join(screen(m), "\n"), "[✔] A")
 	press(m, enter)
-	assert.Equal(t, 1, m.question.tab, "enter continues to the next question")
+	assert.Equal(t, 1, questionOf(m).tab, "enter continues to the next question")
 	press(m, digit('2'))
-	assert.Equal(t, 2, m.question.tab, "the last question opens the review")
+	assert.Equal(t, 2, questionOf(m).tab, "the last question opens the review")
 	assert.Empty(t, c.questionAnswers)
 	press(m, enter)
 	assert.Equal(t, []tool.Answer{
@@ -465,23 +516,23 @@ func TestQuestionArrowsSwitchTabsAndKeepDrafts(t *testing.T) {
 	press(m, digit('2'))
 	press(m, down)
 	press(m, right)
-	assert.Equal(t, 1, m.question.tab)
+	assert.Equal(t, 1, questionOf(m).tab)
 	press(m, digit('3'))
 	typeKeys(m, "draft")
 	press(m, left)
-	assert.Equal(t, 1, m.question.tab, "left moves the cursor while the draft has text")
+	assert.Equal(t, 1, questionOf(m).tab, "left moves the cursor while the draft has text")
 	press(m, tea.KeyPressMsg{Code: tea.KeyHome})
 	press(m, tea.KeyPressMsg{Code: tea.KeyLeft})
 	press(m, right)
-	assert.Equal(t, 1, m.question.tab)
+	assert.Equal(t, 1, questionOf(m).tab)
 
-	m.question.pages[1].custom().reset()
+	questionOf(m).pages[1].custom().reset()
 	press(m, left)
-	assert.Equal(t, 0, m.question.tab)
-	assert.True(t, m.question.pages[0].picked[1], "the pick survives")
+	assert.Equal(t, 0, questionOf(m).tab)
+	assert.True(t, questionOf(m).pages[0].picked[1], "the pick survives")
 	assert.Equal(t, 1, m.frontDialog().sel, "so does the focused row")
 	press(m, right)
-	assert.Equal(t, 2, m.question.pages[1].d.sel)
+	assert.Equal(t, 2, questionOf(m).pages[1].d.sel)
 	assert.True(t, m.frontDialog().field().ta.Focused())
 }
 
@@ -490,16 +541,16 @@ func TestQuestionReviewJumpsToTheFirstGap(t *testing.T) {
 	m, c := openQuestion(t, qs...)
 	press(m, right)
 	press(m, digit('1'))
-	require.Equal(t, 2, m.question.tab)
+	require.Equal(t, 2, questionOf(m).tab)
 	assert.Contains(t, strings.Join(screen(m), "\n"), "↳ Answer required")
 	press(m, enter)
-	assert.Equal(t, 0, m.question.tab)
+	assert.Equal(t, 0, questionOf(m).tab)
 	assert.Contains(t, screen(m), "  Answer this question before submitting.")
 	assert.Empty(t, c.questionAnswers)
 
 	press(m, digit('2'))
 	press(m, enter)
-	require.Equal(t, 2, m.question.tab)
+	require.Equal(t, 2, questionOf(m).tab)
 	press(m, enter)
 	assert.Equal(t, []tool.Answer{{Picks: []tool.Pick{{Option: 1}}}, {Picks: []tool.Pick{{Option: 0}}}}, sent(t, c, qs...))
 }
@@ -509,9 +560,9 @@ func TestQuestionReviewLeftGoesBack(t *testing.T) {
 	m, _ := openQuestion(t, qs...)
 	press(m, digit('1'))
 	press(m, digit('1'))
-	require.Equal(t, 2, m.question.tab)
+	require.Equal(t, 2, questionOf(m).tab)
 	press(m, left)
-	assert.Equal(t, 1, m.question.tab)
+	assert.Equal(t, 1, questionOf(m).tab)
 }
 
 func TestQuestionNoteIsSavedAndSentWithThePick(t *testing.T) {
@@ -535,20 +586,20 @@ func TestQuestionNoteEditorTabSavesBlankRemovesAndEscDiscards(t *testing.T) {
 	press(m, tab)
 	typeKeys(m, "keep")
 	press(m, tab)
-	assert.Equal(t, "keep", m.question.pages[0].notes[0])
+	assert.Equal(t, "keep", questionOf(m).pages[0].notes[0])
 
 	press(m, tab)
-	assert.Equal(t, "keep", m.question.pages[0].note.value(), "the editor opens on the saved note")
+	assert.Equal(t, "keep", questionOf(m).pages[0].note.value(), "the editor opens on the saved note")
 	typeKeys(m, "ing")
 	press(m, escape)
 	assert.Empty(t, c.questionAnswers, "esc in the editor is not a dismissal")
-	assert.Equal(t, "keep", m.question.pages[0].notes[0])
-	assert.Equal(t, -1, m.question.pages[0].noting)
+	assert.Equal(t, "keep", questionOf(m).pages[0].notes[0])
+	assert.Equal(t, -1, questionOf(m).pages[0].noting)
 
 	press(m, tab)
-	m.question.pages[0].note.reset()
+	questionOf(m).pages[0].note.reset()
 	press(m, enter)
-	assert.Empty(t, m.question.pages[0].notes[0])
+	assert.Empty(t, questionOf(m).pages[0].notes[0])
 }
 
 func TestQuestionNoteEditorNeverMovesBetweenOptions(t *testing.T) {
@@ -587,16 +638,16 @@ func TestQuestionEscapeDismisses(t *testing.T) {
 			press(m, escape)
 			require.Len(t, c.questionAnswers, 1)
 			assert.Equal(t, questionAnswer{token: 7}, c.questionAnswers[0])
-			assert.NotNil(t, m.question)
+			assert.NotNil(t, questionOf(m))
 		})
 	}
 }
 
-func TestQuestionCancelInterruptsTheTurn(t *testing.T) {
+func TestQuestionCancelDismisses(t *testing.T) {
 	m, c := openQuestion(t, choice("db", false, "A", "B"))
 	press(m, ctrlC)
-	assert.Equal(t, 1, c.interrupts)
-	assert.Empty(t, c.questionAnswers)
+	assert.Zero(t, c.interrupts)
+	assert.Equal(t, []questionAnswer{{token: 7}}, c.questionAnswers)
 }
 
 func TestQuestionSwallowsOtherKeys(t *testing.T) {
@@ -607,7 +658,7 @@ func TestQuestionSwallowsOtherKeys(t *testing.T) {
 	assert.Zero(t, c.toggles)
 	assert.Empty(t, c.sentNow)
 	assert.Empty(t, c.questionAnswers)
-	assert.NotNil(t, m.question)
+	assert.NotNil(t, questionOf(m))
 }
 
 func TestQuestionPasteGoesToTheFocusedFieldOnly(t *testing.T) {
@@ -615,15 +666,15 @@ func TestQuestionPasteGoesToTheFocusedFieldOnly(t *testing.T) {
 	typeText(m, "draft")
 	pasteText(m, "ignored")
 	assert.Equal(t, "draft", m.composer.value())
-	assert.Empty(t, m.question.pages[0].customText(), "an option row takes no paste")
+	assert.Empty(t, questionOf(m).pages[0].customText(), "an option row takes no paste")
 
 	press(m, digit('3'))
 	pasteText(m, "pasted")
-	assert.Equal(t, "pasted", m.question.pages[0].customText())
+	assert.Equal(t, "pasted", questionOf(m).pages[0].customText())
 	assert.Equal(t, "draft", m.composer.value())
 
 	m.Update(clipboardTextMsg{text: " more", field: m.frontDialog().field()})
-	assert.Equal(t, "pasted more", m.question.pages[0].customText())
+	assert.Equal(t, "pasted more", questionOf(m).pages[0].customText())
 
 	m.Update(clipboardTextMsg{text: "stray"})
 	assert.Equal(t, "draft", m.composer.value(), "the composer takes no clipboard text meanwhile")
@@ -633,7 +684,7 @@ func TestQuestionPasteGoesToTheNoteEditor(t *testing.T) {
 	m, _ := openQuestion(t, choice("db", false, "A", "B"))
 	press(m, tab)
 	pasteText(m, "noted")
-	assert.Equal(t, "noted", m.question.pages[0].note.value())
+	assert.Equal(t, "noted", questionOf(m).pages[0].note.value())
 }
 
 func TestQuestionKeepsTheComposerDraft(t *testing.T) {
@@ -671,11 +722,15 @@ func TestQuestionFieldAreasMatchTheScreen(t *testing.T) {
 
 func TestQuestionEndsWithItsEventTurnEndOrSessionChange(t *testing.T) {
 	qs := []tool.Question{choice("db", false, "A", "B")}
-	for _, ev := range []event.Event{event.QuestionEnded{Token: 7}, event.TurnEnd{}, event.SessionChanged{SessionID: "s2"}} {
+	for _, evs := range [][]event.Event{
+		{event.QuestionEnded{Token: 7}},
+		{event.QuestionEnded{Token: 7}, event.TurnEnd{}},
+		{event.QuestionEnded{Token: 7}, event.SessionChanged{SessionID: "s2"}},
+	} {
 		m, _ := newTestModel(t, 70, 30)
 		send(m, event.QuestionRequested{Token: 7, Questions: qs})
-		send(m, ev)
-		assert.Nil(t, m.question, "%T", ev)
+		send(m, evs...)
+		assert.Nil(t, questionOf(m), "%T", evs[len(evs)-1])
 		assert.Nil(t, m.frontDialog())
 		assert.NotContains(t, strings.Join(screen(m), "\n"), "Which db?")
 		assert.Contains(t, strings.Join(screen(m), "\n"), "❯")
@@ -684,16 +739,19 @@ func TestQuestionEndsWithItsEventTurnEndOrSessionChange(t *testing.T) {
 	m, _ := newTestModel(t, 70, 30)
 	send(m, event.QuestionRequested{Token: 7, Questions: qs})
 	send(m, event.QuestionEnded{Token: 8})
-	assert.NotNil(t, m.question, "another token's end is ignored")
+	assert.NotNil(t, questionOf(m), "another token's end is ignored")
 }
 
-func TestQuestionRequestClosesTheTasksDialog(t *testing.T) {
+func TestQuestionRequestCoversTheTasksDialog(t *testing.T) {
 	m, _ := tasksModel(t)
 	submitText(m, "/tasks")
-	require.NotNil(t, m.tasks)
+	require.NotNil(t, tasksOf(m))
 	send(m, event.QuestionRequested{Token: 7, Questions: []tool.Question{choice("db", false, "A", "B")}})
-	assert.Nil(t, m.tasks)
-	assert.NotNil(t, m.question)
+	assert.NotNil(t, tasksOf(m))
+	assert.Equal(t, promptQuestion, frontKind(m))
+
+	send(m, event.QuestionEnded{Token: 7})
+	assert.Equal(t, promptTasks, frontKind(m))
 }
 
 func TestQuestionReturnsAfterAChildApprovalOverIt(t *testing.T) {
@@ -709,7 +767,7 @@ func TestQuestionReturnsAfterAChildApprovalOverIt(t *testing.T) {
 	assert.Empty(t, c.questionAnswers, "keys go to the approval")
 
 	send(m, event.ApprovalEnded{Token: 2})
-	assert.Nil(t, m.approval)
+	assert.Nil(t, approvalOf(m))
 	assert.Contains(t, strings.Join(screen(m), "\n"), "Which db?")
 	press(m, enter)
 	assert.Equal(t, []tool.Answer{{Picks: []tool.Pick{{Option: 0}}}}, sent(t, c, qs))
@@ -720,7 +778,7 @@ func TestQuestionWaitsForAChildApprovalAlreadyShown(t *testing.T) {
 	m, c := newTestModel(t, 70, 30)
 	send(m, subagentAsk(2, "explore"))
 	send(m, event.QuestionRequested{Token: 7, Questions: []tool.Question{qs}})
-	require.NotNil(t, m.question)
+	require.NotNil(t, questionOf(m))
 	text := strings.Join(screen(m), "\n")
 	assert.Contains(t, text, "explore t2 › Edit explore.go")
 	assert.NotContains(t, text, "Which db?")
@@ -757,11 +815,11 @@ func TestQuestionRowsHintScrollingOnlyWhenSomethingIsCut(t *testing.T) {
 		lines = append(lines, fmt.Sprintf("line %d", i))
 	}
 	q := newQuestionDialog(event.QuestionRequested{Questions: previewQuestion(strings.Join(lines, "\n\n"))}, &km, mocha())
-	rows := plainRows(q.rows(80, 6, 100, mocha()))
+	rows := plainRows(q.dialog(80, mocha()).rows(80, 100, 6, mocha()))
 	assert.Equal(t, "  pgup/pgdown to scroll · enter to choose · tab to add a note · esc to dismiss", rows[len(rows)-2])
 	assert.Regexp(t, `│ … \d+ more lines +│$`, rows[len(rows)-5], "markers sit inside the box")
 
-	rows = plainRows(q.rows(80, 100, 100, mocha()))
+	rows = plainRows(q.dialog(80, mocha()).rows(80, 100, 100, mocha()))
 	assert.Equal(t, "  enter to choose · tab to add a note · esc to dismiss", rows[len(rows)-2])
 }
 
@@ -771,7 +829,7 @@ func TestQuestionRowsMarkTheChosenOptionAndCustomAnswer(t *testing.T) {
 	q := newQuestionDialog(event.QuestionRequested{Questions: []tool.Question{choice("db", false, "A", "B")}}, &km, th)
 	p := q.pages[0]
 	p.chosen = 0
-	rows := q.rows(60, 6, 100, th)
+	rows := q.dialog(60, th).rows(60, 100, 6, th)
 	assert.Equal(t, "❭ 1. A ✔", plainRows(rows)[3])
 	assert.Equal(t, fg(th.accent).Render("❭ ")+fg(th.accent).Bold(true).Render("1. A ✔"), rows[3], "chosen and focused: bold accent")
 	assert.Equal(t, fg(th.accent).Render("  ")+"2. B", rows[5], "an unchosen option stays plain")
@@ -779,7 +837,7 @@ func TestQuestionRowsMarkTheChosenOptionAndCustomAnswer(t *testing.T) {
 	p.custom().ta.SetValue("mine")
 	p.chosen = 2
 	p.d.move(0)
-	rows = plainRows(q.rows(60, 6, 100, th))
+	rows = plainRows(q.dialog(60, th).rows(60, 100, 6, th))
 	assert.Equal(t, "  3. mine ✔", rows[7])
 }
 
@@ -788,11 +846,11 @@ func TestQuestionRowsDrawTheNoteEditorBelowTheDetail(t *testing.T) {
 	q := newQuestionDialog(event.QuestionRequested{Questions: []tool.Question{choice("db", false, "A", "B")}}, &km, mocha())
 	p := q.pages[0]
 	p.notes[0] = "kept"
-	assert.Equal(t, []string{"❭ 1. A", "  about A", "  ↳ note: kept", "  2. B"}, plainRows(q.rows(60, 6, 100, mocha()))[3:7])
+	assert.Equal(t, []string{"❭ 1. A", "  about A", "  ↳ note: kept", "  2. B"}, plainRows(q.dialog(60, mocha()).rows(60, 100, 6, mocha()))[3:7])
 
 	p.openNote()
 	p.note.ta.SetValue("a long note that goes on and on past the end of the row so it wraps")
-	rows := plainRows(q.rows(40, 6, 100, mocha()))
+	rows := plainRows(q.dialog(40, mocha()).rows(40, 100, 6, mocha()))
 	assert.Equal(t, []string{"❭ 1. A", "  about A", "  ↳ note: a long note that goes on and"}, rows[3:6])
 	assert.True(t, strings.HasPrefix(rows[6], "          "), "continuation rows hang under the text: %q", rows[6])
 }
@@ -805,10 +863,10 @@ func TestQuestionPageKeysScrollACutPreviewFromTheNoteEditor(t *testing.T) {
 	m, _ := openQuestion(t, previewQuestion(strings.Join(lines, "\n"))...)
 	press(m, tab)
 	typeKeys(m, "abc")
-	require.True(t, m.question.scroll.cut())
+	require.True(t, questionOf(m).current().scroll.cut())
 
 	press(m, pgDown)
 
-	assert.Positive(t, m.question.scroll.off)
-	assert.Equal(t, "abc", m.question.pages[0].note.value())
+	assert.Positive(t, questionOf(m).current().scroll.off)
+	assert.Equal(t, "abc", questionOf(m).pages[0].note.value())
 }

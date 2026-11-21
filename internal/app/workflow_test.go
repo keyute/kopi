@@ -169,6 +169,41 @@ func TestWorkflowModelOrder(t *testing.T) {
 	})
 }
 
+func TestWorkflowAgentsAreInTheTotalAsEachEnds(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	def := agentDef("explorer")
+	a := newAgentHarness(t, sb, Config{WorkflowModel: sb.PricedModel(t)}, def)
+	gate := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+	})
+	a.child.SetResponses([]ai.FauxResponseStep{gated(gate, "second")})
+	a.rootAcks(1)
+
+	id := a.startWorkflow(t, "audit", `await agent("first"); return await agent("second", {agentType: "explorer"})`)
+
+	a.until(t, func() bool { return a.c.Status().TotalCost == pigruntimetest.PricedModelCost })
+	assert.Equal(t, tool.TaskRunning, a.info(t, id).Status)
+	close(gate)
+	a.untilStatus(t, id, tool.TaskCompleted)
+	assert.Equal(t, pigruntimetest.PricedModelCost, a.c.Status().TotalCost)
+}
+
+func TestWorkflowTotalSumsItsAgents(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	a := newAgentHarness(t, sb, Config{WorkflowModel: sb.PricedModel(t)})
+	a.rootAcks(1)
+
+	id := a.startWorkflow(t, "audit", `return await parallel([() => agent("a"), () => agent("b")])`)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	assert.Equal(t, 2*pigruntimetest.PricedModelCost, a.c.Status().TotalCost)
+}
+
 func TestWorkflowSchemaReturnsTheRecordedObject(t *testing.T) {
 	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
 	requests := make(chan childRequest, 1)
@@ -432,6 +467,31 @@ func TestWorkflowLimitIsFreedBySessionSwitch(t *testing.T) {
 	second := a.startWorkflow(t, "second", `return 1`)
 
 	a.untilStatus(t, second, tool.TaskCompleted)
+}
+
+func TestWorkflowAgentsPendingApprovalEndsOnceBeforeSessionChangedOnASwitch(t *testing.T) {
+	ran := new(atomic.Int32)
+	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{probeTool(ran)}})
+	approvals := subscribeTo[event.ApprovalRequested](a.c)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("p1", 1)), pigruntimetest.Text("unreached")})
+	a.rootAcks(1)
+	oldID := a.c.Status().SessionID
+	a.startWorkflow(t, "audit", `return await agent("go")`)
+	req := receiveEvent(t, approvals)
+
+	require.NoError(t, a.c.NewSession(t.Context()))
+
+	evs := a.rec.all()
+	changedAt := slices.IndexFunc(evs, func(ev event.Event) bool {
+		changed, ok := ev.(event.SessionChanged)
+		return ok && changed.SessionID != oldID
+	})
+	require.GreaterOrEqual(t, changedAt, 0)
+	ended := event.Event(event.ApprovalEnded{Token: req.Token})
+	assert.Len(t, slices.DeleteFunc(slices.Clone(evs), func(ev event.Event) bool { return ev != ended }), 1)
+	assert.Less(t, slices.Index(evs, ended), changedAt)
+	assert.False(t, a.c.Answer(req.Token, policy.Decision{Answer: policy.Allow}))
+	assert.Zero(t, ran.Load())
 }
 
 func TestWorkflowEndAfterASwitchReportsNothingToTheNewSession(t *testing.T) {

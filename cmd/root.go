@@ -361,14 +361,14 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// c resolves the session model, which the closures read when a call runs.
 	var c *app.Controller
 	answer := func(ctx context.Context, system, prompt string) (string, error) {
-		return rt.Answer(ctx, c.SmallModel(), pigruntime.DefaultEffort, system, prompt)
+		return c.SideAnswer(ctx, c.SmallModel(), pigruntime.DefaultEffort, system, prompt)
 	}
 	classifierOn := resolved.Config.Classifier.Enabled
 	var review *classifier.Classifier
 	if classifierOn {
 		stage := func(effort pigruntime.Effort) classifier.Answer {
 			return func(ctx context.Context, system, prompt string) (string, error) {
-				return rt.Answer(ctx, cmp.Or(resolved.Config.Classifier.Model, c.Model()), effort, system, prompt)
+				return c.SideAnswer(ctx, cmp.Or(resolved.Config.Classifier.Model, c.Model()), effort, system, prompt)
 			}
 		}
 		review = classifier.New(stage(pigruntime.LowestEffort), stage(pigruntime.MediumEffort), resolved.Config.Classifier.Instructions)

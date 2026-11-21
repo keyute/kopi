@@ -60,6 +60,10 @@ var segments = map[string]segment{
 		text := costText(s.Cost)
 		return fg(th.text).Render(text), text != ""
 	},
+	"total": func(s statusInput, th theme) (string, bool) {
+		text := costText(s.TotalCost)
+		return fg(th.text).Render(text), text != ""
+	},
 	"branch": func(s statusInput, th theme) (string, bool) {
 		return fg(th.accent).Render(s.Branch), s.Branch != ""
 	},

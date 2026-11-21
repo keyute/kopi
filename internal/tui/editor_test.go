@@ -67,7 +67,7 @@ func TestPlanOpenRefreshesAPlanRequestedWhileTheEditorRuns(t *testing.T) {
 	submitText(m, "/plan open")
 	require.Len(t, *calls, 1)
 	send(m, planRequest(7, "# Heading\n\nstep one"))
-	require.NotNil(t, m.plan)
+	require.NotNil(t, planOf(m))
 
 	m.Update((*calls)[0].done(nil))
 	assert.Equal(t, []uint64{7}, c.refreshes)

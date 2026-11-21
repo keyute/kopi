@@ -18,12 +18,11 @@ import (
 // taskDialog is the /tasks dialog, drawn in the composer's slot: the
 // background tasks, or one task's output while open names it.
 type taskDialog struct {
-	d *dialog
-	// scrolled is set when the human moves the open output off its end.
-	scrolled bool
-	list     []tool.TaskInfo
-	open     string
-	info     tool.TaskInfo
+	d    *dialog
+	km   *keyMap
+	list []tool.TaskInfo
+	open string
+	info tool.TaskInfo
 	// out is info's output as body rows for outWidth and outTheme, kept
 	// across renders.
 	out      []string
@@ -38,23 +37,21 @@ func (m *model) showTasks() tea.Cmd {
 	if len(list) == 0 {
 		return m.flash("no background tasks")
 	}
-	m.tasks = &taskDialog{d: &dialog{}, list: list}
-	m.tasks.setOptions(m.width)
+	t := &taskDialog{d: &dialog{}, km: &m.keys, list: list}
+	t.setOptions(m.width)
+	m.open(promptTasks, t)
 	return nil
 }
 
-// tasksKey goes to the dialog: interrupt leaves the task for the list and
-// the list for the composer. Enter on a subagent's task shows its session.
-// Other keys it has no use for are swallowed.
-func (m *model) tasksKey(msg tea.KeyPressMsg) tea.Cmd {
-	t := m.tasks
-	if key.Matches(msg, m.keys.interrupt) {
+// key goes to the dialog: dismiss leaves the task for the list and the list
+// for the composer. Enter on a subagent's task shows its session. Other keys it
+// has no use for are swallowed.
+func (t *taskDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	if key.Matches(msg, m.keys.dismiss) {
 		if t.open == "" {
-			m.tasks = nil
-		} else {
-			m.taskList(t.open)
+			return nil, false
 		}
-		return nil
+		return nil, t.taskList(m, t.open)
 	}
 	if t.open == "" && key.Matches(msg, m.keys.stopAgent) {
 		info := t.list[t.d.sel]
@@ -62,75 +59,74 @@ func (m *model) tasksKey(msg tea.KeyPressMsg) tea.Cmd {
 			if err := m.c.StopTask(info.ID); err != nil {
 				m.showError(err)
 			}
-			m.taskList(info.ID)
+			return nil, t.taskList(m, info.ID)
 		}
-		return nil
+		return nil, true
 	}
 	picked, cmd := t.d.key(msg, &m.keys)
 	if !picked {
-		return cmd
+		return cmd, true
 	}
 	switch {
 	case t.open == "":
 		info := t.list[t.d.sel]
 		if _, ok := m.agent(info.ID); ok && info.Agent != "" {
-			m.tasks = nil
-			return m.show(info.ID)
+			return m.show(info.ID), false
 		}
-		m.openTask(info.ID)
+		return nil, t.openTask(m, info.ID)
 	case t.stoppable() && t.d.sel == 0:
 		if err := m.c.StopTask(t.open); err != nil {
 			m.showError(err)
 		}
-		m.openTask(t.open)
-	default:
-		m.taskList(t.open)
+		return nil, t.openTask(m, t.open)
 	}
-	return nil
+	return nil, t.taskList(m, t.open)
 }
 
-// refreshTasks re-reads what the dialog shows, keeping the selected task.
-func (m *model) refreshTasks() {
-	if m.tasks == nil {
-		return
+// seen ends the dialog with a session switch. A change of tasks has it read what
+// it shows again, keeping the selected task.
+func (t *taskDialog) seen(m *model, msg tea.Msg) bool {
+	switch msg.(type) {
+	case event.SessionChanged:
+		return false
+	case event.TasksChanged:
+		if t.open != "" {
+			return t.openTask(m, t.open)
+		}
+		return t.taskList(m, t.list[t.d.sel].ID)
 	}
-	if m.tasks.open != "" {
-		m.openTask(m.tasks.open)
-		return
-	}
-	m.taskList(m.tasks.list[m.tasks.d.sel].ID)
+	return true
 }
 
 // openTask shows task id's output, or the list when it cannot be read. A
-// task newly opened starts on its first option.
-func (m *model) openTask(id string) {
-	t := m.tasks
+// task newly opened starts on its first option. It reports whether the dialog
+// stays open.
+func (t *taskDialog) openTask(m *model, id string) bool {
 	info, err := m.c.TaskOutput(id)
 	if err != nil {
 		m.showError(err)
-		m.taskList(id)
-		return
+		return t.taskList(m, id)
 	}
 	if id != t.open {
-		t.d.sel, t.d.scroll, t.scrolled = 0, scroller{}, false
+		t.d.sel, t.d.scroll = 0, scroller{}
 	}
 	t.open, t.info, t.out = id, info, nil
 	t.setOptions(m.width)
+	return true
 }
 
-// taskList shows the list with task id selected, closing the dialog when
-// there are no tasks.
-func (m *model) taskList(id string) {
-	t := m.tasks
+// taskList shows the list with task id selected. It reports whether the dialog
+// stays open: with no tasks it does not.
+func (t *taskDialog) taskList(m *model, id string) bool {
 	list := m.c.Tasks()
 	if len(list) == 0 {
-		m.tasks = nil
-		return
+		return false
 	}
 	sel := slices.IndexFunc(list, func(i tool.TaskInfo) bool { return i.ID == id })
 	t.list, t.open, t.d.sel = list, "", max(0, sel)
-	t.d.scroll, t.scrolled = scroller{}, false
+	t.d.scroll = scroller{}
 	t.setOptions(m.width)
+	return true
 }
 
 func (m *model) showError(err error) {
@@ -163,40 +159,21 @@ func (t *taskDialog) setOptions(width int) {
 	d.sel = min(d.sel, len(d.options)-1)
 }
 
-// rows draws the dialog within maxRows; an open task's output fills what
-// the other rows leave, at most maxBody rows, from its end until it is
-// scrolled.
-func (t *taskDialog) rows(width, maxBody, maxRows int, km *keyMap, th theme) []string {
-	if maxRows <= 0 {
-		return nil
-	}
+// dialog is the task list or, for an open task, its output, which fills what
+// the other rows leave, from its end until it is scrolled.
+func (t *taskDialog) dialog(width int, th theme) *dialog {
 	t.setOptions(width)
 	t.d.note = ""
 	if t.open == "" {
 		if info := t.list[t.d.sel]; info.Agent != "" && info.Status == tool.TaskRunning {
-			t.d.note = binding(km.stopAgent, "stop agent")
+			t.d.note = binding(t.km.stopAgent, "stop agent")
 		}
 	}
-	t.d.body = nil
+	t.d.body, t.d.tail, t.d.hint = nil, t.open != "", scrollHint(t.km)
 	if t.open != "" {
 		t.d.body = t.wrapped(width-2, th)
-		// The view follows the end until the human scrolls up.
-		if !t.scrolled {
-			t.d.scroll.off = len(t.d.body)
-		}
 	}
-	rows := t.d.scrollRows(width, maxRows, 1, maxBody, scrollHint(km), th)
-	t.scrolled = t.d.scroll.below > 0
-	if t.open == "" && len(rows) > maxRows {
-		head := len(rows) - len(t.d.options) - 1
-		room := maxRows - head - 1
-		if room > 0 {
-			start := max(0, t.d.sel-room+1)
-			rows = append(rows[:head], rows[head+start:head+start+room]...)
-			return append(rows, rows[0])
-		}
-	}
-	return rows[max(0, len(rows)-maxRows):]
+	return t.d
 }
 
 // wrapped is the output as body rows for width and th.

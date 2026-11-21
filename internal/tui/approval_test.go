@@ -20,15 +20,18 @@ var rule40 = strings.Repeat("─", 40)
 
 func plainApprovalRows(a event.ApprovalRequested, choice, maxPreview int) []string {
 	km := newKeyMap(config.DefaultKeys())
-	d := newApprovalDialog(&a, &km, mocha())
-	d.sel = choice
-	return plainRows(approvalRows(d, &approvalPreview{}, &a, &km, 40, maxPreview, 100, mocha()))
+	p := newApprovalDialog(&a, &km, mocha())
+	p.d.sel = choice
+	return plainRows(p.dialog(40, mocha()).rows(40, 100, maxPreview, mocha()))
 }
 
 func TestApprovalRowsWithNonpositiveMaxRows(t *testing.T) {
+	km := newKeyMap(config.DefaultKeys())
 	for _, maxRows := range []int{-4, -1, 0} {
 		t.Run(fmt.Sprint(maxRows), func(t *testing.T) {
-			assert.Nil(t, approvalRows(nil, nil, nil, nil, 40, 10, maxRows, mocha()))
+			a := event.ApprovalRequested{}
+			p := newApprovalDialog(&a, &km, mocha())
+			assert.Nil(t, p.dialog(40, mocha()).rows(40, maxRows, 10, mocha()))
 		})
 	}
 }
@@ -74,8 +77,9 @@ func TestApprovalRowsScrollThePreview(t *testing.T) {
 	a := event.ApprovalRequested{Title: "Write a.go", Preview: numberedPreview(10)}
 	km := newKeyMap(config.DefaultKeys())
 	hint := "  " + scrollHint(&km)
-	d, p := newApprovalDialog(&a, &km, mocha()), &approvalPreview{}
-	frame := func() []string { return plainRows(approvalRows(d, p, &a, &km, 40, 4, 100, mocha()))[2:7] }
+	p := newApprovalDialog(&a, &km, mocha())
+	d := p.d
+	frame := func() []string { return plainRows(p.dialog(40, mocha()).rows(40, 100, 4, mocha()))[2:7] }
 
 	assert.Equal(t, []string{"  + l1", "  + l2", "  + l3", "  … 7 more lines", hint}, frame())
 	d.scroll.off += d.scroll.visible
@@ -86,24 +90,25 @@ func TestApprovalRowsScrollThePreview(t *testing.T) {
 	assert.Equal(t, []string{"  + l1", "  + l2", "  + l3", "  … 7 more lines", hint}, frame())
 
 	a.Preview = numberedPreview(4)
-	d, p = newApprovalDialog(&a, &km, mocha()), &approvalPreview{}
+	p = newApprovalDialog(&a, &km, mocha())
 	assert.Equal(t, []string{"  + l1", "  + l2", "  + l3", "  + l4", ""}, frame(), "an exact fit has no marker or hint")
 }
 
 func TestApprovalRowsJoinTheHintToTheNote(t *testing.T) {
 	a := event.ApprovalRequested{Title: "Write a.go", Rule: "Write(a.go)", Preview: numberedPreview(10)}
 	km := newKeyMap(config.DefaultKeys())
-	rows := plainRows(approvalRows(newApprovalDialog(&a, &km, mocha()), &approvalPreview{}, &a, &km, 60, 4, 100, mocha()))
+	rows := plainRows(newApprovalDialog(&a, &km, mocha()).dialog(60, mocha()).rows(60, 100, 4, mocha()))
 	assert.Equal(t, "  asked by Write(a.go) · "+scrollHint(&km), rows[6])
 }
 
 func TestApprovalRowsReachTheEndOfALongLine(t *testing.T) {
 	a := event.ApprovalRequested{Title: "Bash", Preview: []tool.PreviewLine{{Kind: tool.Context, Text: strings.Repeat("0123456789", 20) + "END"}}}
 	km := newKeyMap(config.DefaultKeys())
-	d, p := newApprovalDialog(&a, &km, mocha()), &approvalPreview{}
+	p := newApprovalDialog(&a, &km, mocha())
+	d := p.d
 	var rows []string
 	for range 20 {
-		rows = plainRows(approvalRows(d, p, &a, &km, 40, 4, 100, mocha()))
+		rows = plainRows(p.dialog(40, mocha()).rows(40, 100, 4, mocha()))
 		if strings.Contains(strings.Join(rows, ""), "END") {
 			break
 		}
@@ -116,10 +121,11 @@ func TestApprovalRowsReachTheEndOfALongLine(t *testing.T) {
 func TestApprovalRowsReachTheEndWhenTheHintTakesARow(t *testing.T) {
 	a := event.ApprovalRequested{Title: "Write a.go", Preview: numberedPreview(10)}
 	km := newKeyMap(config.DefaultKeys())
-	d, p := newApprovalDialog(&a, &km, mocha()), &approvalPreview{}
+	p := newApprovalDialog(&a, &km, mocha())
+	d := p.d
 	var rows []string
 	for range 20 {
-		rows = plainRows(approvalRows(d, p, &a, &km, 40, 4, 10, mocha()))
+		rows = plainRows(p.dialog(40, mocha()).rows(40, 10, 4, mocha()))
 		if slices.Contains(rows, "  + l10") {
 			break
 		}
@@ -131,15 +137,16 @@ func TestApprovalRowsReachTheEndWhenTheHintTakesARow(t *testing.T) {
 func TestApprovalRowsKeepTheOffsetAcrossAWidthChange(t *testing.T) {
 	a := event.ApprovalRequested{Title: "Write a.go", Preview: numberedPreview(40)}
 	km := newKeyMap(config.DefaultKeys())
-	d, p := newApprovalDialog(&a, &km, mocha()), &approvalPreview{}
-	approvalRows(d, p, &a, &km, 40, 4, 100, mocha())
+	p := newApprovalDialog(&a, &km, mocha())
+	d := p.d
+	p.dialog(40, mocha()).rows(40, 100, 4, mocha())
 	d.scroll.off = 30
-	approvalRows(d, p, &a, &km, 40, 4, 100, mocha())
+	p.dialog(40, mocha()).rows(40, 100, 4, mocha())
 	require.Equal(t, 30, d.scroll.off)
 
 	for _, width := range []int{12, 80} {
-		rows := plainRows(approvalRows(d, p, &a, &km, width, 4, 100, mocha()))
-		assert.Equal(t, width, p.width+2)
+		rows := plainRows(p.dialog(width, mocha()).rows(width, 100, 4, mocha()))
+		assert.Equal(t, width, p.preview.width+2)
 		assert.Equal(t, "  … 30 earlier lines", ansi.Strip(rows[2]), "width %d", width)
 	}
 }
@@ -147,10 +154,11 @@ func TestApprovalRowsKeepTheOffsetAcrossAWidthChange(t *testing.T) {
 func TestApprovalRowsKeepTheFieldWithATallDraftAndALongPreview(t *testing.T) {
 	a := event.ApprovalRequested{Title: "Edit a.go", Preview: numberedPreview(30), Edits: true}
 	km := newKeyMap(config.DefaultKeys())
-	d, p := newApprovalDialog(&a, &km, mocha()), &approvalPreview{}
+	p := newApprovalDialog(&a, &km, mocha())
+	d := p.d
 	d.move(2)
 	d.paste("one\ntwo\nthree\nfour\nfive")
-	rows := plainRows(approvalRows(d, p, &a, &km, 40, 3, 12, mocha()))
+	rows := plainRows(p.dialog(40, mocha()).rows(40, 12, 3, mocha()))
 	assert.LessOrEqual(t, len(rows), 12)
 	assert.Equal(t, "  five", rows[len(rows)-2])
 	assert.Equal(t, rule40, rows[len(rows)-1])
@@ -165,9 +173,9 @@ func TestApprovalRowsSecondFrameAllocationsDoNotGrowWithThePreview(t *testing.T)
 	km := newKeyMap(config.DefaultKeys())
 	allocs := func(n int) float64 {
 		a := event.ApprovalRequested{Title: "Write a.go", Preview: numberedPreview(n)}
-		d, p := newApprovalDialog(&a, &km, mocha()), &approvalPreview{}
-		approvalRows(d, p, &a, &km, 40, 4, 100, mocha())
-		return testing.AllocsPerRun(10, func() { approvalRows(d, p, &a, &km, 40, 4, 100, mocha()) })
+		p := newApprovalDialog(&a, &km, mocha())
+		p.dialog(40, mocha()).rows(40, 100, 4, mocha())
+		return testing.AllocsPerRun(10, func() { p.dialog(40, mocha()).rows(40, 100, 4, mocha()) })
 	}
 	assert.LessOrEqual(t, allocs(5000), allocs(50)+2)
 }
@@ -177,10 +185,11 @@ func BenchmarkApprovalRowsFirstFrame(b *testing.B) {
 	for _, n := range []int{100, 5000} {
 		b.Run(fmt.Sprint(n), func(b *testing.B) {
 			a := event.ApprovalRequested{Title: "Write a.go", Preview: numberedPreview(n)}
-			d := newApprovalDialog(&a, &km, mocha())
+			p := newApprovalDialog(&a, &km, mocha())
 			b.ReportAllocs()
 			for b.Loop() {
-				approvalRows(d, &approvalPreview{}, &a, &km, 40, 10, 100, mocha())
+				p.preview = approvalPreview{}
+				p.dialog(40, mocha()).rows(40, 100, 10, mocha())
 			}
 		})
 	}
@@ -191,57 +200,59 @@ func BenchmarkApprovalRowsFirstFrameHugeLine(b *testing.B) {
 	for _, size := range []int{4096, 4 << 20} {
 		b.Run(fmt.Sprint(size), func(b *testing.B) {
 			a := event.ApprovalRequested{Title: "Bash", Preview: []tool.PreviewLine{{Kind: tool.Context, Text: strings.Repeat("x", size)}}}
-			d := newApprovalDialog(&a, &km, mocha())
+			p := newApprovalDialog(&a, &km, mocha())
 			b.ReportAllocs()
 			for b.Loop() {
-				approvalRows(d, &approvalPreview{}, &a, &km, 40, 10, 100, mocha())
+				p.preview = approvalPreview{}
+				p.dialog(40, mocha()).rows(40, 100, 10, mocha())
 			}
 		})
 	}
 }
 
-func TestApprovalRowsCutTheTopFirst(t *testing.T) {
+func TestApprovalRowsKeepBothRulesAndTheSelectionWhenTheOptionsDoNotFit(t *testing.T) {
 	a := event.ApprovalRequested{
 		Title:   "Edit a.go",
 		Preview: []tool.PreviewLine{{Kind: tool.Removed, Text: "old"}, {Kind: tool.Added, Text: "new"}},
 		Edits:   true,
 	}
 	km := newKeyMap(config.DefaultKeys())
-	rows := plainRows(approvalRows(newApprovalDialog(&a, &km, mocha()), &approvalPreview{}, &a, &km, 40, 10, 4, mocha()))
-	assert.Equal(t, []string{"❭ 1. Yes", "  2. Yes, allow all edits this session", "  3. No (esc)  What should change?", rule40}, rows)
+	rows := plainRows(newApprovalDialog(&a, &km, mocha()).dialog(40, mocha()).rows(40, 4, 10, mocha()))
+	assert.Equal(t, []string{rule40, "❭ 1. Yes", "  1 of 3", rule40}, rows)
 }
 
-func TestApprovalRowsShiftAreasForTheCut(t *testing.T) {
+func TestApprovalRowsPlaceAreasOnTheDrawnRows(t *testing.T) {
 	a := event.ApprovalRequested{
 		Title:   "Edit a.go",
 		Preview: []tool.PreviewLine{{Kind: tool.Removed, Text: "old"}, {Kind: tool.Added, Text: "new"}},
 		Edits:   true,
 	}
 	km := newKeyMap(config.DefaultKeys())
-	d := newApprovalDialog(&a, &km, mocha())
-	p := &approvalPreview{}
+	p := newApprovalDialog(&a, &km, mocha())
+	d := p.d
 	f := d.options[2].field
 	// "  3. No (esc)  " takes 15 cells.
-	approvalRows(d, p, &a, &km, 40, 10, 100, mocha())
+	p.dialog(40, mocha()).rows(40, 100, 10, mocha())
 	assert.Equal(t, []fieldArea{{c: f, x: 15, y: 7, h: 1}}, d.areas)
 
-	approvalRows(d, p, &a, &km, 40, 10, 4, mocha())
-	assert.Equal(t, []fieldArea{{c: f, x: 15, y: 2, h: 1}}, d.areas, "shifted by the cut")
+	d.move(2)
+	p.dialog(40, mocha()).rows(40, 4, 10, mocha())
+	assert.Equal(t, []fieldArea{{c: f, x: 15, y: 1, h: 1}}, d.areas, "the selected option's row is all that fits")
 
-	require.Equal(t, []string{rule40}, plainRows(approvalRows(d, p, &a, &km, 40, 10, 1, mocha())))
-	assert.Empty(t, d.areas, "a field the cut reaches is dropped")
+	require.Equal(t, []string{rule40}, plainRows(p.dialog(40, mocha()).rows(40, 1, 10, mocha())))
+	assert.Empty(t, d.areas, "a field that is not drawn is dropped")
 }
 
 func TestApprovalRowsKeepTheFieldWithATallDraft(t *testing.T) {
 	a := event.ApprovalRequested{Title: "Edit a.go", Preview: []tool.PreviewLine{{Kind: tool.Added, Text: "x"}}, Edits: true}
 	km := newKeyMap(config.DefaultKeys())
-	for _, maxRows := range []int{5, 6, 7, 8, 12} {
+	for _, maxRows := range []int{6, 7, 8, 12} {
 		t.Run(fmt.Sprint(maxRows), func(t *testing.T) {
-			d := newApprovalDialog(&a, &km, mocha())
-			p := &approvalPreview{}
+			p := newApprovalDialog(&a, &km, mocha())
+			d := p.d
 			d.move(2)
 			d.paste("one\ntwo\nthree\nfour\nfive")
-			rows := plainRows(approvalRows(d, p, &a, &km, 40, 3, maxRows, mocha()))
+			rows := plainRows(p.dialog(40, mocha()).rows(40, maxRows, 3, mocha()))
 			assert.LessOrEqual(t, len(rows), maxRows)
 			at := slices.Index(rows, "  1. Yes")
 			require.GreaterOrEqual(t, at, 0, "%q", rows)
@@ -254,11 +265,17 @@ func TestApprovalRowsKeepTheFieldWithATallDraft(t *testing.T) {
 		})
 	}
 
-	d := newApprovalDialog(&a, &km, mocha())
-	p := &approvalPreview{}
+	p := newApprovalDialog(&a, &km, mocha())
+	d := p.d
 	d.move(2)
 	d.paste("one\ntwo")
-	assert.Equal(t, []string{"❭ 3. No (esc)", "  two", rule40}, plainRows(approvalRows(d, p, &a, &km, 40, 3, 3, mocha())), "too few rows for the options cuts the top")
+	assert.Equal(t, []string{rule40, "❭ 3. No (esc)", rule40}, plainRows(p.dialog(40, mocha()).rows(40, 3, 3, mocha())), "too few rows for the options keeps the selected row between the rules")
+
+	p = newApprovalDialog(&a, &km, mocha())
+	d = p.d
+	d.move(2)
+	d.paste("one\ntwo\nthree\nfour\nfive")
+	assert.Equal(t, []string{rule40, "❭ 3. No (esc)", "  five", "  3 of 3", rule40}, plainRows(p.dialog(40, mocha()).rows(40, 5, 3, mocha())), "the selected field keeps one row")
 }
 
 func TestApprovalRowsDropAnUnselectedFieldBeforeAnOption(t *testing.T) {
@@ -267,22 +284,24 @@ func TestApprovalRowsDropAnUnselectedFieldBeforeAnOption(t *testing.T) {
 	for _, tt := range []struct{ width, maxPreview, maxRows int }{{60, 2, 4}, {30, 3, 5}} {
 		t.Run(fmt.Sprint(tt.width), func(t *testing.T) {
 			rule := strings.Repeat("─", tt.width)
-			d := newApprovalDialog(&a, &km, mocha())
-			p := &approvalPreview{}
+			p := newApprovalDialog(&a, &km, mocha())
+			d := p.d
 			d.move(2)
 			d.paste("one\ntwo\nthree")
 			d.move(0)
-			rows := plainRows(approvalRows(d, p, &a, &km, tt.width, tt.maxPreview, tt.maxRows, mocha()))
+			rows := plainRows(p.dialog(tt.width, mocha()).rows(tt.width, tt.maxRows, tt.maxPreview, mocha()))
 			assert.LessOrEqual(t, len(rows), tt.maxRows)
-			assert.Equal(t, "❭ 1. Yes", rows[0], "%q", rows)
-			assert.Equal(t, []string{"  3. No (esc)", rule}, rows[len(rows)-2:])
+			assert.Equal(t, rule, rows[0])
+			assert.Contains(t, rows, "❭ 1. Yes", "%q", rows)
 			for _, line := range []string{"one", "two", "three"} {
 				assert.NotContains(t, rows, "  "+line)
 			}
 
 			d.move(2)
-			rows = plainRows(approvalRows(d, p, &a, &km, tt.width, tt.maxPreview, tt.maxRows, mocha()))
-			assert.Equal(t, []string{"❭ 3. No (esc)", "  three", rule}, rows[len(rows)-3:], "the selected field keeps one row")
+			rows = plainRows(p.dialog(tt.width, mocha()).rows(tt.width, tt.maxRows, tt.maxPreview, mocha()))
+			at := slices.Index(rows, "❭ 3. No (esc)")
+			require.GreaterOrEqual(t, at, 0, "%q", rows)
+			assert.Equal(t, "  three", rows[at+1], "the selected field keeps one row")
 		})
 	}
 }
