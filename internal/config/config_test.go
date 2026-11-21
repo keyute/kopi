@@ -346,9 +346,9 @@ func TestResolveAcceptsTheLimitSegmentsOnlyInTheStatusLine(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, entries, r.Config.StatusLine.Left)
 
-	_, err = Resolve(Defaults(), globalLayer(t, `{"agentline": {"left": ["$limit_5h"]}}`))
+	_, err = Resolve(Defaults(), globalLayer(t, `{"subagentline": {"left": ["$limit_5h"]}}`))
 	require.ErrorIs(t, err, ErrInvalidValue)
-	assert.Contains(t, err.Error(), `agentline.left: unknown segment "limit_5h"`)
+	assert.Contains(t, err.Error(), `subagentline.left: unknown segment "limit_5h"`)
 }
 
 func TestResolveRejectsInvalidEntries(t *testing.T) {

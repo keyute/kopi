@@ -500,7 +500,7 @@ func TestStatusRefreshesOnALimitsReading(t *testing.T) {
 func TestStatusLimitsFollowTheShownAgentsProvider(t *testing.T) {
 	opts := testOptions()
 	opts.StatusLine = config.StatusLine{Left: []string{"(wk $limit_wk)"}, Separator: " "}
-	opts.AgentLine = config.DefaultAgentLine()
+	opts.SubagentLine = config.DefaultSubagentLine()
 	m, c := newTestModelWith(t, 40, 20, opts)
 	main := app.AgentStatus{ID: app.Main, Model: "openai-codex/gpt-5.2-codex"}
 	child := app.AgentStatus{ID: "t1", Agent: "explorer", Model: "xai/grok-4", State: "running"}
