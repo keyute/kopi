@@ -377,6 +377,55 @@ func TestNotifyForATurnThatStartsAndEndsInOneBatch(t *testing.T) {
 	assert.Equal(t, []any{ansi.Notify("Failed: kopi")}, *raw)
 }
 
+func TestConsecutiveBatchedTurnOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		outcome event.Status
+		want    tea.ProgramState
+		text    string
+	}{
+		{event.Completed, tea.ProgramStateDone, "Finished: kopi"},
+		{event.Failed, tea.ProgramStateError, "Failed: kopi"},
+	} {
+		for _, interrupted := range []bool{false, true} {
+			name := tc.outcome.String() + map[bool]string{false: "/consecutive", true: "/interrupted"}[interrupted]
+			t.Run(name, func(t *testing.T) {
+				m, raw := awayModel(t)
+				m.getenv = env(map[string]string{"TERM_PROGRAM": "ghostty"})
+				send(m, turnStart, turnEnd(tc.outcome))
+				require.Equal(t, tc.want, state(m))
+				require.Equal(t, []any{ansi.Notify(tc.text)}, *raw)
+
+				if interrupted {
+					send(m, turnStart, turnEnd(event.Interrupted))
+					assert.Equal(t, tea.ProgramStateIdle, state(m))
+					assert.Len(t, *raw, 1)
+				}
+
+				send(m, turnStart, turnEnd(tc.outcome))
+				assert.Equal(t, tc.want, state(m))
+				assert.Equal(t, []any{ansi.Notify(tc.text), ansi.Notify(tc.text)}, *raw)
+				send(m, event.Notice{Text: "later"})
+				m.Update(tea.WindowSizeMsg{Width: 70, Height: 20})
+				assert.Len(t, *raw, 2, "unrelated updates must not notify")
+			})
+		}
+	}
+}
+
+func TestSubagentBatchedTurnDoesNotClearUnseen(t *testing.T) {
+	for _, outcome := range []event.Status{event.Completed, event.Failed} {
+		t.Run(outcome.String(), func(t *testing.T) {
+			m, raw := awayModel(t)
+			send(m, turnStart, turnEnd(outcome))
+			want := state(m)
+			require.Len(t, *raw, 1)
+			send(m, event.Session{ID: "t1", Event: turnStart}, event.Session{ID: "t1", Event: turnEnd(event.Interrupted)})
+			assert.Equal(t, want, state(m))
+			assert.Len(t, *raw, 1)
+		})
+	}
+}
+
 func TestSessionChangeForgetsThePreviousOutcome(t *testing.T) {
 	m, raw := awayModel(t)
 	c := m.c.(*fakeController)

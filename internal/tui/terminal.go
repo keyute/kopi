@@ -64,7 +64,8 @@ func (m *model) terminalTitle(state tea.ProgramState) string {
 
 // attend follows the terminal's focus, keeps unseen, and returns the
 // notification when the state changed from was into one that needs the human
-// while the terminal is away. It runs after update, with was taken before it.
+// or a fresh main turn finished while away. It runs after update, with was
+// taken before it.
 func (m *model) attend(msg tea.Msg, was tea.ProgramStatus) tea.Cmd {
 	switch msg.(type) {
 	case tea.BlurMsg:
@@ -84,9 +85,11 @@ func (m *model) attend(msg tea.Msg, was tea.ProgramStatus) tea.Cmd {
 			m.unseen = tea.ProgramStateError
 		}
 	}
+	fresh := m.mainEnded && m.ended != nil && (*m.ended == event.Completed || *m.ended == event.Failed)
 	m.mainEnded = false
 	now := m.programStatus()
-	if !m.away || now == was {
+	fresh = fresh && (now.State == tea.ProgramStateDone || now.State == tea.ProgramStateError)
+	if !m.away || (now == was && !fresh) {
 		return nil
 	}
 	var text string

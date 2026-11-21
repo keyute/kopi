@@ -565,6 +565,9 @@ func (m *model) apply(ev event.Event) *view {
 		v.queued = ev.Pending
 		return v
 	case event.TurnStart:
+		if id == app.Main {
+			m.unseen = ""
+		}
 		v.busy = true
 		v.turnStart = time.Now()
 		v.verb = m.pickVerb()
