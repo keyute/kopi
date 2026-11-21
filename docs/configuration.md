@@ -21,7 +21,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `sandbox/` | The lock and the record of placeholders that Kopi processes sharing the home use to remove them safely (Linux), see [sandbox](sandbox.md#linux-placeholders) |
 | `images/` | Pasted clipboard images, removed after a day |
 | `installation_id` | The installation's UUID, created the first time a sign-in asks for it |
-| `agent/` | PiG's agent directory, created on first run: its credential file (`auth.json`), session logs (`sessions/`), other PiG state and an optional `models.json` |
+| `agent/` | PiG's agent directory, created on first run: its credential file (`auth.json`), session logs (`sessions/`), other PiG state, the saved model lists (`models-store.json`, see [models](providers.md#models)) and an optional `models.json` |
 
 ## Top-level keys
 
@@ -45,7 +45,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 ## `model`
 
-- `provider/id` of the session model; `--model` overrides it.
+- `provider/id` of the session model; `--model` overrides it. An id Kopi does not know is fetched or declared as described in [models](providers.md#models).
 - Unset, each start uses the default model of a provider with a credential, environment credentials included. Nothing is saved, and a notice names the model and the config file to set it in.
 - With credentials for several providers, the default depends on the order the runtime prefers; set `model` to pin it.
 - With no credential at all, the fullscreen interface asks which provider to log in to, then opens the session; print mode fails with a hint to run `kopi login`. Start fails first, naming the provider, when `smallModel`, an enabled `classifier.model`, `workflows.model` (checked only in the fullscreen interface and when no rule denies `Workflow`) or a [subagent](subagents.md) definition's `model` names a provider with no credential.

@@ -18,6 +18,10 @@ var (
 	ErrParentResume    = errors.New("a session with a parent cannot resume or continue")
 	ErrScript          = errors.New("script failed")
 
+	// ErrModelListUnavailable accompanies ErrUnknownModel when refreshing the
+	// provider's model list failed.
+	ErrModelListUnavailable = errors.New("model list could not be refreshed")
+
 	ErrServerStartTimeout = errors.New("MCP server did not start in time")
 	ErrServerNameClash    = errors.New("MCP server names give the same tool names")
 	ErrServerClosed       = errors.New("MCP server is closed")

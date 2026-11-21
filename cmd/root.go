@@ -431,6 +431,9 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			}
 			return diagnose(err, ref, origin, paths, app.OpenRequest{}, providers)
 		}
+		if errors.Is(err, pigruntime.ErrUnknownModel) {
+			return unknownModelError(err, ref, "", paths)
+		}
 		return err
 	}
 	if resolved.Config.SmallModel != "" {
@@ -871,6 +874,16 @@ func sameProviderNoCredential(err error, model, sub string) bool {
 	return errors.Is(err, pigruntime.ErrNoCredential) && provider == subProvider
 }
 
+// unknownModelError is the advice for an unknown model; check, when set,
+// leads to the declaring advice.
+func unknownModelError(err error, model, check string, paths config.Paths) error {
+	refresh := ""
+	if errors.Is(err, pigruntime.ErrModelListUnavailable) {
+		refresh = "the model list could not be refreshed; "
+	}
+	return fmt.Errorf("unknown model %q: %s%sdeclare the model in %s", model, refresh, check, filepath.Join(paths.AgentDir, "models.json"))
+}
+
 // diagnose turns the open failures a user can fix into Kopi's own advice.
 func diagnose(err error, model, origin string, paths config.Paths, req app.OpenRequest, providers []pigruntime.Provider) error {
 	switch {
@@ -892,7 +905,7 @@ func diagnose(err error, model, origin string, paths config.Paths, req app.OpenR
 		if origin != "flags" {
 			where = fmt.Sprintf("\"model\" in %s", paths.ConfigFile)
 		}
-		return fmt.Errorf("unknown model %q: check %s", model, where)
+		return unknownModelError(err, model, "check "+where+", or ", paths)
 	case errors.Is(err, pigruntime.ErrSessionNotFound) && req.Continue:
 		return errors.New("no session to continue in this directory: start without --continue")
 	case errors.Is(err, pigruntime.ErrSessionNotFound):

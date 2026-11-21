@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MichaelKinsy/PiG/agent"
@@ -29,12 +30,20 @@ const pigSettings = `{"retry":{"enabled":true},"compaction":{"enabled":true},"ca
 type Options struct {
 	// Home is Kopi's home; PiG's own home is pinned beneath it.
 	Home, AgentDir, CWD string
+	// catalogURL is the remote model catalog's base URL; empty selects PiG's
+	// default host. Tests point it at a local server.
+	catalogURL string
 }
 
 type Runtime struct {
-	svcs             *coding.AgentSessionServices
+	svcs *coding.AgentSessionServices
+	// models is shared with svcs, which does not close a model runtime it was
+	// handed.
+	models           *coding.ModelRuntime
 	rt               *coding.Runtime
 	installationFile string
+	refreshMu        sync.Mutex
+	refreshed        map[string]bool
 	// openURL opens a sign-in URL in the user's browser.
 	openURL func(string) error
 }
@@ -52,28 +61,43 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	if err := json.Unmarshal([]byte(pigSettings), &s); err != nil {
 		return nil, fmt.Errorf("failed to decode pig settings: %w", err)
 	}
-	svcs, err := coding.CreateAgentSessionServices(coding.CreateAgentSessionServicesOptions{
-		CWD:                opts.CWD,
-		AgentDir:           opts.AgentDir,
-		ProjectTrusted:     new(false),
-		SettingsManager:    coding.NewInMemorySettingsManager(s),
-		ModelRuntimeSignal: ctx,
+	// RefreshOnCreate and AllowModelNetwork stay unset: creating the runtime
+	// only restores the stored catalog and never reaches the network.
+	modelsPath := filepath.Join(opts.AgentDir, "models.json")
+	models, err := coding.CreateModelRuntime(ctx, coding.CreateModelRuntimeOptions{
+		AuthPath:       filepath.Join(opts.AgentDir, "auth.json"),
+		ModelsPath:     new(&modelsPath),
+		CatalogBaseURL: opts.catalogURL,
 	})
 	if err != nil {
+		return nil, fmt.Errorf("failed to create pig model runtime: %w", err)
+	}
+	svcs, err := coding.CreateAgentSessionServices(coding.CreateAgentSessionServicesOptions{
+		CWD:             opts.CWD,
+		AgentDir:        opts.AgentDir,
+		ProjectTrusted:  new(false),
+		SettingsManager: coding.NewInMemorySettingsManager(s),
+		ModelRuntime:    models,
+	})
+	if err != nil {
+		models.Close()
 		return nil, fmt.Errorf("failed to create pig services: %w", err)
 	}
 	rt, err := coding.NewRuntime(coding.RuntimeOptions{Services: svcs})
 	if err != nil {
 		svcs.Close()
+		models.Close()
 		return nil, fmt.Errorf("failed to create pig runtime: %w", err)
 	}
 	// The browser's own output would land in the terminal mid-prompt.
 	browser.Stdout, browser.Stderr = io.Discard, io.Discard
 	return &Runtime{
 		svcs:             svcs,
+		models:           models,
 		rt:               rt,
 		installationFile: filepath.Join(opts.Home, "installation_id"),
 		openURL:          browser.OpenURL,
+		refreshed:        map[string]bool{},
 	}, nil
 }
 
@@ -374,7 +398,24 @@ func (r *Runtime) usableModel(ctx context.Context, ref string) (*ai.Model, error
 	provider, id, _ := strings.Cut(ref, "/")
 	model := r.svcs.ModelRuntime().GetModel(provider, id)
 	if model == nil {
-		return nil, ErrUnknownModel
+		refreshErr := r.refreshModels(ctx, provider)
+		if model = r.svcs.ModelRuntime().GetModel(provider, id); model == nil {
+			// A known provider without a credential reports that, since a
+			// sign-in would let the fetch run.
+			if r.svcs.ModelRuntime().GetProvider(provider) != nil {
+				ok, err := r.hasCredential(ctx, provider)
+				if err != nil {
+					return nil, err
+				}
+				if !ok {
+					return nil, fmt.Errorf("provider %q: %w", provider, ErrNoCredential)
+				}
+			}
+			if refreshErr != nil {
+				return nil, errors.Join(ErrUnknownModel, ErrModelListUnavailable, refreshErr)
+			}
+			return nil, ErrUnknownModel
+		}
 	}
 	ok, err := r.hasCredential(ctx, provider)
 	if err != nil {
@@ -402,4 +443,5 @@ func (r *Runtime) Close() {
 		slog.Warn("failed to close pig runtime", "error", err)
 	}
 	r.svcs.Close()
+	r.models.Close()
 }

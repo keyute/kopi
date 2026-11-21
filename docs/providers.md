@@ -22,6 +22,27 @@
 - When the configured model has no credential and its provider offers a sign-in or an API key, Kopi opens a login for that provider before the session opens. Headless use exits with the `kopi login` hint.
 - With no `model` and no credential for any provider, the fullscreen interface lists the providers that offer a login, sorted by id; the one you choose is logged in, then the session opens with that provider's default model. Cancelling leaves no session, and `/login <provider>` opens it. Headless use exits with the `kopi login` hint.
 
+## Models
+
+- A model is `provider/id`. The ids a provider offers are built into Kopi, so a model released after your Kopi build is unknown until Kopi is updated or its list is fetched.
+- Kopi fetches a provider's list only when a configured model of that provider is unknown, the provider has a credential, and the provider has not been fetched in this process. The fetch happens at start, once per provider per process, and waits at most 5 seconds per provider, so unknown ids under several providers add up.
+- The list comes from `pi-in-go.dev`. That request carries the provider id and a user agent with PiG's name and version, the OS, its release and the architecture; it carries no credential.
+- A provider that serves its own list is also asked for it, with its own credential:
+  - `openrouter`: `/models/user`. The result replaces openrouter's whole built-in list, narrowed to the models its key may use, and does so on later starts too.
+  - `radius`: its own catalog, in place of `pi-in-go.dev`.
+- An expired sign-in of the provider is renewed before the fetch; for `github-copilot` the renewal also reads the account's available models.
+- The fetched list is saved in `agent/models-store.json`. A later start reads it without a request, and its entries replace the built-in ones of that provider, base URL included, while it is newer than the list built into Kopi. `PIG_OFFLINE=1` stops the fetch; the saved list is still read.
+- A model still unknown after the fetch stops the start, naming `agent/models.json`; if the fetch failed, the message says the list could not be refreshed.
+- Declare a model yourself in `agent/models.json`. Under a built-in provider whose models carry an API and base URL, the entry takes both from them and uses the provider's credential:
+
+```json
+{"providers": {"mistral": {"models": [{"id": "brand-new"}]}}}
+```
+
+- A provider whose built-in models ship without a base URL, such as `azure`, also needs `baseUrl`.
+- Fields worth setting, with the value used when omitted: `contextWindow` (128000), `maxTokens` (16384), `cost` (`input`, `output`, `cacheRead`, `cacheWrite`, per million tokens; all 0), `reasoning` (false), `input` (`["text"]`; add `"image"`).
+- With no `model` set, the default model for a provider still follows the Kopi build.
+
 ## Identity
 
 - After an `anthropic` account sign-in Kopi notes that Anthropic bills third-party tools per token as extra usage, not from Claude plan limits.
