@@ -174,6 +174,10 @@ type TasksChanged struct{}
 // their status.
 type LimitsChanged struct{}
 
+// ToolsChanged reports that a session's callable tools changed; frontends
+// re-read their status.
+type ToolsChanged struct{}
+
 type ModeChanged struct{ Mode policy.Mode }
 
 type SessionChanged struct {
@@ -234,6 +238,7 @@ func (TurnEnd) isEvent()             {}
 func (TaskEnded) isEvent()           {}
 func (TasksChanged) isEvent()        {}
 func (LimitsChanged) isEvent()       {}
+func (ToolsChanged) isEvent()        {}
 func (ModeChanged) isEvent()         {}
 func (SessionChanged) isEvent()      {}
 func (SessionNamed) isEvent()        {}

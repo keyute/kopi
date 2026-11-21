@@ -801,6 +801,7 @@ func (c *Controller) Status() Status {
 		_, cost := sess.Usage()
 		s.TotalCost += cost
 		s.MessageCount = sess.MessageCount()
+		s.Ultracode = sess.Callable("Workflow")
 		if tokens, window, ok := sess.ContextUsage(); ok {
 			s.ContextTokens, s.ContextWindow = tokens, window
 		}

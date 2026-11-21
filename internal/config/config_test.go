@@ -426,7 +426,7 @@ func TestBackgroundActionAndTasksSegment(t *testing.T) {
 	assert.Equal(t, []string{"ctrl+b"}, DefaultKeys()["background"])
 	assert.Contains(t, KeyActions, "stop-agent")
 	assert.Equal(t, []string{"x"}, DefaultKeys()["stop-agent"])
-	assert.Equal(t, []string{"$notice", "$shells", "$workflows", "$sandbox", "$mode"}, DefaultStatusLine().Right)
+	assert.Equal(t, []string{"$notice", "$shells", "$ultracode", "$sandbox", "$mode"}, DefaultStatusLine().Right)
 
 	global := globalLayer(t, `{"keys": {"background": ["ctrl+g"]}, "statusline": {"left": ["$agents", "$shells"]}}`)
 	r, err := Resolve(Defaults(), global)
@@ -930,7 +930,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "keys.submit", Value: `["enter"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "keys.newline", Value: `["shift+enter","alt+enter","ctrl+j"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "statusline.left", Value: `["$model","$context","$branch( $changes)"]`, Origin: "default"})
-	assert.Contains(t, entries, Entry{Key: "statusline.right", Value: `["$notice","$shells","$workflows","$sandbox","$mode"]`, Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "statusline.right", Value: `["$notice","$shells","$ultracode","$sandbox","$mode"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "terminal.title", Value: "true", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "terminal.progress", Value: "false", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "terminal.notifications", Value: "auto", Origin: "default"})

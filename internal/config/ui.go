@@ -53,7 +53,7 @@ var LimitSegments = func() []string {
 }()
 
 // StatusSegments lists every segment the status line can show.
-var StatusSegments = slices.Concat([]string{"model", "effort", "context", "tools", "cost", "total", "branch", "mode", "notice", "sandbox", "agents", "shells", "workflows", "tokens", "changes", "cwd"}, LimitSegments)
+var StatusSegments = slices.Concat([]string{"model", "effort", "context", "tools", "cost", "total", "branch", "mode", "notice", "sandbox", "agents", "shells", "workflows", "ultracode", "tokens", "changes", "cwd"}, LimitSegments)
 
 // AgentSegments lists every segment an agent row can show.
 var AgentSegments = []string{"agent", "tokens", "model", "effort", "context", "tools", "cost", "elapsed", "state", "activity", "id"}
@@ -138,7 +138,7 @@ func DefaultKeys() map[string][]string {
 }
 
 func DefaultStatusLine() StatusLine {
-	return StatusLine{Left: []string{"$model", "$context", "$branch( $changes)"}, Right: []string{"$notice", "$shells", "$workflows", "$sandbox", "$mode"}, Separator: " · "}
+	return StatusLine{Left: []string{"$model", "$context", "$branch( $changes)"}, Right: []string{"$notice", "$shells", "$ultracode", "$sandbox", "$mode"}, Separator: " · "}
 }
 
 func DefaultAgentLine() AgentLine {

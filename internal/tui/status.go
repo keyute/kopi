@@ -98,6 +98,9 @@ var segments = withLimitSegments(map[string]segment{
 	"shells": func(s statusInput, th theme) (string, bool) {
 		return fg(th.dim).Render(countText(s.Shells, "shell")), s.Shells > 0
 	},
+	"ultracode": func(s statusInput, th theme) (string, bool) {
+		return fg(th.accent).Render("ultracode"), s.Ultracode
+	},
 	"workflows": func(s statusInput, th theme) (string, bool) {
 		return fg(th.dim).Render(countText(s.Workflows, "workflow")), s.Workflows > 0
 	},
