@@ -242,6 +242,15 @@ func TestNotifyChannels(t *testing.T) {
 		{"auto kitty", "auto", map[string]string{"TERM": "xterm-kitty"}, ansi.Notify(text)},
 		{"auto xterm-ghostty", "auto", map[string]string{"TERM": "xterm-ghostty"}, ansi.Notify(text)},
 		{"auto tmux", "auto", map[string]string{"TERM_PROGRAM": "tmux", "TERM": "screen-256color"}, "\a"},
+		{"auto tmux inherited ghostty", "auto", map[string]string{"TMUX": "/tmux,1,0", "TERM_PROGRAM": "ghostty"}, "\a"},
+		{"auto tmux inherited iTerm", "auto", map[string]string{"TMUX": "/tmux,1,0", "TERM_PROGRAM": "iTerm.app"}, "\a"},
+		{"auto tmux inherited warp", "auto", map[string]string{"TMUX": "/tmux,1,0", "TERM_PROGRAM": "WarpTerminal"}, "\a"},
+		{"auto tmux inherited wezterm", "auto", map[string]string{"TMUX": "/tmux,1,0", "TERM_PROGRAM": "WezTerm"}, "\a"},
+		{"auto tmux inherited kitty", "auto", map[string]string{"TMUX": "/tmux,1,0", "TERM": "xterm-kitty"}, "\a"},
+		{"auto tmux inherited xterm-ghostty", "auto", map[string]string{"TMUX": "/tmux,1,0", "TERM": "xterm-ghostty"}, "\a"},
+		{"tmux explicit osc9", "osc9", map[string]string{"TMUX": "/tmux,1,0"}, ansi.Notify(text)},
+		{"tmux explicit bell", "bell", map[string]string{"TMUX": "/tmux,1,0", "TERM_PROGRAM": "ghostty"}, "\a"},
+		{"tmux explicit off", "off", map[string]string{"TMUX": "/tmux,1,0", "TERM_PROGRAM": "ghostty"}, nil},
 		{"auto unknown", "auto", nil, "\a"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -369,7 +378,7 @@ func TestNotifyForATurnThatStartsAndEndsInOneBatch(t *testing.T) {
 }
 
 func TestSessionChangeForgetsThePreviousOutcome(t *testing.T) {
-	m, _ := awayModel(t)
+	m, raw := awayModel(t)
 	c := m.c.(*fakeController)
 	c.status.Agents = 1
 	send(m, turnStart)
@@ -378,5 +387,73 @@ func TestSessionChangeForgetsThePreviousOutcome(t *testing.T) {
 
 	c.status.Agents = 0
 	send(m, event.TasksChanged{})
-	assert.Equal(t, tea.ProgramStateDone, state(m))
+	assert.Equal(t, tea.ProgramStateIdle, state(m))
+	assert.Empty(t, *raw)
+}
+
+func TestSessionChangeClearsUnseenOutcome(t *testing.T) {
+	for _, outcome := range []event.Status{event.Completed, event.Failed} {
+		for _, resumed := range []bool{false, true} {
+			t.Run(outcome.String()+map[bool]string{false: "/new", true: "/resumed"}[resumed], func(t *testing.T) {
+				m, raw := awayModel(t)
+				m.getenv = env(map[string]string{"TERM_PROGRAM": "ghostty"})
+				send(m, turnStart, turnEnd(outcome))
+				require.Len(t, *raw, 1)
+				changed := event.SessionChanged{Resumed: resumed}
+				if resumed {
+					changed.History = []event.Event{turnStart, turnEnd(outcome)}
+				}
+				send(m, changed)
+				assert.Equal(t, tea.ProgramStateIdle, state(m))
+				send(m, event.Notice{Text: "later"})
+				assert.Equal(t, tea.ProgramStateIdle, state(m))
+				assert.Len(t, *raw, 1, "switching must not notify")
+			})
+		}
+	}
+}
+
+func TestSessionChangeBatchedWithTurnEnd(t *testing.T) {
+	for _, outcome := range []event.Status{event.Completed, event.Failed} {
+		t.Run(outcome.String(), func(t *testing.T) {
+			m, raw := awayModel(t)
+			send(m, turnStart)
+			send(m, turnEnd(outcome), event.SessionChanged{})
+			assert.Equal(t, tea.ProgramStateIdle, state(m))
+			assert.False(t, m.mainEnded)
+			assert.Empty(t, *raw)
+		})
+	}
+}
+
+func TestSessionChangeKeepsRunningTurnAndItsCompletion(t *testing.T) {
+	for _, batched := range []bool{false, true} {
+		t.Run(map[bool]string{false: "separate", true: "batched"}[batched], func(t *testing.T) {
+			m, raw := awayModel(t)
+			m.getenv = env(map[string]string{"TERM_PROGRAM": "ghostty"})
+			send(m, turnStart)
+			if batched {
+				send(m, event.SessionChanged{}, turnEnd(event.Completed))
+			} else {
+				send(m, event.SessionChanged{})
+				assert.Equal(t, tea.ProgramStateWorking, state(m))
+				assert.Empty(t, *raw)
+				send(m, turnEnd(event.Completed))
+			}
+			assert.Equal(t, tea.ProgramStateDone, state(m))
+			assert.Equal(t, []any{ansi.Notify("Finished: kopi")}, *raw)
+		})
+	}
+}
+
+func TestUnseenNoOutcomeWhenOnlyAgentsStop(t *testing.T) {
+	m, raw := awayModel(t)
+	c := m.c.(*fakeController)
+	c.status.Agents = 1
+	send(m, event.TasksChanged{})
+	require.Equal(t, tea.ProgramStateWorking, state(m))
+	c.status.Agents = 0
+	send(m, event.TasksChanged{})
+	assert.Equal(t, tea.ProgramStateIdle, state(m))
+	assert.Empty(t, *raw)
 }

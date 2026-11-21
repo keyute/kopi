@@ -76,8 +76,8 @@ func (m *model) attend(msg tea.Msg, was tea.ProgramStatus) tea.Cmd {
 	switch {
 	case !m.away || m.working():
 		m.unseen = ""
-	case (was.State == tea.ProgramStateWorking || m.mainEnded) && m.programStatus().State != tea.ProgramStateBlocked:
-		switch m.ended {
+	case m.ended != nil && (was.State == tea.ProgramStateWorking || m.mainEnded) && m.programStatus().State != tea.ProgramStateBlocked:
+		switch *m.ended {
 		case event.Completed:
 			m.unseen = tea.ProgramStateDone
 		case event.Failed:
@@ -111,8 +111,8 @@ func (m *model) notify(text string) tea.Cmd {
 	case "osc9":
 		osc9 = true
 	case "auto":
-		osc9 = slices.Contains([]string{"ghostty", "iTerm.app", "WarpTerminal", "WezTerm"}, m.getenv("TERM_PROGRAM")) ||
-			slices.Contains([]string{"xterm-kitty", "xterm-ghostty"}, m.getenv("TERM"))
+		osc9 = m.getenv("TMUX") == "" && (slices.Contains([]string{"ghostty", "iTerm.app", "WarpTerminal", "WezTerm"}, m.getenv("TERM_PROGRAM")) ||
+			slices.Contains([]string{"xterm-kitty", "xterm-ghostty"}, m.getenv("TERM")))
 	}
 	if osc9 {
 		return m.raw(ansi.Notify(text))

@@ -2,6 +2,7 @@ package app
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -179,26 +180,102 @@ func blockedTitle(t *testing.T, title *ai.FauxProviderHandle, reply string, unbl
 	return entered
 }
 
-func TestTitleAnsweredAfterSessionSwitchIsDropped(t *testing.T) {
+func TestTitleCommitPrecedesSameSessionResume(t *testing.T) {
 	h, title := titleHarness(t, Config{Title: true})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("one")})
-	release := make(chan struct{})
-	entered := blockedTitle(t, title, "Stale", release)
-	named := subscribeTo[event.SessionNamed](h.c)
+	title.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("Fix the build")})
+	id := h.c.Status().SessionID
+	announced, release := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock)
 	h.c.mu.Lock()
-	old := h.c.main.sess
+	bound := h.c.main.bound
+	h.c.main.bound = func(ev event.Event) {
+		bound(ev)
+		close(announced)
+		<-release
+	}
 	h.c.mu.Unlock()
 
 	h.turn(t, "fix the build")
-	wait(t, entered)
-	require.NoError(t, h.c.NewSession(t.Context()))
-	close(release)
+	wait(t, announced)
+	locked := h.c.titleCommit.TryLock()
+	if locked {
+		h.c.titleCommit.Unlock()
+	}
+	assert.False(t, locked, "title commit must cover persistence and announcement")
+	op, err := h.c.beginSwitch(nil)
+	require.NoError(t, err)
+	switching, switched := make(chan struct{}), make(chan error, 1)
+	go func() {
+		h.c.life.Lock()
+		defer h.c.life.Unlock()
+		close(switching)
+		switched <- h.c.startSwitch(t.Context(), OpenRequest{ResumeID: id}, op)
+	}()
+	wait(t, switching)
+	unblock()
+	select {
+	case err := <-switched:
+		require.NoError(t, err)
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for resume")
+	}
 	h.c.wg.Wait()
 
-	assert.Empty(t, old.Name())
-	assert.Empty(t, h.sessionName())
-	assert.Empty(t, named)
-	assert.Empty(t, ofType[event.SessionNamed](h.rec.all()))
+	assert.Equal(t, "Fix the build", h.sessionName())
+	changed := ofType[event.SessionChanged](h.rec.all())
+	require.Len(t, changed, 2)
+	assert.Equal(t, "Fix the build", changed[1].Name)
+}
+
+func TestTitleAnsweredAfterSessionSwitchIsDropped(t *testing.T) {
+	for _, resume := range []bool{false, true} {
+		name := "new session"
+		if resume {
+			name = "same-session resume"
+		}
+		t.Run(name, func(t *testing.T) {
+			h, title := titleHarness(t, Config{Title: true})
+			h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("one")})
+			release := make(chan struct{})
+			unblock := sync.OnceFunc(func() { close(release) })
+			t.Cleanup(unblock)
+			entered := blockedTitle(t, title, "Stale", release)
+			named := subscribeTo[event.SessionNamed](h.c)
+			h.c.mu.Lock()
+			old := h.c.main.sess
+			h.c.mu.Unlock()
+			h.c.Subscribe(func(ev event.Event) {
+				if _, ok := ev.(event.SessionChanged); !ok {
+					return
+				}
+				locked := h.c.titleCommit.TryLock()
+				if locked {
+					h.c.titleCommit.Unlock()
+				}
+				assert.False(t, locked, "replacement must hold title commit through announcement")
+				unblock()
+			})
+
+			h.turn(t, "fix the build")
+			wait(t, entered)
+			if resume {
+				require.NoError(t, h.c.Resume(t.Context(), old.ID()))
+			} else {
+				require.NoError(t, h.c.NewSession(t.Context()))
+			}
+			h.c.wg.Wait()
+
+			assert.Empty(t, old.Name())
+			assert.Empty(t, h.sessionName())
+			assert.Empty(t, named)
+			assert.Empty(t, ofType[event.SessionNamed](h.rec.all()))
+			changed := ofType[event.SessionChanged](h.rec.all())
+			require.Len(t, changed, 2)
+			assert.Empty(t, changed[1].Name)
+		})
+	}
 }
 
 func TestCloseStopsTitleRequest(t *testing.T) {

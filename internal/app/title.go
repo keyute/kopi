@@ -55,6 +55,8 @@ func (c *Controller) nameSession(sess *pigruntime.Session, bound func(event.Even
 		}
 		return
 	}
+	c.titleCommit.Lock()
+	defer c.titleCommit.Unlock()
 	c.mu.Lock()
 	current := c.main.sess == sess
 	c.mu.Unlock()
