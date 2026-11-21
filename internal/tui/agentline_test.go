@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -669,5 +670,152 @@ func TestElapsedStartsTheTickWhenAClockAppears(t *testing.T) {
 
 		assert.NotNil(t, cmd)
 		assert.True(t, m.tickWanted())
+	})
+}
+
+// workflowRows lists run w1 in the rows below main and one explorer.
+func workflowRows(t *testing.T) (*model, *fakeController) {
+	t.Helper()
+	m, c := agentLineModel(t, 100, lineOf([]string{"$agent"}), explorer("t1"))
+	status, agents := workflowFixture(time.Now())
+	c.workflows = []app.WorkflowStatus{status}
+	c.runs = map[string]fakeRun{"w1": {status: status, agents: agents}}
+	send(m, event.TasksChanged{})
+	return m, c
+}
+
+func TestAWorkflowRowDrawsAloneWithoutAMainRow(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := workflowModel(t, 100)
+
+		assert.Equal(t, 1, m.geo.agents)
+		assert.Equal(t, "  ○ workflow › audit route handlers  ▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱  1/4 · 1 failed · Review · 2m 10s", lastRows(m, 1)[0])
+		assert.NotContains(t, strings.Join(screen(m), "\n"), "main")
+	})
+}
+
+func TestWorkflowRowsFollowTheAgentEntries(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := workflowRows(t)
+
+		rows := lastRows(m, 3)
+		assert.Equal(t, "  ● main", rows[0])
+		assert.Equal(t, "  ○ explorer › Find the config loader", rows[1])
+		assert.True(t, strings.HasPrefix(rows[2], "  ○ workflow › audit route handlers  "), rows[2])
+	})
+}
+
+func TestFocusMovesAcrossAgentsAndWorkflows(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := workflowRows(t)
+		press(m, down)
+		require.Equal(t, app.Main, m.focus.id)
+
+		press(m, down)
+		press(m, down)
+		assert.Equal(t, "w1", m.focus.id)
+		assert.True(t, strings.HasPrefix(lastRows(m, 1)[0], "❭ ○ workflow › "))
+
+		press(m, down)
+		assert.Equal(t, "w1", m.focus.id, "the last row stays")
+		press(m, up)
+		assert.Equal(t, "t1", m.focus.id)
+	})
+}
+
+func TestEnterOnAWorkflowRowOpensItsDialog(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := workflowRows(t)
+		press(m, down)
+		press(m, down)
+		press(m, down)
+
+		press(m, enter)
+
+		require.NotNil(t, workflowOf(m))
+		assert.Equal(t, "w1", workflowOf(m).id)
+		assert.False(t, m.focus.on)
+		assert.Equal(t, app.Main, m.shown)
+	})
+}
+
+func TestStopKeyOnAWorkflowRowStopsTheTask(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := workflowRows(t)
+		press(m, down)
+		press(m, down)
+		press(m, down)
+
+		press(m, keyX)
+
+		assert.Equal(t, []string{"w1"}, c.stops)
+		assert.Zero(t, c.interrupts)
+		assert.True(t, m.focus.on, "the cursor stays")
+	})
+}
+
+func TestStopKeyOnAWorkflowRowShowsAFailedStop(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := workflowRows(t)
+		c.stopErr = errors.New("task is gone")
+		press(m, down)
+		press(m, down)
+		press(m, down)
+
+		press(m, keyX)
+
+		assert.Equal(t, []string{"w1"}, c.stops)
+		assert.Contains(t, strings.Join(screen(m), "\n"), "task is gone")
+	})
+}
+
+func TestAWorkflowRowLeavesWhenTheWorkflowIsNoLongerRunning(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := workflowRows(t)
+		press(m, down)
+		press(m, down)
+		press(m, down)
+		require.Equal(t, "w1", m.focus.id)
+
+		c.workflows = nil
+		send(m, event.TasksChanged{})
+
+		assert.Equal(t, 2, m.geo.agents)
+		assert.NotContains(t, strings.Join(screen(m), "\n"), "workflow ›")
+		assert.Equal(t, "t1", m.focus.id, "the cursor moves to the nearest row")
+	})
+}
+
+func TestARunningWorkflowKeepsTheClockTicking(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := workflowModel(t, 100)
+		assert.True(t, m.tickWanted())
+
+		c.workflows = nil
+		send(m, event.TasksChanged{})
+
+		assert.False(t, m.tickWanted())
+	})
+}
+
+func TestWorkflowRowsWindowWithTheAgentEntries(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := workflowRows(t)
+		for _, id := range []string{"w2", "w3", "w4", "w5"} {
+			status, _ := workflowFixture(time.Now())
+			status.ID = id
+			c.workflows = append(c.workflows, status)
+		}
+		send(m, event.TasksChanged{})
+
+		rows := lastRows(m, 6)
+		assert.Equal(t, "  ↓ 2 more", rows[5])
+		press(m, down)
+		for range 6 {
+			press(m, down)
+		}
+		assert.Equal(t, "w5", m.focus.id)
+		assert.Equal(t, "  ↑ 2 more", lastRows(m, 6)[0])
+		assert.True(t, strings.HasPrefix(lastRows(m, 1)[0], "❭ ○ workflow › "))
 	})
 }

@@ -291,3 +291,26 @@ func TestFoldsOfARowHaveStateOnceItIsNotRunning(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskResultFoldTogglesByClickAndCtrlO(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 60, 30)
+		send(m, workflowEnd("completed", 1, 0, "", "result"))
+		closed := []string{"", "• workflow finished · audit route handlers · 6m 3s", "  ↳ 1 agent"}
+		require.Equal(t, closed, body(m))
+
+		press(m, ctrlO)
+		assert.Equal(t, append(closed, "    result"), body(m))
+		press(m, ctrlO)
+		assert.Equal(t, closed, body(m))
+
+		clickText(t, m, "• workflow finished · audit route handlers · 6m 3s")
+		assert.Equal(t, append(closed, "    result"), body(m))
+	})
+}
+
+func TestTaskWithoutAResultHasNoFold(t *testing.T) {
+	f := newFolds()
+	f.all = true
+	assert.Equal(t, blockFolds{}, f.of(transcript.Task{}))
+}

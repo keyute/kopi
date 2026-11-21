@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -19,6 +20,30 @@ import (
 // normally completed turn ends without a TurnEnd.
 func (s *Session) History() []event.Event {
 	return historyEntries(s.inner.SessionManager().GetBranch())
+}
+
+// Saved is a session's transcript file. It outlives the session, which holds
+// no file once closed.
+type Saved struct{ path string }
+
+// Saved returns the handle of the session's transcript file.
+func (s *Session) Saved() Saved { return Saved{path: s.inner.Path()} }
+
+// SavedHistory replays the transcript sv names as History does for a live
+// session. A transcript the session never wrote wraps ErrNotSaved.
+func (r *Runtime) SavedHistory(sv Saved) ([]event.Event, error) {
+	// PiG creates an empty log when it opens a path that does not exist, so
+	// the file is checked first. The log PiG loads also holds a snapshot file
+	// beside the transcript until it is garbage-collected, and PiG has no public
+	// way to close it.
+	if _, err := os.Stat(sv.path); err != nil {
+		return nil, fmt.Errorf("failed to read saved transcript: %w: %w", ErrNotSaved, err)
+	}
+	manager, err := coding.SessionManagerFor(r.svcs, coding.SessionStartOptions{ResumePath: sv.path})
+	if err != nil {
+		return nil, fmt.Errorf("failed to read saved transcript: %w", reword(err))
+	}
+	return historyEntries(manager.GetBranch()), nil
 }
 
 func historyEntries(entries []coding.SessionEntry) []event.Event {
@@ -141,7 +166,10 @@ func history(msgs []agent.AgentMessage) []event.Event {
 			afterText = false
 		case isNotice(m):
 			d, _ := m.Custom["details"].(noticeDetails)
-			out = append(out, event.TaskEnded{ID: d.ID, Command: d.Command, Agent: d.Agent, Status: d.Status, Elapsed: time.Duration(d.ElapsedMs) * time.Millisecond})
+			out = append(out, event.TaskEnded{
+				ID: d.ID, Command: d.Command, Agent: d.Agent, Status: d.Status, Elapsed: time.Duration(d.ElapsedMs) * time.Millisecond,
+				Agents: d.Agents, Failed: d.Failed, Reason: d.Reason, Result: d.Result,
+			})
 			afterText = false
 		}
 	}

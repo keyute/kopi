@@ -20,6 +20,7 @@ var (
 	ErrUnknownEffort   = errors.New("unknown effort")
 	ErrParentResume    = errors.New("a session with a parent cannot resume or continue")
 	ErrScript          = errors.New("script failed")
+	ErrNotSaved        = errors.New("session has no saved transcript")
 
 	// ErrModelListUnavailable accompanies ErrUnknownModel when refreshing the
 	// provider's model list failed.

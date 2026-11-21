@@ -31,6 +31,9 @@ type view struct {
 	// unsent is the input a turn handed back while the view was hidden, restored
 	// into the composer when the view is next shown.
 	unsent []event.Input
+	// closed is set once the session has closed while the view was shown; it takes
+	// no more events.
+	closed bool
 }
 
 func newView() *view {

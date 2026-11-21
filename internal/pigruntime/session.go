@@ -97,6 +97,10 @@ type noticeDetails struct {
 	Agent     string `json:"agent,omitempty"`
 	Status    string `json:"status"`
 	ElapsedMs int64  `json:"elapsedMs"`
+	Agents    int    `json:"agents,omitempty"`
+	Failed    int    `json:"failed,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	Result    string `json:"result,omitempty"`
 }
 
 func (n Notice) message() extension.CustomMessageRef {
@@ -104,7 +108,10 @@ func (n Notice) message() extension.CustomMessageRef {
 		CustomType: noticeType,
 		Content:    n.Text,
 		Display:    true,
-		Details:    noticeDetails{ID: n.Shown.ID, Command: n.Shown.Command, Agent: n.Shown.Agent, Status: n.Shown.Status, ElapsedMs: n.Shown.Elapsed.Milliseconds()},
+		Details: noticeDetails{
+			ID: n.Shown.ID, Command: n.Shown.Command, Agent: n.Shown.Agent, Status: n.Shown.Status, ElapsedMs: n.Shown.Elapsed.Milliseconds(),
+			Agents: n.Shown.Agents, Failed: n.Shown.Failed, Reason: n.Shown.Reason, Result: n.Shown.Result,
+		},
 	}
 }
 

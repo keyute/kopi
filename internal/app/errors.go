@@ -26,6 +26,7 @@ var (
 
 	ErrTooManyWorkflowCalls   = fmt.Errorf("a workflow may make at most %d agent() calls", tool.WorkflowCalls)
 	ErrAgentStopped           = errors.New("the agent was stopped")
+	ErrAgentRunning           = errors.New("the agent has not ended")
 	ErrNoStructuredOutput     = errors.New("the agent ended without calling StructuredOutput")
 	ErrUnknownAgentType       = errors.New("unknown agent type")
 	ErrStructuredOutputDenied = errors.New("the StructuredOutput tool is denied by a rule")
