@@ -20,10 +20,10 @@ func (m *model) working() bool {
 	return m.views[app.Main].busy || m.status.Busy || m.status.Agents+m.status.Workflows > 0
 }
 
-// programStatus is the session-wide state for the terminal, whichever view is
-// shown. The first match wins: blocked on the human, working, a finished or
-// failed run not yet seen, idle.
-func (m *model) programStatus() tea.ProgramStatus {
+// attention is the session-wide state the tab title glyph and the
+// notifications follow, whichever view is shown. The first match wins: blocked
+// on the human, working, a finished or failed run not yet seen, idle.
+func (m *model) attention() tea.ProgramStatus {
 	s := tea.ProgramStatus{App: "kopi", State: tea.ProgramStateIdle}
 	if front := m.front(); front != nil && front.kind.programKind() != "" {
 		s.State, s.Kind = tea.ProgramStateBlocked, front.kind.programKind()
@@ -31,6 +31,21 @@ func (m *model) programStatus() tea.ProgramStatus {
 		s.State = tea.ProgramStateWorking
 	} else if m.unseen != "" {
 		s.State = m.unseen
+	}
+	return s
+}
+
+// programStatus is the record for the terminal: attention, except that a
+// session at rest reports how the main session's last turn ended, seen or not.
+func (m *model) programStatus() tea.ProgramStatus {
+	s := m.attention()
+	if s.State == tea.ProgramStateIdle && m.ended != nil {
+		switch *m.ended {
+		case event.Completed:
+			s.State = tea.ProgramStateDone
+		case event.Failed:
+			s.State = tea.ProgramStateError
+		}
 	}
 	return s
 }
@@ -126,7 +141,7 @@ func (m *model) attend(msg tea.Msg, was tea.ProgramStatus) tea.Cmd {
 	switch {
 	case !m.away || m.working():
 		m.unseen = ""
-	case m.ended != nil && (was.State == tea.ProgramStateWorking || m.mainEnded) && m.programStatus().State != tea.ProgramStateBlocked:
+	case m.ended != nil && (was.State == tea.ProgramStateWorking || m.mainEnded) && m.attention().State != tea.ProgramStateBlocked:
 		switch *m.ended {
 		case event.Completed:
 			m.unseen = tea.ProgramStateDone
@@ -136,7 +151,7 @@ func (m *model) attend(msg tea.Msg, was tea.ProgramStatus) tea.Cmd {
 	}
 	fresh := m.mainEnded && m.ended != nil && (*m.ended == event.Completed || *m.ended == event.Failed)
 	m.mainEnded = false
-	now := m.programStatus()
+	now := m.attention()
 	fresh = fresh && (now.State == tea.ProgramStateDone || now.State == tea.ProgramStateError)
 	if !m.away || (now == was && !fresh) {
 		return nil

@@ -30,6 +30,9 @@ const (
 	// below it.
 	busyRows = 2
 	flashFor = 2 * time.Second
+	// barEvery is under Ghostty's removal of a progress bar 15 s after its last
+	// report.
+	barEvery = 10 * time.Second
 )
 
 // geometry is the row heights and field areas arrange last computed, which
@@ -55,6 +58,9 @@ type interruptMsg struct{}
 
 // flashMsg ends the flash numbered seq; a later flash outlives it.
 type flashMsg struct{ seq int }
+
+// barMsg is a tick of the progress bar's keepalive.
+type barMsg struct{}
 
 type model struct {
 	// ctx is Run's context, passed to Submit.
@@ -99,6 +105,10 @@ type model struct {
 	unseen    tea.ProgramState
 	ended     *event.Status
 	mainEnded bool
+	// barBeating is set while a barMsg is due, so one chain runs at a time;
+	// barBeat is the bar's value, flipped on each so Bubble Tea writes it again.
+	barBeating bool
+	barBeat    int
 	// readsStatus is set once the terminal answers the OSC 7501 query. records
 	// holds the child records the terminal has, by id, with their titles.
 	readsStatus bool
@@ -214,9 +224,9 @@ func (m *model) statusInput() statusInput {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	held, was := m.holding(), m.programStatus()
+	held, was := m.holding(), m.attention()
 	cmd := m.update(msg)
-	cmd = tea.Batch(cmd, m.syncInput(held), m.attend(msg, was), m.syncRecords())
+	cmd = tea.Batch(cmd, m.syncInput(held), m.attend(msg, was), m.syncRecords(), m.beat())
 	m.syncFocus()
 	m.arrange()
 	m.syncFocus()
@@ -258,6 +268,9 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return m.cancel()
 	case editorDoneMsg:
 		m.editorDone(msg)
+	case barMsg:
+		m.barBeating = false
+		m.barBeat = 1 - m.barBeat
 	case flashMsg:
 		if msg.seq == m.flashSeq {
 			m.flashText, m.exitArmed = "", false
@@ -405,6 +418,22 @@ func (m *model) cancel() tea.Cmd {
 		k = ks[0]
 	}
 	return m.flash(k + " again to exit")
+}
+
+// barWanted reports whether the progress bar shows: the option is on and the
+// session is working.
+func (m *model) barWanted() bool {
+	return m.terminal.Progress && m.attention().State == tea.ProgramStateWorking
+}
+
+// beat starts the progress bar's keepalive when the bar shows and none is due;
+// a due tick that finds the bar gone is not followed by another.
+func (m *model) beat() tea.Cmd {
+	if !m.barWanted() || m.barBeating {
+		return nil
+	}
+	m.barBeating = true
+	return tea.Tick(barEvery, func(time.Time) tea.Msg { return barMsg{} })
 }
 
 // flash shows text on the status line for flashFor.
@@ -806,13 +835,13 @@ func (m *model) selected(r region, i int) string {
 
 func (m *model) View() tea.View {
 	v := tea.View{AltScreen: true, MouseMode: tea.MouseModeCellMotion, ReportFocus: true}
-	status := m.programStatus()
+	status, attention := m.programStatus(), m.attention()
 	v.ProgramStatus = &status
 	if m.terminal.Title {
-		v.WindowTitle = m.terminalTitle(status.State)
+		v.WindowTitle = m.terminalTitle(attention.State)
 	}
-	if m.terminal.Progress && status.State == tea.ProgramStateWorking {
-		v.ProgressBar = tea.NewProgressBar(tea.ProgressBarIndeterminate, 0)
+	if m.barWanted() {
+		v.ProgressBar = tea.NewProgressBar(tea.ProgressBarIndeterminate, m.barBeat)
 	}
 	if m.width == 0 || m.height == 0 {
 		return v

@@ -108,6 +108,19 @@ func TestProgramStatusStates(t *testing.T) {
 			send(m, turnEnd(event.Completed))
 			return m
 		}, tea.ProgramStatus{App: "kopi", State: tea.ProgramStateWorking}},
+		{"approval over a finished turn", func(t *testing.T) *model {
+			m, _ := newTestModel(t, 60, 20)
+			send(m, turnStart, turnEnd(event.Completed))
+			require.Equal(t, tea.ProgramStateDone, state(m))
+			send(m, editApproval())
+			return m
+		}, blocked(tea.ProgramStatusKindPermission)},
+		{"approval closed over a finished turn", func(t *testing.T) *model {
+			m, _ := newTestModel(t, 60, 20)
+			send(m, turnStart, turnEnd(event.Completed))
+			send(m, editApproval(), event.ApprovalEnded{Token: 1})
+			return m
+		}, tea.ProgramStatus{App: "kopi", State: tea.ProgramStateDone}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, tc.set(t).programStatus())
@@ -242,28 +255,94 @@ func TestTerminalProgressBar(t *testing.T) {
 	assert.Nil(t, m.View().ProgressBar, "blocked")
 }
 
+func TestTerminalProgressBarKeepsAlive(t *testing.T) {
+	opts := testOptions()
+	opts.Terminal.Progress = true
+	m, c := newTestModelWith(t, 60, 20, opts)
+	value := func() int { return m.View().ProgressBar.Value }
+	tick := func() tea.Cmd {
+		_, cmd := m.Update(barMsg{})
+		return cmd
+	}
+
+	send(m, turnStart)
+	require.True(t, m.barBeating, "the loop starts with the bar")
+	before := value()
+	assert.NotNil(t, tick())
+	assert.NotEqual(t, before, value())
+	assert.True(t, m.barBeating)
+
+	send(m, turnEnd(event.Interrupted))
+	assert.Nil(t, tick(), "idle: not rescheduled")
+	assert.False(t, m.barBeating)
+
+	c.status.Agents = 1
+	send(m, event.TasksChanged{})
+	assert.True(t, m.barBeating, "a subagent alone starts it")
+	c.status.Agents = 0
+	send(m, event.TasksChanged{})
+	send(m, turnStart)
+	assert.True(t, m.barBeating, "working again before the tick fires keeps the one loop")
+	assert.Nil(t, m.beat(), "a tick is pending: no second loop")
+	assert.NotNil(t, tick())
+
+	m, _ = newTestModel(t, 60, 20)
+	send(m, turnStart)
+	assert.False(t, m.barBeating, "progress off: no loop")
+}
+
 func TestUnseenFollowsHowTheSessionSettledWhileAway(t *testing.T) {
 	for _, tc := range []struct {
 		status event.Status
 		want   tea.ProgramState
+		title  string
 	}{
-		{event.Completed, tea.ProgramStateDone},
-		{event.Failed, tea.ProgramStateError},
-		{event.Interrupted, tea.ProgramStateIdle},
+		{event.Completed, tea.ProgramStateDone, "✓ kopi"},
+		{event.Failed, tea.ProgramStateError, "✗ kopi"},
+		{event.Interrupted, tea.ProgramStateIdle, "κ kopi"},
 	} {
 		t.Run(tc.status.String(), func(t *testing.T) {
 			m, _ := awayModel(t)
 			send(m, turnStart)
 			send(m, turnEnd(tc.status))
 			assert.Equal(t, tc.want, state(m))
+			assert.Equal(t, tc.title, m.View().WindowTitle)
 		})
 	}
 }
 
-func TestUnseenNeverSetWhenPresent(t *testing.T) {
+func TestFinishedTurnWhilePresentIsReportedWithoutAGlyph(t *testing.T) {
+	for _, tc := range []struct {
+		status event.Status
+		want   tea.ProgramState
+	}{
+		{event.Completed, tea.ProgramStateDone},
+		{event.Failed, tea.ProgramStateError},
+	} {
+		t.Run(tc.status.String(), func(t *testing.T) {
+			m, _ := newTestModel(t, 60, 20)
+			send(m, turnStart)
+			send(m, turnEnd(tc.status))
+			assert.Equal(t, tc.want, state(m))
+			assert.Empty(t, m.unseen)
+			assert.Equal(t, "κ kopi", m.View().WindowTitle)
+		})
+	}
+}
+
+func TestRecordIsIdleAfterAnInterruptedTurnAndASessionChange(t *testing.T) {
 	m, _ := newTestModel(t, 60, 20)
 	send(m, turnStart)
 	send(m, turnEnd(event.Completed))
+	require.Equal(t, tea.ProgramStateDone, state(m))
+	send(m, turnStart)
+	send(m, turnEnd(event.Interrupted))
+	assert.Equal(t, tea.ProgramStateIdle, state(m))
+
+	send(m, turnStart)
+	send(m, turnEnd(event.Failed))
+	require.Equal(t, tea.ProgramStateError, state(m))
+	send(m, event.SessionChanged{})
 	assert.Equal(t, tea.ProgramStateIdle, state(m))
 }
 
@@ -272,17 +351,38 @@ func TestUnseenClearsOnFocusAndOnANewTurn(t *testing.T) {
 	send(m, turnStart)
 	send(m, turnEnd(event.Completed))
 	require.Equal(t, tea.ProgramStateDone, state(m))
+	require.Equal(t, "✓ kopi", m.View().WindowTitle)
 	m.Update(tea.FocusMsg{})
-	assert.Equal(t, tea.ProgramStateIdle, state(m))
+	assert.Equal(t, tea.ProgramStateDone, state(m), "the record holds at rest")
+	assert.Equal(t, "κ kopi", m.View().WindowTitle)
 
 	m.Update(tea.BlurMsg{})
 	send(m, turnStart)
 	send(m, turnEnd(event.Failed))
 	require.Equal(t, tea.ProgramStateError, state(m))
+	require.Equal(t, "✗ kopi", m.View().WindowTitle)
 	send(m, turnStart)
 	assert.Equal(t, tea.ProgramStateWorking, state(m))
+	assert.Equal(t, "◐ kopi", m.View().WindowTitle)
 	send(m, turnEnd(event.Interrupted))
 	assert.Equal(t, tea.ProgramStateIdle, state(m))
+	assert.Equal(t, "κ kopi", m.View().WindowTitle)
+}
+
+func TestNotifySilentWhenADialogClosesOntoARestingRecord(t *testing.T) {
+	m, raw := awayModel(t)
+	send(m, turnStart)
+	send(m, turnEnd(event.Completed))
+	m.Update(tea.FocusMsg{})
+	m.Update(tea.BlurMsg{})
+	require.Empty(t, m.unseen)
+	require.Equal(t, tea.ProgramStateDone, state(m))
+	*raw = nil
+
+	send(m, event.LoginRequested{Token: 1, Message: "API key"})
+	send(m, event.LoginEnded{Token: 1})
+	assert.Equal(t, tea.ProgramStateDone, state(m))
+	assert.Empty(t, *raw)
 }
 
 func TestNotifyChannels(t *testing.T) {

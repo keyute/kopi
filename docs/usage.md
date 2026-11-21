@@ -146,19 +146,19 @@ Fullscreen only; print mode sends none of this. Kopi derives one state for the w
 
 - Waiting on you: an approval, a plan, a question or a login is open. (`/tasks` and a workflow's [progress dialog](workflows.md#progress-dialog) are not.)
 - Working: the main turn runs, or a subagent or workflow does. Background shells do not count; one may be a server that never ends.
-- Done or failed: the session stopped working while the terminal was not focused, and the last turn completed or failed. An interrupted turn is neither. It clears when the terminal is focused again or work starts.
-- Idle: otherwise.
+- Done or failed: the session is at rest and the last main turn completed or failed. It holds until work starts again or the session changes. An interrupted turn is neither.
+- Idle: otherwise, including before any turn and after a session change.
 
 What Kopi sends:
 
 - **Program status** (OSC 7501): `app=kopi` and the state: working, waiting on you with its kind (`permission` for an approval or a plan, `question`, `auth` for a login), done, failed or idle. Terminals that read it show it per tab. Each running subagent and each running workflow also has a record beneath it: its task id, `working`, titled `<agent> › <description>`, removed when it ends. A workflow is one record whatever agents it starts; shells have none. All are cleared when Kopi exits.
-- **Tab title**: `κ`, then the session's title followed by ` · ` and the workspace folder (`κ Fix flaky test · kopi.osc`), else the folder alone. Kopi asks the terminal once at start whether it reads OSC 7501; until it answers, or where it never does, a glyph for the state (`◐` working, `✋` waiting, `✓` done, `✗` failed, `κ` idle) replaces the `κ`. A session with no title gets one from [`smallModel`](configuration.md#smallmodel), once, from the first prompt given to it: the first 2000 bytes of the prompt go to that model, and the title is stored with the session so a resumed one shows it again. With no `smallModel` the title stays the folder and no model is called. Turn it off with `terminal.title`.
-- **Progress bar** (OSC 9;4): an indeterminate bar while working. Off by default (`terminal.progress`); older iTerm2 and Kitty show the sequence as a notification.
+- **Tab title**: `κ`, then the session's title followed by ` · ` and the workspace folder (`κ Fix flaky test · kopi.osc`), else the folder alone. Kopi asks the terminal once at start whether it reads OSC 7501; until it answers, or where it never does, a glyph for the state (`◐` working, `✋` waiting, `κ` otherwise) replaces the `κ`; `✓` done and `✗` failed show only for work that ended while the terminal was not focused, until it is focused again or work starts. A session with no title gets one from [`smallModel`](configuration.md#smallmodel), once, from the first prompt given to it: the first 2000 bytes of the prompt go to that model, and the title is stored with the session so a resumed one shows it again. With no `smallModel` the title stays the folder and no model is called. Turn it off with `terminal.title`.
+- **Progress bar** (OSC 9;4): an indeterminate bar while working, repeated every 10 seconds because Ghostty removes a bar 15 seconds after its last report. Off by default (`terminal.progress`); older iTerm2 and Kitty show the sequence as a notification.
 - **Notification**: once, when the session starts waiting for an approval, a plan or an answer, or finishes or fails, while the terminal is not focused. It reads `Waiting for you: <title>`, `Finished: <title>` or `Failed: <title>`; a login sends none. The channel is `terminal.notifications`, see [configuration](configuration.md#terminal).
 
 Limits:
 
-- Focus comes from the terminal's focus reports. A terminal that sends none is taken as focused: no done or failed state and no notification.
+- Focus comes from the terminal's focus reports. A terminal that sends none is taken as focused: no `✓` or `✗` glyph and no notification.
 - tmux needs `set -g focus-events on`, and gets the bell. Nothing is wrapped for tmux passthrough.
 - On exit the tab title is cleared, not restored.
 
