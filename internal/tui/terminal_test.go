@@ -328,3 +328,55 @@ func TestTasksDialogOpenDoesNotHideTheFinishedTurn(t *testing.T) {
 	assert.Len(t, *raw, 1)
 	assert.Contains(t, (*raw)[0], "Finished: ")
 }
+
+func TestFinishedWhenTheLastAgentEndsAfterTheTurn(t *testing.T) {
+	m, raw := awayModel(t)
+	c := m.c.(*fakeController)
+	m.getenv = env(map[string]string{"TERM_PROGRAM": "ghostty"})
+	c.status.Agents = 1
+	send(m, turnStart)
+	send(m, turnEnd(event.Completed))
+	require.Equal(t, tea.ProgramStateWorking, state(m))
+	require.Empty(t, *raw)
+
+	c.status.Agents = 0
+	send(m, event.TasksChanged{})
+	assert.Equal(t, tea.ProgramStateDone, state(m))
+	assert.Equal(t, []any{ansi.Notify("Finished: kopi")}, *raw)
+}
+
+func TestSubagentTurnEndDoesNotChangeTheOutcome(t *testing.T) {
+	m, raw := awayModel(t)
+	c := m.c.(*fakeController)
+	m.getenv = env(map[string]string{"TERM_PROGRAM": "ghostty"})
+	c.status.Agents = 1
+	send(m, turnStart)
+	send(m, turnEnd(event.Completed))
+	send(m, event.Session{ID: "t1", Event: turnEnd(event.Failed)})
+
+	c.status.Agents = 0
+	send(m, event.TasksChanged{})
+	assert.Equal(t, tea.ProgramStateDone, state(m))
+	assert.Equal(t, []any{ansi.Notify("Finished: kopi")}, *raw)
+}
+
+func TestNotifyForATurnThatStartsAndEndsInOneBatch(t *testing.T) {
+	m, raw := awayModel(t)
+	m.getenv = env(map[string]string{"TERM_PROGRAM": "ghostty"})
+	send(m, turnStart, turnEnd(event.Failed))
+	assert.Equal(t, tea.ProgramStateError, state(m))
+	assert.Equal(t, []any{ansi.Notify("Failed: kopi")}, *raw)
+}
+
+func TestSessionChangeForgetsThePreviousOutcome(t *testing.T) {
+	m, _ := awayModel(t)
+	c := m.c.(*fakeController)
+	c.status.Agents = 1
+	send(m, turnStart)
+	send(m, turnEnd(event.Failed))
+	send(m, event.SessionChanged{})
+
+	c.status.Agents = 0
+	send(m, event.TasksChanged{})
+	assert.Equal(t, tea.ProgramStateDone, state(m))
+}

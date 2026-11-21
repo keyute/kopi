@@ -15,9 +15,9 @@ import (
 
 const (
 	titleSystem = "Write a title of at most six words for a coding session that begins with the user's message. Reply with the title only."
-	// titlePromptRunes and titleRunes bound what is sent for the title and what is kept of it.
-	titlePromptRunes = 2000
-	titleRunes       = 60
+	// titlePromptBytes and titleBytes bound what is sent for the title and what is kept of it.
+	titlePromptBytes = 2000
+	titleBytes       = 60
 )
 
 // nameSessionLocked names the main session from the first human prompt in ps,
@@ -44,13 +44,10 @@ func (c *Controller) nameSessionLocked(ps []pigruntime.Prompt) {
 	c.wg.Go(func() { c.nameSession(sess, bound, prompt) })
 }
 
-// nameSession stores and announces the title of sess unless it already has a
-// name or is no longer the main session when the model answers. bound belongs
+// nameSession stores and announces the title of sess unless it is no
+// longer the main session when the model answers. bound belongs
 // to sess's relay epoch.
 func (c *Controller) nameSession(sess *pigruntime.Session, bound func(event.Event), prompt string) {
-	if sess.Name() != "" {
-		return
-	}
 	title, err := c.title(c.titleCtx, prompt)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
@@ -73,10 +70,7 @@ func (c *Controller) nameSession(sess *pigruntime.Session, bound func(event.Even
 
 // title asks the small model for a title for a session that begins with prompt.
 func (c *Controller) title(ctx context.Context, prompt string) (string, error) {
-	if r := []rune(prompt); len(r) > titlePromptRunes {
-		prompt = string(r[:titlePromptRunes])
-	}
-	reply, err := c.SideAnswer(ctx, c.SmallModel(), pigruntime.LowestEffort, titleSystem, prompt)
+	reply, err := c.SideAnswer(ctx, c.SmallModel(), pigruntime.LowestEffort, titleSystem, truncate(prompt, titlePromptBytes))
 	if err != nil {
 		return "", fmt.Errorf("failed to ask for a title: %w", err)
 	}
@@ -104,8 +98,5 @@ func cleanTitle(reply string) string {
 		return r
 	}, line)
 	line = strings.TrimSpace(strings.Trim(line, "\"'`“”‘’"))
-	if r := []rune(line); len(r) > titleRunes {
-		line = strings.TrimSpace(string(r[:titleRunes]))
-	}
-	return line
+	return strings.TrimSpace(truncate(line, titleBytes))
 }

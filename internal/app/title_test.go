@@ -129,6 +129,26 @@ func TestFailedTitleLeavesNoNameAndIsNotRetried(t *testing.T) {
 	assert.Empty(t, ofType[event.SessionNamed](h.rec.all()))
 }
 
+func TestLongPromptIsCutForTheTitleRequest(t *testing.T) {
+	for _, tc := range []struct{ name, prompt, want string }{
+		{"ascii", strings.Repeat("a", titlePromptBytes+10), strings.Repeat("a", titlePromptBytes)},
+		{"character straddling the cut", strings.Repeat("a", titlePromptBytes-1) + "é" + "tail", strings.Repeat("a", titlePromptBytes-1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, title := titleHarness(t, Config{Title: true})
+			h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("one")})
+			requests := make(chan pigruntimetest.Request, 1)
+			title.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "Fix the build")})
+
+			h.turn(t, tc.prompt)
+			h.c.wg.Wait()
+
+			require.Len(t, requests, 1)
+			assert.Equal(t, []string{tc.want}, (<-requests).UserTexts)
+		})
+	}
+}
+
 func TestCleanTitle(t *testing.T) {
 	for _, tc := range []struct{ name, reply, want string }{
 		{"first non-empty line", "\n  \n Fix it \nsecond", "Fix it"},
@@ -136,7 +156,7 @@ func TestCleanTitle(t *testing.T) {
 		{"control characters", "Fix\x00 \x1b[31mit", "Fix [31mit"},
 		{"only quotes", "\"\"", ""},
 		{"blank", " \n\t", ""},
-		{"capped by runes", strings.Repeat("é", titleRunes+5), strings.Repeat("é", titleRunes)},
+		{"capped by bytes without splitting a character", strings.Repeat("é", titleBytes), strings.Repeat("é", titleBytes/2)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, cleanTitle(tc.reply))

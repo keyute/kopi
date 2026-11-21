@@ -1150,7 +1150,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	}
 	c.main.sess, c.sessID, c.main.emit, c.main.bound, c.main.unsubscribe = sess, id, emit, bound, unsubscribe
 	c.main.told = ""
-	c.titled = false
+	c.titled = sess.Name() != ""
 	c.spent = 0
 	c.deferred = nil
 	c.mu.Unlock()

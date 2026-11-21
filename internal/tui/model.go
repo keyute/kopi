@@ -93,10 +93,12 @@ type model struct {
 	title string
 	// away is set while the terminal reports it is not focused. unseen is the
 	// done or error state a run left while it was, until focus returns or work
-	// starts; ended is the main session's last turn outcome.
-	away   bool
-	unseen tea.ProgramState
-	ended  event.Status
+	// starts; ended is the main session's last turn outcome, and mainEnded that
+	// a main turn ended in the update in progress.
+	away      bool
+	unseen    tea.ProgramState
+	ended     event.Status
+	mainEnded bool
 
 	// views holds each session's state by id, main's under app.Main; shown is
 	// the id of the one drawn and acted on.
@@ -521,6 +523,7 @@ func (m *model) apply(ev event.Event) *view {
 		}
 		m.views, m.shown = map[string]*view{app.Main: main}, app.Main
 		m.title = ev.Name
+		m.ended = event.Status(0)
 		m.composer.restore(unsent)
 		if len(ev.History) > 0 {
 			m.view().tr.Restore(ev.History)
@@ -574,7 +577,7 @@ func (m *model) apply(ev event.Event) *view {
 		}
 		v.busy = false
 		if id == app.Main {
-			m.ended = ev.Outcome.Status
+			m.ended, m.mainEnded = ev.Outcome.Status, true
 		}
 		if id == m.shown {
 			m.composer.restore(ev.Unsent)

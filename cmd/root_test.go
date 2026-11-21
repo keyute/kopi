@@ -2982,6 +2982,19 @@ func TestRootPrintSkillPrefixFromConfig(t *testing.T) {
 	assert.Contains(t, texts[2], "foo body 3d9e")
 }
 
+func TestRootPrintSendsNoTitleRequest(t *testing.T) {
+	e := newTestEnv(t)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), fmt.Sprintf(`{"smallModel":%q}`, mockModel))
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	server.next(t)
+	assert.Empty(t, server.requests)
+}
+
 func TestRootPrintReportsSkillProblemsAndRuns(t *testing.T) {
 	e := newTestEnv(t)
 	e.writeFile(t, filepath.Join(e.kopiHome, "skills", "broken", "SKILL.md"), "---\nname: broken\n---\nno description\n")

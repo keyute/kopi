@@ -72,10 +72,11 @@ func (m *model) attend(msg tea.Msg, was tea.ProgramStatus) tea.Cmd {
 	case tea.FocusMsg:
 		m.away = false
 	}
-	switch front := m.front(); {
+	// A turn that starts and ends in one update is never seen working.
+	switch {
 	case !m.away || m.working():
 		m.unseen = ""
-	case was.State == tea.ProgramStateWorking && (front == nil || front.kind.programKind() == ""):
+	case (was.State == tea.ProgramStateWorking || m.mainEnded) && m.programStatus().State != tea.ProgramStateBlocked:
 		switch m.ended {
 		case event.Completed:
 			m.unseen = tea.ProgramStateDone
@@ -83,6 +84,7 @@ func (m *model) attend(msg tea.Msg, was tea.ProgramStatus) tea.Cmd {
 			m.unseen = tea.ProgramStateError
 		}
 	}
+	m.mainEnded = false
 	now := m.programStatus()
 	if !m.away || now == was {
 		return nil
