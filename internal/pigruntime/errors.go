@@ -1,6 +1,9 @@
 package pigruntime
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 var (
 	ErrUnknownModel    = errors.New("unknown model")
@@ -27,3 +30,16 @@ var (
 	ErrServerClosed       = errors.New("MCP server is closed")
 	ErrToolError          = errors.New("MCP tool returned an error")
 )
+
+// ModelListError is the failure to refresh a provider's model list; it
+// matches ErrModelListUnavailable and wraps the cause.
+type ModelListError struct {
+	Provider string
+	Err      error
+}
+
+func (e *ModelListError) Error() string {
+	return fmt.Sprintf("failed to refresh the model list of provider %q: %v", e.Provider, e.Err)
+}
+
+func (e *ModelListError) Unwrap() []error { return []error{ErrModelListUnavailable, e.Err} }

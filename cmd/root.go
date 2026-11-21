@@ -883,8 +883,8 @@ func unknownModelError(err error, model, where string, paths config.Paths) error
 		check = "check " + where + ", or "
 	}
 	refresh := ""
-	if errors.Is(err, pigruntime.ErrModelListUnavailable) {
-		refresh = "the model list could not be refreshed; "
+	if listErr := (*pigruntime.ModelListError)(nil); errors.As(err, &listErr) {
+		refresh = fmt.Sprintf("%v (%v); ", pigruntime.ErrModelListUnavailable, listErr.Err)
 	}
 	return fmt.Errorf("unknown model %q: %s%sdeclare the model in %s", model, refresh, check, filepath.Join(paths.AgentDir, "models.json"))
 }

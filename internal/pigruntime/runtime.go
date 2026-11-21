@@ -36,17 +36,16 @@ type Options struct {
 }
 
 type Runtime struct {
-	svcs *coding.AgentSessionServices
-	// models is shared with svcs, which does not close a model runtime it was
-	// handed.
-	models           *coding.ModelRuntime
+	svcs             *coding.AgentSessionServices
 	rt               *coding.Runtime
 	installationFile string
 	refreshMu        sync.Mutex
 	modelsPath       string
 	// refreshed holds the outcome of each provider's catalog fetch; a
-	// present key means it ran.
+	// present key means it ran. fetching holds a channel closed when the
+	// provider's fetch in flight ends.
 	refreshed map[string]error
+	fetching  map[string]chan struct{}
 	// openURL opens a sign-in URL in the user's browser.
 	openURL func(string) error
 }
@@ -67,6 +66,9 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	// RefreshOnCreate and AllowModelNetwork stay unset: creating the runtime
 	// only restores the stored catalog and never reaches the network.
 	modelsPath := filepath.Join(opts.AgentDir, "models.json")
+	// CreateModelRuntime always calls PiG's internal AgentDir(), which reads
+	// PIG_CODING_AGENT_DIR and PIG_HOME and panics when the user home cannot be
+	// resolved, even though every path is passed explicitly.
 	models, err := coding.CreateModelRuntime(ctx, coding.CreateModelRuntimeOptions{
 		AuthPath:       filepath.Join(opts.AgentDir, "auth.json"),
 		ModelsPath:     new(&modelsPath),
@@ -96,12 +98,12 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	browser.Stdout, browser.Stderr = io.Discard, io.Discard
 	return &Runtime{
 		svcs:             svcs,
-		models:           models,
 		rt:               rt,
 		installationFile: filepath.Join(opts.Home, "installation_id"),
 		openURL:          browser.OpenURL,
 		modelsPath:       modelsPath,
 		refreshed:        map[string]error{},
+		fetching:         map[string]chan struct{}{},
 	}, nil
 }
 
@@ -400,42 +402,42 @@ func (r *Runtime) newChild(start coding.SessionStartOptions) (*coding.Session, e
 // has a credential.
 func (r *Runtime) usableModel(ctx context.Context, ref string) (*ai.Model, error) {
 	provider, id, _ := strings.Cut(ref, "/")
-	model := r.svcs.ModelRuntime().GetModel(provider, id)
-	if model == nil {
-		if r.svcs.ModelRuntime().GetProvider(provider) == nil {
-			return nil, r.unknownModel(false)
-		}
-		// A known provider without a credential reports that, since a sign-in
-		// would let the fetch run; ErrUnknownModel marks the id as still
-		// unverified.
-		ok, err := r.hasCredential(ctx, provider)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			return nil, fmt.Errorf("provider %q: %w (%w)", provider, ErrNoCredential, ErrUnknownModel)
-		}
-		failed := r.refreshModels(ctx, provider) != nil
-		if model = r.svcs.ModelRuntime().GetModel(provider, id); model == nil {
-			return nil, r.unknownModel(failed)
-		}
-		return model, nil
+	models := r.svcs.ModelRuntime()
+	model := models.GetModel(provider, id)
+	if model == nil && models.GetProvider(provider) == nil {
+		return nil, r.unknownModel(nil)
 	}
 	ok, err := r.hasCredential(ctx, provider)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
+		// A known provider without a credential reports that, since a sign-in
+		// would let the fetch run; ErrUnknownModel marks the id as still
+		// unverified.
+		if model == nil {
+			return nil, fmt.Errorf("provider %q: %w (%w)", provider, ErrNoCredential, ErrUnknownModel)
+		}
 		return nil, fmt.Errorf("provider %q: %w", provider, ErrNoCredential)
+	}
+	if model != nil {
+		return model, nil
+	}
+	refreshErr := r.refreshModels(ctx, provider)
+	if refreshErr != nil && ctx.Err() != nil {
+		return nil, fmt.Errorf("failed to check model %q: %w", ref, ctx.Err())
+	}
+	if model = models.GetModel(provider, id); model == nil {
+		return nil, r.unknownModel(refreshErr)
 	}
 	return model, nil
 }
 
 // unknownModel points at models.json, where the user can declare the model;
-// failed adds that the remote list could not be refreshed.
-func (r *Runtime) unknownModel(failed bool) error {
-	if failed {
-		return fmt.Errorf("%w: %w; declare the model in %s", ErrUnknownModel, ErrModelListUnavailable, r.modelsPath)
+// refreshErr, when set, is the failure to refresh the remote list.
+func (r *Runtime) unknownModel(refreshErr error) error {
+	if refreshErr != nil {
+		return fmt.Errorf("%w: %w; declare the model in %s", ErrUnknownModel, refreshErr, r.modelsPath)
 	}
 	return fmt.Errorf("%w: declare the model in %s", ErrUnknownModel, r.modelsPath)
 }
@@ -456,5 +458,6 @@ func (r *Runtime) Close() {
 		slog.Warn("failed to close pig runtime", "error", err)
 	}
 	r.svcs.Close()
-	r.models.Close()
+	// svcs does not close a model runtime it was handed.
+	r.svcs.ModelRuntime().Close()
 }
