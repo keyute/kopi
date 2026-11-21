@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 )
 
@@ -204,4 +205,21 @@ func TestCloseStopsTitleRequest(t *testing.T) {
 	}
 	assert.Empty(t, sess.Name())
 	assert.Empty(t, named)
+}
+
+func TestAgentAndBlankPromptsDoNotNameSession(t *testing.T) {
+	h, title := titleHarness(t, Config{Title: true})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("one")})
+	title.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("Fix the build")})
+	named := subscribeTo[event.SessionNamed](h.c)
+
+	h.c.queue.Lock()
+	h.c.nameSessionLocked([]pigruntime.Prompt{{Text: "from an agent", FromAgent: true}, {Text: " \n"}})
+	h.c.queue.Unlock()
+	h.c.wg.Wait()
+	assert.Zero(t, title.CallCount())
+
+	h.turn(t, "fix the build")
+	assert.Equal(t, event.SessionNamed{Name: "Fix the build"}, receiveEvent(t, named))
+	assert.Equal(t, 1, title.CallCount())
 }

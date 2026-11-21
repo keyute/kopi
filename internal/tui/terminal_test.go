@@ -154,7 +154,7 @@ func TestWindowTitle(t *testing.T) {
 func TestWindowTitleStripsControlCharacters(t *testing.T) {
 	m, _ := newTestModel(t, 60, 20)
 	send(m, event.SessionNamed{Name: "a\x1b]0;x\x07b\nc"})
-	assert.Equal(t, "κ a]0;xbc", m.View().WindowTitle)
+	assert.Equal(t, "κ ab c", m.View().WindowTitle)
 }
 
 func TestWindowTitleOffLeavesItEmpty(t *testing.T) {
@@ -310,4 +310,21 @@ func TestNotifySilentWhenATurnContinues(t *testing.T) {
 	send(m, turnEnd(event.Completed), turnStart)
 	assert.Equal(t, tea.ProgramStateWorking, state(m))
 	assert.Empty(t, *raw)
+}
+
+func TestTasksDialogOpenDoesNotHideTheFinishedTurn(t *testing.T) {
+	m, _ := tasksModel(t)
+	raw := recordRaw(m)
+	m.Update(tea.BlurMsg{})
+	m.getenv = env(map[string]string{"TERM_PROGRAM": "ghostty"})
+	typeText(m, "/tasks")
+	press(m, enter)
+	require.Equal(t, promptTasks, m.front().kind)
+
+	send(m, turnStart)
+	send(m, turnEnd(event.Completed))
+
+	assert.Equal(t, tea.ProgramStateDone, state(m))
+	assert.Len(t, *raw, 1)
+	assert.Contains(t, (*raw)[0], "Finished: ")
 }

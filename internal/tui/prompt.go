@@ -23,6 +23,20 @@ const (
 // waits reports that a turn is blocked on the answer.
 func (k promptKind) waits() bool { return k <= promptPlan }
 
+// programKind is the program status kind of a prompt that blocks on the human,
+// "" for one that does not.
+func (k promptKind) programKind() tea.ProgramStatusKind {
+	switch k {
+	case promptApproval, promptPlan:
+		return tea.ProgramStatusKindPermission
+	case promptQuestion:
+		return tea.ProgramStatusKindQuestion
+	case promptLogin:
+		return tea.ProgramStatusKindAuth
+	}
+	return ""
+}
+
 // prompt is a dialog drawn in the composer's slot; the one in front takes the
 // keys.
 type prompt interface {

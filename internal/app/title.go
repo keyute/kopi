@@ -25,6 +25,9 @@ const (
 // the title was already decided on for this session. It must be called with
 // queue held. The request never delays the turn.
 func (c *Controller) nameSessionLocked(ps []pigruntime.Prompt) {
+	if !c.cfg.Title {
+		return
+	}
 	i := slices.IndexFunc(ps, func(p pigruntime.Prompt) bool { return !p.FromAgent && strings.TrimSpace(p.Text) != "" })
 	if i < 0 {
 		return
@@ -32,7 +35,7 @@ func (c *Controller) nameSessionLocked(ps []pigruntime.Prompt) {
 	prompt := ps[i].Text
 	c.mu.Lock()
 	sess, bound := c.main.sess, c.main.bound
-	if !c.cfg.Title || c.titled || sess == nil {
+	if c.titled || sess == nil {
 		c.mu.Unlock()
 		return
 	}
@@ -42,8 +45,8 @@ func (c *Controller) nameSessionLocked(ps []pigruntime.Prompt) {
 }
 
 // nameSession stores and announces the title of sess unless it already has a
-// name or a session switch replaced it while the model was answering. bound
-// belongs to sess's relay epoch.
+// name or is no longer the main session when the model answers. bound belongs
+// to sess's relay epoch.
 func (c *Controller) nameSession(sess *pigruntime.Session, bound func(event.Event), prompt string) {
 	if sess.Name() != "" {
 		return

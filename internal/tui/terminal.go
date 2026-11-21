@@ -2,8 +2,7 @@ package tui
 
 import (
 	"path/filepath"
-	"strings"
-	"unicode"
+	"slices"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -24,37 +23,24 @@ func (m *model) working() bool {
 // failed run not yet seen, idle.
 func (m *model) programStatus() tea.ProgramStatus {
 	s := tea.ProgramStatus{App: "kopi", State: tea.ProgramStateIdle}
-	switch front := m.front(); {
-	case front != nil && (front.kind == promptApproval || front.kind == promptPlan):
-		s.State, s.Kind = tea.ProgramStateBlocked, tea.ProgramStatusKindPermission
-	case front != nil && front.kind == promptQuestion:
-		s.State, s.Kind = tea.ProgramStateBlocked, tea.ProgramStatusKindQuestion
-	case front != nil && front.kind == promptLogin:
-		s.State, s.Kind = tea.ProgramStateBlocked, tea.ProgramStatusKindAuth
-	default:
-		switch {
-		case m.working():
-			s.State = tea.ProgramStateWorking
-		case m.unseen != "":
-			s.State = m.unseen
-		}
+	if front := m.front(); front != nil && front.kind.programKind() != "" {
+		s.State, s.Kind = tea.ProgramStateBlocked, front.kind.programKind()
+	} else if m.working() {
+		s.State = tea.ProgramStateWorking
+	} else if m.unseen != "" {
+		s.State = m.unseen
 	}
 	return s
 }
 
 // terminalLabel is the session's name, else the workspace folder, else kopi,
-// without control characters.
+// on one line.
 func (m *model) terminalLabel() string {
 	label := m.title
 	if label == "" {
 		label = filepath.Base(m.status.Workspace)
 	}
-	label = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, label)
+	label = oneLine(label)
 	if label == "" || label == "." || label == string(filepath.Separator) {
 		return "kopi"
 	}
@@ -89,7 +75,7 @@ func (m *model) attend(msg tea.Msg, was tea.ProgramStatus) tea.Cmd {
 	switch front := m.front(); {
 	case !m.away || m.working():
 		m.unseen = ""
-	case was.State == tea.ProgramStateWorking && (front == nil || front.kind == promptTasks):
+	case was.State == tea.ProgramStateWorking && (front == nil || front.kind.programKind() == ""):
 		switch m.ended {
 		case event.Completed:
 			m.unseen = tea.ProgramStateDone
@@ -116,20 +102,17 @@ func (m *model) attend(msg tea.Msg, was tea.ProgramStatus) tea.Cmd {
 }
 
 func (m *model) notify(text string) tea.Cmd {
+	osc9 := false
 	switch m.terminal.Notifications {
 	case "off":
 		return nil
-	case "bell":
-		return m.raw("\a")
 	case "osc9":
-		return m.raw(ansi.Notify(text))
+		osc9 = true
+	case "auto":
+		osc9 = slices.Contains([]string{"ghostty", "iTerm.app", "WarpTerminal", "WezTerm"}, m.getenv("TERM_PROGRAM")) ||
+			slices.Contains([]string{"xterm-kitty", "xterm-ghostty"}, m.getenv("TERM"))
 	}
-	switch m.getenv("TERM_PROGRAM") {
-	case "ghostty", "iTerm.app", "WarpTerminal", "WezTerm":
-		return m.raw(ansi.Notify(text))
-	}
-	switch m.getenv("TERM") {
-	case "xterm-kitty", "xterm-ghostty":
+	if osc9 {
 		return m.raw(ansi.Notify(text))
 	}
 	// ansi.BEL is an integer constant, which tea.Raw would print as 7.
