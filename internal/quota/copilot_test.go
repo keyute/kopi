@@ -36,6 +36,46 @@ func TestCopilotFree(t *testing.T) {
 	}, got, "a date-only reset is read, and used is floored at zero")
 }
 
+func TestCopilotBusinessPlaceholders(t *testing.T) {
+	for _, unlimited := range []string{"", `,"unlimited":false`} {
+		t.Run(unlimited, func(t *testing.T) {
+			client, _ := fakeClient(http.StatusOK, `{"copilot_plan":"business","token_based_billing":true,"quota_reset_date":"2026-09-01","quota_snapshots":{"premium_interactions":{"entitlement":0,"remaining":0,"percent_remaining":100,"credits_used":31`+unlimited+`},"chat":{"entitlement":0,"remaining":0,"percent_remaining":100,"credits_used":0`+unlimited+`}}}`)
+
+			got, err := Copilot(t.Context(), client, "gh-token", "")
+
+			require.NoError(t, err)
+			assert.Empty(t, got)
+		})
+	}
+}
+
+func TestCopilotMixedPlaceholder(t *testing.T) {
+	client, _ := fakeClient(http.StatusOK, `{"quota_snapshots":{"premium_interactions":{"entitlement":100,"remaining":25,"percent_remaining":25},"chat":{"entitlement":0,"remaining":0,"percent_remaining":100,"unlimited":false}}}`)
+
+	got, err := Copilot(t.Context(), client, "gh-token", "")
+
+	require.NoError(t, err)
+	assert.Equal(t, []Window{{Label: "premium", UsedPercent: 75}}, got)
+}
+
+func TestCopilotExhausted(t *testing.T) {
+	client, _ := fakeClient(http.StatusOK, `{"quota_snapshots":{"premium_interactions":{"entitlement":100,"remaining":0,"percent_remaining":0,"unlimited":false}}}`)
+
+	got, err := Copilot(t.Context(), client, "gh-token", "")
+
+	require.NoError(t, err)
+	assert.Equal(t, []Window{{Label: "premium", UsedPercent: 100}}, got)
+}
+
+func TestCopilotMissingAllowanceFields(t *testing.T) {
+	client, _ := fakeClient(http.StatusOK, `{"quota_snapshots":{"premium_interactions":{"remaining":0,"percent_remaining":100},"chat":{"entitlement":0,"percent_remaining":100}}}`)
+
+	got, err := Copilot(t.Context(), client, "gh-token", "")
+
+	require.NoError(t, err)
+	assert.Equal(t, []Window{{Label: "premium"}, {Label: "chat"}}, got)
+}
+
 func TestCopilotEnterpriseHost(t *testing.T) {
 	client, f := fakeClient(http.StatusOK, copilotPaid)
 

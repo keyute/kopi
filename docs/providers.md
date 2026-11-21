@@ -69,6 +69,7 @@
 | `kimi-coding` | `5h`, `wk`, `mo`, `mo_code` | `api.kimi.com` | the sign-in's access token |
 | `xai` | `wk` or `mo`, by the billing period's length | `cli-chat-proxy.grok.com` | the sign-in's access token |
 
+- Copilot's zero-allowance placeholders (explicit zero entitlement and zero remaining) are omitted. Token-billing credits are not displayed.
 - The endpoints are undocumented, so their answers can change without notice.
 - Kopi calls them only in the fullscreen interface, with a `limit_` or `reset_` segment in the layout and an account sign-in for the provider; an API key has no plan to read. Headless use never calls.
 - A read follows activity, such as a turn starting or ending, at most once a minute, and never while idle, so a reset time that has passed stays until the next activity.

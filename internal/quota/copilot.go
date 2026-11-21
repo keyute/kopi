@@ -12,8 +12,10 @@ import (
 var hostname = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
 
 type copilotQuota struct {
-	PercentRemaining float64 `json:"percent_remaining"`
-	Unlimited        bool    `json:"unlimited"`
+	Entitlement      *float64 `json:"entitlement"`
+	Remaining        *float64 `json:"remaining"`
+	PercentRemaining float64  `json:"percent_remaining"`
+	Unlimited        bool     `json:"unlimited"`
 }
 
 // Copilot reads the GitHub Copilot plan's premium and chat quotas with the
@@ -42,6 +44,9 @@ func Copilot(ctx context.Context, client *http.Client, token, domain string) ([]
 		quota *copilotQuota
 	}{{"premium", usage.Snapshots.Premium}, {"chat", usage.Snapshots.Chat}} {
 		if q.quota == nil || q.quota.Unlimited {
+			continue
+		}
+		if q.quota.Entitlement != nil && *q.quota.Entitlement == 0 && q.quota.Remaining != nil && *q.quota.Remaining == 0 {
 			continue
 		}
 		windows = append(windows, Window{Label: q.label, UsedPercent: max(0, 100-q.quota.PercentRemaining), ResetsAt: reset})
