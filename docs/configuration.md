@@ -59,13 +59,13 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `provider/id` of the model that answers `WebFetch` and `WebSearch` calls.
 - Unset, it is the session model, so set it to a cheaper model.
 - A wrong value, an unknown model or one whose provider has no credential fails at start.
-- In the fullscreen interface, a `smallModel` that shares the provider of a configured `model` without a credential gets the first-run login instead when that provider offers a sign-in or an API key.
+- In the fullscreen interface, a `smallModel` that shares the provider of a configured `model` without a credential gets the first-run login instead when that provider offers a sign-in or an API key and the id is one Kopi knows; an unknown id fails at start with the login hint.
 
 ## `workflows`
 
 - `workflows.model` is the `provider/id` of the model workflow agents use when their definition sets none; unset, it is the session model. A wrong value, an unknown model or one whose provider has no credential fails at start, checked only where workflows can run: in the fullscreen interface, with no rule denying `Workflow`.
 - `workflows.maxWorkflows` (default 4, at least 1) is how many [workflows](workflows.md) run at once, and `workflows.maxAgents` (default 16, at least 1) how many agents of one workflow run at once.
-- In the fullscreen interface, a `workflows.model` that shares the provider of a configured `model` without a credential gets the first-run login instead when that provider offers a sign-in or an API key.
+- In the fullscreen interface, a `workflows.model` that shares the provider of a configured `model` without a credential gets the first-run login instead when that provider offers a sign-in or an API key and the id is one Kopi knows; an unknown id fails at start with the login hint.
 
 ## `instructionFallbacks`
 

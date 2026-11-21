@@ -20,7 +20,7 @@ var (
 
 	// ErrModelListUnavailable accompanies ErrUnknownModel when refreshing the
 	// provider's model list failed.
-	ErrModelListUnavailable = errors.New("model list could not be refreshed")
+	ErrModelListUnavailable = errors.New("the model list could not be refreshed")
 
 	ErrServerStartTimeout = errors.New("MCP server did not start in time")
 	ErrServerNameClash    = errors.New("MCP server names give the same tool names")

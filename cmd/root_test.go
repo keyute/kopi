@@ -549,7 +549,7 @@ func TestRootAgentModelFailsAtStart(t *testing.T) {
 			_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
 
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), fmt.Sprintf("failed to use model %q in %s", model, path))
+			assert.Contains(t, err.Error(), fmt.Sprintf("failed to use the model in %s", path))
 			assert.Empty(t, server.requests)
 		})
 	}
@@ -725,6 +725,7 @@ func TestSameProviderNoCredential(t *testing.T) {
 		{name: "same provider", err: noCredential, model: "a/m1", sub: "a/m2", want: true},
 		{name: "other provider", err: noCredential, model: "a/m1", sub: "b/m2"},
 		{name: "other error", err: pigruntime.ErrUnknownModel, model: "a/m1", sub: "a/m2"},
+		{name: "unknown id without credential", err: fmt.Errorf("provider %q: %w (%w)", "a", pigruntime.ErrNoCredential, pigruntime.ErrUnknownModel), model: "a/m1", sub: "a/m2"},
 		{name: "unset model", err: noCredential, model: "", sub: "a/m2", want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -747,6 +748,15 @@ func TestRootWithoutCredentialSuggestsLogin(t *testing.T) {
 	newTestEnv(t)
 
 	_, _, err := execute(t, "", "--model", builtinModel(t, "openai-codex"), "-p", "hi")
+
+	require.Error(t, err)
+	assert.Equal(t, `no credential for provider "openai-codex": run "kopi login openai-codex"`, err.Error())
+}
+
+func TestRootUnknownModelWithoutCredentialSuggestsLogin(t *testing.T) {
+	newTestEnv(t)
+
+	_, _, err := execute(t, "", "--model", "openai-codex/nosuch-1", "-p", "hi")
 
 	require.Error(t, err)
 	assert.Equal(t, `no credential for provider "openai-codex": run "kopi login openai-codex"`, err.Error())

@@ -1,10 +1,13 @@
 package pigruntime
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,15 +26,20 @@ const (
 type catalogServer struct {
 	*httptest.Server
 	requests chan struct{}
+	bundled  *ai.Model
+
+	mu   sync.Mutex
+	body []byte
+	// hold makes a request wait until its client gives up.
+	hold bool
 }
 
-// newCatalogServer serves a list holding a copy of a bundled mistral model
-// under each of ids, or status when it is not 200.
-func newCatalogServer(t *testing.T, bundled *ai.Model, status int, ids ...string) *catalogServer {
+// serve switches the list to a copy of the bundled model under each of ids.
+func (s *catalogServer) serve(t *testing.T, ids ...string) {
 	t.Helper()
 	records := []json.RawMessage{}
 	for _, id := range ids {
-		m := *bundled
+		m := *s.bundled
 		m.ID = id
 		record, err := ai.EncodeStoredModel(&m)
 		require.NoError(t, err)
@@ -39,11 +47,34 @@ func newCatalogServer(t *testing.T, bundled *ai.Model, status int, ids ...string
 	}
 	body, err := json.Marshal(records)
 	require.NoError(t, err)
-	s := &catalogServer{requests: make(chan struct{}, 8)}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.body = body
+}
+
+func (s *catalogServer) holdRequests(hold bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hold = hold
+}
+
+// newCatalogServer serves a list holding a copy of a bundled mistral model
+// under each of ids, or status when it is not 200.
+func newCatalogServer(t *testing.T, bundled *ai.Model, status int, ids ...string) *catalogServer {
+	t.Helper()
+	s := &catalogServer{requests: make(chan struct{}, 8), bundled: bundled}
+	s.serve(t, ids...)
 	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/models/providers/"+catalogProvider, r.URL.Path)
 		assert.Empty(t, r.Header.Get("Authorization"))
 		s.requests <- struct{}{}
+		s.mu.Lock()
+		body, hold := s.body, s.hold
+		s.mu.Unlock()
+		if hold {
+			<-r.Context().Done()
+			return
+		}
 		if status != http.StatusOK {
 			w.WriteHeader(status)
 			return
@@ -108,12 +139,23 @@ func TestFetchedModelResolvesFromStoreWithoutRequest(t *testing.T) {
 	sb, s, r := catalogSetup(t, http.StatusOK, "catalog-new-1")
 	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogModel}))
 	<-s.requests
-	s.Close()
 
 	fresh := newCatalogRuntime(t, sb, s.URL)
 
 	require.NoError(t, fresh.Check(t.Context(), OpenOptions{Model: catalogModel}))
 	assert.Empty(t, s.requests)
+}
+
+func TestFetchIgnoresFreshStoredList(t *testing.T) {
+	sb, s, r := catalogSetup(t, http.StatusOK, "catalog-other-1")
+	require.ErrorIs(t, r.Check(t.Context(), OpenOptions{Model: catalogModel}), ErrUnknownModel)
+	<-s.requests
+	s.serve(t, "catalog-new-1")
+
+	fresh := newCatalogRuntime(t, sb, s.URL)
+
+	require.NoError(t, fresh.Check(t.Context(), OpenOptions{Model: catalogModel}))
+	assert.Len(t, s.requests, 1)
 }
 
 func TestModelAbsentFromFetchedListStaysUnknown(t *testing.T) {
@@ -128,14 +170,38 @@ func TestModelAbsentFromFetchedListStaysUnknown(t *testing.T) {
 }
 
 func TestFailedFetchReportsModelListUnavailable(t *testing.T) {
-	_, s, r := catalogSetup(t, http.StatusServiceUnavailable, "catalog-new-1")
+	sb, s, r := catalogSetup(t, http.StatusServiceUnavailable, "catalog-new-1")
+	want := "unknown model: the model list could not be refreshed; declare the model in " + filepath.Join(sb.agentDir, "models.json")
 
 	err := r.Check(t.Context(), OpenOptions{Model: catalogModel})
 
 	require.ErrorIs(t, err, ErrUnknownModel)
-	assert.ErrorIs(t, err, ErrModelListUnavailable)
-	assert.Contains(t, err.Error(), "503")
-	assert.NotEmpty(t, s.requests)
+	require.ErrorIs(t, err, ErrModelListUnavailable)
+	assert.ErrorContains(t, err, want)
+	// PiG retries a failing fetch, so the count is its own.
+	requests := len(s.requests)
+	assert.NotZero(t, requests)
+
+	err = r.Check(t.Context(), OpenOptions{Model: catalogModel})
+
+	require.ErrorIs(t, err, ErrUnknownModel)
+	require.ErrorIs(t, err, ErrModelListUnavailable)
+	assert.Len(t, s.requests, requests)
+}
+
+func TestCancelledFetchIsNotRemembered(t *testing.T) {
+	_, s, r := catalogSetup(t, http.StatusOK, "catalog-new-1")
+	s.holdRequests(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- r.Check(ctx, OpenOptions{Model: catalogModel}) }()
+	<-s.requests
+	cancel()
+	require.Error(t, <-done)
+	s.holdRequests(false)
+
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogModel}))
+	assert.Len(t, s.requests, 1)
 }
 
 func TestUnknownModelWithoutCredentialMakesNoRequest(t *testing.T) {
@@ -148,7 +214,23 @@ func TestUnknownModelWithoutCredentialMakesNoRequest(t *testing.T) {
 	err := r.Check(t.Context(), OpenOptions{Model: catalogModel})
 
 	require.ErrorIs(t, err, ErrNoCredential)
+	assert.ErrorIs(t, err, ErrUnknownModel)
 	assert.Empty(t, s.requests)
+}
+
+func TestSignInAfterNoCredentialFetches(t *testing.T) {
+	clearEnv(t)
+	sb := newSandbox(t)
+	probe := newCatalogRuntime(t, sb, "http://127.0.0.1:1")
+	s := newCatalogServer(t, bundledMistral(t, probe), http.StatusOK, "catalog-new-1")
+	r := newCatalogRuntime(t, sb, s.URL)
+	require.ErrorIs(t, r.Check(t.Context(), OpenOptions{Model: catalogModel}), ErrNoCredential)
+
+	_, err := r.Login(t.Context(), catalogProvider, script(catalogKey).ui())
+	require.NoError(t, err)
+
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogModel}))
+	assert.Len(t, s.requests, 1)
 }
 
 func TestUnknownProviderMakesNoRequest(t *testing.T) {

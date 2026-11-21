@@ -43,7 +43,10 @@ type Runtime struct {
 	rt               *coding.Runtime
 	installationFile string
 	refreshMu        sync.Mutex
-	refreshed        map[string]bool
+	modelsPath       string
+	// refreshed holds the outcome of each provider's catalog fetch; a
+	// present key means it ran.
+	refreshed map[string]error
 	// openURL opens a sign-in URL in the user's browser.
 	openURL func(string) error
 }
@@ -97,7 +100,8 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		rt:               rt,
 		installationFile: filepath.Join(opts.Home, "installation_id"),
 		openURL:          browser.OpenURL,
-		refreshed:        map[string]bool{},
+		modelsPath:       modelsPath,
+		refreshed:        map[string]error{},
 	}, nil
 }
 
@@ -398,25 +402,24 @@ func (r *Runtime) usableModel(ctx context.Context, ref string) (*ai.Model, error
 	provider, id, _ := strings.Cut(ref, "/")
 	model := r.svcs.ModelRuntime().GetModel(provider, id)
 	if model == nil {
-		refreshErr := r.refreshModels(ctx, provider)
-		if model = r.svcs.ModelRuntime().GetModel(provider, id); model == nil {
-			// A known provider without a credential reports that, since a
-			// sign-in would let the fetch run; ErrUnknownModel marks the id as
-			// still unverified.
-			if r.svcs.ModelRuntime().GetProvider(provider) != nil {
-				ok, err := r.hasCredential(ctx, provider)
-				if err != nil {
-					return nil, err
-				}
-				if !ok {
-					return nil, fmt.Errorf("provider %q: %w (%w)", provider, ErrNoCredential, ErrUnknownModel)
-				}
-			}
-			if refreshErr != nil {
-				return nil, errors.Join(ErrUnknownModel, ErrModelListUnavailable, refreshErr)
-			}
-			return nil, ErrUnknownModel
+		if r.svcs.ModelRuntime().GetProvider(provider) == nil {
+			return nil, r.unknownModel(false)
 		}
+		// A known provider without a credential reports that, since a sign-in
+		// would let the fetch run; ErrUnknownModel marks the id as still
+		// unverified.
+		ok, err := r.hasCredential(ctx, provider)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("provider %q: %w (%w)", provider, ErrNoCredential, ErrUnknownModel)
+		}
+		failed := r.refreshModels(ctx, provider) != nil
+		if model = r.svcs.ModelRuntime().GetModel(provider, id); model == nil {
+			return nil, r.unknownModel(failed)
+		}
+		return model, nil
 	}
 	ok, err := r.hasCredential(ctx, provider)
 	if err != nil {
@@ -426,6 +429,15 @@ func (r *Runtime) usableModel(ctx context.Context, ref string) (*ai.Model, error
 		return nil, fmt.Errorf("provider %q: %w", provider, ErrNoCredential)
 	}
 	return model, nil
+}
+
+// unknownModel points at models.json, where the user can declare the model;
+// failed adds that the remote list could not be refreshed.
+func (r *Runtime) unknownModel(failed bool) error {
+	if failed {
+		return fmt.Errorf("%w: %w; declare the model in %s", ErrUnknownModel, ErrModelListUnavailable, r.modelsPath)
+	}
+	return fmt.Errorf("%w: declare the model in %s", ErrUnknownModel, r.modelsPath)
 }
 
 // hasCredential relies on PiG's CheckAuth returning (nil, nil) when the

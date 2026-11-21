@@ -462,7 +462,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			continue
 		}
 		if err := checkModel(def.Model, ""); err != nil {
-			return fmt.Errorf("failed to use model %q in %s: %w", def.Model, def.Path, err)
+			return fmt.Errorf("failed to use the model in %s: %w", def.Path, err)
 		}
 	}
 	var skillDirs []string
@@ -875,9 +875,13 @@ func sameProviderNoCredential(err error, model, sub string) bool {
 	return errors.Is(err, pigruntime.ErrNoCredential) && !errors.Is(err, pigruntime.ErrUnknownModel) && provider == subProvider
 }
 
-// unknownModelError is the advice for an unknown model; check, when set,
-// leads to the declaring advice.
-func unknownModelError(err error, model, check string, paths config.Paths) error {
+// unknownModelError is the advice for an unknown model; where, when set, names
+// the setting to check before declaring the model.
+func unknownModelError(err error, model, where string, paths config.Paths) error {
+	check := ""
+	if where != "" {
+		check = "check " + where + ", or "
+	}
 	refresh := ""
 	if errors.Is(err, pigruntime.ErrModelListUnavailable) {
 		refresh = "the model list could not be refreshed; "
@@ -906,7 +910,7 @@ func diagnose(err error, model, origin string, paths config.Paths, req app.OpenR
 		if origin != "flags" {
 			where = fmt.Sprintf("\"model\" in %s", paths.ConfigFile)
 		}
-		return unknownModelError(err, model, "check "+where+", or ", paths)
+		return unknownModelError(err, model, where, paths)
 	case errors.Is(err, pigruntime.ErrSessionNotFound) && req.Continue:
 		return errors.New("no session to continue in this directory: start without --continue")
 	case errors.Is(err, pigruntime.ErrSessionNotFound):
