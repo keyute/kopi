@@ -17,6 +17,7 @@ var (
 	ErrUnknownEffort   = errors.New("unknown effort")
 	ErrParentResume    = errors.New("a session with a parent cannot resume or continue")
 	ErrScript          = errors.New("script failed")
+	ErrNotSaved        = errors.New("session has no saved transcript")
 
 	ErrServerStartTimeout = errors.New("MCP server did not start in time")
 	ErrServerNameClash    = errors.New("MCP server names give the same tool names")

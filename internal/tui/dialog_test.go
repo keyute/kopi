@@ -590,3 +590,84 @@ func TestDialogRowsSecondFrameAllocationsDoNotGrowWithTheBody(t *testing.T) {
 	}
 	assert.LessOrEqual(t, allocs(5000), allocs(50)+2)
 }
+
+// drawnDialog has a heading over every fourth option, as the caller renders
+// them.
+func drawnDialog(n int) *dialog {
+	d := &dialog{title: "Pick"}
+	for i := range n {
+		var rows []string
+		if i%4 == 0 {
+			rows = append(rows, fmt.Sprintf("  H%d", i/4))
+		}
+		d.options = append(d.options, option{drawn: append(rows, fmt.Sprintf("    • w%d", i))})
+	}
+	return d
+}
+
+func TestDialogDrawnOptionsAreUnnumberedWithTheCursorOnTheLastRow(t *testing.T) {
+	th := mocha()
+	d := drawnDialog(5)
+	d.sel = 4
+	rule := strings.Repeat("─", 20)
+	rows := d.rows(20, 100, 5, th)
+	assert.Equal(t, []string{
+		rule, "  Pick", "",
+		"  H0", "    • w0", "    • w1", "    • w2", "    • w3",
+		"  H1", "❭   • w4", rule,
+	}, plainRows(rows))
+	assert.Equal(t, "  H1", rows[8], "a heading is as given")
+	assert.Equal(t, fg(th.accent).Render(cursorMark)+"  • w4", rows[9])
+	assert.Equal(t, []int{3, 5, 6, 7, 8, 10}, d.optionStarts)
+}
+
+func TestDialogKeyDoesNotPickADrawnOptionByDigit(t *testing.T) {
+	km := newKeyMap(config.DefaultKeys())
+	d := drawnDialog(3)
+	d.options = append(d.options, option{label: "Close"})
+	picked, _ := d.key(digit('1'), &km)
+	assert.False(t, picked)
+	assert.Equal(t, 0, d.sel)
+	picked, _ = d.key(digit('4'), &km)
+	assert.True(t, picked)
+	assert.Equal(t, 3, d.sel)
+
+	d.sel = 0
+	_, _ = d.key(down, &km)
+	assert.Equal(t, 1, d.sel)
+	_, _ = d.key(up, &km)
+	assert.Equal(t, 0, d.sel)
+	picked, _ = d.key(enter, &km)
+	assert.True(t, picked)
+}
+
+func TestDialogRowsKeepTheSelectedDrawnOptionAndItsHeadingWithinTheHeight(t *testing.T) {
+	for _, sel := range []int{0, 4, 5, 12, 13} {
+		d := drawnDialog(14)
+		d.sel = sel
+		for height := 4; height <= 30; height++ {
+			rows := plainRows(d.rows(20, height, 5, mocha()))
+			require.LessOrEqual(t, len(rows), height, "sel %d height %d", sel, height)
+			assert.Contains(t, rows, fmt.Sprintf("❭   • w%d", sel), "sel %d height %d", sel, height)
+			if height >= 5 && height < 20 {
+				assert.Contains(t, rows, fmt.Sprintf("  %d of 14", sel+1), "sel %d height %d", sel, height)
+			}
+			if sel%4 == 0 {
+				assert.Contains(t, rows, fmt.Sprintf("  H%d", sel/4), "sel %d height %d", sel, height)
+			}
+		}
+	}
+}
+
+func TestDialogRowsSecondFrameAllocationsDoNotGrowWithTheOptions(t *testing.T) {
+	if raceEnabled {
+		t.Skip("sync.Pool randomly drops items under -race, so allocation counts vary")
+	}
+	allocs := func(n int) float64 {
+		d := drawnDialog(n)
+		d.sel = n / 2
+		d.rows(40, 20, 5, mocha())
+		return testing.AllocsPerRun(10, func() { d.rows(40, 20, 5, mocha()) })
+	}
+	assert.LessOrEqual(t, allocs(1000), allocs(50)+2)
+}

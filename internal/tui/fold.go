@@ -3,9 +3,9 @@ package tui
 import "github.com/keyute/kopi/internal/transcript"
 
 // folds is the frontend's own view state over the transcript: which sealed
-// groups are open (by group key), which calls show their output (by call
-// ID), whether everything is shown, and the verb each live turn picked (by
-// turn key).
+// groups are open (by group key), which calls show their output (by call ID)
+// and which tasks show their result (by block key), whether everything is
+// shown, and the verb each live turn picked (by turn key).
 type folds struct {
 	open     map[string]bool
 	expanded map[string]bool
@@ -37,6 +37,10 @@ func (f *folds) of(b transcript.Block) blockFolds {
 	case transcript.Row:
 		if b.Call.State != transcript.Running {
 			return blockFolds{expanded: []bool{f.all || f.expanded[b.Call.ID]}}
+		}
+	case transcript.Task:
+		if b.Result != "" {
+			return blockFolds{expanded: []bool{f.all || f.expanded[b.Key()]}}
 		}
 	case transcript.Turn:
 		if v, ok := f.verbs[b.Key()]; ok {

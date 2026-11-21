@@ -263,3 +263,34 @@ func TestSubagentTurnEndKeepsMainsQuestionAndPlan(t *testing.T) {
 	require.NotNil(t, planOf(m))
 	assert.Contains(t, strings.Join(screen(m), "\n"), "step one")
 }
+
+func TestSessionClosedDeletesAHiddenViewAndMarksTheShownOne(t *testing.T) {
+	m, _ := agentsModel(t)
+	m.viewOf("w1")
+	m.viewOf("w2")
+
+	send(m, event.SessionClosed{ID: "w1"})
+
+	assert.NotContains(t, m.views, "w1")
+
+	display(m, "w2")
+	send(m, event.SessionClosed{ID: "w2"})
+
+	require.Contains(t, m.views, "w2")
+	assert.True(t, m.views["w2"].closed)
+	assert.False(t, m.views[app.Main].closed)
+
+	send(m, sub("w2", event.TurnStart{Prompt: "late"}), sub("w2", event.TextDelta{Text: "late"}))
+	assert.Empty(t, body(m), "a closed view takes no more events")
+	assert.False(t, m.views["w2"].busy)
+}
+
+func TestWorkflowAgentViewsDoNotMakeAgentRows(t *testing.T) {
+	m, _ := agentsModel(t)
+	send(m, sub("w1", event.TurnStart{Prompt: "dig"}))
+
+	assert.Contains(t, m.views, "w1")
+	for _, e := range m.entries() {
+		assert.NotEqual(t, "w1", e.ID)
+	}
+}

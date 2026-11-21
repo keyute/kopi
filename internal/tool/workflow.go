@@ -88,7 +88,17 @@ func NewWorkflow(defs []subagent.Definition, w Workflows, maxWorkflows, maxAgent
 				}
 				return ""
 			},
-			Body:   func(string) string { return "" },
+			Body: func(string) string { return "" },
+			// The opened row shows the script.
+			Change: func(raw json.RawMessage) (string, []PreviewLine) {
+				var args workflowArgs
+				_ = json.Unmarshal(raw, &args)
+				var lines []PreviewLine
+				for line := range strings.Lines(args.Script) {
+					lines = append(lines, PreviewLine{Kind: Context, Text: strings.TrimRight(line, "\r\n")})
+				}
+				return "", lines
+			},
 			Action: Action{Verb: "Launched", One: "workflow", Many: "workflows"},
 		},
 	}
@@ -119,10 +129,10 @@ func NewStructuredOutput(schema map[string]any, record func(json.RawMessage)) To
 }
 
 func workflowDescription(defs []subagent.Definition, maxWorkflows, maxAgents int) string {
-	agentCall := "agent(prompt, {agentType, schema, label}): starts an agent with its own context, which sees only prompt, and returns a promise of its final message. " +
+	agentCall := "agent(prompt, {agentType, schema, label, phase}): starts an agent with its own context, which sees only prompt, and returns a promise of its final message. " +
 		"agentType names one of the agent types below; without it the agent has the tools a subagent can have."
 	if len(defs) == 0 {
-		agentCall = "agent(prompt, {schema, label}): starts an agent with its own context, which sees only prompt, and returns a promise of its final message. " +
+		agentCall = "agent(prompt, {schema, label, phase}): starts an agent with its own context, which sees only prompt, and returns a promise of its final message. " +
 			"The agent has the tools a subagent can have."
 	}
 	var b strings.Builder
@@ -133,6 +143,7 @@ func workflowDescription(defs []subagent.Definition, maxWorkflows, maxAgents int
 		"Agents share the working directory and the session's mode with you and with each other; nothing isolates those that write at the same time.\n" +
 		"The script can call:\n" +
 		"- " + agentCall + " With schema, a JSON Schema of type object, the promise is of an object matching it, and rejects if the agent gives none. label names the agent to the user.\n" +
+		"- phase(title): sets the heading the user sees the agents under that agent() starts after it; the phase option of agent() sets it for that one agent.\n" +
 		"- parallel(thunks): calls the functions together and returns a promise of their results in order, null for one that threw.\n" +
 		"- pipeline(items, ...stages): passes every item through the stages in order, each called as stage(previous, item, index), the items together; returns a promise of the last stage's results in order, null for an item whose stage threw.\n" +
 		fmt.Sprintf("At most %d of a script's agents run at once and the rest wait; an agent() call beyond the first %d fails the script. At most %d scripts run at once. A script has no files, network, timers or imports.", maxAgents, WorkflowCalls, maxWorkflows))
@@ -147,8 +158,8 @@ func workflowDescription(defs []subagent.Definition, maxWorkflows, maxAgents int
 const workflowExamples = "\nExample, find then check:\n" +
 	"const CLAIMS = {type: \"object\", properties: {claims: {type: \"array\", items: {type: \"string\"}}}, required: [\"claims\"]}\n" +
 	"const checked = await pipeline([\"internal/policy\", \"internal/tool\"],\n" +
-	"  area => agent(`List defects in ${area}, each with file:line.`, {schema: CLAIMS, label: area}),\n" +
-	"  (found, area) => agent(`Check each claim against the source in ${area}. Return those that hold.\\n${JSON.stringify(found.claims)}`, {schema: CLAIMS, label: area + \" check\"}))\n" +
+	"  area => agent(`List defects in ${area}, each with file:line.`, {schema: CLAIMS, label: area, phase: \"Find\"}),\n" +
+	"  (found, area) => agent(`Check each claim against the source in ${area}. Return those that hold.\\n${JSON.stringify(found.claims)}`, {schema: CLAIMS, label: area + \" check\", phase: \"Check\"}))\n" +
 	"return checked.filter(Boolean).flatMap(c => c.claims)\n" +
 	"Example, implement one slice at a time, then review it:\n" +
 	"const REVIEW = {type: \"object\", properties: {approved: {type: \"boolean\"}, problems: {type: \"array\", items: {type: \"string\"}}}, required: [\"approved\", \"problems\"]}\n" +

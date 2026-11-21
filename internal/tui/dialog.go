@@ -33,6 +33,11 @@ type option struct {
 	// detail is rows the caller rendered for width-2, drawn two columns in
 	// under the label's rows; a field below the label comes after them.
 	detail []string
+	// drawn, when set, is the option as rows the caller rendered for the
+	// dialog's width, their first two cells blank, in place of the numbered
+	// label: the last is the choice, where the cursor goes, and those before it
+	// a heading. No digit picks it.
+	drawn []string
 }
 
 // dialog is a choice drawn in the composer's slot. It is drawn between two
@@ -158,6 +163,15 @@ func (d *dialog) blocks(col int, th theme) []optionBlock {
 			st = st.Bold(true)
 		}
 		or := &opts[i]
+		if len(o.drawn) > 0 {
+			or.rows = o.drawn
+			if i == d.sel {
+				or.rows = slices.Clone(o.drawn)
+				last := len(or.rows) - 1
+				or.rows[last] = fg(th.accent).Render(cursorMark) + ansi.TruncateLeft(or.rows[last], lipgloss.Width(cursorMark), "")
+			}
+			continue
+		}
 		if o.field != nil && o.label == "" {
 			if len(d.options) == 1 {
 				or.slot = fieldSlot{f: o.field, head: fg(th.accent).Render(prefix), indent: lipgloss.Width(prefix)}
@@ -200,7 +214,7 @@ func (d *dialog) blocks(col int, th theme) []optionBlock {
 // the body or pane is cut.
 func (d *dialog) fit(s *shape, note, foot string, maxRows, limit int, th theme) ([]string, bool) {
 	none := lipgloss.NewStyle()
-	d.areas, d.optionStarts = nil, nil
+	d.areas, d.optionStarts = nil, make([]int, 0, len(s.opts)+1)
 	var noteRows, footRows []string
 	// gap is 1 when a blank row separates the options from the foot.
 	gap := 0
@@ -303,6 +317,11 @@ func (d *dialog) fit(s *shape, note, foot string, maxRows, limit int, th theme) 
 // also gives the field areas and where each option starts, counted from the
 // first option row, the last start being the end of the options.
 func (d *dialog) expand(s *shape, room int, th theme) (all []string, areas []fieldArea, starts []int) {
+	plain := 0
+	for _, o := range s.opts {
+		plain += len(o.rows)
+	}
+	all, starts = make([]string, 0, plain), make([]int, 0, len(s.opts)+1)
 	for _, o := range s.opts {
 		starts = append(starts, len(all))
 		sl := o.slot
@@ -499,7 +518,7 @@ func (d *dialog) key(msg tea.KeyPressMsg, km *keyMap) (picked bool, cmd tea.Cmd)
 	case key.Matches(msg, km.submit):
 		return true, nil
 	}
-	if n, err := strconv.Atoi(msg.String()); err == nil && n >= 1 && n <= len(d.options) {
+	if n, err := strconv.Atoi(msg.String()); err == nil && n >= 1 && n <= len(d.options) && len(d.options[n-1].drawn) == 0 {
 		if d.options[n-1].field != nil {
 			return false, d.move(n - 1)
 		}

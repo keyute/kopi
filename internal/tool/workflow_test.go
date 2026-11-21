@@ -39,7 +39,10 @@ func TestWorkflowDescribesItself(t *testing.T) {
 	assert.True(t, tool.Deferred)
 	assert.Equal(t, Action{Verb: "Launched", One: "workflow", Many: "workflows"}, tool.Display.Action)
 	assert.Contains(t, tool.Description, "agentType names one of the agent types below")
-	assert.Contains(t, tool.Description, "agent(prompt, {agentType, schema, label})")
+	assert.Contains(t, tool.Description, "agent(prompt, {agentType, schema, label, phase})")
+	assert.Contains(t, tool.Description, "- phase(title): sets the heading the user sees the agents under that agent() starts after it; the phase option of agent() sets it for that one agent.")
+	assert.Contains(t, tool.Description, `phase: "Find"}`)
+	assert.Contains(t, tool.Description, `phase: "Check"}`)
 	assert.Contains(t, tool.Description, "Agent types:\nexplore: Finds things.\nreview: Reviews a change.\nExample")
 	assert.Contains(t, tool.Description, "At most 7 of a script's agents run at once and the rest wait; an agent() call beyond the first 1000 fails the script. At most 3 scripts run at once.")
 }
@@ -47,7 +50,7 @@ func TestWorkflowDescribesItself(t *testing.T) {
 func TestWorkflowDescriptionWithoutDefinitions(t *testing.T) {
 	tool := NewWorkflow(nil, nil, 4, 16)
 
-	assert.Contains(t, tool.Description, "agent(prompt, {schema, label})")
+	assert.Contains(t, tool.Description, "agent(prompt, {schema, label, phase})")
 	assert.Contains(t, tool.Description, "The agent has the tools a subagent can have.")
 	assert.NotContains(t, tool.Description, "agentType")
 	assert.NotContains(t, tool.Description, "Agent types:")
@@ -153,4 +156,15 @@ func TestStructuredOutputDoesNotRecordWithoutAdmission(t *testing.T) {
 	})
 
 	assert.ErrorIs(t, err, refused)
+}
+
+func TestWorkflowDisplayOpensToTheScript(t *testing.T) {
+	display := NewWorkflow(nil, nil, 4, 16).Display
+
+	summary, lines := display.Change(json.RawMessage(`{"description":"audit","script":"const a = 1\r\nreturn a\n"}`))
+
+	assert.Empty(t, summary)
+	assert.Equal(t, []PreviewLine{{Kind: Context, Text: "const a = 1"}, {Kind: Context, Text: "return a"}}, lines)
+	_, lines = display.Change(json.RawMessage(`not json`))
+	assert.Empty(t, lines)
 }
