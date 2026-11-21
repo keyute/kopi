@@ -35,7 +35,7 @@ Commands in the fullscreen interface:
 | `/resume <id>` | Resume a session |
 | `/login <provider>` | Log in to a provider |
 | `/logout <provider>` | Remove a provider's stored credential |
-| `/tasks` | List background tasks, [subagents](subagents.md) and [workflows](workflows.md), show one's output, open a subagent's view and stop it |
+| `/tasks` | List background tasks, [subagents](subagents.md) and [workflows](workflows.md), show one's output, open a subagent's view or a workflow's [progress dialog](workflows.md#progress-dialog) and stop them |
 | `/skill:<name>` | Load a skill with the prompt ([skills](skills.md)) |
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
@@ -52,7 +52,7 @@ Defaults; change them with [`keys`](configuration.md#keys).
 - Ctrl+Enter sends now: it stops the current response and continues the turn with the queued messages plus the draft.
 - Alt+Enter, Shift+Enter or Ctrl+J inserts a newline. Ctrl+Enter and Shift+Enter need a terminal that reports modified Enter.
 - Up at the top of the input pulls queued messages back into it for editing; with nothing queued it browses input history, and Down goes back.
-- Down from the last line of the input, with no newer history entry, moves into the [agent rows](subagents.md#agent-rows) under the status line: Up and Down move, Enter opens that session's view, `x` stops the selected subagent, Esc or typing returns to the input.
+- Down from the last line of the input, with no newer history entry, moves into the [agent rows](subagents.md#agent-rows) under the status line: Up and Down move, Enter opens that session's view, `x` stops the selected subagent or workflow (a workflow's row opens its [progress dialog](workflows.md#progress-dialog)), Esc or typing returns to the input.
 - Esc interrupts the running turn of the session whose view is open: the main agent's in the main view, only that subagent's run in a [subagent's view](subagents.md#views). It never acts on another session.
 - The row above the input, in priority order: `Waiting for you…` while an approval, question or plan dialog is open; `<Verb>… <elapsed>` (`Brewing… 12s`) while the open view's turn runs; in the main view, Kopi's own activity such as `Connecting to MCP servers…` or `Logging in to <provider>…`; `2 agents, 1 workflow, 1 shell still running` in the main view while the main agent is idle and background tasks, subagents or [workflows](workflows.md) run.
 - A turn ends with `κ Brewed for 41s`, `κ Interrupted after 12s` or `κ Failed after 12s` followed by the error.
@@ -144,7 +144,7 @@ Rejected, denied and interrupted rows have a warning-coloured bullet, a failed r
 
 Fullscreen only; print mode sends none of this. Kopi derives one state for the whole session, whichever session is shown:
 
-- Waiting on you: an approval, a plan, a question or a login is open. (`/tasks` is not.)
+- Waiting on you: an approval, a plan, a question or a login is open. (`/tasks` and a workflow's [progress dialog](workflows.md#progress-dialog) are not.)
 - Working: the main turn runs, or a subagent or workflow does. Background shells do not count; one may be a server that never ends.
 - Done or failed: the session stopped working while the terminal was not focused, and the last turn completed or failed. An interrupted turn is neither. It clears when the terminal is focused again or work starts.
 - Idle: otherwise.

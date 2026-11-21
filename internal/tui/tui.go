@@ -58,6 +58,14 @@ type Controller interface {
 	Tasks() []tool.TaskInfo
 	TaskOutput(id string) (tool.TaskInfo, error)
 	StopTask(id string) error
+	// Workflows is the running workflows; Workflow one run of the session, ended
+	// or not, with its agents by number.
+	Workflows() []app.WorkflowStatus
+	Workflow(id string) (app.WorkflowStatus, []app.WorkflowAgent, bool)
+	// StopWorkflowAgent stops a queued or running call of a workflow run.
+	StopWorkflowAgent(id string, n int)
+	// WorkflowHistory is an ended agent's saved transcript as display events.
+	WorkflowHistory(id string, n int) ([]event.Event, error)
 }
 
 // Options are the frontend's settings. Keys maps action names to key

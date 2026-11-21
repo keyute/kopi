@@ -431,6 +431,9 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			}
 			return diagnose(err, ref, origin, paths, app.OpenRequest{}, providers)
 		}
+		if errors.Is(err, pigruntime.ErrUnknownModel) {
+			return unknownModelError(err, ref, "", paths)
+		}
 		return err
 	}
 	if resolved.Config.SmallModel != "" {
@@ -459,7 +462,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			continue
 		}
 		if err := checkModel(def.Model, ""); err != nil {
-			return fmt.Errorf("failed to use model %q in %s: %w", def.Model, def.Path, err)
+			return fmt.Errorf("failed to use the model in %s: %w", def.Path, err)
 		}
 	}
 	var skillDirs []string
@@ -866,11 +869,26 @@ func planPolicy(p sandbox.Policy, cwd string) sandbox.Policy {
 
 // sameProviderNoCredential reports whether err is the missing credential of
 // the provider a configured model shares with model; in fullscreen the
-// first-run login of model supplies it.
+// first-run login of model supplies it. An unknown id is not skipped: nothing
+// rechecks it after the login.
 func sameProviderNoCredential(err error, model, sub string) bool {
 	provider, _, _ := strings.Cut(model, "/")
 	subProvider, _, _ := strings.Cut(sub, "/")
-	return errors.Is(err, pigruntime.ErrNoCredential) && provider == subProvider
+	return errors.Is(err, pigruntime.ErrNoCredential) && !errors.Is(err, pigruntime.ErrUnknownModel) && provider == subProvider
+}
+
+// unknownModelError is the advice for an unknown model; where, when set, names
+// the setting to check before declaring the model.
+func unknownModelError(err error, model, where string, paths config.Paths) error {
+	check := ""
+	if where != "" {
+		check = "check " + where + ", or "
+	}
+	refresh := ""
+	if listErr := (*pigruntime.ModelListError)(nil); errors.As(err, &listErr) {
+		refresh = fmt.Sprintf("%v (%v); ", pigruntime.ErrModelListUnavailable, listErr.Err)
+	}
+	return fmt.Errorf("unknown model %q: %s%sdeclare the model in %s", model, refresh, check, filepath.Join(paths.AgentDir, "models.json"))
 }
 
 // diagnose turns the open failures a user can fix into Kopi's own advice.
@@ -894,7 +912,7 @@ func diagnose(err error, model, origin string, paths config.Paths, req app.OpenR
 		if origin != "flags" {
 			where = fmt.Sprintf("\"model\" in %s", paths.ConfigFile)
 		}
-		return fmt.Errorf("unknown model %q: check %s", model, where)
+		return unknownModelError(err, model, where, paths)
 	case errors.Is(err, pigruntime.ErrSessionNotFound) && req.Continue:
 		return errors.New("no session to continue in this directory: start without --continue")
 	case errors.Is(err, pigruntime.ErrSessionNotFound):

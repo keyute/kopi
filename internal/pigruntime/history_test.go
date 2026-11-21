@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -724,4 +725,49 @@ func TestHistoryNoticeWithoutAgentKeyRestoresEmpty(t *testing.T) {
 	assert.NotContains(t, string(raw), `"agent"`)
 	got := unstreamed(resume(t, r, sess.ID()).History())
 	assert.Contains(t, got, event.Event(event.TaskEnded{ID: "t1", Command: n.Shown.Command, Status: n.Shown.Status, Elapsed: n.Shown.Elapsed}))
+}
+
+func TestHistoryRestoresWorkflowNoticeFields(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{reply("noted")})
+	sess := openTestSession(t, r)
+	n := testNotice("t1")
+	n.Shown.Agent = "workflow"
+	n.Shown.Agents, n.Shown.Failed, n.Shown.Reason, n.Shown.Result = 9, 2, "boom", `{"ok":true}`
+	more, _ := handOnce(nil, []Notice{n})
+	_, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, more)
+	require.NoError(t, err)
+	require.NoError(t, sess.Close(t.Context()))
+
+	assert.Contains(t, unstreamed(resume(t, r, sess.ID()).History()), event.Event(n.Shown))
+}
+
+func TestSavedHistoryReplaysAClosedSession(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{reply("noted")})
+	sess := openTestSession(t, r)
+	_, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
+	require.NoError(t, err)
+	saved := sess.Saved()
+	want := sess.History()
+	require.NoError(t, sess.Close(t.Context()))
+
+	got, err := r.SavedHistory(saved)
+
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+	assert.Contains(t, got, event.Event(event.TextDelta{Text: "noted"}))
+}
+
+func TestSavedHistoryOfAMissingFileIsNotSavedAndCreatesNothing(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	path := filepath.Join(t.TempDir(), "gone.jsonl")
+
+	_, err := r.SavedHistory(Saved{path: path})
+
+	require.ErrorIs(t, err, ErrNotSaved)
+	assert.NoFileExists(t, path)
 }

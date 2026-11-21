@@ -261,3 +261,14 @@ func TestRestoreMatchesApply(t *testing.T) {
 	restored.Restore(events)
 	assert.Equal(t, live.Blocks(), restored.Blocks())
 }
+
+func TestWorkflowTaskEndedCarriesItsOutcome(t *testing.T) {
+	ev := event.TaskEnded{ID: "t4", Agent: "workflow", Command: "audit", Status: "failed", Elapsed: time.Minute, Agents: 9, Failed: 1, Reason: "boom", Result: "{}"}
+	var live, restored Transcript
+	live.Apply(ev)
+	restored.Restore([]event.Event{ev})
+
+	want := []Block{Task{key: "item:0", ID: "t4", Agent: "workflow", Command: "audit", Status: "failed", Elapsed: time.Minute, Agents: 9, Failed: 1, Reason: "boom", Result: "{}"}}
+	assert.Equal(t, want, live.Blocks())
+	assert.Equal(t, want, restored.Blocks())
+}

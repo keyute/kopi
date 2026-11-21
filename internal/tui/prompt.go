@@ -17,6 +17,7 @@ const (
 	promptQuestion
 	promptPlan
 	promptLogin
+	promptWorkflow
 	promptTasks
 )
 

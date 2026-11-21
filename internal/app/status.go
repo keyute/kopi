@@ -1,6 +1,8 @@
 package app
 
 import (
+	"time"
+
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
 )
@@ -52,4 +54,32 @@ type AgentStatus struct {
 	ToolCalls int
 	// Cost is in dollars, estimated from the model's price.
 	Cost float64
+}
+
+// WorkflowQueued is a workflow agent's state before a slot is free for it.
+const WorkflowQueued tool.TaskStatus = "queued"
+
+// WorkflowStatus describes one workflow run of the current session.
+type WorkflowStatus struct {
+	ID, Description string
+	State           tool.TaskStatus
+	Started, Ended  time.Time
+	// Failed counts every ended call that did not complete, stopped ones included.
+	Done, Failed, Running, Queued int
+	// Phase is the phase of the latest running call that has one.
+	Phase string
+}
+
+// WorkflowAgent is one agent() call of a workflow run.
+type WorkflowAgent struct {
+	// ID is the agent's session id, "" until it opens; Agent is the
+	// definition's name, Description the call's label and State queued,
+	// running, completed, failed or stopped.
+	AgentStatus
+	// N is the call's number in the script.
+	N              int
+	Phase          string
+	Started, Ended time.Time // Started is zero while queued
+	// Reason is why a failed call failed.
+	Reason string
 }

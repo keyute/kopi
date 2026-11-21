@@ -500,3 +500,17 @@ func TestAPromptStaysThroughTurnEndAndSessionChangeUntilItsEnd(t *testing.T) {
 		assert.Nil(t, m.front())
 	}
 }
+
+func TestWorkflowIsRankedBetweenLoginAndTasks(t *testing.T) {
+	m, _ := newTestModel(t, 70, 30)
+	m.open(promptTasks, &taskDialog{d: &dialog{}, km: &m.keys})
+	m.open(promptWorkflow, &workflowDialog{m: m, d: &dialog{}})
+	send(m, event.LoginRequested{Token: 1, Message: "Login code"})
+
+	var kinds []promptKind
+	for _, h := range m.prompts {
+		kinds = append(kinds, h.kind)
+	}
+	assert.Equal(t, []promptKind{promptLogin, promptWorkflow, promptTasks}, kinds)
+	assert.False(t, promptWorkflow.waits(), "it does not wait on the human")
+}

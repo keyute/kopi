@@ -44,8 +44,8 @@ func (m *model) showTasks() tea.Cmd {
 }
 
 // key goes to the dialog: dismiss leaves the task for the list and the list
-// for the composer. Enter on a subagent's task shows its session. Other keys it
-// has no use for are swallowed.
+// for the composer. Enter on a workflow opens its dialog over the list, on a
+// subagent's task shows its session. Other keys it has no use for are swallowed.
 func (t *taskDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	if key.Matches(msg, m.keys.dismiss) {
 		if t.open == "" {
@@ -70,6 +70,9 @@ func (t *taskDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	switch {
 	case t.open == "":
 		info := t.list[t.d.sel]
+		if m.openWorkflow(info.ID) {
+			return nil, true
+		}
 		if _, ok := m.agent(info.ID); ok && info.Agent != "" {
 			return m.show(info.ID), false
 		}

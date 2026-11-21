@@ -67,7 +67,7 @@
 - Tasks are background commands, [subagents](subagents.md) and [workflows](workflows.md), numbered `t1`, `t2`, … per run in one sequence.
 - They have no time limit. A command keeps the sandbox profile of the mode it started in; a subagent follows the session's mode unless its definition pins plan mode.
 - `/tasks` shows an open task's output from its end and follows new output; PgUp/PgDn or the mouse wheel over the dialog scroll it when it does not fit, and scrolling back to the end follows again. Otherwise those keys scroll the transcript.
-- `TaskOutput` returns a task's status and its output so far, kept and [saved](#saved-output) like `Bash` output; for a subagent, its activity so far, and for a workflow, a line for each agent's start and end.
+- `TaskOutput` returns a task's status and its output so far, kept and [saved](#saved-output) like `Bash` output; for a subagent, its activity so far, and for a workflow, a line for each agent's start and end (the `/tasks` entry opens the progress dialog instead).
 - `TaskStop` kills a command task's process group (on Windows, only the shell), whichever mode it started in, and stops a subagent or a workflow.
 - When a task completes or fails, the model is told, for a command, its status and its last 20 non-empty output lines, for a subagent its final message, and for a workflow the value it returned or its error, at the next boundary of the running turn, or in a new turn when none runs. After an interrupt such notices wait for the next prompt; they never return to the input.
 - A task stopped from `/tasks` is reported to the model along with the next prompt or the next task notice, without starting a turn. One the model stops is not reported again.

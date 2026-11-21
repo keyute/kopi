@@ -77,6 +77,12 @@ func TestProgramStatusStates(t *testing.T) {
 			assert.Equal(t, promptTasks, m.front().kind)
 			return m
 		}, tea.ProgramStatus{App: "kopi", State: tea.ProgramStateIdle}},
+		{"workflow dialog is not blocked", func(t *testing.T) *model {
+			m, _ := workflowModel(t, 60)
+			openFromRow(t, m)
+			assert.Equal(t, promptWorkflow, frontKind(m))
+			return m
+		}, tea.ProgramStatus{App: "kopi", State: tea.ProgramStateIdle}},
 		{"subagent", func(t *testing.T) *model {
 			m, c := newTestModel(t, 60, 20)
 			c.status.Agents = 1
@@ -220,7 +226,7 @@ func TestWindowTitleOffLeavesItEmpty(t *testing.T) {
 	assert.NotNil(t, m.View().ProgramStatus, "the status report has no key")
 }
 
-func TestProgressBar(t *testing.T) {
+func TestTerminalProgressBar(t *testing.T) {
 	m, _ := newTestModel(t, 60, 20)
 	send(m, turnStart)
 	assert.Nil(t, m.View().ProgressBar, "off by default")
