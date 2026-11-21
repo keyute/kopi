@@ -36,5 +36,8 @@ func XAI(ctx context.Context, client *http.Client, token string) ([]Window, erro
 	if err != nil {
 		return nil, fmt.Errorf("failed to read the billing period: %w", err)
 	}
+	if !end.After(start) {
+		return nil, nil
+	}
 	return []Window{{Label: label(end.Sub(start)), UsedPercent: billing.Config.CreditUsagePercent, ResetsAt: end}}, nil
 }

@@ -43,7 +43,7 @@ type statusInput struct {
 type segment func(statusInput, theme) (string, bool)
 
 // segments is keyed by the config's status segment names.
-var segments = map[string]segment{
+var segments = withLimitSegments(map[string]segment{
 	"model": func(s statusInput, th theme) (string, bool) {
 		return fg(th.accent).Render(modelID(s.Model)), s.Model != ""
 	},
@@ -70,18 +70,6 @@ var segments = map[string]segment{
 		text := costText(s.TotalCost)
 		return fg(th.text).Render(text), text != ""
 	},
-	"limit_5h":      limitSegment("5h"),
-	"reset_5h":      resetSegment("5h"),
-	"limit_wk":      limitSegment("wk"),
-	"reset_wk":      resetSegment("wk"),
-	"limit_mo":      limitSegment("mo"),
-	"reset_mo":      resetSegment("mo"),
-	"limit_mo_code": limitSegment("mo code"),
-	"reset_mo_code": resetSegment("mo code"),
-	"limit_premium": limitSegment("premium"),
-	"reset_premium": resetSegment("premium"),
-	"limit_chat":    limitSegment("chat"),
-	"reset_chat":    resetSegment("chat"),
 	"branch": func(s statusInput, th theme) (string, bool) {
 		return fg(th.accent).Render(s.Branch), s.Branch != ""
 	},
@@ -126,6 +114,16 @@ var segments = map[string]segment{
 		}
 		return strings.Join(parts, " "), len(parts) > 0
 	},
+})
+
+// withLimitSegments adds the limit and reset segments of every plan window.
+func withLimitSegments(m map[string]segment) map[string]segment {
+	for _, label := range config.LimitWindows {
+		suffix := strings.ReplaceAll(label, " ", "_")
+		m["limit_"+suffix] = limitSegment(label)
+		m["reset_"+suffix] = resetSegment(label)
+	}
+	return m
 }
 
 // contextText is the share of the window the context fills, and whether it is

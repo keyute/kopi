@@ -41,3 +41,11 @@ func TestSegmentNames(t *testing.T) {
 	assert.Equal(t, []string{"a", "b", "c", "a"}, SegmentNames([]string{"$a( $b)", "text"}, nil, []string{"$c$a"}))
 	assert.Empty(t, SegmentNames())
 }
+
+func TestDefaultStatusLineReadsNoPlanLimits(t *testing.T) {
+	line := DefaultStatusLine()
+
+	for _, name := range SegmentNames(line.Left, line.Right) {
+		assert.NotContains(t, LimitSegments, name)
+	}
+}

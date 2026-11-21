@@ -26,7 +26,9 @@ func Codex(ctx context.Context, client *http.Client, token, account string) ([]W
 		} `json:"rate_limit"`
 	}
 	header := bearer(token)
-	header.Set("ChatGPT-Account-Id", account)
+	if account != "" {
+		header.Set("ChatGPT-Account-Id", account)
+	}
 	if err := get(ctx, client, codexURL, header, &usage); err != nil {
 		return nil, err
 	}

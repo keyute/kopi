@@ -95,3 +95,14 @@ func TestCopilotRefusesNonHostname(t *testing.T) {
 		assert.Empty(t, f.reqs, domain)
 	}
 }
+
+func TestCopilotEnterpriseURL(t *testing.T) {
+	for _, domain := range []string{"https://octo.ghe.com", "https://octo.ghe.com/", "https://octo.ghe.com/path"} {
+		client, f := fakeClient(http.StatusOK, copilotPaid)
+
+		_, err := Copilot(t.Context(), client, "gh-token", domain)
+
+		require.NoError(t, err, domain)
+		assert.Equal(t, "https://api.octo.ghe.com/copilot_internal/user", f.reqs[0].URL.String(), domain)
+	}
+}

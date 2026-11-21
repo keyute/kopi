@@ -48,3 +48,17 @@ func TestXAIUnparsablePeriod(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, got)
 }
+
+func TestXAIEmptyPeriodHasNoWindow(t *testing.T) {
+	for _, period := range []string{
+		`"start":"2026-11-24T00:00:00Z","end":"2026-11-24T00:00:00Z"`,
+		`"start":"2026-11-24T00:00:00Z","end":"2026-11-17T00:00:00Z"`,
+	} {
+		client, _ := fakeClient(http.StatusOK, `{"config":{"currentPeriod":{`+period+`}}}`)
+
+		got, err := XAI(t.Context(), client, "tok")
+
+		require.NoError(t, err)
+		assert.Empty(t, got, period)
+	}
+}

@@ -75,3 +75,12 @@ func TestCodexSkipsAWindowWithoutALength(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, "wk", got[0].Label)
 }
+
+func TestCodexWithoutAnAccountSendsNoAccountHeader(t *testing.T) {
+	client, f := fakeClient(http.StatusOK, `{"rate_limit":{"primary_window":`+codexWeek+`}}`)
+
+	_, err := Codex(t.Context(), client, "tok", "")
+
+	require.NoError(t, err)
+	assert.NotContains(t, f.reqs[0].Header, "Chatgpt-Account-Id")
+}

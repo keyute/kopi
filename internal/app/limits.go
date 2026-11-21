@@ -72,6 +72,17 @@ func (l *limits) refresh() {
 	}()
 }
 
+// force starts a read now, past the throttle, for a change of credentials.
+func (l *limits) force() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	l.attempted = time.Time{}
+	l.mu.Unlock()
+	l.refresh()
+}
+
 func (l *limits) finish(provider string, windows []quota.Window, err error) {
 	l.mu.Lock()
 	l.running = false
@@ -80,6 +91,9 @@ func (l *limits) finish(provider string, windows []quota.Window, err error) {
 		return
 	}
 	if err != nil {
+		if l.last.Provider != provider {
+			l.last = quota.Limits{}
+		}
 		first := !l.failing
 		l.failing = true
 		l.mu.Unlock()

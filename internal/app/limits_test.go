@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -165,19 +167,6 @@ func TestLimitsFailureKeepsTheLastReading(t *testing.T) {
 	})
 }
 
-func TestLimitsWaitForAProvider(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		f := newFakeLimits()
-		l := newLimits(f.read, func() string { return "" }, func(event.Event) {})
-		t.Cleanup(l.close)
-
-		l.observe(event.TurnEnd{})
-		synctest.Wait()
-
-		assert.Empty(t, f.started)
-	})
-}
-
 func TestLimitsNoProviderAttemptDoesNotCountAsRead(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newFakeLimits()
@@ -219,10 +208,123 @@ func TestLimitsCloseCancelsAndJoins(t *testing.T) {
 	})
 }
 
+func TestLimitsForceBypassesTheThrottle(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newFakeLimits()
+		l, _ := newTestLimits(f)
+		t.Cleanup(l.close)
+
+		l.observe(event.TurnEnd{})
+		synctest.Wait()
+		<-f.started
+		f.release <- limitsResult{}
+		synctest.Wait()
+
+		l.observe(event.TurnEnd{})
+		synctest.Wait()
+		require.Empty(t, f.started, "the throttle drops an ordinary trigger")
+
+		l.force()
+		synctest.Wait()
+		assert.Equal(t, "codex", <-f.started)
+		f.release <- limitsResult{}
+	})
+}
+
+func TestLimitsFailureOfAnotherProviderDropsTheLastReading(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newFakeLimits()
+		var provider atomic.Value
+		provider.Store("codex")
+		l := newLimits(f.read, func() string { return provider.Load().(string) }, func(event.Event) {})
+		t.Cleanup(l.close)
+
+		l.observe(event.TurnEnd{})
+		synctest.Wait()
+		<-f.started
+		f.release <- limitsResult{windows: weekly}
+		synctest.Wait()
+		require.Equal(t, "codex", l.get().Provider)
+
+		provider.Store("xai")
+		l.force()
+		synctest.Wait()
+		<-f.started
+		f.release <- limitsResult{err: errors.New("status 500")}
+		synctest.Wait()
+
+		assert.Equal(t, quota.Limits{}, l.get())
+	})
+}
+
+func TestLimitsCloseDuringAnUncancellableReadPublishesNothing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started, release := make(chan struct{}), make(chan struct{})
+		published := make(chan event.Event, 8)
+		l := newLimits(func(context.Context, string) ([]quota.Window, error) {
+			close(started)
+			<-release
+			return weekly, nil
+		}, func() string { return "codex" }, func(ev event.Event) { published <- ev })
+
+		l.observe(event.TurnEnd{})
+		<-started
+		var closed sync.WaitGroup
+		closed.Go(l.close)
+		synctest.Wait()
+		close(release)
+		closed.Wait()
+
+		assert.Empty(t, published)
+		assert.Equal(t, quota.Limits{}, l.get())
+	})
+}
+
+// captureWarnings replaces the default logger with one that sends each
+// message to the returned channel.
+func captureWarnings(t *testing.T) chan string {
+	t.Helper()
+	logged := make(chan string, 8)
+	prev := slog.Default()
+	slog.SetDefault(slog.New(captureHandler{logged}))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return logged
+}
+
+type captureHandler struct{ logged chan string }
+
+func (captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.logged <- r.Message
+	return nil
+}
+func (h captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h captureHandler) WithGroup(string) slog.Handler      { return h }
+
+func TestLimitsWarnOncePerRunOfFailures(t *testing.T) {
+	logged := captureWarnings(t)
+	synctest.Test(t, func(t *testing.T) {
+		f := newFakeLimits()
+		l, _ := newTestLimits(f)
+		t.Cleanup(l.close)
+
+		for _, res := range []limitsResult{{err: errors.New("a")}, {err: errors.New("b")}, {windows: weekly}, {err: errors.New("c")}} {
+			l.force()
+			synctest.Wait()
+			<-f.started
+			f.release <- res
+			synctest.Wait()
+		}
+
+		assert.Len(t, logged, 2, "one warning for the first two failures, one after the success")
+	})
+}
+
 func TestNilLimitsDoNothing(t *testing.T) {
 	var l *limits
 
 	l.close()
+	l.force()
 
 	assert.Equal(t, quota.Limits{}, l.get())
 }

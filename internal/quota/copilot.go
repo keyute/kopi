@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -21,6 +22,11 @@ type copilotQuota struct {
 // Copilot reads the GitHub Copilot plan's premium and chat quotas with the
 // GitHub token; domain is the enterprise host, empty for github.com.
 func Copilot(ctx context.Context, client *http.Client, token, domain string) ([]Window, error) {
+	// PiG's sign-in stores a bare host, but a credential written otherwise can
+	// hold a URL, which PiG normalises to its host.
+	if _, rest, ok := strings.Cut(domain, "://"); ok {
+		domain, _, _ = strings.Cut(rest, "/")
+	}
 	if domain == "" {
 		domain = "github.com"
 	} else if !hostname.MatchString(domain) {

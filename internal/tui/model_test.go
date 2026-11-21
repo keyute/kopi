@@ -497,6 +497,28 @@ func TestStatusRefreshesOnALimitsReading(t *testing.T) {
 	assert.Equal(t, "  wk 40%"+strings.Repeat(" ", 26)+"plan", last())
 }
 
+func TestStatusLimitsFollowTheShownAgentsProvider(t *testing.T) {
+	opts := testOptions()
+	opts.StatusLine = config.StatusLine{Left: []string{"(wk $limit_wk)"}, Separator: " "}
+	opts.AgentLine = config.DefaultAgentLine()
+	m, c := newTestModelWith(t, 40, 20, opts)
+	main := app.AgentStatus{ID: app.Main, Model: "openai-codex/gpt-5.2-codex"}
+	child := app.AgentStatus{ID: "t1", Agent: "explorer", Model: "xai/grok-4", State: "running"}
+	c.agents = []app.AgentStatus{main, child}
+	c.status.Limits = quota.Limits{Provider: "openai-codex", Windows: []quota.Window{{Label: "wk", UsedPercent: 40}}}
+	m.viewOf("t1").busy = true
+	send(m, event.TasksChanged{})
+	assert.Contains(t, statusText(m), "wk 40%")
+
+	m.show("t1")
+	send(m, event.TasksChanged{})
+	assert.NotContains(t, statusText(m), "wk")
+
+	m.show(app.Main)
+	send(m, event.TasksChanged{})
+	assert.Contains(t, statusText(m), "wk 40%")
+}
+
 func TestBackgroundKeyIsConsumedOnlyWhenACommandMoves(t *testing.T) {
 	m, c := newTestModel(t, 40, 20)
 	typeText(m, "ab")
