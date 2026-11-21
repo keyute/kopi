@@ -95,9 +95,15 @@ func (m *model) terminalTitle(state tea.ProgramState) string {
 	return glyph + " " + label
 }
 
+// recordsWrittenMsg acknowledges the snapshot after Bubble Tea prints its raw write.
+type recordsWrittenMsg map[string]string
+
 // syncRecords reports a record for each running subagent and workflow that is
 // new or retitled, and clears each that ended, in one write sorted by id.
 func (m *model) syncRecords() tea.Cmd {
+	if m.recordsWriting {
+		return nil
+	}
 	live := make(map[string]string, len(m.agents)+len(m.workflows))
 	for _, a := range m.agents {
 		if a.ID != app.Main && a.State == tool.TaskRunning {
@@ -124,11 +130,13 @@ func (m *model) syncRecords() tea.Cmd {
 			out.WriteString(ansi.SetProgramStatus(ansi.ProgramStatus{State: ansi.ProgramStateWorking, ID: id, App: "kopi", Title: title}))
 		}
 	}
-	m.records = live
 	if out.Len() == 0 {
 		return nil
 	}
-	return m.raw(out.String())
+	// Commands from different updates run concurrently. Keep the write in flight
+	// until its acknowledgement, then reconcile the latest children.
+	m.recordsWriting = true
+	return tea.Sequence(m.raw(out.String()), func() tea.Msg { return recordsWrittenMsg(live) })
 }
 
 // attend follows the terminal's focus, keeps unseen, and returns the

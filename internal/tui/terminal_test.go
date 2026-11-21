@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"reflect"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -23,6 +24,51 @@ func recordRaw(m *model) *[]any {
 		return nil
 	}
 	return &got
+}
+
+// deliveredRecordRaw captures output only when the raw command runs.
+func deliveredRecordRaw(m *model) *[]any {
+	var got []any
+	m.raw = func(v any) tea.Cmd {
+		return func() tea.Msg {
+			got = append(got, v)
+			return tea.Raw(v)()
+		}
+	}
+	return &got
+}
+
+// recordSequence exposes Bubble Tea's unexported sequenceMsg for delivery in order.
+func recordSequence(t *testing.T, cmd tea.Cmd) []tea.Cmd {
+	t.Helper()
+	require.NotNil(t, cmd)
+	msg := reflect.ValueOf(cmd())
+	target := reflect.TypeFor[[]tea.Cmd]()
+	require.True(t, msg.Type().ConvertibleTo(target))
+	return msg.Convert(target).Interface().([]tea.Cmd)
+}
+
+func deliverRecords(t *testing.T, m *model, cmd tea.Cmd) {
+	t.Helper()
+	for _, next := range recordSequence(t, cmd) {
+		_, follow := m.Update(next())
+		if follow != nil {
+			deliverRecords(t, m, follow)
+		}
+	}
+}
+
+func sendRecords(t *testing.T, m *model, evs ...event.Event) {
+	t.Helper()
+	_, cmd := m.Update(eventsMsg(evs))
+	if !m.recordsWriting {
+		return
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	require.True(t, ok)
+	require.Len(t, batch, 2, "bridge wait and record sequence")
+	deliverRecords(t, m, batch[1])
+	require.False(t, m.recordsWriting)
 }
 
 func state(m *model) tea.ProgramState { return m.programStatus().State }
@@ -194,7 +240,7 @@ func TestWindowTitleDropsTheGlyphOnceTheTerminalReadsStatus(t *testing.T) {
 
 func TestChildRecordsFollowRunningAgentsAndWorkflows(t *testing.T) {
 	m, c := newTestModel(t, 60, 20)
-	raw := recordRaw(m)
+	raw := deliveredRecordRaw(m)
 	report := func(id, title string) string {
 		return ansi.SetProgramStatus(ansi.ProgramStatus{State: ansi.ProgramStateWorking, ID: id, App: "kopi", Title: title})
 	}
@@ -203,27 +249,27 @@ func TestChildRecordsFollowRunningAgentsAndWorkflows(t *testing.T) {
 	workflow := app.WorkflowStatus{ID: "t2", Description: "review changes", State: tool.TaskRunning}
 
 	c.agents, c.workflows = []app.AgentStatus{main, researcher}, []app.WorkflowStatus{workflow}
-	send(m, event.TasksChanged{})
+	sendRecords(t, m, event.TasksChanged{})
 	assert.Equal(t, []any{report("t1", "researcher › peer survey") + report("t2", "workflow › review changes")}, *raw)
 
 	*raw = nil
-	send(m, event.TasksChanged{})
+	sendRecords(t, m, event.TasksChanged{})
 	assert.Empty(t, *raw, "nothing changed")
 
 	researcher.State = tool.TaskCompleted
 	c.agents = []app.AgentStatus{main, researcher}
-	send(m, event.TasksChanged{})
+	sendRecords(t, m, event.TasksChanged{})
 	assert.Equal(t, []any{ansi.ClearProgramStatusID("t1")}, *raw)
 
 	*raw = nil
 	c.agents, c.workflows = nil, nil
-	send(m, event.SessionChanged{})
+	sendRecords(t, m, event.SessionChanged{})
 	assert.Equal(t, []any{ansi.ClearProgramStatusID("t2")}, *raw)
 }
 
 func TestChildRecordsSyncInOneWriteInIDOrder(t *testing.T) {
 	m, c := newTestModel(t, 60, 20)
-	raw := recordRaw(m)
+	raw := deliveredRecordRaw(m)
 	report := func(id, title string) string {
 		return ansi.SetProgramStatus(ansi.ProgramStatus{State: ansi.ProgramStateWorking, ID: id, App: "kopi", Title: title})
 	}
@@ -231,24 +277,91 @@ func TestChildRecordsSyncInOneWriteInIDOrder(t *testing.T) {
 		return app.AgentStatus{ID: id, Agent: "researcher", Description: description, State: tool.TaskRunning}
 	}
 	c.agents = []app.AgentStatus{running("t1", "one"), running("t3", "three")}
-	send(m, event.TasksChanged{})
+	sendRecords(t, m, event.TasksChanged{})
 
 	*raw = nil
 	c.agents = []app.AgentStatus{running("t2", "two"), running("t3", "three again")}
-	send(m, event.TasksChanged{})
+	sendRecords(t, m, event.TasksChanged{})
 	assert.Equal(t, []any{ansi.ClearProgramStatusID("t1") + report("t2", "researcher › two") + report("t3", "researcher › three again")}, *raw)
 }
 
 func TestChildRecordTitleIsTheAgentRowsText(t *testing.T) {
 	m, c := newTestModel(t, 60, 20)
-	raw := recordRaw(m)
+	raw := deliveredRecordRaw(m)
 	r := app.AgentStatus{ID: "t1", Agent: "researcher", Description: "a long description of what this agent was started to look into", State: tool.TaskRunning}
 	c.agents = []app.AgentStatus{r}
-	send(m, event.TasksChanged{})
+	sendRecords(t, m, event.TasksChanged{})
 
 	text, ok := agentSegments["agent"](entry{AgentStatus: r}, theme{})
 	require.True(t, ok)
 	assert.Equal(t, []any{ansi.SetProgramStatus(ansi.ProgramStatus{State: ansi.ProgramStateWorking, ID: "t1", App: "kopi", Title: text})}, *raw)
+}
+
+func TestChildRecordsReconcileLatestAfterHeldWrite(t *testing.T) {
+	m, c := newTestModel(t, 60, 20)
+	raw := deliveredRecordRaw(m)
+	write := m.raw
+	started, release := make(chan struct{}), make(chan struct{})
+	m.raw = func(v any) tea.Cmd {
+		cmd := write(v)
+		if started == nil {
+			return cmd
+		}
+		ready := started
+		started = nil
+		return func() tea.Msg {
+			close(ready)
+			<-release
+			return cmd()
+		}
+	}
+	ready := started
+	c.agents = []app.AgentStatus{{ID: "t1", Agent: "researcher", Description: "survey", State: tool.TaskRunning}}
+	c.workflows = []app.WorkflowStatus{{ID: "t2", Description: "original", State: tool.TaskRunning}}
+	_, cmd := m.Update(eventsMsg{event.TasksChanged{}})
+	batch, ok := cmd().(tea.BatchMsg)
+	require.True(t, ok)
+	require.Len(t, batch, 2)
+	sequence := recordSequence(t, batch[1])
+	require.Len(t, sequence, 2, "raw write then acknowledgement")
+	written := make(chan tea.Msg)
+	go func() { written <- sequence[0]() }()
+	<-ready
+	require.True(t, m.recordsWriting)
+	require.Empty(t, m.records, "no delivered snapshot before acknowledgement")
+
+	c.agents = nil
+	c.workflows = []app.WorkflowStatus{{ID: "t2", Description: "intermediate", State: tool.TaskRunning}}
+	m.bridge.push(event.TasksChanged{})
+	_, cmd = m.Update(m.bridge.wait()())
+	require.NotNil(t, cmd, "bridge remains armed while a write is held")
+	require.Empty(t, *raw)
+	c.workflows = []app.WorkflowStatus{{ID: "t2", Description: "latest", State: tool.TaskRunning}}
+	m.bridge.push(event.TasksChanged{})
+	_, cmd = m.Update(cmd())
+	require.NotNil(t, cmd)
+	require.Equal(t, "latest", m.workflows[0].Description)
+	require.Empty(t, *raw, "newer updates cannot start another record write")
+
+	close(release)
+	_, follow := m.Update(<-written)
+	require.Nil(t, follow, "RawMsg is processed before acknowledgement")
+	require.Empty(t, m.records)
+	_, follow = m.Update(sequence[1]())
+	require.Equal(t, map[string]string{"t1": "researcher › survey", "t2": "workflow › original"}, m.records)
+	require.True(t, m.recordsWriting, "acknowledgement starts reconciliation")
+	deliverRecords(t, m, follow)
+
+	report := func(id, title string) string {
+		return ansi.SetProgramStatus(ansi.ProgramStatus{State: ansi.ProgramStateWorking, ID: id, App: "kopi", Title: title})
+	}
+	assert.Equal(t, []any{
+		report("t1", "researcher › survey") + report("t2", "workflow › original"),
+		ansi.ClearProgramStatusID("t1") + report("t2", "workflow › latest"),
+	}, *raw)
+	assert.Equal(t, map[string]string{"t2": "workflow › latest"}, m.records)
+	assert.False(t, m.recordsWriting)
+	assert.Nil(t, m.syncRecords(), "no later stale working record remains queued")
 }
 
 func TestWindowTitleStripsControlCharacters(t *testing.T) {

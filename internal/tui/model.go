@@ -111,8 +111,9 @@ type model struct {
 	barBeat    int
 	// readsStatus is set once the terminal answers the OSC 7501 query. records
 	// holds the child records the terminal has, by id, with their titles.
-	readsStatus bool
-	records     map[string]string
+	readsStatus    bool
+	records        map[string]string
+	recordsWriting bool
 
 	// views holds each session's state by id, main's under app.Main; shown is
 	// the id of the one drawn and acted on.
@@ -243,6 +244,9 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		m.relayout()
 	case tea.ProgramStatusSupportMsg:
 		m.readsStatus = true
+	case recordsWrittenMsg:
+		m.records = msg
+		m.recordsWriting = false
 	case tea.BackgroundColorMsg:
 		if !msg.IsDark() {
 			m.th = m.themes.light
