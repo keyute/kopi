@@ -20,7 +20,7 @@ import (
 // line, so the script's line numbers stay its own, and defines agent, parallel,
 // pipeline and phase over the host global.
 const (
-	workflowPrefix = `let __n=0,__p;const agent=(prompt,o)=>host({phase:__p,...o,prompt,n:++__n}),phase=t=>{__p=t==null?t:String(t)},parallel=ts=>Promise.all(ts.map(t=>Promise.resolve().then(()=>typeof t==="function"?t():t).catch(()=>null))),pipeline=(items,...stages)=>parallel(items.map((item,i)=>async()=>{let v=item;for(const s of stages)v=await s(v,item,i);return v}));return(async()=>{`
+	workflowPrefix = `let __n=0,__p;const agent=(prompt,o)=>host({...o,phase:o&&o.phase!=null?String(o.phase):__p,prompt,n:++__n}),phase=t=>{__p=t==null?t:String(t)},parallel=ts=>Promise.all(ts.map(t=>Promise.resolve().then(()=>typeof t==="function"?t():t).catch(()=>null))),pipeline=(items,...stages)=>parallel(items.map((item,i)=>async()=>{let v=item;for(const s of stages)v=await s(v,item,i);return v}));return(async()=>{`
 	workflowSuffix = "\n})()"
 )
 

@@ -292,6 +292,23 @@ func TestWorkflowDialogEnterOnAnAgentWithoutASessionFlashesWhy(t *testing.T) {
 	})
 }
 
+func TestWorkflowDialogEnterOnACallStoppedWhileQueuedSaysSo(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := workflowModel(t, 60)
+		setRun(m, c, func(r *fakeRun) {
+			r.agents = append(r.agents, agentOf(5, "", "reviewer", "x.ts", "Review", tool.TaskStopped))
+		})
+		openFromRow(t, m)
+		for range 4 {
+			press(m, down)
+		}
+
+		press(m, enter)
+
+		assert.Contains(t, statusText(m), "stopped before it started")
+	})
+}
+
 func TestWorkflowDialogStaysInTheListWhenTheHistoryCannotBeRead(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, c := workflowModel(t, 60)
@@ -541,6 +558,22 @@ func TestApprovalCoversTheWorkflowDialogAndItReturns(t *testing.T) {
 
 		assert.Equal(t, promptWorkflow, frontKind(m))
 		assert.Contains(t, screen(m), "  Workflow › audit route handlers")
+	})
+}
+
+func TestWorkflowDialogStatusFollowsTheWatchedAgentWhileAnotherPromptCoversIt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := workflowModel(t, 60)
+		send(m, sub("s2", event.TurnStart{Prompt: "review"}))
+		openFromRow(t, m)
+		press(m, down)
+		press(m, enter)
+		send(m, editApproval())
+		require.Equal(t, promptApproval, frontKind(m))
+
+		setRun(m, c, func(r *fakeRun) { r.agents[1].Model = "mock/rev-2" })
+
+		assert.Equal(t, "mock/rev-2", m.watched.Model)
 	})
 }
 

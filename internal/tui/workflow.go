@@ -286,7 +286,8 @@ func (w *workflowDialog) build() {
 		d.options[j] = option{drawn: w.rows[starts[j]:end:end]}
 	}
 	d.sel = 0
-	if j := slices.IndexFunc(w.order, func(i int) bool { return w.agents[i].N == w.selN() }); j >= 0 {
+	sel := w.m.workflowSel[w.id]
+	if j := slices.IndexFunc(w.order, func(i int) bool { return w.agents[i].N == sel }); j >= 0 {
 		d.sel = j
 	}
 	if len(w.order) > 0 {
@@ -368,14 +369,6 @@ func (w *workflowDialog) drawAgent(a app.WorkflowAgent) string {
 	return ansi.Truncate(lead+what+strings.Repeat(" ", gap)+fg(w.th.muted).Render(text), w.width, "")
 }
 
-// selN is the number of the selected agent, -1 before one is.
-func (w *workflowDialog) selN() int {
-	if n, ok := w.m.workflowSel[w.id]; ok {
-		return n
-	}
-	return -1
-}
-
 // selected is the selected agent, false without agents.
 func (w *workflowDialog) selected() (app.WorkflowAgent, bool) {
 	if len(w.order) == 0 {
@@ -432,13 +425,16 @@ func (w *workflowDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 // current state: the live view of a running agent, a restored one of an ended
 // agent. An agent that never opened a session flashes why.
 func (w *workflowDialog) watchSelected(m *model) tea.Cmd {
-	_, agents, _ := m.c.Workflow(w.id)
-	i := findAgent(agents, w.selN())
+	w.read()
+	w.stale = true
+	i := findAgent(w.agents, m.workflowSel[w.id])
 	if i < 0 {
 		return nil
 	}
-	a := agents[i]
+	a := w.agents[i]
 	switch {
+	case a.ID == "" && a.State == tool.TaskStopped:
+		return m.flash("stopped before it started")
 	case a.ID == "":
 		return m.flash(cmp.Or(a.Reason, "not started yet"))
 	case a.State == tool.TaskRunning:
@@ -482,7 +478,11 @@ func (w *workflowDialog) seen(m *model, msg tea.Msg) bool {
 		m.watched = app.AgentStatus{}
 		return false
 	case event.TasksChanged, event.ToolEnd, event.TurnEnd:
-		w.stale = true
+		if w.watching {
+			w.read()
+		} else {
+			w.stale = true
+		}
 	case event.PlanRequested:
 		if w.watching {
 			w.leave(m)
