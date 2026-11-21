@@ -155,6 +155,7 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 | `tokens` | The session's context size (`22.1k tokens`); absent until known |
 | `cost` | The session's cost (`$0.42`); absent while zero |
 | `total` | The whole session's estimated cost (`$1.87`): the main session, its subagents, workflow agents that have ended, and the classifier, `WebFetch` and `WebSearch` requests; absent while zero |
+| `limits` | The usage windows of the provider's subscription plan (`5h 12% 14:30 · wk 40% Tue 09:00`); absent when the provider has none, with an API key and until read |
 | `cwd` | The workspace, with your home directory as `~` |
 | `notice` | Transient hints such as `Copied` |
 | `sandbox` | `sandboxed` or `unsandboxed` when `Bash` is available; shows the default, not a call that sets `unsandboxed` |
@@ -166,6 +167,7 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 - `model`, `effort`, `context`, `tokens`, `tools` and `cost` show the session whose view is open.
 - `cost` is an estimate computed from the model's listed price; on a subscription sign-in it is not what you are billed. `total` is the same kind of estimate.
 - `total` always shows the whole session, whichever view is open. It leaves out a workflow agent that is still running. After a resume (`-c`, `-r` or `/resume`) it holds the main session's cost from before the resume, but not what subagents, workflow agents and those requests cost then.
+- `limits` is not in the default layout, and naming it makes Kopi call the provider's usage endpoint. See [Plan limits](providers.md#plan-limits) for the providers, what is sent and when.
 - `changes`:
   - Untracked files are not counted.
   - Kopi runs `git diff` in the workspace for it, unsandboxed, in any folder whether trusted or not, and only when an entry names `changes` and the workspace is in a repository when Kopi starts.

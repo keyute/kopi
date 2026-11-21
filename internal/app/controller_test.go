@@ -2500,6 +2500,35 @@ func TestStatusTotalCostIncludesARootTurn(t *testing.T) {
 	assert.Equal(t, pigruntimetest.PricedModelCost, h.c.Status().TotalCost)
 }
 
+func TestStatusLimitsFollowOpenWhenEnabled(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	h := newHarness(t, sb, Config{Limits: true})
+	changed := make(chan struct{}, 1)
+	h.c.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.LimitsChanged); ok {
+			select {
+			case changed <- struct{}{}:
+			default:
+			}
+		}
+	})
+	assert.Zero(t, h.c.Status().Limits)
+
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+
+	wait(t, changed)
+	assert.Equal(t, fauxProvider, h.c.Status().Limits.Provider)
+}
+
+func TestStatusLimitsAreNotReadByDefault(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+
+	require.NoError(t, h.c.Close(t.Context()))
+
+	assert.Empty(t, ofType[event.LimitsChanged](h.rec.all()))
+	assert.Zero(t, h.c.Status().Limits)
+}
+
 func TestStatusKeepsRootAndChildCostsTogetherDuringSwitch(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("requires a named pipe")

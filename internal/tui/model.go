@@ -437,7 +437,7 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 			pureThinking = false
 		}
 		switch inner.(type) {
-		case event.SessionChanged, event.ModeChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged:
+		case event.SessionChanged, event.ModeChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged, event.LimitsChanged:
 			refresh = true
 		}
 		if m.commands != nil {
@@ -511,7 +511,7 @@ func (m *model) apply(ev event.Event) *view {
 		m.clearSelection()
 		m.focus = agentFocus{}
 		return m.view()
-	case event.TasksChanged:
+	case event.TasksChanged, event.LimitsChanged:
 		return nil
 	case event.ModeChanged:
 		return nil

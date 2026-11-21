@@ -21,6 +21,7 @@ import (
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/quota"
 	"github.com/keyute/kopi/internal/skill"
 	"github.com/keyute/kopi/internal/tool"
 )
@@ -446,6 +447,19 @@ func TestStatusRefreshesOnEventsThatChangeIt(t *testing.T) {
 	c.status.Shells = 2
 	send(m, event.TasksChanged{})
 	assert.Equal(t, "  model-1 · main"+strings.Repeat(" ", 4)+"2 shells · execute", last())
+}
+
+func TestStatusRefreshesOnALimitsReading(t *testing.T) {
+	opts := testOptions()
+	opts.StatusLine = config.StatusLine{Left: []string{"$limits"}, Right: []string{"$mode"}, Separator: " "}
+	m, c := newTestModelWith(t, 40, 20, opts)
+	last := func() string { return screen(m)[len(screen(m))-1] }
+	assert.Equal(t, strings.Repeat(" ", 34)+"plan", last())
+
+	c.status.Limits = quota.Limits{Provider: "mock", Windows: []quota.Window{{Label: "wk", UsedPercent: 40}}}
+	send(m, event.LimitsChanged{})
+
+	assert.Equal(t, "  wk 40%"+strings.Repeat(" ", 26)+"plan", last())
 }
 
 func TestBackgroundKeyIsConsumedOnlyWhenACommandMoves(t *testing.T) {

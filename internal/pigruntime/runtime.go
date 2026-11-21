@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -48,6 +49,8 @@ type Runtime struct {
 	fetching  map[string]chan struct{}
 	// openURL opens a sign-in URL in the user's browser.
 	openURL func(string) error
+	// limitsClient sends the plan-limit requests.
+	limitsClient *http.Client
 }
 
 // New builds a PiG runtime whose every input is explicit: in-memory settings,
@@ -101,6 +104,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		rt:               rt,
 		installationFile: filepath.Join(opts.Home, "installation_id"),
 		openURL:          browser.OpenURL,
+		limitsClient:     &http.Client{},
 		modelsPath:       modelsPath,
 		refreshed:        map[string]error{},
 		fetching:         map[string]chan struct{}{},

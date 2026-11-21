@@ -91,6 +91,9 @@ type Config struct {
 	// MaxWorkflows is how many workflows may run at once, and MaxAgents how
 	// many agents of one workflow.
 	MaxWorkflows, MaxAgents int
+	// Limits reads the plan limits of the session model's provider on
+	// activity, for Status.Limits.
+	Limits bool
 }
 
 const maxReferenceEntries = 10000
@@ -110,7 +113,7 @@ const Main = ""
 // queue held, and Tasks.List, which Status calls with queue held. That is
 // safe only because tool.Tasks calls nothing back while holding its own locks:
 // OnChange and the stop function run without them, and the stop function takes
-// queue.
+// queue. The mutex of limits is a leaf: nothing is called with it held.
 type Controller struct {
 	rt  *pigruntime.Runtime
 	cfg Config
@@ -127,7 +130,9 @@ type Controller struct {
 	skillErrs []error
 	authority *policy.Authority
 	relay     relay
-	wg        sync.WaitGroup
+	// limits is nil unless Config.Limits.
+	limits *limits
+	wg     sync.WaitGroup
 	// startup is what the first open that succeeds reports, so a failed first
 	// open does not lose it; life guards it once a session can be opened.
 	startup []event.Event
@@ -228,6 +233,10 @@ func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
 	c.setup(nil)
 	cfg.Tasks.OnChange(c.taskChanged)
 	cfg.Tasks.OnForeground(func() { c.relay.emit(event.TasksChanged{}) })
+	if cfg.Limits {
+		c.limits = newLimits(rt.Limits, c.modelProvider, c.relay.emit)
+		c.relay.subscribe(c.limits.observe)
+	}
 	return c
 }
 
@@ -808,6 +817,7 @@ func (c *Controller) Status() Status {
 		s.TotalCost += cost
 	}
 	s.Foreground = c.cfg.Tasks.Foreground()
+	s.Limits = c.limits.get()
 	return s
 }
 
@@ -856,6 +866,7 @@ func (c *Controller) Close(ctx context.Context) error {
 	c.life.Lock()
 	defer c.life.Unlock()
 	defer c.relay.shut()
+	defer c.limits.close()
 
 	c.queue.Lock()
 	c.mu.Lock()

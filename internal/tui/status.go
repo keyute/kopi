@@ -3,8 +3,10 @@ package tui
 import (
 	"fmt"
 	"image/color"
+	"math"
 	"slices"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -12,10 +14,14 @@ import (
 	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/quota"
 )
 
 // contextWarnPercent is the context use from which the percentage warns.
 const contextWarnPercent = 90
+
+// limitWarnPercent is the plan limit use from which a window warns.
+const limitWarnPercent = 90
 
 // statusInput is what a segment draws from: the session status with the open
 // view's effort, tool calls and cost (Effort is empty when the model does not
@@ -31,6 +37,8 @@ type statusInput struct {
 	notice         string
 	home           string
 	commands       map[string]string
+	// separator is the layout's, set when a segment is looked up.
+	separator string
 }
 
 // segment renders one part of the status line; false draws nothing.
@@ -63,6 +71,21 @@ var segments = map[string]segment{
 	"total": func(s statusInput, th theme) (string, bool) {
 		text := costText(s.TotalCost)
 		return fg(th.text).Render(text), text != ""
+	},
+	"limits": func(s statusInput, th theme) (string, bool) {
+		l := s.Limits
+		if len(l.Windows) == 0 || modelProvider(s.Model) != l.Provider {
+			return "", false
+		}
+		parts := make([]string, len(l.Windows))
+		for i, w := range l.Windows {
+			c := th.text
+			if math.Round(w.UsedPercent) >= limitWarnPercent {
+				c = th.warning
+			}
+			parts[i] = fg(c).Render(windowText(w, l.At))
+		}
+		return strings.Join(parts, fg(th.dim).Render(s.separator)), true
 	},
 	"branch": func(s statusInput, th theme) (string, bool) {
 		return fg(th.accent).Render(s.Branch), s.Branch != ""
@@ -139,6 +162,33 @@ func costText(cost float64) string {
 	return fmt.Sprintf("$%.2f", cost)
 }
 
+// windowText is a plan window as its label, use and reset, such as
+// "5h 12% 14:30".
+func windowText(w quota.Window, read time.Time) string {
+	text := fmt.Sprintf("%s %.0f%%", w.Label, w.UsedPercent)
+	if reset := resetText(w.ResetsAt, read); reset != "" {
+		text += " " + reset
+	}
+	return text
+}
+
+// resetText is the local time a window resets, by how far off it was when
+// read: the clock time under a day, with the weekday from a day, and the date
+// from a week; "" when unknown. A clock time stays true while the footer idles.
+func resetText(resets, read time.Time) string {
+	if resets.IsZero() {
+		return ""
+	}
+	resets = resets.Local()
+	switch away := resets.Sub(read); {
+	case away < 24*time.Hour:
+		return resets.Format("15:04")
+	case away < 7*24*time.Hour:
+		return resets.Format("Mon 15:04")
+	}
+	return resets.Format("Jan 2")
+}
+
 // statusLayout holds the parsed entries on each side of the status line, the
 // separator between them and the user's segments.
 type statusLayout struct {
@@ -211,6 +261,7 @@ func renderEntries(fs []config.Format, lookup func(string) (string, bool), liter
 }
 
 func (l statusLayout) lookup(in statusInput, th theme) func(string) (string, bool) {
+	in.separator = l.separator
 	return func(name string) (string, bool) {
 		if seg, builtin := segments[name]; builtin {
 			return seg(in, th)
@@ -369,4 +420,14 @@ func modelID(ref string) string {
 		return id
 	}
 	return ref
+}
+
+// modelProvider is the part of a "provider/id" model reference before the first
+// "/", or "" without one.
+func modelProvider(ref string) string {
+	provider, _, _ := strings.Cut(ref, "/")
+	if provider == ref {
+		return ""
+	}
+	return provider
 }

@@ -53,6 +53,24 @@
   - The `radius` sign-in URL names `pi-gateway` on `radius.pi.dev`.
   - xAI's sign-in sends `referrer: pig`.
 
+## Plan limits
+
+- The `limits` segment of the [status line](configuration.md#status-line) shows each usage window of the main session's model's provider: the share used and when it resets, as a local time (`15:04` under a day away, `Mon 15:04` from a day, `Jan 2` from a week). A window at 90% or more shows in the warning colour. It is absent when the provider reports none, and in a subagent's view on another provider.
+- A provider has plan limits only where Kopi's usage draws from the subscription's own windows. Elsewhere `cost` and `total` are the figure to read.
+
+| Provider | Windows | Host called | Credential sent |
+| --- | --- | --- | --- |
+| `openai-codex` | by length, `5h` and `wk`; some plans have only one | `chatgpt.com` | the sign-in's access token and its ChatGPT account id |
+| `github-copilot` | `premium` and `chat`, unless unlimited | `api.github.com`, or `api.` plus the enterprise domain of the sign-in | the GitHub token of the sign-in, not the short-lived Copilot token |
+| `kimi-coding` | `5h`, `wk`, `mo` and `mo code` | `api.kimi.com` | the sign-in's access token |
+| `xai` | the billing period's credits, labelled by its length | `cli-chat-proxy.grok.com` | the sign-in's access token |
+
+- The endpoints are undocumented, so their answers can change without notice.
+- Kopi calls them only in the fullscreen interface, with `limits` in the layout and an account sign-in for the provider; an API key has no plan to read. Headless use never calls.
+- A read follows activity, such as a turn starting or ending, at most once a minute, and never while idle, so a reset time that has passed stays until the next activity.
+- A failed read keeps the last values.
+- Requests carry only the credential and an `Accept` header, with Go's default user agent.
+
 ## Limitations
 
 - PiG's built-in providers still use ambient credentials: API keys in the environment, Google application-default credentials and the AWS profile and credential chain.
@@ -62,4 +80,7 @@
 
 ## Not implemented
 
+- `/usage`, and a way to force a fresh read of the plan limits.
+- Plan limits for `anthropic`: its third-party usage is billed as extra usage, not from the plan's windows, so read `cost` and `total`; there is no extra-usage figure either.
+- Plan limits for `openai` and `meta`, and for a subagent's or workflow agent's provider.
 - A Kopi provider identity.
