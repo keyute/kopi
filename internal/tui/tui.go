@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/config"
@@ -78,6 +79,7 @@ type Options struct {
 	AgentLine  config.AgentLine
 	ImageDir   string
 	Themes     Themes
+	Terminal   config.Terminal
 }
 
 type statusCommands interface {
@@ -140,7 +142,10 @@ func (f *Frontend) Run(ctx context.Context, interrupts <-chan os.Signal) error {
 			}
 		}
 	}()
-	if _, err := p.Run(); err != nil {
+	_, err := p.Run()
+	// Bubble Tea leaves the last status record, which a shell would not clear.
+	_, _ = fmt.Fprint(f.out, ansi.ClearProgramStatus)
+	if err != nil {
 		return fmt.Errorf("failed to run the terminal UI: %w", err)
 	}
 	if hint := exitHint(f.c.Status()); hint != "" {

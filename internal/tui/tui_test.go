@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -135,4 +136,45 @@ func TestRunQuitsOnSecondInterruptAtIdleAndPrintsResumeHint(t *testing.T) {
 		interrupts <- os.Interrupt
 	})
 	assert.True(t, strings.HasSuffix(out, "Resume with: kopi -r s1 --model 'anthropic/claude-sonnet-4-5'\n"), "output ends %q", out[max(0, len(out)-100):])
+}
+
+// watchBuffer closes seen once the output holds want.
+type watchBuffer struct {
+	lockedBuffer
+	want string
+	seen chan struct{}
+	once sync.Once
+}
+
+func (w *watchBuffer) Write(p []byte) (int, error) {
+	n, err := w.lockedBuffer.Write(p)
+	if strings.Contains(w.String(), w.want) {
+		w.once.Do(func() { close(w.seen) })
+	}
+	return n, err
+}
+
+func TestRunReportsTheProgramStatusAndClearsItOnExit(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	c := &fakeController{}
+	out := &watchBuffer{want: "\x1b]7501;state=working", seen: make(chan struct{})}
+	f := New(c, strings.NewReader(""), out, testOptions())
+	c.subscriber(event.TurnStart{Prompt: "go"})
+	done := make(chan error, 1)
+	go func() { done <- f.Run(ctx, nil) }()
+
+	select {
+	case <-out.seen:
+	case <-time.After(waitLimit):
+		t.Fatal("no working report")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(waitLimit):
+		t.Fatal("Run did not return")
+	}
+	assert.True(t, strings.HasSuffix(out.String(), ansi.ClearProgramStatus), "output ends %q", out.String()[max(0, len(out.String())-60):])
 }

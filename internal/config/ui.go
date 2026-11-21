@@ -80,6 +80,22 @@ func DefaultTheme() Theme {
 	return Theme{Dark: "catppuccin-mocha", Light: "catppuccin-latte"}
 }
 
+// notificationModes lists the values terminal.notifications takes.
+var notificationModes = []string{"auto", "osc9", "bell", "off"}
+
+// Terminal says what Kopi tells the terminal about the session.
+type Terminal struct {
+	// Title sets the terminal title to the session name, which the small model writes.
+	Title    bool `koanf:"title"`
+	Progress bool `koanf:"progress"`
+	// Notifications is one of notificationModes.
+	Notifications string `koanf:"notifications"`
+}
+
+func DefaultTerminal() Terminal {
+	return Terminal{Title: true, Notifications: "auto"}
+}
+
 func DefaultKeys() map[string][]string {
 	return map[string][]string{
 		"submit":       {"enter"},
@@ -125,11 +141,13 @@ func uiDefaults() map[string]any {
 	s := DefaultStatusLine()
 	a := DefaultAgentLine()
 	t := DefaultTheme()
+	term := DefaultTerminal()
 	return map[string]any{
 		"keys":       keys,
 		"statusline": map[string]any{"left": s.Left, "right": s.Right, "separator": s.Separator, "segments": map[string]any{}},
 		"agentline":  map[string]any{"left": a.Left, "right": a.Right, "separator": a.Separator},
 		"theme":      map[string]any{"dark": t.Dark, "light": t.Light},
+		"terminal":   map[string]any{"title": term.Title, "progress": term.Progress, "notifications": term.Notifications},
 	}
 }
 
@@ -363,6 +381,13 @@ func validSegmentName(name string) bool { return name != "" && leadingName(name)
 func validateThemeName(key, name string) error {
 	if name == "" || strings.ContainsAny(name, `/\`) || strings.HasPrefix(name, ".") {
 		return fmt.Errorf("%w: %s: %q is not a theme name", ErrInvalidValue, key, name)
+	}
+	return nil
+}
+
+func validateNotifications(value string) error {
+	if !slices.Contains(notificationModes, value) {
+		return fmt.Errorf("%w: terminal.notifications: %q is not auto, osc9, bell or off", ErrInvalidValue, value)
 	}
 	return nil
 }
