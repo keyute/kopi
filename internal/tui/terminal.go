@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"cmp"
 	"maps"
 	"path/filepath"
 	"slices"
@@ -35,47 +36,60 @@ func (m *model) attention() tea.ProgramStatus {
 	return s
 }
 
+// endedState is how the main session's last turn ended as a program state, ""
+// when there is none or it was interrupted.
+func (m *model) endedState() tea.ProgramState {
+	if m.ended == nil {
+		return ""
+	}
+	switch *m.ended {
+	case event.Completed:
+		return tea.ProgramStateDone
+	case event.Failed:
+		return tea.ProgramStateError
+	}
+	return ""
+}
+
 // programStatus is the record for the terminal: attention, except that a
 // session at rest reports how the main session's last turn ended, seen or not.
 func (m *model) programStatus() tea.ProgramStatus {
 	s := m.attention()
-	if s.State == tea.ProgramStateIdle && m.ended != nil {
-		switch *m.ended {
-		case event.Completed:
-			s.State = tea.ProgramStateDone
-		case event.Failed:
-			s.State = tea.ProgramStateError
-		}
+	if s.State == tea.ProgramStateIdle && m.endedState() != "" {
+		s.State = m.endedState()
 	}
 	return s
 }
 
-// terminalLabel is the session's name, else the workspace folder, else kopi,
-// on one line.
-func (m *model) terminalLabel() string {
-	label := m.title
-	if label == "" {
-		label = m.terminalFolder()
+// terminalNames is the session's name and the workspace folder's name, each on
+// one line; the folder is "" when the workspace has none.
+func (m *model) terminalNames() (title, folder string) {
+	title = oneLine(m.title)
+	folder = oneLine(filepath.Base(m.status.Workspace))
+	if folder == "." || folder == string(filepath.Separator) {
+		folder = ""
 	}
-	label = oneLine(label)
-	if label == "" || label == "." || label == string(filepath.Separator) {
-		return "kopi"
-	}
-	return label
+	return title, folder
 }
 
-// terminalFolder is the workspace folder's name on one line, "" when it has none.
-func (m *model) terminalFolder() string {
-	folder := oneLine(filepath.Base(m.status.Workspace))
-	if folder == "." || folder == string(filepath.Separator) {
-		return ""
+// terminalLabel is the session's name, else the workspace folder, else kopi.
+func (m *model) terminalLabel() string {
+	title, folder := m.terminalNames()
+	return labelOf(title, folder)
+}
+
+func labelOf(title, folder string) string {
+	label := cmp.Or(title, folder)
+	if label == "." || label == string(filepath.Separator) {
+		return "kopi"
 	}
-	return folder
+	return cmp.Or(label, "kopi")
 }
 
 func (m *model) terminalTitle(state tea.ProgramState) string {
-	label := m.terminalLabel()
-	if folder := m.terminalFolder(); oneLine(m.title) != "" && folder != "" {
+	title, folder := m.terminalNames()
+	label := labelOf(title, folder)
+	if title != "" && folder != "" {
 		label += " · " + folder
 	}
 	if m.readsStatus {
@@ -102,7 +116,7 @@ func (m *model) syncRecords() tea.Cmd {
 	for _, r := range m.status.Running {
 		live[r.ID] = agentTitle(r.Agent, r.Description)
 	}
-	ids := slices.Sorted(maps.Keys(live))
+	ids := slices.Collect(maps.Keys(live))
 	for id := range m.records {
 		if _, ok := live[id]; !ok {
 			ids = append(ids, id)
@@ -142,14 +156,11 @@ func (m *model) attend(msg tea.Msg, was tea.ProgramStatus) tea.Cmd {
 	case !m.away || m.working():
 		m.unseen = ""
 	case m.ended != nil && (was.State == tea.ProgramStateWorking || m.mainEnded) && m.attention().State != tea.ProgramStateBlocked:
-		switch *m.ended {
-		case event.Completed:
-			m.unseen = tea.ProgramStateDone
-		case event.Failed:
-			m.unseen = tea.ProgramStateError
+		if ended := m.endedState(); ended != "" {
+			m.unseen = ended
 		}
 	}
-	fresh := m.mainEnded && m.ended != nil && (*m.ended == event.Completed || *m.ended == event.Failed)
+	fresh := m.mainEnded && m.endedState() != ""
 	m.mainEnded = false
 	now := m.attention()
 	fresh = fresh && (now.State == tea.ProgramStateDone || now.State == tea.ProgramStateError)

@@ -86,8 +86,8 @@ func modeLine(mode policy.Mode, planPath string) string {
 // earlier one that was not delivered has been taken back by untell. Only the
 // main session is told its mode. It must be called with queue held.
 //
-// Every prompt the main session's model receives passes through tell, so it is
-// also where the session's first human prompt is noticed for its title.
+// Every prompt about to be sent to the main session's model passes through tell,
+// so it is also where the session's first human prompt is noticed for its title.
 func (r *runner) tell(ps []pigruntime.Prompt) []pigruntime.Prompt {
 	if len(ps) == 0 || r != r.c.main {
 		return ps

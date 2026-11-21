@@ -30,7 +30,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `version` | `1` |
 | `model` | `provider/id` of the model, optional, see [`model`](#model) |
 | `mode` | Mode sessions start in, see [`mode`](#mode) |
-| `smallModel` | Model that answers `WebFetch` and `WebSearch`, see [`smallModel`](#smallmodel) |
+| `smallModel` | Model that answers `WebFetch` and `WebSearch` and writes session titles, see [`smallModel`](#smallmodel) |
 | `instructionFallbacks` | Fallback names for project instruction files, see [`instructionFallbacks`](#instructionfallbacks) |
 | `skills` | `skills.prefix`, see [`skills.prefix`](#skillsprefix) |
 | `workflows` | `workflows.model`, `workflows.maxWorkflows` and `workflows.maxAgents`, see [`workflows`](#workflows) |
@@ -57,8 +57,8 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 ## `smallModel`
 
-- `provider/id` of the model that answers `WebFetch` and `WebSearch` calls.
-- Unset, it is the session model, so set it to a cheaper model.
+- `provider/id` of the model that answers `WebFetch` and `WebSearch` calls and writes the session title shown in the terminal tab, see [terminal](usage.md#terminal).
+- Unset, it is the session model for `WebFetch` and `WebSearch`, so set it to a cheaper model; titles are off, with no fallback to the session model.
 - A wrong value, an unknown model or one whose provider has no credential fails at start.
 - In the fullscreen interface, a `smallModel` that shares the provider of a configured `model` without a credential gets the first-run login instead when that provider offers a sign-in or an API key and the id is one Kopi knows; an unknown id fails at start with the login hint.
 

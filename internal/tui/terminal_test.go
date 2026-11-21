@@ -171,6 +171,12 @@ func TestWindowTitle(t *testing.T) {
 	c.status.Workspace = ""
 	send(m, event.SessionChanged{Name: "Other"})
 	assert.Equal(t, "κ Other", title(), "no folder, no separator")
+
+	c.status.Workspace = "/"
+	send(m, event.SessionChanged{Name: "Other"})
+	assert.Equal(t, "κ Other", title(), "the root has no folder name")
+	send(m, event.SessionChanged{})
+	assert.Equal(t, "κ kopi", title())
 }
 
 func TestWindowTitleDropsTheGlyphOnceTheTerminalReadsStatus(t *testing.T) {
@@ -211,6 +217,21 @@ func TestChildRecordsFollowRunningAgentsAndWorkflows(t *testing.T) {
 	c.status.Running = nil
 	send(m, event.SessionChanged{})
 	assert.Equal(t, []any{ansi.ClearProgramStatusID("t2")}, *raw)
+}
+
+func TestChildRecordsSyncInOneWriteInIDOrder(t *testing.T) {
+	m, c := newTestModel(t, 60, 20)
+	raw := recordRaw(m)
+	report := func(id, title string) string {
+		return ansi.SetProgramStatus(ansi.ProgramStatus{State: ansi.ProgramStateWorking, ID: id, App: "kopi", Title: title})
+	}
+	c.status.Running = []app.RunningAgent{{ID: "t1", Agent: "researcher", Description: "one"}, {ID: "t3", Agent: "researcher", Description: "three"}}
+	send(m, event.TasksChanged{})
+
+	*raw = nil
+	c.status.Running = []app.RunningAgent{{ID: "t2", Agent: "researcher", Description: "two"}, {ID: "t3", Agent: "researcher", Description: "three again"}}
+	send(m, event.TasksChanged{})
+	assert.Equal(t, []any{ansi.ClearProgramStatusID("t1") + report("t2", "researcher › two") + report("t3", "researcher › three again")}, *raw)
 }
 
 func TestChildRecordTitleIsTheAgentRowsText(t *testing.T) {

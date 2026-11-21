@@ -1067,6 +1067,26 @@ func TestStatusCountsAgentsSeparately(t *testing.T) {
 	assert.Equal(t, 1, s.Shells)
 }
 
+func TestStatusRunningListsSubagentsAndWorkflowsNotShells(t *testing.T) {
+	a, started := blockingHarness(t, Config{}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1"))})
+	shell, err := a.tasks.Start(t.Context(), tool.NewShell(pigruntimetest.NewSandbox(t).Workspace, nil), "/bin/sleep 60")
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = a.tasks.Stop(shell.ID) })
+	workflow := a.startWorkflow(t, "audit", `return await agent("go")`)
+	wait(t, started)
+	var agent *tool.AgentTask
+	agent = a.tasks.StartAgent("explorer", "find it", func() { agent.End(tool.TaskStopped, "", "") })
+
+	s := a.c.Status()
+	assert.Equal(t, 1, s.Shells)
+	assert.Equal(t, []RunningAgent{
+		{ID: workflow, Agent: tool.WorkflowAgent, Description: "audit"},
+		{ID: agent.ID(), Agent: "explorer", Description: "find it"},
+	}, s.Running)
+	assert.Less(t, workflow, agent.ID())
+}
+
 func TestTaskNoticeNamesTheSavedOutput(t *testing.T) {
 	info := endedTask("t1")
 	head := "Background task t1 completed (exit code 0): make t1"
