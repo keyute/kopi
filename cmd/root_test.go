@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -253,7 +254,7 @@ func TestRootToolSearchRules(t *testing.T) {
 
 				require.Error(t, err)
 				if rule == "ToolSearch" {
-					assert.EqualError(t, err, `unknown model "nosuch/model-1": check --model`)
+					assert.EqualError(t, err, unknownModelText(e, "--model"))
 				} else {
 					assert.Contains(t, err.Error(), `tool "ToolSearch" takes no path`)
 					assert.NoDirExists(t, e.agentDir)
@@ -548,7 +549,11 @@ func TestRootAgentModelFailsAtStart(t *testing.T) {
 			_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
 
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), fmt.Sprintf("failed to use model %q in %s", model, path))
+			if model == "nosuch/model-1" {
+				assert.EqualError(t, err, fmt.Sprintf("failed to use the model in %s: unknown model %q: declare the model in %s", path, model, filepath.Join(e.agentDir, "models.json")))
+			} else {
+				assert.Contains(t, err.Error(), fmt.Sprintf("failed to use the model in %s", path))
+			}
 			assert.Empty(t, server.requests)
 		})
 	}
@@ -624,8 +629,7 @@ func TestRootUnknownSmallModelFailsAtStart(t *testing.T) {
 
 	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
 
-	require.ErrorIs(t, err, pigruntime.ErrUnknownModel)
-	assert.Contains(t, err.Error(), `"smallModel" in `+configFile)
+	assert.EqualError(t, err, fmt.Sprintf(`failed to use "smallModel" in %s: unknown model "nosuch/model-1": declare the model in %s`, configFile, filepath.Join(e.agentDir, "models.json")))
 	assert.Empty(t, server.requests)
 }
 
@@ -656,8 +660,7 @@ func TestRootUnknownClassifierModelFailsAtStart(t *testing.T) {
 
 	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
 
-	require.ErrorIs(t, err, pigruntime.ErrUnknownModel)
-	assert.Contains(t, err.Error(), `"classifier.model" in `+configFile)
+	assert.EqualError(t, err, fmt.Sprintf(`failed to use "classifier.model" in %s: unknown model "nosuch/model-1": declare the model in %s`, configFile, filepath.Join(e.agentDir, "models.json")))
 	assert.Empty(t, server.requests)
 }
 
@@ -726,6 +729,7 @@ func TestSameProviderNoCredential(t *testing.T) {
 		{name: "same provider", err: noCredential, model: "a/m1", sub: "a/m2", want: true},
 		{name: "other provider", err: noCredential, model: "a/m1", sub: "b/m2"},
 		{name: "other error", err: pigruntime.ErrUnknownModel, model: "a/m1", sub: "a/m2"},
+		{name: "unknown id without credential", err: fmt.Errorf("provider %q: %w (%w)", "a", pigruntime.ErrNoCredential, pigruntime.ErrUnknownModel), model: "a/m1", sub: "a/m2"},
 		{name: "unset model", err: noCredential, model: "", sub: "a/m2", want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -748,6 +752,15 @@ func TestRootWithoutCredentialSuggestsLogin(t *testing.T) {
 	newTestEnv(t)
 
 	_, _, err := execute(t, "", "--model", builtinModel(t, "openai-codex"), "-p", "hi")
+
+	require.Error(t, err)
+	assert.Equal(t, `no credential for provider "openai-codex": run "kopi login openai-codex"`, err.Error())
+}
+
+func TestRootUnknownModelWithoutCredentialSuggestsLogin(t *testing.T) {
+	newTestEnv(t)
+
+	_, _, err := execute(t, "", "--model", "openai-codex/nosuch-1", "-p", "hi")
 
 	require.Error(t, err)
 	assert.Equal(t, `no credential for provider "openai-codex": run "kopi login openai-codex"`, err.Error())
@@ -779,12 +792,37 @@ func TestDiagnoseProviderWithoutLogin(t *testing.T) {
 	assert.Equal(t, `no credential for provider "ambient": supply its credential in the environment`, err.Error())
 }
 
+func unknownModelText(e testEnv, where string) string {
+	return fmt.Sprintf(`unknown model "nosuch/model-1": check %s, or declare the model in %s`, where, filepath.Join(e.agentDir, "models.json"))
+}
+
+func TestDiagnoseUnknownModel(t *testing.T) {
+	paths := config.Paths{AgentDir: "/kopi/agent", ConfigFile: "/kopi/config.json"}
+
+	err := diagnose(pigruntime.ErrUnknownModel, "a/m1", "flags", paths, app.OpenRequest{}, nil)
+	assert.EqualError(t, err, `unknown model "a/m1": check --model, or declare the model in /kopi/agent/models.json`)
+
+	err = diagnose(fmt.Errorf("%w: %w", pigruntime.ErrUnknownModel, &pigruntime.ModelListError{Provider: "a", Err: errors.New("boom")}), "a/m1", "config", paths, app.OpenRequest{}, nil)
+	assert.EqualError(t, err, `unknown model "a/m1": the model list could not be refreshed (boom); check "model" in /kopi/config.json, or declare the model in /kopi/agent/models.json`)
+}
+
+func TestUnknownModelErrorForSubModel(t *testing.T) {
+	paths := config.Paths{AgentDir: "/kopi/agent"}
+
+	err := unknownModelError(pigruntime.ErrUnknownModel, "a/m1", "", paths)
+	assert.EqualError(t, err, `unknown model "a/m1": declare the model in /kopi/agent/models.json`)
+
+	unavailable := fmt.Errorf("%w: %w", pigruntime.ErrUnknownModel, &pigruntime.ModelListError{Provider: "a", Err: errors.New("GET https://catalog.example/x: boom")})
+	err = unknownModelError(unavailable, "a/m1", "", paths)
+	assert.EqualError(t, err, `unknown model "a/m1": the model list could not be refreshed (GET https://catalog.example/x: boom); declare the model in /kopi/agent/models.json`)
+}
+
 func TestRootUnknownModelNamesWhereItIsSet(t *testing.T) {
 	e := newTestEnv(t)
 
 	_, _, err := execute(t, "", "--model", "nosuch/model-1", "-p", "hi")
 	require.Error(t, err)
-	assert.Equal(t, `unknown model "nosuch/model-1": check --model`, err.Error())
+	assert.Equal(t, unknownModelText(e, "--model"), err.Error())
 
 	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"model":"nosuch/model-1"}`)
 	_, _, err = execute(t, "", "-p", "hi")
@@ -799,7 +837,7 @@ func TestRootDiagnosesOpenFailureWhenCredentialsCannotBeListed(t *testing.T) {
 	_, _, err := execute(t, "", "--model", "nosuch/model-1", "-p", "hi")
 
 	require.Error(t, err)
-	assert.Equal(t, `unknown model "nosuch/model-1": check --model`, err.Error())
+	assert.Equal(t, unknownModelText(e, "--model"), err.Error())
 }
 
 func TestRootReportsMissingSession(t *testing.T) {
@@ -2996,19 +3034,19 @@ func TestRootPrintReportsSkillProblemsAndRuns(t *testing.T) {
 func TestRootSkillRules(t *testing.T) {
 	for _, flag := range []string{"--allowed-tools", "--disallowed-tools"} {
 		t.Run(flag, func(t *testing.T) {
-			newTestEnv(t)
+			e := newTestEnv(t)
 
 			_, _, err := execute(t, "", "--model", "nosuch/model-1", "-p", "hi", flag, "Skill")
 
-			assert.EqualError(t, err, `unknown model "nosuch/model-1": check --model`)
+			assert.EqualError(t, err, unknownModelText(e, "--model"))
 		})
 	}
 	t.Run("path", func(t *testing.T) {
-		newTestEnv(t)
+		e := newTestEnv(t)
 
 		_, _, err := execute(t, "", "--model", "nosuch/model-1", "-p", "hi", "--allowed-tools", "Skill(x)")
 
-		assert.EqualError(t, err, `unknown model "nosuch/model-1": check --model`)
+		assert.EqualError(t, err, unknownModelText(e, "--model"))
 	})
 }
 

@@ -29,7 +29,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/history"
-	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 )
 
@@ -646,8 +645,19 @@ func TestRootFullscreenUnknownWorkflowsModelFailsAtStart(t *testing.T) {
 
 	err := startFullscreenWithConfig(t, e, `{"workflows":{"model":"nosuch/model-1"}}`)
 
-	require.ErrorIs(t, err, pigruntime.ErrUnknownModel)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), `"workflows.model" in `+filepath.Join(e.kopiHome, "config.json"))
+	assert.Contains(t, err.Error(), `unknown model "nosuch/model-1": declare the model in `+filepath.Join(e.agentDir, "models.json"))
+}
+
+func TestRootFullscreenSameProviderUnknownSmallModelWithoutCredentialFailsAtStart(t *testing.T) {
+	e := newTestEnv(t)
+
+	err := startFullscreenWithConfig(t, e, `{"smallModel":"openai-codex/nosuch-1"}`)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"smallModel" in `+filepath.Join(e.kopiHome, "config.json"))
+	assert.Contains(t, err.Error(), `no credential for provider "openai-codex"`)
 }
 
 func TestRootFullscreenDifferentProviderWorkflowsModelWithoutCredentialFailsAtStart(t *testing.T) {
