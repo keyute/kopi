@@ -165,24 +165,39 @@ func (m *model) elapsedTicks() bool {
 // ticks.
 func (m *model) tickWanted() bool {
 	_, working := m.workingText()
-	return working || m.elapsedTicks()
+	return working || m.elapsedTicks() || len(m.workflows) > 0
 }
 
-// agentRows draws the entries, a window of at most maxAgentRows of them. The
-// window moves only when the cursor, or without one the shown entry, would
-// leave it, so rows keep their place as the cursor moves. It shrinks to limit
-// lines, more rows included, and no rows draw when not even one entry fits.
-func (m *model) agentRows(limit int) []string {
+// rowTargets are the agent rows' entries and the ids of every row: the entries'
+// then the running workflows'. Task ids are unique across both.
+func (m *model) rowTargets() ([]entry, []string) {
 	es := m.entries()
-	if len(es) == 0 {
+	ids := make([]string, 0, len(es)+len(m.workflows))
+	for _, e := range es {
+		ids = append(ids, e.ID)
+	}
+	for _, w := range m.workflows {
+		ids = append(ids, w.ID)
+	}
+	return es, ids
+}
+
+// agentRows draws the entries and workflows, a window of at most maxAgentRows
+// of them. The window moves only when the cursor, or without one the shown
+// entry, would leave it, so rows keep their place as the cursor moves. It
+// shrinks to limit lines, more rows included, and no rows draw when not even
+// one fits.
+func (m *model) agentRows(limit int) []string {
+	es, ids := m.rowTargets()
+	if len(ids) == 0 {
 		return nil
 	}
-	at := slices.IndexFunc(es, func(e entry) bool { return e.ID == m.shown })
+	at := slices.Index(ids, m.shown)
 	if m.focus.on {
-		at = slices.IndexFunc(es, func(e entry) bool { return e.ID == m.focus.id })
+		at = slices.Index(ids, m.focus.id)
 	}
-	for size := min(maxAgentRows, len(es)); size > 0; size-- {
-		from := min(max(m.agentFrom, 0), len(es)-size)
+	for size := min(maxAgentRows, len(ids)); size > 0; size-- {
+		from := min(max(m.agentFrom, 0), len(ids)-size)
 		if at >= 0 {
 			from = min(max(from, at-size+1), at)
 		}
@@ -191,7 +206,7 @@ func (m *model) agentRows(limit int) []string {
 		if from > 0 {
 			lines++
 		}
-		if to < len(es) {
+		if to < len(ids) {
 			lines++
 		}
 		if lines > limit {
@@ -201,11 +216,15 @@ func (m *model) agentRows(limit int) []string {
 		if from > 0 {
 			rows = append(rows, fg(m.th.dim).Render(fmt.Sprintf("  ↑ %d more", from)))
 		}
-		for _, e := range es[from:to] {
-			rows = append(rows, m.agentRow(e))
+		for i := from; i < to; i++ {
+			if i < len(es) {
+				rows = append(rows, m.agentRow(es[i]))
+			} else {
+				rows = append(rows, m.workflowRow(m.workflows[i-len(es)]))
+			}
 		}
-		if to < len(es) {
-			rows = append(rows, fg(m.th.dim).Render(fmt.Sprintf("  ↓ %d more", len(es)-to)))
+		if to < len(ids) {
+			rows = append(rows, fg(m.th.dim).Render(fmt.Sprintf("  ↓ %d more", len(ids)-to)))
 		}
 		m.agentFrom = from
 		return rows
@@ -259,39 +278,39 @@ func (m *model) agentRow(e entry) string {
 }
 
 // syncFocus drops the focus while a dialog is open or no rows show, and moves a
-// cursor whose entry has gone to the nearest remaining one.
+// cursor whose row has gone to the nearest remaining one.
 func (m *model) syncFocus() {
 	if !m.focus.on {
 		return
 	}
-	es := m.entries()
-	if m.geo.agents == 0 || len(es) == 0 || m.front() != nil {
+	_, ids := m.rowTargets()
+	if m.geo.agents == 0 || len(ids) == 0 || m.front() != nil {
 		m.focus = agentFocus{}
 		return
 	}
-	i := slices.IndexFunc(es, func(e entry) bool { return e.ID == m.focus.id })
+	i := slices.Index(ids, m.focus.id)
 	if i < 0 {
-		i = min(m.focus.at, len(es)-1)
+		i = min(m.focus.at, len(ids)-1)
 	}
-	m.focus.id, m.focus.at = es[i].ID, i
+	m.focus.id, m.focus.at = ids[i], i
 }
 
-// focusRows gives the rows the keys with the cursor on the first entry, false
+// focusRows gives the rows the keys with the cursor on the first row, false
 // when no rows show.
 func (m *model) focusRows() bool {
-	es := m.entries()
-	if m.geo.agents == 0 || len(es) == 0 {
+	_, ids := m.rowTargets()
+	if m.geo.agents == 0 || len(ids) == 0 {
 		return false
 	}
-	m.focus = agentFocus{on: true, id: es[0].ID}
+	m.focus = agentFocus{on: true, id: ids[0]}
 	return true
 }
 
 // agentKey handles a key while the rows have focus; false leaves the rows and
 // lets the key be handled normally.
 func (m *model) agentKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
-	es := m.entries()
-	at := slices.IndexFunc(es, func(e entry) bool { return e.ID == m.focus.id })
+	es, ids := m.rowTargets()
+	at := slices.Index(ids, m.focus.id)
 	if at < 0 {
 		m.focus = agentFocus{}
 		return nil, false
@@ -299,8 +318,8 @@ func (m *model) agentKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	km := &m.keys
 	switch {
 	case key.Matches(msg, km.menuDown):
-		m.focus.at = min(at+1, len(es)-1)
-		m.focus.id = es[m.focus.at].ID
+		m.focus.at = min(at+1, len(ids)-1)
+		m.focus.id = ids[m.focus.at]
 		return nil, true
 	case key.Matches(msg, km.menuUp):
 		if at == 0 {
@@ -308,12 +327,22 @@ func (m *model) agentKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		m.focus.at = at - 1
-		m.focus.id = es[at-1].ID
+		m.focus.id = ids[at-1]
 		return nil, true
 	case key.Matches(msg, km.submit):
 		m.focus.at = at
-		return m.show(es[at].ID), true
+		if at < len(es) {
+			return m.show(ids[at]), true
+		}
+		m.openWorkflow(ids[at])
+		return nil, true
 	case key.Matches(msg, km.stopAgent):
+		if at >= len(es) {
+			if err := m.c.StopTask(ids[at]); err != nil {
+				m.showError(err)
+			}
+			return nil, true
+		}
 		if e := es[at]; e.ID != app.Main && e.busy && e.ID != m.shown {
 			m.c.Interrupt(e.ID)
 			return nil, true

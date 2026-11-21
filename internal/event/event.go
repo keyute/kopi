@@ -155,10 +155,15 @@ type TurnEnd struct {
 // TaskEnded is a background task's end, at the point the model reads about it.
 // Agent names the subagent that ran; it is "" for a shell command, whose
 // Command is the command. For an agent, Command is the call's description.
+// For a workflow, Agents counts the agent() calls, Failed those that ended
+// without completing (stopped ones included), Reason is why a failed run
+// failed and Result the value it returned; all are zero for any other task.
 type TaskEnded struct {
 	ID, Command, Status string
 	Agent               string
 	Elapsed             time.Duration
+	Agents, Failed      int
+	Reason, Result      string
 }
 
 // TasksChanged reports that the set or state of background tasks changed;
@@ -195,6 +200,10 @@ type Session struct {
 	Event Event
 }
 
+// SessionClosed is the last event of the non-main session ID, which closed
+// while the main session stays open. It is not wrapped in Session.
+type SessionClosed struct{ ID string }
+
 func (TurnStart) isEvent()           {}
 func (QueueChanged) isEvent()        {}
 func (UserMessage) isEvent()         {}
@@ -221,6 +230,7 @@ func (StatusCommandResult) isEvent() {}
 func (Changes) isEvent()             {}
 func (Error) isEvent()               {}
 func (Session) isEvent()             {}
+func (SessionClosed) isEvent()       {}
 
 type Status int
 

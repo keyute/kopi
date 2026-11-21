@@ -104,6 +104,14 @@ type model struct {
 	status app.Status
 	// agents is the Controller's sessions as of the last refresh.
 	agents []app.AgentStatus
+	// workflows is the running workflows as of the last refresh.
+	workflows []app.WorkflowStatus
+	// workflowSel is the number of the agent last selected in each workflow's
+	// dialog.
+	workflowSel map[string]int
+	// watched is the status of the workflow agent being watched, which the status
+	// line shows while its view is shown; its ID is empty when none is.
+	watched app.AgentStatus
 	// focus is the agent rows' key focus.
 	focus agentFocus
 	// agentFrom is the index of the first entry the agent rows' window shows.
@@ -155,6 +163,8 @@ func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model
 		geo:          geometry{working: -1},
 		status:       c.Status(),
 		agents:       c.Agents(),
+		workflows:    c.Workflows(),
+		workflowSel:  map[string]int{},
 		pickVerb:     randomVerb,
 	}
 	m.composer.setHistory(c.History())
@@ -169,7 +179,11 @@ func (m *model) Init() tea.Cmd {
 
 func (m *model) statusInput() statusInput {
 	in := statusInput{Status: m.status, notice: m.flashText, home: m.home, commands: m.commandOut, added: m.added, removed: m.removed}
-	if a, ok := m.agent(m.shown); ok {
+	a, ok := m.agent(m.shown)
+	if m.watched.ID != "" && m.watched.ID == m.shown {
+		a, ok = m.watched, true
+	}
+	if ok {
 		in.Model, in.ContextTokens, in.ContextWindow = a.Model, a.ContextTokens, a.ContextWindow
 		in.Effort, in.ToolCalls, in.Cost = a.Effort, a.ToolCalls, a.Cost
 	}
@@ -448,7 +462,7 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 		}
 	}
 	if refresh {
-		m.status, m.agents = m.c.Status(), m.c.Agents()
+		m.status, m.agents, m.workflows = m.c.Status(), m.c.Agents(), m.c.Workflows()
 	}
 	if redraw && !pureThinking {
 		m.relayout()
@@ -510,7 +524,18 @@ func (m *model) apply(ev event.Event) *view {
 		}
 		m.clearSelection()
 		m.focus = agentFocus{}
+		clear(m.workflowSel)
 		return m.view()
+	case event.SessionClosed:
+		// Only a shown view stays, for the human to read until they leave it.
+		if v := m.views[ev.ID]; v != nil {
+			if ev.ID == m.shown {
+				v.closed = true
+			} else {
+				delete(m.views, ev.ID)
+			}
+		}
+		return nil
 	case event.TasksChanged:
 		return nil
 	case event.ModeChanged:
@@ -540,6 +565,9 @@ func (m *model) apply(ev event.Event) *view {
 		return nil
 	}
 	v := m.viewOf(id)
+	if v.closed {
+		return nil
+	}
 	switch ev := ev.(type) {
 	case event.QueueChanged:
 		v.queued = ev.Pending

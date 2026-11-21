@@ -85,6 +85,10 @@ type Task struct {
 	// Agent is the subagent's name, "" for a shell command.
 	Agent   string
 	Elapsed time.Duration
+	// Agents, Failed, Reason and Result are a workflow's: its agent calls,
+	// those that did not complete, why a failed run failed and what it returned.
+	Agents, Failed int
+	Reason, Result string
 }
 
 // Plan is a plan presented for approval; a repeat of the same ExitPlanMode
@@ -140,7 +144,7 @@ func (t *Transcript) Blocks() []Block {
 		case planItem:
 			blocks = append(blocks, Plan{key: key, Text: it.text})
 		case taskItem:
-			blocks = append(blocks, Task{key: key, ID: it.task.ID, Command: it.task.Command, Agent: it.task.Agent, Status: it.task.Status, Elapsed: it.task.Elapsed})
+			blocks = append(blocks, Task{key: key, ID: it.task.ID, Command: it.task.Command, Agent: it.task.Agent, Status: it.task.Status, Elapsed: it.task.Elapsed, Agents: it.task.Agents, Failed: it.task.Failed, Reason: it.task.Reason, Result: it.task.Result})
 		}
 	}
 	flush(len(t.items) <= t.boundary)

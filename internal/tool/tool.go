@@ -69,7 +69,8 @@ type Display struct {
 	// output, "" means the row does not open.
 	Body func(output string) string
 	// Change is, for a file change, the line under the row ("+3 -1") and the
-	// full removed and added lines an opened row shows.
+	// full removed and added lines an opened row shows; another call may give
+	// context lines, such as the script a Workflow launches.
 	Change func(args json.RawMessage) (summary string, lines []PreviewLine)
 	// Failure is the line under a call that ran and failed and the body an
 	// opened row shows.

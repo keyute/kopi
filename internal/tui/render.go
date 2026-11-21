@@ -87,7 +87,7 @@ func (c *renderCache) render(b transcript.Block, f blockFolds, spans func(string
 	case transcript.Turn:
 		return plain(renderTurn(b, f.verb, width, th))
 	case transcript.Task:
-		return plain(renderTask(b, width, th))
+		return renderTask(b, len(f.expanded) > 0 && f.expanded[0], width, th)
 	}
 	return nil
 }
@@ -280,8 +280,9 @@ func renderTurn(t transcript.Turn, v verb, width int, th theme) []string {
 }
 
 // renderTask is one row naming a background task's end, its command's (an
-// agent's: description's) first line cut to fit.
-func renderTask(t transcript.Task, width int, th theme) []string {
+// agent's: description's) first line cut to fit. A workflow adds its agent
+// count and a failed run's reason; a task with a result opens to it.
+func renderTask(t transcript.Task, expanded bool, width int, th theme) []line {
 	word, ps, ts := "finished", fg(th.success), lipgloss.NewStyle()
 	if t.Status != string(tool.TaskCompleted) {
 		word, ps, ts = t.Status, fg(th.error), fg(th.error)
@@ -293,7 +294,22 @@ func renderTask(t transcript.Task, width int, th theme) []string {
 	tail := " · " + formatDuration(t.Elapsed)
 	command, _, _ := strings.Cut(t.Command, "\n")
 	command = cut(oneLine(command), width-2-lipgloss.Width(head+tail))
-	return hang("• ", ps, head+command+tail, ts, width)
+	h := hit{}
+	if t.Result != "" {
+		h = hit{kind: hitOutput, id: t.Key()}
+	}
+	out := withHit(h, hang("• ", ps, head+command+tail, ts, width))
+	if t.Agents > 0 {
+		text := countText(t.Agents, "agent") + failedSuffix(t.Failed)
+		out = append(out, plain(hang("  ↳ ", fg(th.dim), text, fg(th.dim), width))...)
+	}
+	if t.Reason != "" {
+		out = append(out, plain(hang("  ", fg(th.error), t.Reason, fg(th.error), width))...)
+	}
+	if expanded {
+		out = append(out, mutedBody(t.Result, width, th)...)
+	}
+	return out
 }
 
 // formatDuration renders d as "41s", "1m 12s" or "1h 2m".

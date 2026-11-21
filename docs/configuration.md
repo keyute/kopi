@@ -95,7 +95,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `quit` | `ctrl+d` |
 | `toggle-mode` | `shift+tab` |
 | `background` | `ctrl+b` |
-| `stop-agent` | `x` (stops the running subagent selected in the [agent rows](subagents.md#agent-rows) or the `/tasks` list) |
+| `stop-agent` | `x` (stops the running subagent or workflow selected in the [agent rows](subagents.md#agent-rows) or the `/tasks` list, or the agent selected in a workflow's progress dialog) |
 | `edit-plan` | `ctrl+g` |
 | `paste` | `ctrl+v` |
 | `history-prev`, `history-next` | `up`, `down` |
@@ -199,7 +199,7 @@ A segment in `segments`:
 
 ## Agent rows
 
-`agentline` lists the `left` and `right` entries of the [agent rows](subagents.md#agent-rows) shown under the status line. Entries use the status line's [format syntax](#formats).
+`agentline` lists the `left` and `right` entries of the [agent rows](subagents.md#agent-rows) shown under the status line. Entries use the status line's [format syntax](#formats). A [workflow](workflows.md#footer-row)'s row has a fixed format.
 
 - Defaults: left `$agent`, `$model`, `$tokens`; right none.
 - `separator` goes between entries (default ` · `, `""` for none; no control characters).

@@ -101,7 +101,7 @@ Report file paths and line numbers.
 
 ## Workflows
 
-A [workflow](workflows.md)'s agents use these definitions by name, but are not subagents: they have no task, row or notice of their own and are not among the 20.
+A [workflow](workflows.md)'s agents use these definitions by name, but are not subagents: they have no task, agent row or notice of their own and are not among the 20. Their sessions can be viewed, watch-only, from the [workflow's progress dialog](workflows.md#viewing-an-agent).
 
 ## Limitations
 

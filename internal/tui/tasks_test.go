@@ -656,3 +656,31 @@ func TestTasksSecondFrameAllocationsDoNotGrowWithTheOutput(t *testing.T) {
 	}
 	assert.LessOrEqual(t, allocs(5000), allocs(50)+2)
 }
+
+func TestTasksEnterOnAWorkflowOpensItsDialogOverTheList(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		status, agents := workflowFixture(time.Now())
+		c.tasks[0].ID = "w1"
+		c.runs = map[string]fakeRun{"w1": {status: status, agents: agents}}
+		submitText(m, "/tasks")
+
+		press(m, enter)
+
+		require.NotNil(t, workflowOf(m))
+		require.NotNil(t, tasksOf(m))
+		assert.Equal(t, promptWorkflow, frontKind(m))
+		assert.Equal(t, "  Workflow › audit route handlers", dialogRows(t, m)[1])
+
+		press(m, escape)
+
+		assert.Nil(t, workflowOf(m))
+		assert.Equal(t, promptTasks, frontKind(m))
+		assert.Equal(t, "  Background tasks", dialogRows(t, m)[1])
+
+		press(m, down)
+		press(m, enter)
+		assert.Nil(t, workflowOf(m), "a task that is not a workflow opens its output")
+		assert.NotEmpty(t, tasksOf(m).open)
+	})
+}
