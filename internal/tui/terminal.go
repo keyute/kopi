@@ -11,7 +11,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/app"
-	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -37,45 +36,30 @@ func (m *model) attention() tea.ProgramStatus {
 	return s
 }
 
-// endedState is how the main session's last turn ended as a program state, ""
-// when there is none or it was interrupted.
-func (m *model) endedState() tea.ProgramState {
-	if m.ended == nil {
-		return ""
-	}
-	switch *m.ended {
-	case event.Completed:
-		return tea.ProgramStateDone
-	case event.Failed:
-		return tea.ProgramStateError
-	}
-	return ""
-}
-
 // programStatus is the record for the terminal: attention, except that a
 // session at rest reports how the main session's last turn ended, seen or not.
-func (m *model) programStatus() tea.ProgramStatus {
-	s := m.attention()
-	if s.State == tea.ProgramStateIdle && m.endedState() != "" {
-		s.State = m.endedState()
+func (m *model) programStatus(s tea.ProgramStatus) tea.ProgramStatus {
+	if s.State == tea.ProgramStateIdle && m.ended != "" {
+		s.State = m.ended
 	}
 	return s
 }
 
 // terminalNames is the session's name, else the workspace folder, else kopi,
-// and the workspace folder's name, each on one line; the folder is "" when the
-// workspace has none.
-func (m *model) terminalNames() (label, folder string) {
+// the workspace folder's name and the session's name, each on one line; the
+// folder is "" when the workspace has none and the name when it has none.
+func (m *model) terminalNames() (label, folder, name string) {
 	folder = oneLine(filepath.Base(m.status.Workspace))
 	if folder == "." || folder == string(filepath.Separator) {
 		folder = ""
 	}
-	return cmp.Or(oneLine(m.title), folder, "kopi"), folder
+	name = oneLine(m.title)
+	return cmp.Or(name, folder, "kopi"), folder, name
 }
 
 func (m *model) terminalTitle(state tea.ProgramState) string {
-	label, folder := m.terminalNames()
-	if oneLine(m.title) != "" && folder != "" {
+	label, folder, name := m.terminalNames()
+	if name != "" && folder != "" {
 		label += " · " + folder
 	}
 	if m.readsStatus {
@@ -154,16 +138,18 @@ func (m *model) attend(msg tea.Msg, was tea.ProgramStatus) tea.Cmd {
 	switch {
 	case !m.away || m.working():
 		m.unseen = ""
-	case m.ended != nil && (was.State == tea.ProgramStateWorking || m.mainEnded) && m.attention().State != tea.ProgramStateBlocked:
-		if ended := m.endedState(); ended != "" {
-			m.unseen = ended
-		}
+	case m.ended != "" && (was.State == tea.ProgramStateWorking || m.mainEnded) && m.attention().State != tea.ProgramStateBlocked:
+		m.unseen = m.ended
 	}
-	fresh := m.mainEnded && m.endedState() != ""
+	fresh := m.mainEnded && m.ended != ""
 	m.mainEnded = false
 	now := m.attention()
 	fresh = fresh && (now.State == tea.ProgramStateDone || now.State == tea.ProgramStateError)
 	if !m.away || (now == was && !fresh) {
+		return nil
+	}
+	// A move between prompts is the same wait, but a login sent no notification.
+	if was.State == tea.ProgramStateBlocked && was.Kind != tea.ProgramStatusKindAuth && now.State == tea.ProgramStateBlocked {
 		return nil
 	}
 	var text string
@@ -177,7 +163,7 @@ func (m *model) attend(msg tea.Msg, was tea.ProgramStatus) tea.Cmd {
 	default:
 		return nil
 	}
-	label, _ := m.terminalNames()
+	label, _, _ := m.terminalNames()
 	return m.notify(text + label)
 }
 

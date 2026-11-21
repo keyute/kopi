@@ -99,11 +99,12 @@ type model struct {
 	title string
 	// away is set while the terminal reports it is not focused. unseen is the
 	// done or error state a run left while it was, until focus returns or work
-	// starts; ended is the main session's last turn outcome, nil before one.
+	// starts; ended is how the main session's last turn ended as a program state,
+	// "" before one or when it was interrupted.
 	// mainEnded records that a main turn ended in the update in progress.
 	away      bool
 	unseen    tea.ProgramState
-	ended     *event.Status
+	ended     tea.ProgramState
 	mainEnded bool
 	// barBeating is set while a barMsg is due, so one chain runs at a time;
 	// barBeat is the bar's value, flipped on each so Bubble Tea writes it again.
@@ -580,7 +581,7 @@ func (m *model) apply(ev event.Event) *view {
 		}
 		m.views, m.shown = map[string]*view{app.Main: main}, app.Main
 		m.title = ev.Name
-		m.unseen, m.ended, m.mainEnded = "", nil, false
+		m.unseen, m.ended, m.mainEnded = "", "", false
 		m.composer.restore(unsent)
 		if len(ev.History) > 0 {
 			m.view().tr.Restore(ev.History)
@@ -651,7 +652,13 @@ func (m *model) apply(ev event.Event) *view {
 		}
 		v.busy = false
 		if id == app.Main {
-			m.ended, m.mainEnded = &ev.Outcome.Status, true
+			m.ended, m.mainEnded = "", true
+			switch ev.Outcome.Status {
+			case event.Completed:
+				m.ended = tea.ProgramStateDone
+			case event.Failed:
+				m.ended = tea.ProgramStateError
+			}
 		}
 		if id == m.shown {
 			m.composer.restore(ev.Unsent)
@@ -839,12 +846,13 @@ func (m *model) selected(r region, i int) string {
 
 func (m *model) View() tea.View {
 	v := tea.View{AltScreen: true, MouseMode: tea.MouseModeCellMotion, ReportFocus: true}
-	status, attention := m.programStatus(), m.attention()
+	attention := m.attention()
+	status := m.programStatus(attention)
 	v.ProgramStatus = &status
 	if m.terminal.Title {
 		v.WindowTitle = m.terminalTitle(attention.State)
 	}
-	if m.barWanted() {
+	if m.terminal.Progress && attention.State == tea.ProgramStateWorking {
 		v.ProgressBar = tea.NewProgressBar(tea.ProgressBarIndeterminate, m.barBeat)
 	}
 	if m.width == 0 || m.height == 0 {

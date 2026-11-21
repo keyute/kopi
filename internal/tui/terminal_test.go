@@ -71,7 +71,7 @@ func sendRecords(t *testing.T, m *model, evs ...event.Event) {
 	require.False(t, m.recordsWriting)
 }
 
-func state(m *model) tea.ProgramState { return m.programStatus().State }
+func state(m *model) tea.ProgramState { return m.programStatus(m.attention()).State }
 
 var (
 	turnStart = event.TurnStart{Prompt: "go"}
@@ -169,7 +169,7 @@ func TestProgramStatusStates(t *testing.T) {
 		}, tea.ProgramStatus{App: "kopi", State: tea.ProgramStateDone}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, tc.set(t).programStatus())
+			assert.Equal(t, tc.want, func() tea.ProgramStatus { m := tc.set(t); return m.programStatus(m.attention()) }())
 		})
 	}
 }
@@ -246,7 +246,7 @@ func TestChildRecordsFollowRunningAgentsAndWorkflows(t *testing.T) {
 	}
 	main := app.AgentStatus{ID: app.Main}
 	researcher := app.AgentStatus{ID: "t1", Agent: "researcher", Description: "peer survey", State: tool.TaskRunning}
-	workflow := app.WorkflowStatus{ID: "t2", Description: "review changes", State: tool.TaskRunning}
+	workflow := app.WorkflowStatus{ID: "t2", Description: "review changes", State: tool.TaskRunning, Done: 1, Running: 2, Queued: 1}
 
 	c.agents, c.workflows = []app.AgentStatus{main, researcher}, []app.WorkflowStatus{workflow}
 	sendRecords(t, m, event.TasksChanged{})
@@ -587,6 +587,24 @@ func TestNotifyTexts(t *testing.T) {
 		ansi.Notify("Failed: Fix it"),
 		ansi.Notify("Waiting for you: Fix it"),
 	}, *raw)
+}
+
+func TestNotifyOnceWhenTheFrontPromptChangesKind(t *testing.T) {
+	m, raw := awayModel(t)
+	m.getenv = env(map[string]string{"TERM_PROGRAM": "ghostty"})
+	send(m, event.QuestionRequested{Token: 1, Questions: []tool.Question{choice("H", false, "a", "b")}})
+	require.Equal(t, promptQuestion, m.front().kind)
+	send(m, editApproval())
+	require.Equal(t, promptApproval, m.front().kind)
+	assert.Equal(t, []any{ansi.Notify("Waiting for you: kopi")}, *raw)
+}
+
+func TestNotifyForAPlan(t *testing.T) {
+	m, raw := awayModel(t)
+	m.getenv = env(map[string]string{"TERM_PROGRAM": "ghostty"})
+	send(m, planRequest(7, "# Heading\n\nstep one"))
+	require.NotNil(t, planOf(m))
+	assert.Equal(t, []any{ansi.Notify("Waiting for you: kopi")}, *raw)
 }
 
 func TestNotifySilentForLogin(t *testing.T) {

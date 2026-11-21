@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -808,15 +809,26 @@ func TestRootFullscreenTitleRequest(t *testing.T) {
 			logger := slog.Default()
 			t.Cleanup(func() { slog.SetDefault(logger) })
 			e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), tc.config)
-			server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "fullscreen-response") })
+			// Without a title request the responses go to the turns in order. A title
+			// request that leaked would reach the server during the second turn's full
+			// round trip, instead of racing the quit.
+			second := tc.titles == 0
+			var served atomic.Int32
+			server := newMockProvider(t, func(w http.ResponseWriter) {
+				if served.Add(1) == 1 {
+					streamText(w, "fullscreen-response")
+					return
+				}
+				streamText(w, "second-response")
+			})
 			e.writeMockModels(t, server.URL)
 			master, slave := openTestTerminal(t)
-			ready, answered, drained := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			ready, answered, answeredAgain, drained := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
 			go func() {
 				defer close(drained)
 				var output strings.Builder
 				buf := make([]byte, 4096)
-				var sawReady, sawAnswer bool
+				var sawReady, sawAnswer, sawAgain bool
 				for {
 					n, err := master.Read(buf)
 					output.Write(buf[:n])
@@ -829,6 +841,10 @@ func TestRootFullscreenTitleRequest(t *testing.T) {
 					if !sawAnswer && strings.Contains(plain, "fullscreen-response") {
 						sawAnswer = true
 						close(answered)
+					}
+					if !sawAgain && strings.Contains(plain, "second-response") {
+						sawAgain = true
+						close(answeredAgain)
 					}
 					if err != nil {
 						return
@@ -861,8 +877,15 @@ func TestRootFullscreenTitleRequest(t *testing.T) {
 			_, err := io.WriteString(master, "fullscreen prompt\r")
 			require.NoError(t, err)
 			wait(answered)
+			requests := tc.requests
+			if second {
+				_, err = io.WriteString(master, "second prompt\r")
+				require.NoError(t, err)
+				wait(answeredAgain)
+				requests++
+			}
 			var titles int
-			for range tc.requests {
+			for range requests {
 				if isTitleRequest(server.next(t)) {
 					titles++
 				}

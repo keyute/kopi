@@ -387,9 +387,7 @@ func validateThemeName(key, name string) error {
 
 func validateNotifications(value string) error {
 	if !slices.Contains(notificationModes, value) {
-		last := len(notificationModes) - 1
-		return fmt.Errorf("%w: terminal.notifications: %q is not %s or %s", ErrInvalidValue, value,
-			strings.Join(notificationModes[:last], ", "), notificationModes[last])
+		return fmt.Errorf("%w: terminal.notifications: %q is not auto, osc9, bell or off", ErrInvalidValue, value)
 	}
 	return nil
 }

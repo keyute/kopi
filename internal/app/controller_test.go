@@ -561,10 +561,14 @@ func TestStatusAfterFinalTurnEndIsNotBusy(t *testing.T) {
 	w, err := h.c.Submit(t.Context(), Main, "go")
 	require.NoError(t, err)
 	wait(t, reached)
-	// The TurnEnd is delivered under queue, so Status waits for the Work's
-	// deregistration that ends the same section.
-	busy := make(chan bool, 1)
-	go func() { busy <- h.c.Status().Busy }()
+	// Status is called while the TurnEnd, delivered under queue, is held; it must
+	// not report busy once the Work has deregistered.
+	busy, calling := make(chan bool, 1), make(chan struct{})
+	go func() {
+		close(calling)
+		busy <- h.c.Status().Busy
+	}()
+	wait(t, calling)
 	close(unblock)
 	wait(t, w.Done())
 

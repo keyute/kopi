@@ -149,6 +149,26 @@ func TestTitleOffAsksNothing(t *testing.T) {
 	assert.Empty(t, ofType[event.SessionNamed](h.rec.all()))
 }
 
+func TestStoredNameIsAnnouncedWithTitlesOff(t *testing.T) {
+	h, title := titleHarness(t, Config{Title: true})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("one")})
+	title.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("Stored")})
+	named := subscribeTo[event.SessionNamed](h.c)
+	firstID := h.c.Status().SessionID
+	h.turn(t, "fix the build")
+	receiveEvent(t, named)
+	h.c.wg.Wait()
+	require.NoError(t, h.c.NewSession(t.Context()))
+
+	h.c.cfg.Title = false
+	require.NoError(t, h.c.Resume(t.Context(), firstID))
+
+	changed := ofType[event.SessionChanged](h.rec.all())
+	require.NotEmpty(t, changed)
+	assert.Equal(t, "Stored", changed[len(changed)-1].Name)
+	assert.Equal(t, 1, title.CallCount())
+}
+
 func TestFailedTitleLeavesNoNameAndIsNotRetried(t *testing.T) {
 	h, title := titleHarness(t, Config{Title: true})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("one"), pigruntimetest.Text("two")})
@@ -310,6 +330,15 @@ func TestTitleAnsweredAfterSessionSwitchIsDropped(t *testing.T) {
 			changed := ofType[event.SessionChanged](h.rec.all())
 			require.Len(t, changed, 2)
 			assert.Empty(t, changed[1].Name)
+
+			if resume {
+				// The titled flag lasts one run, so the untitled session is asked again.
+				h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("two")})
+				title.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("Fresh")})
+				h.turn(t, "again")
+				assert.Equal(t, event.SessionNamed{Name: "Fresh"}, receiveEvent(t, named))
+				assert.Equal(t, 2, title.CallCount())
+			}
 		})
 	}
 }
