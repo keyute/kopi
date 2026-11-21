@@ -160,13 +160,21 @@ func (s *StatusCommands) rerun(command *statusCommand) {
 	}
 }
 
-func (s *StatusCommands) Observe(ev event.Event) {
+// refreshes reports whether ev is activity the footer's commands and the plan
+// limits refresh on.
+func refreshes(ev event.Event) bool {
 	if wrapped, ok := ev.(event.Session); ok {
 		ev = wrapped.Event
 	}
 	switch ev.(type) {
 	case event.TurnStart, event.SessionChanged, event.ModeChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged:
-	default:
+		return true
+	}
+	return false
+}
+
+func (s *StatusCommands) Observe(ev event.Event) {
+	if !refreshes(ev) {
 		return
 	}
 	s.mu.Lock()

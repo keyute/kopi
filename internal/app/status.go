@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/quota"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -31,6 +32,9 @@ type Status struct {
 	// main session, its subagents, the workflow agents that ended, and the
 	// classifier, WebFetch and WebSearch requests.
 	TotalCost float64
+	// Limits is the last reading of the main model's provider's plan limits;
+	// zero until one is read, and kept while a later read fails.
+	Limits quota.Limits
 }
 
 // AgentStatus describes one session for a frontend: the main session or a subagent's.

@@ -37,8 +37,23 @@ var KeyActions = []string{
 	"menu-close",
 }
 
+// LimitWindows lists the plan window labels the quota readers report.
+var LimitWindows = []string{"5h", "wk", "mo", "mo code", "premium", "chat"}
+
+// LimitSegments lists the status segments that read a plan window: its used
+// share and its reset time, for each window label, a space in the label
+// written "_".
+var LimitSegments = func() []string {
+	var names []string
+	for _, label := range LimitWindows {
+		suffix := strings.ReplaceAll(label, " ", "_")
+		names = append(names, "limit_"+suffix, "reset_"+suffix)
+	}
+	return names
+}()
+
 // StatusSegments lists every segment the status line can show.
-var StatusSegments = []string{"model", "effort", "context", "tools", "cost", "total", "branch", "mode", "notice", "sandbox", "agents", "shells", "workflows", "tokens", "changes", "cwd"}
+var StatusSegments = slices.Concat([]string{"model", "effort", "context", "tools", "cost", "total", "branch", "mode", "notice", "sandbox", "agents", "shells", "workflows", "tokens", "changes", "cwd"}, LimitSegments)
 
 // AgentSegments lists every segment an agent row can show.
 var AgentSegments = []string{"agent", "tokens", "model", "effort", "context", "tools", "cost", "elapsed", "state", "activity", "id"}

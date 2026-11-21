@@ -199,6 +199,7 @@ func (c *Controller) loginTask(run *loginRun, ctx context.Context, missing error
 		}
 		return
 	}
+	c.limits.force()
 	notices := []event.Event{event.Notice{Text: fmt.Sprintf("Logged in to %s.", provider)}}
 	if notice != "" {
 		notices = append(notices, event.Notice{Text: notice})
@@ -294,6 +295,7 @@ func (c *Controller) logoutCommand(ctx context.Context, provider string) error {
 	if err := c.rt.Logout(ctx, provider); err != nil {
 		return err
 	}
+	c.limits.force()
 	c.relay.emit(event.Notice{Text: fmt.Sprintf("Logged out of %s.", provider)})
 	return nil
 }

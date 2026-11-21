@@ -3,8 +3,10 @@ package tui
 import (
 	"fmt"
 	"image/color"
+	"math"
 	"slices"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -12,10 +14,14 @@ import (
 	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/quota"
 )
 
 // contextWarnPercent is the context use from which the percentage warns.
 const contextWarnPercent = 90
+
+// limitWarnPercent is the plan limit use from which a window warns.
+const limitWarnPercent = 90
 
 // statusInput is what a segment draws from: the session status with the open
 // view's effort, tool calls and cost (Effort is empty when the model does not
@@ -37,7 +43,7 @@ type statusInput struct {
 type segment func(statusInput, theme) (string, bool)
 
 // segments is keyed by the config's status segment names.
-var segments = map[string]segment{
+var segments = withLimitSegments(map[string]segment{
 	"model": func(s statusInput, th theme) (string, bool) {
 		return fg(th.accent).Render(modelID(s.Model)), s.Model != ""
 	},
@@ -108,6 +114,16 @@ var segments = map[string]segment{
 		}
 		return strings.Join(parts, " "), len(parts) > 0
 	},
+})
+
+// withLimitSegments adds the limit and reset segments of every plan window.
+func withLimitSegments(m map[string]segment) map[string]segment {
+	for _, label := range config.LimitWindows {
+		suffix := strings.ReplaceAll(label, " ", "_")
+		m["limit_"+suffix] = limitSegment(label)
+		m["reset_"+suffix] = resetSegment(label)
+	}
+	return m
 }
 
 // contextText is the share of the window the context fills, and whether it is
@@ -137,6 +153,59 @@ func costText(cost float64) string {
 		return ""
 	}
 	return fmt.Sprintf("$%.2f", cost)
+}
+
+// planWindow is the plan window with the label, when the open view's model
+// belongs to the provider the reading is from.
+func planWindow(s statusInput, label string) (quota.Window, bool) {
+	l := s.Limits
+	if modelProvider(s.Model) != l.Provider {
+		return quota.Window{}, false
+	}
+	i := slices.IndexFunc(l.Windows, func(w quota.Window) bool { return w.Label == label })
+	if i < 0 {
+		return quota.Window{}, false
+	}
+	return l.Windows[i], true
+}
+
+// limitSegment draws the share used of the labelled plan window, warning from
+// limitWarnPercent.
+func limitSegment(label string) segment {
+	return func(s statusInput, th theme) (string, bool) {
+		w, ok := planWindow(s, label)
+		c := th.text
+		if math.Round(w.UsedPercent) >= limitWarnPercent {
+			c = th.warning
+		}
+		return fg(c).Render(fmt.Sprintf("%.0f%%", w.UsedPercent)), ok
+	}
+}
+
+// resetSegment draws when the labelled plan window resets.
+func resetSegment(label string) segment {
+	return func(s statusInput, th theme) (string, bool) {
+		w, ok := planWindow(s, label)
+		text := resetText(w.ResetsAt, s.Limits.At)
+		return fg(th.text).Render(text), ok && text != ""
+	}
+}
+
+// resetText is the local time a window resets, by how far off it was when
+// read: the clock time under a day, with the weekday from a day, and the date
+// from a week; "" when unknown. A clock time stays true while the footer idles.
+func resetText(resets, read time.Time) string {
+	if resets.IsZero() {
+		return ""
+	}
+	resets = resets.Local()
+	switch away := resets.Sub(read); {
+	case away < 24*time.Hour:
+		return resets.Format("15:04")
+	case away < 7*24*time.Hour:
+		return resets.Format("Mon 15:04")
+	}
+	return resets.Format("Jan 2")
 }
 
 // statusLayout holds the parsed entries on each side of the status line, the
@@ -369,4 +438,14 @@ func modelID(ref string) string {
 		return id
 	}
 	return ref
+}
+
+// modelProvider is the part of a "provider/id" model reference before the first
+// "/", or "" without one.
+func modelProvider(ref string) string {
+	provider, _, _ := strings.Cut(ref, "/")
+	if provider == ref {
+		return ""
+	}
+	return provider
 }

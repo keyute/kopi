@@ -21,6 +21,7 @@ import (
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/quota"
 	"github.com/keyute/kopi/internal/skill"
 	"github.com/keyute/kopi/internal/tool"
 )
@@ -481,6 +482,41 @@ func TestStatusRefreshesOnEventsThatChangeIt(t *testing.T) {
 	c.status.Shells = 2
 	send(m, event.TasksChanged{})
 	assert.Equal(t, "  model-1 · main"+strings.Repeat(" ", 4)+"2 shells · execute", last())
+}
+
+func TestStatusRefreshesOnALimitsReading(t *testing.T) {
+	opts := testOptions()
+	opts.StatusLine = config.StatusLine{Left: []string{"(wk $limit_wk)"}, Right: []string{"$mode"}, Separator: " "}
+	m, c := newTestModelWith(t, 40, 20, opts)
+	last := func() string { return screen(m)[len(screen(m))-1] }
+	assert.Equal(t, strings.Repeat(" ", 34)+"plan", last())
+
+	c.status.Limits = quota.Limits{Provider: "mock", Windows: []quota.Window{{Label: "wk", UsedPercent: 40}}}
+	send(m, event.LimitsChanged{})
+
+	assert.Equal(t, "  wk 40%"+strings.Repeat(" ", 26)+"plan", last())
+}
+
+func TestStatusLimitsFollowTheShownAgentsProvider(t *testing.T) {
+	opts := testOptions()
+	opts.StatusLine = config.StatusLine{Left: []string{"(wk $limit_wk)"}, Separator: " "}
+	opts.AgentLine = config.DefaultAgentLine()
+	m, c := newTestModelWith(t, 40, 20, opts)
+	main := app.AgentStatus{ID: app.Main, Model: "openai-codex/gpt-5.2-codex"}
+	child := app.AgentStatus{ID: "t1", Agent: "explorer", Model: "xai/grok-4", State: "running"}
+	c.agents = []app.AgentStatus{main, child}
+	c.status.Limits = quota.Limits{Provider: "openai-codex", Windows: []quota.Window{{Label: "wk", UsedPercent: 40}}}
+	m.viewOf("t1").busy = true
+	send(m, event.TasksChanged{})
+	assert.Contains(t, statusText(m), "wk 40%")
+
+	m.show("t1")
+	send(m, event.TasksChanged{})
+	assert.NotContains(t, statusText(m), "wk")
+
+	m.show(app.Main)
+	send(m, event.TasksChanged{})
+	assert.Contains(t, statusText(m), "wk 40%")
 }
 
 func TestBackgroundKeyIsConsumedOnlyWhenACommandMoves(t *testing.T) {

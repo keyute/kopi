@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -14,6 +15,7 @@ import (
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
+	"github.com/keyute/kopi/internal/quota"
 )
 
 var defaultLayout = newStatusLayout(config.DefaultStatusLine())
@@ -84,6 +86,102 @@ func TestStatusLineShowsTotalAbsentAtZero(t *testing.T) {
 	in := statusInput{Status: app.Status{TotalCost: 1.874}, Cost: 0.424}
 	assert.Equal(t, strings.Repeat(" ", 9)+"$0.42 · $1.87  ", ansi.Strip(statusLine(in, layout, 24, mocha())))
 	assert.Equal(t, "  ", ansi.Strip(statusLine(statusInput{}, layout, 2, mocha())))
+}
+
+func TestStatusLineShowsLimits(t *testing.T) {
+	read := time.Date(2026, 11, 23, 10, 0, 0, 0, time.Local)
+	limits := func(provider string, windows ...quota.Window) app.Status {
+		return app.Status{Model: "openai-codex/gpt-5.2-codex", Limits: quota.Limits{Provider: provider, Windows: windows, At: read}}
+	}
+	fiveHour := quota.Window{Label: "5h", UsedPercent: 12, ResetsAt: time.Date(2026, 11, 23, 14, 30, 0, 0, time.Local)}
+	week := quota.Window{Label: "wk", UsedPercent: 40, ResetsAt: time.Date(2026, 11, 25, 9, 0, 0, 0, time.Local)}
+	layout := layoutOf([]string{"$model", "(5h $limit_5h( $reset_5h))", "(wk $limit_wk( $reset_wk))", "(premium $limit_premium( $reset_premium))"}, nil)
+	for _, tc := range []struct {
+		name string
+		s    app.Status
+		want string
+	}{
+		{"two windows", limits("openai-codex", fiveHour, week), "  gpt-5.2-codex · 5h 12% 14:30 · wk 40% Wed 09:00"},
+		{"one window", limits("openai-codex", week), "  gpt-5.2-codex · wk 40% Wed 09:00"},
+		{"no reset", limits("openai-codex", quota.Window{Label: "premium", UsedPercent: 34}), "  gpt-5.2-codex · premium 34%"},
+		{"a window outside the set", limits("openai-codex", quota.Window{Label: "3d", UsedPercent: 5}), "  gpt-5.2-codex"},
+		{"no windows", limits("openai-codex"), "  gpt-5.2-codex"},
+		{"never read", app.Status{Model: "openai-codex/gpt-5.2-codex"}, "  gpt-5.2-codex"},
+		{"another provider", limits("github-copilot", week), "  gpt-5.2-codex"},
+		{"model without a provider", app.Status{Model: "local", Limits: quota.Limits{Provider: "openai-codex", Windows: []quota.Window{week}}}, "  local"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, strings.TrimRight(ansi.Strip(statusLine(statusInput{Status: tc.s}, layout, 60, mocha())), " "))
+		})
+	}
+}
+
+func TestStatusLineLimitsDrawOnlyTheirValuesInTheFormatsOrder(t *testing.T) {
+	read := time.Date(2026, 11, 23, 10, 0, 0, 0, time.Local)
+	other := quota.Window{Label: "other", UsedPercent: 99, ResetsAt: time.Date(2026, 11, 23, 11, 0, 0, 0, time.Local)}
+	for suffix, label := range map[string]string{"5h": "5h", "wk": "wk", "mo": "mo", "mo_code": "mo code", "premium": "premium", "chat": "chat"} {
+		t.Run(suffix, func(t *testing.T) {
+			target := quota.Window{Label: label, UsedPercent: 12, ResetsAt: time.Date(2026, 11, 23, 14, 30, 0, 0, time.Local)}
+			s := app.Status{Model: "p/m", Limits: quota.Limits{Provider: "p", Windows: []quota.Window{other, target}, At: read}}
+			layout := newStatusLayout(config.StatusLine{Left: []string{"$reset_" + suffix + " $limit_" + suffix}})
+
+			assert.Equal(t, "  14:30 12%", strings.TrimRight(ansi.Strip(statusLine(statusInput{Status: s}, layout, 40, mocha())), " "))
+		})
+	}
+}
+
+func TestStatusLineLimitsFollowTheOpenView(t *testing.T) {
+	week := quota.Window{Label: "wk", UsedPercent: 40}
+	s := app.Status{Limits: quota.Limits{Provider: "openai-codex", Windows: []quota.Window{week}}}
+	layout := layoutOf([]string{"(wk $limit_wk)"}, nil)
+
+	s.Model = "openai-codex/a"
+	assert.Contains(t, ansi.Strip(statusLine(statusInput{Status: s}, layout, 30, mocha())), "wk 40%")
+	s.Model = "xai/b"
+	assert.NotContains(t, ansi.Strip(statusLine(statusInput{Status: s}, layout, 30, mocha())), "wk")
+}
+
+func TestStatusLineWarnsOnALimitNearlyUsed(t *testing.T) {
+	th := mocha()
+	layout := layoutOf([]string{"(wk $limit_wk( $reset_wk))"}, nil)
+	status := func(used float64) statusInput {
+		resets := time.Date(2026, 11, 23, 14, 30, 0, 0, time.Local)
+		read := time.Date(2026, 11, 23, 10, 0, 0, 0, time.Local)
+		return statusInput{Status: app.Status{Model: "p/m", Limits: quota.Limits{Provider: "p", At: read, Windows: []quota.Window{{Label: "wk", UsedPercent: used, ResetsAt: resets}}}}}
+	}
+
+	assert.Contains(t, statusLine(status(89), layout, 40, th), fg(th.text).Render("89%"))
+	assert.Contains(t, statusLine(status(90), layout, 40, th), fg(th.warning).Render("90%"))
+	assert.Contains(t, statusLine(status(89.6), layout, 40, th), fg(th.warning).Render("90%"), "a window warns by the percentage it shows")
+
+	got := statusLine(status(90), layout, 40, th)
+	assert.Contains(t, got, fg(th.text).Render("14:30"))
+	assert.Contains(t, got, "wk")
+	assert.NotContains(t, got, fg(th.warning).Render("14:30"))
+	assert.NotContains(t, got, fg(th.warning).Render("wk"))
+}
+
+func TestResetText(t *testing.T) {
+	at := func(day, hour, min int) time.Time { return time.Date(2026, 11, day, hour, min, 0, 0, time.Local) }
+	read := at(23, 10, 0)
+	for _, tc := range []struct {
+		name   string
+		resets time.Time
+		want   string
+	}{
+		{"unknown", time.Time{}, ""},
+		{"later today", at(23, 14, 30), "14:30"},
+		{"just under a day", at(24, 9, 59), "09:59"},
+		{"a day", at(24, 10, 0), "Tue 10:00"},
+		{"under a week", at(30, 9, 59), "Mon 09:59"},
+		{"a week", at(30, 10, 0), "Nov 30"},
+		{"next month", time.Date(2026, 12, 1, 0, 0, 0, 0, time.Local), "Dec 1"},
+		{"already passed", at(23, 9, 0), "09:00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, resetText(tc.resets, read))
+		})
+	}
 }
 
 func TestStatusInputKeepsTheTotalWithASubagentOpen(t *testing.T) {

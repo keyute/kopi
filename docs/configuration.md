@@ -145,6 +145,14 @@ With `context` `18.0%`, and with it not yet known:
 | `(ctx $context)` | `ctx 18.0%` | nothing |
 | `ctx $context` | `ctx 18.0%` | `ctx ` |
 
+With the entries `(5h $limit_5h( $reset_5h))` and `(wk $limit_wk( $reset_wk))`:
+
+| Reading | Draws |
+| --- | --- |
+| Both windows | `5h 12% 14:30 · wk 40% Wed 09:00` |
+| Only the weekly window | `wk 40% Wed 09:00` |
+| API key, or before the first read | nothing |
+
 ### Segments
 
 Built-in segments: `model`, `context`, `branch`, `mode`, and:
@@ -156,6 +164,8 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 | `tokens` | The session's context size (`22.1k tokens`); absent until known |
 | `cost` | The session's cost (`$0.42`); absent while zero |
 | `total` | The whole session's estimated cost (`$1.87`): the main session, its subagents, workflow agents that have ended, and the classifier, `WebFetch`, `WebSearch` and session-title requests; absent while zero |
+| `limit_<window>` | The share used of one usage window of the provider's subscription plan (`12%`); absent when the provider has no such window, with an API key, until read and in a subagent's or workflow agent's view on another provider |
+| `reset_<window>` | When that window resets (`14:30`, `Wed 09:00`, `Dec 1`); absent in the same cases and when the window has no reset |
 | `cwd` | The workspace, with your home directory as `~` |
 | `notice` | Transient hints such as `Copied` |
 | `sandbox` | `sandboxed` or `unsandboxed` when `Bash` is available; shows the default, not a call that sets `unsandboxed` |
@@ -167,6 +177,9 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 - `model`, `effort`, `context`, `tokens`, `tools` and `cost` show the session whose view is open.
 - `cost` is an estimate computed from the model's listed price; on a subscription sign-in it is not what you are billed. `total` is the same kind of estimate.
 - `total` always shows the whole session, whichever view is open. It leaves out a workflow agent that is still running. After a resume (`-c`, `-r` or `/resume`) it holds the main session's cost from before the resume, but not what subagents, workflow agents and those requests cost then.
+- `<window>` is `5h`, `wk`, `mo`, `mo_code`, `premium` or `chat`; [Plan limits](providers.md#plan-limits) lists which providers have which.
+- `limit_<window>` and `reset_<window>` draw no label and no separator; write them in the entry. None is in the default layout, and naming any makes Kopi call the provider's usage endpoint. See [Plan limits](providers.md#plan-limits) for what is sent and when.
+- `limit_<window>` shows in the warning colour from 90%; `reset_<window>` does not.
 - `changes`:
   - Untracked files are not counted.
   - Kopi runs `git diff` in the workspace for it, unsandboxed, in any folder whether trusted or not, and only when an entry names `changes` and the workspace is in a repository when Kopi starts.

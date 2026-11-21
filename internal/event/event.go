@@ -170,6 +170,10 @@ type TaskEnded struct {
 // frontends re-read their status.
 type TasksChanged struct{}
 
+// LimitsChanged reports a new reading of the plan limits; frontends re-read
+// their status.
+type LimitsChanged struct{}
+
 type ModeChanged struct{ Mode policy.Mode }
 
 type SessionChanged struct {
@@ -229,6 +233,7 @@ func (Activity) isEvent()            {}
 func (TurnEnd) isEvent()             {}
 func (TaskEnded) isEvent()           {}
 func (TasksChanged) isEvent()        {}
+func (LimitsChanged) isEvent()       {}
 func (ModeChanged) isEvent()         {}
 func (SessionChanged) isEvent()      {}
 func (SessionNamed) isEvent()        {}

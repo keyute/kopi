@@ -482,6 +482,10 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		WorkflowModel: resolved.Config.Workflows.Model, MaxWorkflows: resolved.Config.Workflows.MaxWorkflows, MaxAgents: resolved.Config.Workflows.MaxAgents,
 		Title: fullscreen && resolved.Config.Terminal.Title && resolved.Config.SmallModel != "",
 	}
+	// Naming a plan limit segment in the layout is what makes Kopi call the provider.
+	cfg.Limits = fullscreen && slices.ContainsFunc(config.SegmentNames(resolved.Config.StatusLine.Left, resolved.Config.StatusLine.Right), func(name string) bool {
+		return slices.Contains(config.LimitSegments, name)
+	})
 	// Print mode has no plan approval, so its session has no plan file.
 	if fullscreen {
 		cfg.Plans = plans
