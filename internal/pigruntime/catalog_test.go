@@ -32,6 +32,8 @@ type catalogServer struct {
 	body []byte
 	// hold makes a request wait until its client gives up.
 	hold bool
+	// validators holds the If-None-Match of each request, in order.
+	validators []string
 	// gate, when set, makes a request wait until it is closed or its client
 	// gives up, then answer normally.
 	gate chan struct{}
@@ -81,6 +83,7 @@ func newCatalogServer(t *testing.T, bundled *ai.Model, status int, ids ...string
 		assert.Empty(t, r.Header.Get("Authorization"))
 		s.requests <- struct{}{}
 		s.mu.Lock()
+		s.validators = append(s.validators, r.Header.Get("If-None-Match"))
 		body, hold, gate := s.body, s.hold, s.gate
 		s.mu.Unlock()
 		if gate != nil {
@@ -279,4 +282,228 @@ func TestSignInAfterNoCredentialFetches(t *testing.T) {
 
 	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogModel}))
 	assert.Len(t, s.requests, 1)
+}
+
+// refreshUsed marks catalogProvider used by checking a bundled id of it, then
+// runs the background refresh to its end.
+func refreshUsed(t *testing.T, r *Runtime) {
+	t.Helper()
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}))
+	r.StartModelListRefresh()
+	<-r.refreshDone
+}
+
+func drainRequests(s *catalogServer) {
+	for len(s.requests) > 0 {
+		<-s.requests
+	}
+}
+
+// ageStore marks every list in the saved store as checked long ago.
+func ageStore(t *testing.T, sb sandbox) {
+	t.Helper()
+	path := filepath.Join(sb.agentDir, "models-store.json")
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var store any
+	require.NoError(t, json.Unmarshal(data, &store))
+	var walk func(v any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case map[string]any:
+			if _, ok := v["checkedAt"]; ok {
+				v["checkedAt"] = 1
+			}
+			for _, child := range v {
+				walk(child)
+			}
+		case []any:
+			for _, child := range v {
+				walk(child)
+			}
+		}
+	}
+	walk(store)
+	data, err = json.Marshal(store)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+}
+
+func TestRefreshAsksOnlyUsedProviders(t *testing.T) {
+	sb := newSandbox(t)
+	writeAgentFile(t, sb, "auth.json", `{"`+catalogProvider+`":{"type":"api_key","key":"`+catalogKey+`"},"openai":{"type":"api_key","key":"`+catalogKey+`"}}`)
+	probe := newCatalogRuntime(t, sb, "http://127.0.0.1:1")
+	s := newCatalogServer(t, bundledMistral(t, probe), http.StatusOK, "catalog-new-1")
+	r := newCatalogRuntime(t, sb, s.URL)
+
+	refreshUsed(t, r)
+
+	assert.Len(t, s.requests, 1)
+	drainRequests(s)
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogModel}))
+	assert.Empty(t, s.requests)
+}
+
+func TestRefreshSkipsFreshListAndRevalidatesStaleOne(t *testing.T) {
+	sb, s, r := catalogSetup(t, http.StatusOK, "catalog-new-1")
+	refreshUsed(t, r)
+	drainRequests(s)
+
+	refreshUsed(t, newCatalogRuntime(t, sb, s.URL))
+	assert.Empty(t, s.requests)
+
+	ageStore(t, sb)
+	refreshUsed(t, newCatalogRuntime(t, sb, s.URL))
+	assert.Len(t, s.requests, 1)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	assert.Equal(t, []string{"", `"catalog-1"`}, s.validators)
+}
+
+func TestRefreshNeedsOnlineAndCredentialAndUse(t *testing.T) {
+	offline := func(key, value string) func(*testing.T, sandbox, string) *Runtime {
+		return func(t *testing.T, sb sandbox, url string) *Runtime {
+			t.Setenv(key, value)
+			r, err := New(t.Context(), Options{Home: sb.kopiHome, AgentDir: sb.agentDir, CWD: sb.ws, catalogURL: url})
+			require.NoError(t, err)
+			t.Cleanup(r.Close)
+			return r
+		}
+	}
+	tests := []struct {
+		name string
+		open func(*testing.T, sandbox, string) *Runtime
+		key  bool
+		use  bool
+	}{
+		{"PI_OFFLINE", offline("PI_OFFLINE", "1"), true, true},
+		{"PIG_OFFLINE", offline("PIG_OFFLINE", "true"), true, true},
+		{"no credential", newCatalogRuntime, false, true},
+		{"nothing checked", newCatalogRuntime, true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.key {
+				clearEnv(t)
+			}
+			sb := newSandbox(t)
+			if tt.key {
+				withMistralKey(t, sb)
+			}
+			probe := newCatalogRuntime(t, sb, "http://127.0.0.1:1")
+			s := newCatalogServer(t, bundledMistral(t, probe), http.StatusOK, "catalog-new-1")
+			r := tt.open(t, sb, s.URL)
+			switch {
+			case tt.use && tt.key:
+				refreshUsed(t, r)
+			case tt.use:
+				// A provider without a credential must not count as used.
+				require.ErrorIs(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}), ErrNoCredential)
+				r.StartModelListRefresh()
+				<-r.refreshDone
+			default:
+				r.StartModelListRefresh()
+				<-r.refreshDone
+			}
+			assert.Empty(t, s.requests)
+			if !tt.key {
+				// PiG itself makes no request without a credential, so the request
+				// count cannot pin that the provider stayed out of used.
+				r.refreshMu.Lock()
+				defer r.refreshMu.Unlock()
+				assert.Empty(t, r.used)
+			}
+		})
+	}
+}
+
+func TestFailedRefreshIsOnlyLogged(t *testing.T) {
+	_, s, r := catalogSetup(t, http.StatusServiceUnavailable, "catalog-new-1")
+	refreshUsed(t, r)
+	assert.NotZero(t, len(s.requests))
+	drainRequests(s)
+
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}))
+	err := r.Check(t.Context(), OpenOptions{Model: catalogModel})
+	require.ErrorIs(t, err, ErrUnknownModel)
+	require.ErrorIs(t, err, ErrModelListUnavailable)
+	assert.NotZero(t, len(s.requests))
+}
+
+// The registry is checked rather than an open session: the refresh publishes
+// to it, and a session reads its model from it.
+func TestRefreshAppliesChangedContextWindow(t *testing.T) {
+	_, s, r := catalogSetup(t, http.StatusOK)
+	bundled := bundledMistral(t, r)
+	changed := *bundled
+	changed.Capabilities.ContextWindow = bundled.Capabilities.ContextWindow + 1000
+	s.bundled = &changed
+	s.serve(t, bundled.ID)
+
+	refreshUsed(t, r)
+
+	got := r.svcs.ModelRuntime().GetModel(catalogProvider, bundled.ID)
+	require.NotNil(t, got)
+	assert.Equal(t, changed.Capabilities.ContextWindow, got.Capabilities.ContextWindow)
+}
+
+func TestForcedFetchDuringBackgroundRequestResolves(t *testing.T) {
+	_, s, r := catalogSetup(t, http.StatusOK, "catalog-new-1")
+	release := s.gateRequests()
+	defer release()
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}))
+	r.StartModelListRefresh()
+	<-s.requests
+	result := make(chan error, 1)
+	go func() { result <- r.Check(t.Context(), OpenOptions{Model: catalogModel}) }()
+	<-s.requests
+	release()
+
+	require.NoError(t, <-result)
+	<-r.refreshDone
+}
+
+func TestForcedFetchAfterBackgroundRefreshIgnoresFreshList(t *testing.T) {
+	_, s, r := catalogSetup(t, http.StatusOK, "catalog-other-1")
+	refreshUsed(t, r)
+	drainRequests(s)
+	s.serve(t, "catalog-new-1")
+
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogModel}))
+
+	assert.Len(t, s.requests, 1)
+}
+
+func TestRefreshAfterForcedFetchMakesNoRequest(t *testing.T) {
+	_, s, r := catalogSetup(t, http.StatusOK, "catalog-new-1")
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogModel}))
+	require.NotEmpty(t, s.requests)
+	drainRequests(s)
+
+	r.StartModelListRefresh()
+	<-r.refreshDone
+
+	assert.Empty(t, s.requests)
+}
+
+func TestCloseStopsHeldRefresh(t *testing.T) {
+	sb := newSandbox(t)
+	withMistralKey(t, sb)
+	probe := newCatalogRuntime(t, sb, "http://127.0.0.1:1")
+	s := newCatalogServer(t, bundledMistral(t, probe), http.StatusOK, "catalog-new-1")
+	s.holdRequests(true)
+	// Built without newCatalogRuntime, whose cleanup would close it twice.
+	r, err := New(t.Context(), Options{Home: sb.kopiHome, AgentDir: sb.agentDir, CWD: sb.ws, catalogURL: s.URL})
+	require.NoError(t, err)
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}))
+	r.StartModelListRefresh()
+	<-s.requests
+
+	r.Close()
+
+	select {
+	case <-r.refreshDone:
+	default:
+		t.Fatal("refresh still running after Close")
+	}
 }

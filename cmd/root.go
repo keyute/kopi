@@ -543,6 +543,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		}
 		return diagnose(err, c.Model(), resolved.Origins["model"], paths, req, providers)
 	}
+	rt.StartModelListRefresh()
 	// SIGINT is a channel rather than part of the context because it must
 	// keep firing: each one interrupts the running turn, and only one at
 	// idle exits. It is registered before stopStart so SIGINT never reverts to
