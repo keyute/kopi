@@ -308,7 +308,7 @@ func TestResolveOverridesOneSubagentLineSide(t *testing.T) {
 	assert.Equal(t, "default", r.Origins["subagentline.right"])
 }
 
-func TestResolveRejectsUnknownAgentSegmentNamingLayer(t *testing.T) {
+func TestResolveRejectsUnknownSubagentSegmentNamingLayer(t *testing.T) {
 	for _, side := range []string{"left", "right"} {
 		global := globalLayer(t, `{"subagentline": {"`+side+`": ["$agent", "$weather"]}}`)
 		_, err := Resolve(Defaults(), global)

@@ -76,7 +76,7 @@ Report file paths and line numbers.
 
 ### Agent rows
 
-- While a subagent runs, rows show under the status line, two columns in: `main` first, then one row per running subagent in start order, such as `○ explorer › Find the config loader · 22.1k tokens · gpt-5.6`. The segments are set by [`subagentline`](configuration.md#subagent-rows).
+- While a subagent runs, rows show under the status line, two columns in: `main` first, then one row per running subagent in start order, such as `○ explorer › Find the config loader · 22.1k tokens · gpt-5.6`. The `main` row reads only `main`; a subagent row's entries are set by [`subagentline`](configuration.md#subagent-rows).
 - `●` marks the row of the session whose view is open, `○` the others.
 - A subagent that has ended leaves the rows, unless its view is the one open or holds input handed back when it stopped; then `main` and that row stay until you switch away, or for held input until you open it. With no running subagent and the main view open there are no rows.
 - At most five rows show; with more, `↑ N more` and `↓ N more` lines mark what is hidden. On a narrow terminal a row drops entries from the right end, then is cut.

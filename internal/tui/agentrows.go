@@ -28,11 +28,11 @@ const (
 // entry is one row of the agent rows: what it opens and what its segments show.
 type entry struct {
 	app.AgentStatus
-	// busy is whether a turn runs in the session, as its view saw it.
+	// busy is whether a turn runs in the subagent, as its view saw it.
 	busy bool
-	// since is when the session's running turn started, zero when none runs.
+	// since is when the subagent's running turn started, zero when none runs.
 	since time.Time
-	// activity is the title of the tool call running in the session, "" when none.
+	// activity is the title of the tool call running in the subagent, "" when none.
 	activity string
 }
 
@@ -132,7 +132,7 @@ func (m *model) entries() []entry {
 	for _, a := range m.agents {
 		e := entry{AgentStatus: a}
 		held := false
-		if v := m.views[a.ID]; v != nil {
+		if v := m.views[a.ID]; v != nil && a.ID != app.Main {
 			if e.busy = v.busy; e.busy {
 				e.since = v.turnStart
 			}
@@ -252,12 +252,12 @@ func (m *model) agentRow(e entry) string {
 		}
 		return fg(m.th.accent).Render(s)
 	}
+	if e.ID == app.Main {
+		return ansi.Truncate(paint(gutter+glyph+" main"), m.width, "")
+	}
 	lookup := func(name string) (string, bool) {
 		text, ok := subagentSegments[name](e, m.th)
 		return paint(text), ok
-	}
-	if e.ID == app.Main {
-		return ansi.Truncate(paint(gutter+glyph+" main"), m.width, "")
 	}
 	render := func(fs []config.Format) []string { return renderEntries(fs, lookup, paint) }
 	sep := paint(m.subagentLine.separator)

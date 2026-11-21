@@ -213,24 +213,23 @@ A segment in `segments`:
 
 ## Subagent rows
 
-`subagentline` lists the `left` and `right` entries of the subagent rows among the [agent rows](subagents.md#agent-rows) shown under the status line. Entries use the status line's [format syntax](#formats). A [workflow](workflows.md#footer-row)'s row has a fixed format.
+`subagentline` lists the `left` and `right` entries of a subagent's row in the [agent rows](subagents.md#agent-rows) shown under the status line. Entries use the status line's [format syntax](#formats). The `main` row reads only `main` and a [workflow](workflows.md#footer-row)'s row has a fixed format; `subagentline` configures neither.
 
-- The `main` row always reads `main`; `subagentline` sets the subagent rows.
 - Defaults: left `$agent`, `$model`, `$tokens`; right none.
 - `separator` goes between entries (default ` · `, `""` for none; no control characters).
-- At most five rows show; the limit is fixed. On a short terminal fewer rows show.
+- At most five agent rows show, the `main` row and workflow rows among them; the limit is fixed. On a short terminal fewer rows show.
 
 Segments:
 
 | Segment | Shows |
 | --- | --- |
 | `agent` | The subagent's name and what it was started for, the description cut to 36 columns (`explorer › Find the config loader`) |
-| `tokens` | The session's context size (`22.1k tokens`); absent until known |
-| `model` | The session's model, in the form of the status line's `model` |
+| `tokens` | The subagent's context size (`22.1k tokens`); absent until known |
+| `model` | The subagent's model, in the form of the status line's `model` |
 | `effort` | The reasoning level in use (`high`); absent when the model does not reason |
 | `context` | The share of the context window in use (`18.0%`), as in the status line; absent until known |
-| `tools` | The tool calls the session has made (`12 tools`); absent until the first |
-| `cost` | The session's estimated cost (`$0.42`), as in the status line; absent while zero |
+| `tools` | The tool calls the subagent has made (`12 tools`); absent until the first |
+| `cost` | The subagent's estimated cost (`$0.42`), as in the status line; absent while zero |
 | `elapsed` | How long the current turn has been running; absent while idle |
 | `state` | `running`, `completed`, `failed` or `stopped` |
 | `activity` | The tool call running now; absent when none |

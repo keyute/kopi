@@ -649,6 +649,18 @@ func TestElapsedKeepsTheTickRunningInAnIdleView(t *testing.T) {
 	})
 }
 
+func TestMainsTurnDoesNotKeepTheTickRunningBehindAnIdleView(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := subagentLineModel(t, 60, lineOf([]string{"$agent", "$elapsed"}), explorer("t1"))
+		send(m, sub("t1", event.TurnEnd{}))
+		display(m, "t1")
+		send(m, event.TurnStart{Prompt: "go"})
+
+		_, cmd := m.Update(m.spinner.Tick())
+		assert.Nil(t, cmd, "main's row shows no clock")
+	})
+}
+
 func TestWithoutElapsedAnIdleViewDoesNotTick(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, _ := subagentLineModel(t, 60, lineOf([]string{"$agent"}), explorer("t1"))
