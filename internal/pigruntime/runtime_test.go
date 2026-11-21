@@ -1164,3 +1164,43 @@ func TestOpenRejectsParentWithResumeOrContinue(t *testing.T) {
 	}
 	assert.NoError(t, r.Check(t.Context(), OpenOptions{Model: fauxModel, Parent: parent, Effort: MaxEffort, Authority: policy.NewAuthority()}))
 }
+
+func TestUnknownModelWithoutCredentialMakesNoRequest(t *testing.T) {
+	clearEnv(t)
+	sb := newSandbox(t)
+	probe := newCatalogRuntime(t, sb, "http://127.0.0.1:1")
+	s := newCatalogServer(t, bundledMistral(t, probe), http.StatusOK, "catalog-new-1")
+	r := newCatalogRuntime(t, sb, s.URL)
+
+	err := r.Check(t.Context(), OpenOptions{Model: catalogModel})
+
+	require.ErrorIs(t, err, ErrNoCredential)
+	assert.ErrorIs(t, err, ErrUnknownModel)
+	assert.Empty(t, s.requests)
+}
+
+func TestUnknownProviderMakesNoRequest(t *testing.T) {
+	_, s, r := catalogSetup(t, http.StatusOK, "catalog-new-1")
+
+	err := r.Check(t.Context(), OpenOptions{Model: "nosuch/catalog-new-1"})
+
+	require.ErrorIs(t, err, ErrUnknownModel)
+	assert.Empty(t, s.requests)
+}
+
+func TestModelsFileEntryInheritsProviderAndCredential(t *testing.T) {
+	sb := newSandbox(t)
+	withMistralKey(t, sb)
+	writeAgentFile(t, sb, "models.json", `{"providers":{"`+catalogProvider+`":{"models":[{"id":"brand-new"}]}}}`)
+	s := newCatalogServer(t, &ai.Model{}, http.StatusOK)
+	r := newCatalogRuntime(t, sb, s.URL)
+
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/brand-new"}))
+	assert.Empty(t, s.requests)
+	declared := r.svcs.ModelRuntime().GetModel(catalogProvider, "brand-new")
+	require.NotNil(t, declared)
+	bundled := bundledMistral(t, r)
+	assert.Equal(t, bundled.ProviderMeta.API, declared.ProviderMeta.API)
+	assert.Equal(t, bundled.ProviderMeta.BaseURL, declared.ProviderMeta.BaseURL)
+	assert.NotEmpty(t, declared.ProviderMeta.BaseURL)
+}
