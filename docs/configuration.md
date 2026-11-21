@@ -36,7 +36,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `workflows` | `workflows.model`, `workflows.maxWorkflows` and `workflows.maxAgents`, see [`workflows`](#workflows) |
 | `keys` | Key bindings for fullscreen actions, see [Keys](#keys) |
 | `statusline` | Status line entries, see [Status line](#status-line) |
-| `agentline` | Agent row entries, see [Agent rows](#agent-rows) |
+| `subagentline` | Subagent row entries, see [Subagent rows](#subagent-rows) |
 | `theme` | Colour themes, see [Theme](#theme) |
 | `terminal` | What Kopi tells the terminal, see [Terminal](#terminal) |
 | `permissions` | Allow, ask and deny rules, see [permissions](permissions.md#rules) |
@@ -119,7 +119,7 @@ What each key does is in [usage](usage.md#keys).
 
 ### Formats
 
-The entries of `statusline` and of [`agentline`](#agent-rows) use a subset of starship's format syntax:
+The entries of `statusline` and of [`subagentline`](#subagent-rows) use a subset of starship's format syntax:
 
 | Written | Meaning |
 | --- | --- |
@@ -211,10 +211,11 @@ A segment in `segments`:
 }
 ```
 
-## Agent rows
+## Subagent rows
 
-`agentline` lists the `left` and `right` entries of the [agent rows](subagents.md#agent-rows) shown under the status line. Entries use the status line's [format syntax](#formats). A [workflow](workflows.md#footer-row)'s row has a fixed format.
+`subagentline` lists the `left` and `right` entries of the subagent rows among the [agent rows](subagents.md#agent-rows) shown under the status line. Entries use the status line's [format syntax](#formats). A [workflow](workflows.md#footer-row)'s row has a fixed format.
 
+- The `main` row always reads `main`; `subagentline` sets the subagent rows.
 - Defaults: left `$agent`, `$model`, `$tokens`; right none.
 - `separator` goes between entries (default ` · `, `""` for none; no control characters).
 - At most five rows show; the limit is fixed. On a short terminal fewer rows show.
@@ -223,7 +224,7 @@ Segments:
 
 | Segment | Shows |
 | --- | --- |
-| `agent` | The subagent's name and what it was started for, the description cut to 36 columns (`explorer › Find the config loader`); `main` on the main row |
+| `agent` | The subagent's name and what it was started for, the description cut to 36 columns (`explorer › Find the config loader`) |
 | `tokens` | The session's context size (`22.1k tokens`); absent until known |
 | `model` | The session's model, in the form of the status line's `model` |
 | `effort` | The reasoning level in use (`high`); absent when the model does not reason |
@@ -231,16 +232,16 @@ Segments:
 | `tools` | The tool calls the session has made (`12 tools`); absent until the first |
 | `cost` | The session's estimated cost (`$0.42`), as in the status line; absent while zero |
 | `elapsed` | How long the current turn has been running; absent while idle |
-| `state` | `running`, `completed`, `failed` or `stopped`; on the main row `running` while a turn runs, else absent |
+| `state` | `running`, `completed`, `failed` or `stopped` |
 | `activity` | The tool call running now; absent when none |
-| `id` | The task id (`t3`); absent on the main row |
+| `id` | The task id (`t3`) |
 
 - Only these segments exist; there are no user-defined segments. An unknown name stops Kopi at start with an error naming the config layer.
 
 ```json
 {
   "version": 1,
-  "agentline": {
+  "subagentline": {
     "left": ["$agent", "$activity"],
     "right": ["$state( $elapsed)", "$id"],
     "separator": " | "

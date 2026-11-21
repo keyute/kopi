@@ -36,15 +36,15 @@ type entry struct {
 	activity string
 }
 
-// agentLayout holds the parsed entries on each side of an agent row and the
+// subagentLayout holds the parsed entries on each side of a subagent row and the
 // separator between them.
-type agentLayout struct {
+type subagentLayout struct {
 	left, right []config.Format
 	separator   string
 }
 
-func newAgentLayout(line config.AgentLine) agentLayout {
-	return agentLayout{left: parseFormats(line.Left), right: parseFormats(line.Right), separator: line.Separator}
+func newSubagentLayout(line config.SubagentLine) subagentLayout {
+	return subagentLayout{left: parseFormats(line.Left), right: parseFormats(line.Right), separator: line.Separator}
 }
 
 // agentTitle is a subagent's or workflow's name and, cut to a width, what it was
@@ -57,15 +57,12 @@ func agentTitle(agent, description string) string {
 	return name + " › " + cutWords(desc, descriptionWidth)
 }
 
-// agentSegment renders one part of an agent row; false draws nothing.
-type agentSegment func(entry, theme) (string, bool)
+// subagentSegment renders one part of a subagent row; false draws nothing.
+type subagentSegment func(entry, theme) (string, bool)
 
-// agentSegments is keyed by the config's agent segment names.
-var agentSegments = map[string]agentSegment{
+// subagentSegments is keyed by the config's subagent segment names.
+var subagentSegments = map[string]subagentSegment{
 	"agent": func(e entry, _ theme) (string, bool) {
-		if e.ID == app.Main {
-			return "main", true
-		}
 		return agentTitle(e.Agent, e.Description), true
 	},
 	"tokens": func(e entry, _ theme) (string, bool) { return tokensText(e.ContextTokens), e.ContextTokens > 0 },
@@ -74,13 +71,10 @@ var agentSegments = map[string]agentSegment{
 		return formatDuration(time.Since(e.since)), !e.since.IsZero()
 	},
 	"state": func(e entry, _ theme) (string, bool) {
-		if e.ID == app.Main {
-			return "running", e.busy
-		}
 		return string(e.State), e.State != ""
 	},
 	"activity": func(e entry, _ theme) (string, bool) { return oneLine(e.activity), e.activity != "" },
-	"id":       func(e entry, _ theme) (string, bool) { return e.ID, e.ID != app.Main },
+	"id":       func(e entry, _ theme) (string, bool) { return e.ID, true },
 	"effort":   func(e entry, _ theme) (string, bool) { return e.Effort, e.Effort != "" },
 	"context": func(e entry, th theme) (string, bool) {
 		text, warn, ok := contextText(e.ContextTokens, e.ContextWindow)
@@ -259,17 +253,20 @@ func (m *model) agentRow(e entry) string {
 		return fg(m.th.accent).Render(s)
 	}
 	lookup := func(name string) (string, bool) {
-		text, ok := agentSegments[name](e, m.th)
+		text, ok := subagentSegments[name](e, m.th)
 		return paint(text), ok
 	}
+	if e.ID == app.Main {
+		return ansi.Truncate(paint(gutter+glyph+" main"), m.width, "")
+	}
 	render := func(fs []config.Format) []string { return renderEntries(fs, lookup, paint) }
-	sep := paint(m.agentLine.separator)
+	sep := paint(m.subagentLine.separator)
 	var right string
-	if parts := render(m.agentLine.right); len(parts) > 0 {
+	if parts := render(m.subagentLine.right); len(parts) > 0 {
 		right = strings.Join(parts, sep) + "  "
 	}
 	var left string
-	parts := render(m.agentLine.left)
+	parts := render(m.subagentLine.left)
 	for n := len(parts); n >= 0; n-- {
 		left = paint(gutter+glyph+" ") + strings.Join(parts[:n], sep)
 		if lipgloss.Width(left)+1+lipgloss.Width(right) <= m.width {
