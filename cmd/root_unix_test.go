@@ -650,6 +650,16 @@ func TestRootFullscreenUnknownWorkflowsModelFailsAtStart(t *testing.T) {
 	assert.Contains(t, err.Error(), `unknown model "nosuch/model-1": declare the model in `+filepath.Join(e.agentDir, "models.json"))
 }
 
+func TestRootFullscreenSameProviderUnknownSmallModelWithoutCredentialFailsAtStart(t *testing.T) {
+	e := newTestEnv(t)
+
+	err := startFullscreenWithConfig(t, e, `{"smallModel":"openai-codex/nosuch-1"}`)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"smallModel" in `+filepath.Join(e.kopiHome, "config.json"))
+	assert.Contains(t, err.Error(), `no credential for provider "openai-codex"`)
+}
+
 func TestRootFullscreenDifferentProviderWorkflowsModelWithoutCredentialFailsAtStart(t *testing.T) {
 	e := newTestEnv(t)
 	t.Setenv("MISTRAL_API_KEY", "")

@@ -867,11 +867,12 @@ func planPolicy(p sandbox.Policy, cwd string) sandbox.Policy {
 
 // sameProviderNoCredential reports whether err is the missing credential of
 // the provider a configured model shares with model; in fullscreen the
-// first-run login of model supplies it.
+// first-run login of model supplies it. An unknown id is not skipped: nothing
+// rechecks it after the login.
 func sameProviderNoCredential(err error, model, sub string) bool {
 	provider, _, _ := strings.Cut(model, "/")
 	subProvider, _, _ := strings.Cut(sub, "/")
-	return errors.Is(err, pigruntime.ErrNoCredential) && provider == subProvider
+	return errors.Is(err, pigruntime.ErrNoCredential) && !errors.Is(err, pigruntime.ErrUnknownModel) && provider == subProvider
 }
 
 // unknownModelError is the advice for an unknown model; check, when set,

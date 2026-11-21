@@ -401,14 +401,15 @@ func (r *Runtime) usableModel(ctx context.Context, ref string) (*ai.Model, error
 		refreshErr := r.refreshModels(ctx, provider)
 		if model = r.svcs.ModelRuntime().GetModel(provider, id); model == nil {
 			// A known provider without a credential reports that, since a
-			// sign-in would let the fetch run.
+			// sign-in would let the fetch run; ErrUnknownModel marks the id as
+			// still unverified.
 			if r.svcs.ModelRuntime().GetProvider(provider) != nil {
 				ok, err := r.hasCredential(ctx, provider)
 				if err != nil {
 					return nil, err
 				}
 				if !ok {
-					return nil, fmt.Errorf("provider %q: %w", provider, ErrNoCredential)
+					return nil, fmt.Errorf("provider %q: %w (%w)", provider, ErrNoCredential, ErrUnknownModel)
 				}
 			}
 			if refreshErr != nil {
