@@ -216,7 +216,7 @@ func blockedTitle(t *testing.T, title *ai.FauxProviderHandle, reply string, unbl
 	return entered
 }
 
-func TestTitleCommitPrecedesSameSessionResume(t *testing.T) {
+func TestTitleCommitCoversPersistenceAndAnnouncement(t *testing.T) {
 	h, title := titleHarness(t, Config{Title: true})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("one")})
 	title.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("Fix the build")})

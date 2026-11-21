@@ -894,6 +894,11 @@ func newMockProvider(t *testing.T, respond func(http.ResponseWriter)) *mockServe
 	return m
 }
 
+// isTitleRequest reports whether req carries the session-title system prompt.
+func isTitleRequest(req mockRequest) bool {
+	return strings.Contains(fmt.Sprint(req.body), "Write a title of at most six words")
+}
+
 type mockServer struct {
 	*httptest.Server
 	requests chan mockRequest
@@ -3029,8 +3034,8 @@ func TestRootPrintSendsNoTitleRequest(t *testing.T) {
 	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
 
 	require.NoError(t, err)
-	server.next(t)
-	assert.Empty(t, server.requests)
+	assert.False(t, isTitleRequest(server.next(t)))
+	assert.Empty(t, server.requests, "execute has returned, so a title worker has finished")
 }
 
 func TestRootPrintReportsSkillProblemsAndRuns(t *testing.T) {

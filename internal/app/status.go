@@ -31,14 +31,7 @@ type Status struct {
 	// main session, its subagents, the workflow agents that ended, and the
 	// classifier, WebFetch and WebSearch requests.
 	TotalCost float64
-	// Running lists the running subagents and workflows in task order, the ones
-	// Agents and Workflows count.
-	Running []RunningAgent
 }
-
-// RunningAgent is a running subagent or workflow; Agent is the definition's
-// name, or tool.WorkflowAgent for a workflow.
-type RunningAgent struct{ ID, Agent, Description string }
 
 // AgentStatus describes one session for a frontend: the main session or a subagent's.
 type AgentStatus struct {

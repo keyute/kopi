@@ -1038,14 +1038,12 @@ func TestStopTaskOnAgentQueuesAgentNotice(t *testing.T) {
 	var at *tool.AgentTask
 	at = h.tasks.StartAgent("reviewer", "check the diff\nmore", func() { at.End(tool.TaskStopped, "", "") })
 	assert.Equal(t, 1, h.c.Status().Agents)
-	assert.Equal(t, []RunningAgent{{ID: at.ID(), Agent: "reviewer", Description: "check the diff\nmore"}}, h.c.Status().Running)
 
 	require.NoError(t, h.c.StopTask(at.ID()))
 
 	assert.True(t, h.idle(), "a human stop does not wake the model")
 	assert.Zero(t, h.faux.CallCount())
 	assert.Zero(t, h.c.Status().Agents)
-	assert.Empty(t, h.c.Status().Running)
 	queued := h.queuedNotices()
 	require.Len(t, queued, 1)
 	assert.Equal(t, "Agent "+at.ID()+" (reviewer) stopped by the user: check the diff\n(no output)", queued[0].Text)
@@ -1065,26 +1063,6 @@ func TestStatusCountsAgentsSeparately(t *testing.T) {
 	s := h.c.Status()
 	assert.Equal(t, 2, s.Agents)
 	assert.Equal(t, 1, s.Shells)
-}
-
-func TestStatusRunningListsSubagentsAndWorkflowsNotShells(t *testing.T) {
-	a, started := blockingHarness(t, Config{}, agentDef("explorer"))
-	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1"))})
-	shell, err := a.tasks.Start(t.Context(), tool.NewShell(pigruntimetest.NewSandbox(t).Workspace, nil), "/bin/sleep 60")
-	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = a.tasks.Stop(shell.ID) })
-	workflow := a.startWorkflow(t, "audit", `return await agent("go")`)
-	wait(t, started)
-	var agent *tool.AgentTask
-	agent = a.tasks.StartAgent("explorer", "find it", func() { agent.End(tool.TaskStopped, "", "") })
-
-	s := a.c.Status()
-	assert.Equal(t, 1, s.Shells)
-	assert.Equal(t, []RunningAgent{
-		{ID: workflow, Agent: tool.WorkflowAgent, Description: "audit"},
-		{ID: agent.ID(), Agent: "explorer", Description: "find it"},
-	}, s.Running)
-	assert.Less(t, workflow, agent.ID())
 }
 
 func TestTaskNoticeNamesTheSavedOutput(t *testing.T) {

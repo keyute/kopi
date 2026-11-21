@@ -12,6 +12,7 @@ import (
 
 	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/tool"
 )
 
 // working reports whether the session is doing anything on its own: the main
@@ -61,35 +62,20 @@ func (m *model) programStatus() tea.ProgramStatus {
 	return s
 }
 
-// terminalNames is the session's name and the workspace folder's name, each on
-// one line; the folder is "" when the workspace has none.
-func (m *model) terminalNames() (title, folder string) {
-	title = oneLine(m.title)
+// terminalNames is the session's name, else the workspace folder, else kopi,
+// and the workspace folder's name, each on one line; the folder is "" when the
+// workspace has none.
+func (m *model) terminalNames() (label, folder string) {
 	folder = oneLine(filepath.Base(m.status.Workspace))
 	if folder == "." || folder == string(filepath.Separator) {
 		folder = ""
 	}
-	return title, folder
-}
-
-// terminalLabel is the session's name, else the workspace folder, else kopi.
-func (m *model) terminalLabel() string {
-	title, folder := m.terminalNames()
-	return labelOf(title, folder)
-}
-
-func labelOf(title, folder string) string {
-	label := cmp.Or(title, folder)
-	if label == "." || label == string(filepath.Separator) {
-		return "kopi"
-	}
-	return cmp.Or(label, "kopi")
+	return cmp.Or(oneLine(m.title), folder, "kopi"), folder
 }
 
 func (m *model) terminalTitle(state tea.ProgramState) string {
-	title, folder := m.terminalNames()
-	label := labelOf(title, folder)
-	if title != "" && folder != "" {
+	label, folder := m.terminalNames()
+	if oneLine(m.title) != "" && folder != "" {
 		label += " · " + folder
 	}
 	if m.readsStatus {
@@ -112,9 +98,14 @@ func (m *model) terminalTitle(state tea.ProgramState) string {
 // syncRecords reports a record for each running subagent and workflow that is
 // new or retitled, and clears each that ended, in one write sorted by id.
 func (m *model) syncRecords() tea.Cmd {
-	live := make(map[string]string, len(m.status.Running))
-	for _, r := range m.status.Running {
-		live[r.ID] = agentTitle(r.Agent, r.Description)
+	live := make(map[string]string, len(m.agents)+len(m.workflows))
+	for _, a := range m.agents {
+		if a.ID != app.Main && a.State == tool.TaskRunning {
+			live[a.ID] = agentTitle(a.Agent, a.Description)
+		}
+	}
+	for _, w := range m.workflows {
+		live[w.ID] = agentTitle(tool.WorkflowAgent, w.Description)
 	}
 	ids := slices.Collect(maps.Keys(live))
 	for id := range m.records {
@@ -178,7 +169,8 @@ func (m *model) attend(msg tea.Msg, was tea.ProgramStatus) tea.Cmd {
 	default:
 		return nil
 	}
-	return m.notify(text + m.terminalLabel())
+	label, _ := m.terminalNames()
+	return m.notify(text + label)
 }
 
 func (m *model) notify(text string) tea.Cmd {

@@ -198,10 +198,11 @@ func TestChildRecordsFollowRunningAgentsAndWorkflows(t *testing.T) {
 	report := func(id, title string) string {
 		return ansi.SetProgramStatus(ansi.ProgramStatus{State: ansi.ProgramStateWorking, ID: id, App: "kopi", Title: title})
 	}
-	researcher := app.RunningAgent{ID: "t1", Agent: "researcher", Description: "peer survey"}
-	workflow := app.RunningAgent{ID: "t2", Agent: tool.WorkflowAgent, Description: "review changes"}
+	main := app.AgentStatus{ID: app.Main}
+	researcher := app.AgentStatus{ID: "t1", Agent: "researcher", Description: "peer survey", State: tool.TaskRunning}
+	workflow := app.WorkflowStatus{ID: "t2", Description: "review changes", State: tool.TaskRunning}
 
-	c.status.Running = []app.RunningAgent{researcher, workflow}
+	c.agents, c.workflows = []app.AgentStatus{main, researcher}, []app.WorkflowStatus{workflow}
 	send(m, event.TasksChanged{})
 	assert.Equal(t, []any{report("t1", "researcher › peer survey") + report("t2", "workflow › review changes")}, *raw)
 
@@ -209,12 +210,13 @@ func TestChildRecordsFollowRunningAgentsAndWorkflows(t *testing.T) {
 	send(m, event.TasksChanged{})
 	assert.Empty(t, *raw, "nothing changed")
 
-	c.status.Running = []app.RunningAgent{workflow}
+	researcher.State = tool.TaskCompleted
+	c.agents = []app.AgentStatus{main, researcher}
 	send(m, event.TasksChanged{})
 	assert.Equal(t, []any{ansi.ClearProgramStatusID("t1")}, *raw)
 
 	*raw = nil
-	c.status.Running = nil
+	c.agents, c.workflows = nil, nil
 	send(m, event.SessionChanged{})
 	assert.Equal(t, []any{ansi.ClearProgramStatusID("t2")}, *raw)
 }
@@ -225,11 +227,14 @@ func TestChildRecordsSyncInOneWriteInIDOrder(t *testing.T) {
 	report := func(id, title string) string {
 		return ansi.SetProgramStatus(ansi.ProgramStatus{State: ansi.ProgramStateWorking, ID: id, App: "kopi", Title: title})
 	}
-	c.status.Running = []app.RunningAgent{{ID: "t1", Agent: "researcher", Description: "one"}, {ID: "t3", Agent: "researcher", Description: "three"}}
+	running := func(id, description string) app.AgentStatus {
+		return app.AgentStatus{ID: id, Agent: "researcher", Description: description, State: tool.TaskRunning}
+	}
+	c.agents = []app.AgentStatus{running("t1", "one"), running("t3", "three")}
 	send(m, event.TasksChanged{})
 
 	*raw = nil
-	c.status.Running = []app.RunningAgent{{ID: "t2", Agent: "researcher", Description: "two"}, {ID: "t3", Agent: "researcher", Description: "three again"}}
+	c.agents = []app.AgentStatus{running("t2", "two"), running("t3", "three again")}
 	send(m, event.TasksChanged{})
 	assert.Equal(t, []any{ansi.ClearProgramStatusID("t1") + report("t2", "researcher › two") + report("t3", "researcher › three again")}, *raw)
 }
@@ -237,11 +242,11 @@ func TestChildRecordsSyncInOneWriteInIDOrder(t *testing.T) {
 func TestChildRecordTitleIsTheAgentRowsText(t *testing.T) {
 	m, c := newTestModel(t, 60, 20)
 	raw := recordRaw(m)
-	r := app.RunningAgent{ID: "t1", Agent: "researcher", Description: "a long description of what this agent was started to look into"}
-	c.status.Running = []app.RunningAgent{r}
+	r := app.AgentStatus{ID: "t1", Agent: "researcher", Description: "a long description of what this agent was started to look into", State: tool.TaskRunning}
+	c.agents = []app.AgentStatus{r}
 	send(m, event.TasksChanged{})
 
-	text, ok := agentSegments["agent"](entry{AgentStatus: app.AgentStatus{ID: r.ID, Agent: r.Agent, Description: r.Description}}, theme{})
+	text, ok := agentSegments["agent"](entry{AgentStatus: r}, theme{})
 	require.True(t, ok)
 	assert.Equal(t, []any{ansi.SetProgramStatus(ansi.ProgramStatus{State: ansi.ProgramStateWorking, ID: "t1", App: "kopi", Title: text})}, *raw)
 }

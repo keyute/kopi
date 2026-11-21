@@ -796,10 +796,11 @@ func TestRootFullscreenTitleRequest(t *testing.T) {
 	for _, tc := range []struct {
 		name, config string
 		requests     int
+		titles       int
 	}{
-		{"small model set", fmt.Sprintf(`{"smallModel":%q}`, mockModel), 2},
-		{"title off", fmt.Sprintf(`{"smallModel":%q,"terminal":{"title":false}}`, mockModel), 1},
-		{"no small model", `{}`, 1},
+		{"small model set", fmt.Sprintf(`{"smallModel":%q}`, mockModel), 2, 1},
+		{"title off", fmt.Sprintf(`{"smallModel":%q,"terminal":{"title":false}}`, mockModel), 1, 0},
+		{"no small model", `{}`, 1, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newTestEnv(t)
@@ -860,10 +861,12 @@ func TestRootFullscreenTitleRequest(t *testing.T) {
 			_, err := io.WriteString(master, "fullscreen prompt\r")
 			require.NoError(t, err)
 			wait(answered)
+			var titles int
 			for range tc.requests {
-				server.next(t)
+				if isTitleRequest(server.next(t)) {
+					titles++
+				}
 			}
-			assert.Empty(t, server.requests)
 			_, err = master.Write([]byte{4}) // ctrl-d quits with an empty composer.
 			require.NoError(t, err)
 			select {
@@ -872,6 +875,13 @@ func TestRootFullscreenTitleRequest(t *testing.T) {
 			case <-time.After(waitLimit):
 				t.Fatal("timed out waiting for fullscreen exit")
 			}
+			// Close has waited for the title worker, so no request is still to come.
+			for len(server.requests) > 0 {
+				if isTitleRequest(<-server.requests) {
+					titles++
+				}
+			}
+			assert.Equal(t, tc.titles, titles)
 		})
 	}
 }
