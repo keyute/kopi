@@ -48,7 +48,7 @@ func (c *Controller) nameSessionLocked(ps []pigruntime.Prompt) {
 // longer the main session when the model answers. bound belongs
 // to sess's relay epoch.
 func (c *Controller) nameSession(sess *pigruntime.Session, bound func(event.Event), prompt string) {
-	title, err := c.title(c.titleCtx, prompt)
+	title, err := c.title(c.titleCtx, sess, prompt)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
 			slog.Warn("failed to title session", "err", err)
@@ -71,8 +71,9 @@ func (c *Controller) nameSession(sess *pigruntime.Session, bound func(event.Even
 }
 
 // title asks the small model for a title for a session that begins with prompt.
-func (c *Controller) title(ctx context.Context, prompt string) (string, error) {
-	reply, err := c.SideAnswer(ctx, c.SmallModel(), pigruntime.LowestEffort, titleSystem, truncate(prompt, titlePromptBytes))
+func (c *Controller) title(ctx context.Context, sess *pigruntime.Session, prompt string) (string, error) {
+	reply, cost, err := c.rt.Answer(ctx, c.SmallModel(), pigruntime.LowestEffort, titleSystem, truncate(prompt, titlePromptBytes))
+	c.charge(sess, cost)
 	if err != nil {
 		return "", fmt.Errorf("failed to ask for a title: %w", err)
 	}

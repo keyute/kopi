@@ -57,6 +57,42 @@ func TestFirstPromptNamesSessionOnce(t *testing.T) {
 	assert.Empty(t, named)
 }
 
+func TestSuccessfulTitleChargesTheTotal(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	priced := sb.PricedModel(t)
+	h := newHarness(t, sb, Config{Title: true, SmallModel: priced})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("one")})
+	named := subscribeTo[event.SessionNamed](h.c)
+
+	h.turn(t, "fix the build")
+	assert.Equal(t, event.SessionNamed{Name: "priced answer"}, receiveEvent(t, named))
+	h.c.wg.Wait()
+
+	assert.Equal(t, "priced answer", h.sessionName())
+	assert.Equal(t, pigruntimetest.PricedModelCost, h.c.Status().TotalCost)
+}
+
+func TestTitleWorkerStartedAfterSessionSwitchChargesNothing(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	priced := sb.PricedModel(t)
+	h := newHarness(t, sb, Config{Title: true, SmallModel: priced})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	named := subscribeTo[event.SessionNamed](h.c)
+	h.c.mu.Lock()
+	old, bound := h.c.main.sess, h.c.main.bound
+	h.c.mu.Unlock()
+
+	require.NoError(t, h.c.NewSession(t.Context()))
+	h.c.nameSession(old, bound, "fix the build")
+
+	assert.Zero(t, h.c.Status().TotalCost)
+	assert.Empty(t, old.Name())
+	assert.Empty(t, h.sessionName())
+	assert.Empty(t, named)
+	assert.Empty(t, ofType[event.SessionNamed](h.rec.all()))
+}
+
 func TestPromptQueuedWhileOpeningNamesSession(t *testing.T) {
 	srv := holdServers()
 	h, title := unopenedTitleHarness(t, Config{Title: true, Servers: srv.wait})
