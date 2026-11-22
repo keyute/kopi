@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -241,4 +242,17 @@ func TestEditTarget(t *testing.T) {
 	got, err := tool.Target(json.RawMessage(`{"file_path":"a.txt"}`))
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(dir, "a.txt"), got.Path)
+}
+
+func TestEditDisplayOutcome(t *testing.T) {
+	ws, plan, _ := newPlanWorkspace(t, t.TempDir())
+	d := NewEdit(ws).Display
+
+	done, action := d.Outcome(json.RawMessage(`{"file_path":`+strconv.Quote(plan)+`}`), "")
+	assert.Empty(t, done)
+	assert.Equal(t, Action{Verb: "Edited", One: "the plan"}, action)
+	_, action = d.Outcome(json.RawMessage(`{"file_path":"a.go"}`), "")
+	assert.Equal(t, Action{}, action)
+	_, action = d.Outcome(json.RawMessage(`{"file_path":"plan"}`), "")
+	assert.Equal(t, Action{}, action)
 }

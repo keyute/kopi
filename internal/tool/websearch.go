@@ -89,7 +89,7 @@ func NewWebSearch(search func(ctx context.Context, system, query string) (Search
 				}
 				return previewLines(Context, args.Query)
 			},
-			Action: Action{Verb: "Ran", One: "web search", Many: "web searches"},
+			Action: Action{Verb: "Searched", One: "the web"},
 		},
 	}
 }

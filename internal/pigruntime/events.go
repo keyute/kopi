@@ -44,17 +44,17 @@ func translate(ev agent.AgentEvent) (event.Event, bool) {
 		return toolEnd(ev.ToolCallID, ev.ToolName, ev.Result.Content, ev.IsError), true
 	case agent.AutoRetryStartEvent:
 		delay := time.Duration(ev.DelayMs) * time.Millisecond
-		return event.Notice{Text: fmt.Sprintf("retrying (attempt %d/%d) in %s: %s", ev.Attempt, ev.MaxAttempts, delay, pigTexts.Replace(ev.ErrorMessage))}, true
+		return event.Notice{Text: fmt.Sprintf("Retrying (attempt %d/%d) in %s: %s", ev.Attempt, ev.MaxAttempts, delay, pigTexts.Replace(ev.ErrorMessage))}, true
 	case agent.CompactionStartEvent:
-		return event.Notice{Text: fmt.Sprintf("compacting context (%s)", ev.Reason)}, true
+		return event.Notice{Text: fmt.Sprintf("Compacting context (%s)", ev.Reason)}, true
 	case agent.CompactionEndEvent:
 		switch {
 		case ev.Aborted:
-			return event.Notice{Text: "compaction aborted"}, true
+			return event.Notice{Text: "Compaction aborted"}, true
 		case ev.ErrorMessage != "":
-			return event.Notice{Text: "compaction failed: " + pigTexts.Replace(ev.ErrorMessage)}, true
+			return event.Notice{Text: "Compaction failed: " + pigTexts.Replace(ev.ErrorMessage)}, true
 		}
-		return event.Notice{Text: "compaction done"}, true
+		return event.Notice{Text: "Compaction done"}, true
 	}
 	return nil, false
 }
@@ -64,8 +64,13 @@ func translate(ev agent.AgentEvent) (event.Event, bool) {
 // concatenation draws separate paragraphs live and restored. Thinking does not
 // separate text; a tool call, notice, user message or new run does. Tool events
 // can arrive from concurrent goroutines.
+//
+// It also gives a ToolEnd its call's arguments: PiG's tool end event carries
+// none, so they are kept from the start event.
 type textJoiner struct {
 	mu sync.Mutex
+	// args holds the arguments of started calls until their end.
+	args map[string]string
 	// afterText: the last event emitted was text. newBlock: a text block has
 	// started and none of its text has been emitted yet.
 	afterText, newBlock bool
@@ -91,6 +96,17 @@ func (j *textJoiner) translate(ev agent.AgentEvent) (event.Event, bool) {
 		}
 	}
 	switch d := e.(type) {
+	case event.ToolStart:
+		if j.args == nil {
+			j.args = map[string]string{}
+		}
+		j.args[d.CallID] = d.Args
+		j.afterText = false
+	case event.ToolEnd:
+		d.Args = j.args[d.CallID]
+		delete(j.args, d.CallID)
+		e = d
+		j.afterText = false
 	case event.TextDelta:
 		// History skips empty text, so an empty delta neither takes nor
 		// leaves the separator.

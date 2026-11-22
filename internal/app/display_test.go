@@ -28,6 +28,30 @@ func TestDisplayUsesToolDisplay(t *testing.T) {
 	assert.Equal(t, event.ToolEnd{CallID: "c1", Name: "Show", Output: "ok", Summary: "shown ok", Body: "ok"}, end)
 }
 
+func TestDisplayOutcomeOnSuccessOnly(t *testing.T) {
+	action := tool.Action{Verb: "Searched", One: "the web"}
+	hooked := testTool("Hooked", policy.Read, nil)
+	hooked.Display.Outcome = func(args json.RawMessage, output string) (string, tool.Action) {
+		return "Done " + string(args) + " " + output, action
+	}
+	plain := testTool("Plain", policy.Read, nil)
+	d := newDisplay([]tool.Tool{hooked, plain})
+
+	ok := d.apply(event.ToolEnd{Name: "Hooked", Args: `{"x":1}`, Output: "out"}).(event.ToolEnd)
+	assert.Equal(t, `Done {"x":1} out`, ok.Done)
+	assert.Equal(t, action, ok.Action)
+
+	for name, end := range map[string]event.ToolEnd{
+		"failed":      {Name: "Hooked", Args: "{}", Output: "boom", IsError: true},
+		"interrupted": {Name: "Hooked", Args: "{}", Output: "Operation aborted", IsError: true, Kind: event.EndInterrupted},
+		"no hook":     {Name: "Plain", Args: "{}", Output: "out"},
+	} {
+		got := d.apply(end).(event.ToolEnd)
+		assert.Empty(t, got.Done, name)
+		assert.Zero(t, got.Action, name)
+	}
+}
+
 func TestDisplayFallbacks(t *testing.T) {
 	labelled := testTool("Plain", policy.Read, nil)
 	labelled.Label = "Plain tool"

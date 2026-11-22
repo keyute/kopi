@@ -204,17 +204,34 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 				}
 				return done
 			},
+			Outcome: func(raw json.RawMessage, output string) (string, Action) {
+				_, started, ok := backgroundTask(output)
+				if !ok {
+					return "", Action{}
+				}
+				var args bashArgs
+				_ = json.Unmarshal(raw, &args)
+				action := Action{Verb: "Started", One: "shell", Many: "shells"}
+				if started {
+					return "", action
+				}
+				done := "Moved " + titleLine(args.Command) + " to background"
+				if unsandboxedHook != nil && args.Unsandboxed {
+					done += " · unsandboxed"
+				}
+				return done, action
+			},
 			Summary: func(output string) string {
-				id, started, ok := backgroundTask(output)
+				_, _, ok := backgroundTask(output)
 				switch {
 				case !ok && output == noOutputNotice:
 					return "no output"
 				case !ok:
 					return lineCount(countLines(output))
-				case started:
-					return "task " + id
+				case timeoutResult.MatchString(output):
+					return "timed out"
 				}
-				return "moved to background · task " + id
+				return ""
 			},
 			Body: func(output string) string {
 				if _, _, ok := backgroundTask(output); ok || output == noOutputNotice {

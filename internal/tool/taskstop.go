@@ -24,21 +24,45 @@ func NewTaskStop(tasks *Tasks) Tool {
 			if _, err := admit(policy.Target{}); err != nil {
 				return Result{}, err
 			}
+			before, err := tasks.Output(args.TaskID)
+			if err != nil {
+				return Result{}, err
+			}
 			info, err := tasks.Stop(args.TaskID)
 			if err != nil {
 				return Result{}, err
 			}
-			if info.Status == TaskStopped {
-				return Result{Text: fmt.Sprintf("Task %s stopped.", info.ID)}, nil
+			// Stop reports a task it did not stop as stopped too, so only one that was running here counts.
+			if info.Status == TaskStopped && before.Status == TaskRunning {
+				return Result{Text: fmt.Sprintf("Task %s stopped.\n%s", info.ID, taskName(info))}, nil
 			}
-			return Result{Text: fmt.Sprintf("Task %s already %s.", info.ID, info.StatusText())}, nil
+			return Result{Text: fmt.Sprintf("Task %s already %s.\n%s", info.ID, info.StatusText(), taskName(info))}, nil
 		},
 		Display: Display{
 			Title:   taskTitle("TaskStop"),
 			Done:    taskTitle("Stopped task"),
 			Body:    func(string) string { return "" },
-			Summary: taskSummary,
+			Summary: taskStopSummary,
 			Action:  Action{Verb: "Stopped", One: "task", Many: "tasks"},
+			Outcome: func(raw json.RawMessage, output string) (string, Action) {
+				if taskStopSummary(output) == "" {
+					return taskOutcome("Stopped", output)
+				}
+				// Nothing was stopped, so the row keeps the call's title.
+				subject, noun, ok := taskSubject(output)
+				if !ok {
+					return taskTitle("TaskStop")(raw), Action{Verb: "Checked", One: "task", Many: "tasks"}
+				}
+				return "TaskStop " + subject, Action{Verb: "Checked on", One: noun, Many: noun + "s"}
+			},
 		},
 	}
+}
+
+// taskStopSummary is "" for a task this call stopped, which the title says.
+func taskStopSummary(output string) string {
+	if summary := taskSummary(output); summary != "stopped" {
+		return summary
+	}
+	return ""
 }

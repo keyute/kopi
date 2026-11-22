@@ -3,6 +3,7 @@ package tool
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -452,16 +453,47 @@ func (w *Workspace) inProtectedPath(target string) (bool, error) {
 // shown is path as a transcript names it: "plan" for the plan file, relative
 // to the start directory when inside it, else as written. It does no I/O.
 func (w *Workspace) shown(path string) string {
-	if p := w.plans.Path(); p != "" && filepath.Clean(w.absolute(path)) == filepath.Clean(p) {
+	if w.isPlan(path) {
 		return "plan"
 	}
-	if _, ok := w.outputs.holds(w.absolute(path)); ok {
+	if w.isOutput(path) {
 		return "output " + filepath.Base(path)
 	}
 	if rel, err := w.relative(path); err == nil {
 		return rel
 	}
 	return path
+}
+
+// isPlan reports whether path names the session's plan file. It does no I/O.
+func (w *Workspace) isPlan(path string) bool {
+	p := w.plans.Path()
+	return p != "" && filepath.Clean(w.absolute(path)) == filepath.Clean(p)
+}
+
+// isOutput reports whether path names a saved output file. It does no I/O.
+func (w *Workspace) isOutput(path string) bool {
+	_, ok := w.outputs.holds(w.absolute(path))
+	return ok
+}
+
+// fileOutcome is the Display.Outcome of a tool acting on a file_path: the plan
+// and saved output files are named as such in a group, any other path keeps the
+// tool's own action. The done title is the tool's.
+func (w *Workspace) fileOutcome(verb string) func(json.RawMessage, string) (string, Action) {
+	return func(raw json.RawMessage, _ string) (string, Action) {
+		var args struct {
+			FilePath string `json:"file_path"`
+		}
+		_ = json.Unmarshal(raw, &args)
+		switch {
+		case w.isPlan(args.FilePath):
+			return "", Action{Verb: verb, One: "the plan"}
+		case w.isOutput(args.FilePath):
+			return "", Action{Verb: verb, One: "output file", Many: "output files"}
+		}
+		return "", Action{}
+	}
 }
 
 func (w *Workspace) relative(path string) (string, error) {

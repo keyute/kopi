@@ -103,32 +103,17 @@ func newWebFetch(f *fetcher, answer func(ctx context.Context, system, prompt str
 			return Result{Text: reply + webFetchSource + page.url.String()}, nil
 		},
 		Display: Display{
-			Title: func(raw json.RawMessage) string {
-				var args webFetchArgs
-				_ = json.Unmarshal(raw, &args)
-				if args.URL == "" {
-					return "WebFetch"
+			Title: func(raw json.RawMessage) string { return webFetchTitle("WebFetch", raw) },
+			Done:  func(raw json.RawMessage) string { return webFetchTitle("Fetched", raw) },
+			Outcome: func(raw json.RawMessage, output string) (string, Action) {
+				if !webFetchRedirected(output) {
+					return "", Action{}
 				}
-				if u, err := url.Parse(args.URL); err == nil && u.Host != "" {
-					return titleLine("WebFetch " + u.Host)
-				}
-				return titleLine("WebFetch " + args.URL)
-			},
-			Done: func(raw json.RawMessage) string {
-				var args webFetchArgs
-				_ = json.Unmarshal(raw, &args)
-				if args.URL == "" {
-					return "Fetched"
-				}
-				if u, err := url.Parse(args.URL); err == nil && u.Host != "" {
-					return titleLine("Fetched " + u.Host)
-				}
-				return titleLine("Fetched " + args.URL)
+				// Nothing was fetched, so the row keeps the call's title.
+				return webFetchTitle("WebFetch", raw), Action{Verb: "Hit", One: "redirect", Many: "redirects"}
 			},
 			Summary: func(output string) string {
-				// An answer ends in its source line; a redirect is one line.
-				i := strings.LastIndex(output, webFetchSource)
-				if i < 0 || strings.Contains(output[i+len(webFetchSource):], "\n") {
+				if webFetchRedirected(output) {
 					return "redirected"
 				}
 				return lineCount(countLines(output))
@@ -145,6 +130,27 @@ func newWebFetch(f *fetcher, answer func(ctx context.Context, system, prompt str
 			Action: Action{Verb: "Fetched", One: "page", Many: "pages"},
 		},
 	}
+}
+
+// webFetchRedirected reports whether output is a redirect notice. An answer
+// ends in its source line; a redirect does not.
+func webFetchRedirected(output string) bool {
+	i := strings.LastIndex(output, webFetchSource)
+	return i < 0 || strings.Contains(output[i+len(webFetchSource):], "\n")
+}
+
+// webFetchTitle names the call by verb and the URL's host. It runs before the
+// arguments are validated, so it decodes leniently.
+func webFetchTitle(verb string, raw json.RawMessage) string {
+	var args webFetchArgs
+	_ = json.Unmarshal(raw, &args)
+	if args.URL == "" {
+		return verb
+	}
+	if u, err := url.Parse(args.URL); err == nil && u.Host != "" {
+		return titleLine(verb + " " + u.Host)
+	}
+	return titleLine(verb + " " + args.URL)
 }
 
 func decodeWebFetchArgs(raw json.RawMessage) (webFetchArgs, error) {

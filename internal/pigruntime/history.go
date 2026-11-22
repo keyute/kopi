@@ -126,6 +126,7 @@ func history(msgs []agent.AgentMessage) []event.Event {
 	// next text needs a separating blank line once the reducer concatenates;
 	// textJoiner applies the same rule live.
 	afterText := false
+	callArgs := map[string]string{}
 	for _, m := range msgs {
 		switch {
 		case m.User != nil:
@@ -147,7 +148,9 @@ func history(msgs []agent.AgentMessage) []event.Event {
 					afterText = true
 				case ai.ToolCall:
 					args, _ := b.ArgumentsJSON()
-					toolStarts = append(toolStarts, event.ToolStart{CallID: b.ID, Name: b.Name, Args: compactJSON(args)})
+					compact := compactJSON(args)
+					callArgs[b.ID] = compact
+					toolStarts = append(toolStarts, event.ToolStart{CallID: b.ID, Name: b.Name, Args: compact})
 					afterText = false
 				}
 			}
@@ -162,7 +165,9 @@ func history(msgs []agent.AgentMessage) []event.Event {
 			}
 		case m.ToolResult != nil:
 			r := m.ToolResult
-			out = append(out, toolEnd(r.ToolCallID, r.ToolName, r.Content, r.IsError))
+			end := toolEnd(r.ToolCallID, r.ToolName, r.Content, r.IsError)
+			end.Args = callArgs[r.ToolCallID]
+			out = append(out, end)
 			afterText = false
 		case isNotice(m):
 			d, _ := m.Custom["details"].(noticeDetails)

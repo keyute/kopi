@@ -121,6 +121,14 @@ func NewSkill(skills []skill.Skill, home string) Tool {
 				return readSummary(output)
 			},
 			Action: Action{Verb: "Loaded", One: "skill", Many: "skills"},
+			Outcome: func(raw json.RawMessage, _ string) (string, Action) {
+				var args skillArgs
+				_ = json.Unmarshal(raw, &args)
+				if args.File == "" {
+					return "", Action{}
+				}
+				return "", Action{Verb: "Read", One: "skill file", Many: "skill files"}
+			},
 		},
 	}
 }

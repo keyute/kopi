@@ -62,12 +62,18 @@ const (
 
 // ToolEnd's Output is the raw result text. Summary is the line under the call,
 // set for a call that did not succeed too. Body is what an opened row shows:
-// the result of a successful call, the detail of one that did not.
+// the result of a successful call, the detail of one that did not. Args is the
+// call's arguments as on its ToolStart, "" when the start was not seen. Done and
+// Action are a successful call's done title and group action when they differ
+// from the ToolStart's; zero keeps the start's.
 type ToolEnd struct {
 	CallID, Name, Output string
+	Args                 string
 	IsError              bool
 	Kind                 EndKind
 	Summary, Body        string
+	Done                 string
+	Action               tool.Action
 }
 
 // ApprovalRequested asks the human to approve one call; answer with
@@ -155,9 +161,11 @@ type TurnEnd struct {
 // TaskEnded is a background task's end, at the point the model reads about it.
 // Agent names the subagent that ran; it is "" for a shell command, whose
 // Command is the command. For an agent, Command is the call's description.
-// For a workflow, Agents counts the agent() calls, Failed those that ended
-// without completing (stopped ones included), Reason is why a failed run
-// failed and Result the value it returned; all are zero for any other task.
+// Reason is why a failed task failed and Result is what its row opens to: an
+// agent's final reply, a shell's last output lines, a workflow's returned
+// value. For a workflow, Agents counts the agent() calls and Failed those that
+// ended without completing (stopped ones included); both are zero for any
+// other task.
 type TaskEnded struct {
 	ID, Command, Status string
 	Agent               string

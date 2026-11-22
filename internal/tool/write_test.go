@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -236,4 +237,17 @@ func TestPreviewLineBoundaries(t *testing.T) {
 	}
 	assert.Equal(t, []PreviewLine{{Kind: Context, Text: "0 lines"}}, writePreview(json.RawMessage(`{"content":`)))
 	assert.Empty(t, editPreview(json.RawMessage(`{"old_string":`)))
+}
+
+func TestWriteDisplayOutcome(t *testing.T) {
+	ws, plan, _ := newPlanWorkspace(t, t.TempDir())
+	d := NewWrite(ws).Display
+
+	done, action := d.Outcome(json.RawMessage(`{"file_path":`+strconv.Quote(plan)+`}`), "")
+	assert.Empty(t, done)
+	assert.Equal(t, Action{Verb: "Wrote", One: "the plan"}, action)
+	_, action = d.Outcome(json.RawMessage(`{"file_path":"a.go"}`), "")
+	assert.Equal(t, Action{}, action)
+	_, action = d.Outcome(json.RawMessage(`{"file_path":"plan"}`), "")
+	assert.Equal(t, Action{}, action)
 }

@@ -287,15 +287,16 @@ func renderTask(t transcript.Task, expanded bool, width int, th theme) []line {
 	if t.Status != string(tool.TaskCompleted) {
 		word, ps, ts = t.Status, fg(th.error), fg(th.error)
 	}
-	head := "task " + oneLine(t.ID) + " " + word + " · "
+	head := "shell " + word + " · "
 	if t.Agent != "" {
 		head = oneLine(t.Agent) + " " + word + " · "
 	}
 	tail := " · " + formatDuration(t.Elapsed)
 	command, _, _ := strings.Cut(t.Command, "\n")
 	command = cut(oneLine(command), width-2-lipgloss.Width(head+tail))
+	result := bodyText(t.Result)
 	h := hit{}
-	if t.Result != "" {
+	if result != "" {
 		h = hit{kind: hitOutput, id: t.Key()}
 	}
 	out := withHit(h, hang("• ", ps, head+command+tail, ts, width))
@@ -307,7 +308,7 @@ func renderTask(t transcript.Task, expanded bool, width int, th theme) []line {
 		out = append(out, plain(hang("  ", fg(th.error), t.Reason, fg(th.error), width))...)
 	}
 	if expanded {
-		out = append(out, mutedBody(t.Result, width, th)...)
+		out = append(out, mutedBody(result, width, th)...)
 	}
 	return out
 }

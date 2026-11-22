@@ -15,8 +15,9 @@ import (
 type Agents interface {
 	// Launch starts agent on prompt in the background and returns its task id.
 	Launch(ctx context.Context, agent, description, prompt string) (id string, err error)
-	// Message delivers message to the subagent task id; resumed reports that the subagent had ended and runs again.
-	Message(ctx context.Context, id, message string) (resumed bool, err error)
+	// Message delivers message to the subagent task id; to is that task, zero when it cannot be read,
+	// and resumed reports that the subagent had ended and runs again.
+	Message(ctx context.Context, id, message string) (to TaskInfo, resumed bool, err error)
 }
 
 type agentArgs struct {
@@ -95,7 +96,11 @@ func NewAgent(defs []subagent.Definition, agents Agents) Tool {
 				}
 				return ""
 			},
-			Body:   func(string) string { return "" },
+			Change: func(raw json.RawMessage) (string, []PreviewLine) {
+				var args agentArgs
+				_ = json.Unmarshal(raw, &args)
+				return "", previewLines(Context, args.Prompt)
+			},
 			Action: Action{Verb: "Launched", One: "agent", Many: "agents"},
 		},
 	}

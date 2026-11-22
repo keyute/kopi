@@ -174,7 +174,7 @@ func TestHistoryRestoresNotices(t *testing.T) {
 	assert.Equal(t, []event.Event{
 		event.TurnStart{Prompt: "go"},
 		event.ToolStart{CallID: "call-1", Name: "Probe", Args: "{}"},
-		event.ToolEnd{CallID: "call-1", Name: "Probe", Output: toolOutput},
+		event.ToolEnd{CallID: "call-1", Name: "Probe", Args: "{}", Output: toolOutput},
 		n.Shown,
 		event.TextDelta{Text: "noted"},
 	}, resumed.History())
@@ -288,7 +288,7 @@ func TestHistoryEndsFailedAndInterruptedTurns(t *testing.T) {
 		assert.Equal(t, []event.Event{
 			event.TurnStart{Prompt: "block"},
 			event.ToolStart{CallID: "call-1", Name: "Probe", Args: "{}"},
-			event.ToolEnd{CallID: "call-1", Name: "Probe", Output: context.Canceled.Error(), IsError: true},
+			event.ToolEnd{CallID: "call-1", Name: "Probe", Args: "{}", Output: context.Canceled.Error(), IsError: true},
 			event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}},
 		}, resume(t, r, sess.ID(), block).History())
 	})
@@ -325,7 +325,7 @@ func TestHistoryRetainsCompactedConversationOnActiveBranch(t *testing.T) {
 		event.TurnStart{Prompt: "old prompt"},
 		event.TextDelta{Text: "old answer"},
 		event.ToolStart{CallID: "old-call", Name: "Probe", Args: "{}"},
-		event.ToolEnd{CallID: "old-call", Name: "Probe", Output: "old output"},
+		event.ToolEnd{CallID: "old-call", Name: "Probe", Args: "{}", Output: "old output"},
 		event.TextDelta{Text: "old conclusion"},
 		event.TurnStart{Prompt: "new prompt"},
 		event.TextDelta{Text: "new answer"},
@@ -363,7 +363,7 @@ func TestHistoryOmitsFailedRetryAttempt(t *testing.T) {
 		event.TextDelta{Text: "earlier answer"},
 		event.TurnStart{Prompt: "try again"},
 		event.ToolStart{CallID: "call-1", Name: "Probe", Args: "{}"},
-		event.ToolEnd{CallID: "call-1", Name: "Probe", Output: "kept output"},
+		event.ToolEnd{CallID: "call-1", Name: "Probe", Args: "{}", Output: "kept output"},
 		event.TextDelta{Text: "recovered"},
 	}, resume(t, r, sess.ID()).History())
 }
