@@ -3059,7 +3059,7 @@ func TestSubmitUltrathinkRaisesEffortForTheTurnOnly(t *testing.T) {
 	h.turn(t, "please ultrathink")
 	assert.NotEqual(t, plain, <-levels)
 	assert.Equal(t, before, h.c.main.sess.Effort(), "restored when the turn ends")
-	assert.NotEmpty(t, ofType[event.EffortChanged](h.rec.all()))
+	assert.Len(t, ofType[event.EffortChanged](h.rec.all()), 2, "raise and restore")
 }
 
 func TestSendNowKeepsTheUltrathinkRaiseForTheTurn(t *testing.T) {
@@ -3093,6 +3093,125 @@ func TestSendNowKeepsTheUltrathinkRaiseForTheTurn(t *testing.T) {
 	assert.NotEqual(t, ai.ThinkingLevelHigh, <-levels, "the next turn")
 }
 
+func TestPlainPromptAfterACompletedRaisedTurnIsNotRaised(t *testing.T) {
+	h := openThinkerHarness(t, Config{})
+	levels := make(chan ai.ThinkingLevel, 2)
+	step := ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+		levels <- o.Thinking
+		return ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{}), nil
+	})
+	h.faux.SetResponses([]ai.FauxResponseStep{step, step})
+	// The restore at the end of the send is the last thing that happens in it,
+	// after the final hand-over: input given then is left for the Work's next
+	// send.
+	var changes int
+	h.c.main.sess.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.EffortChanged); ok {
+			if changes++; changes == 2 {
+				_, err := h.c.Submit(t.Context(), Main, "plain")
+				assert.NoError(t, err)
+			}
+		}
+	})
+
+	w, err := h.c.Submit(t.Context(), Main, "ultrathink")
+	require.NoError(t, err)
+	wait(t, w.Done())
+
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels)
+	assert.NotEqual(t, ai.ThinkingLevelHigh, <-levels, "the follow-up prompt")
+}
+
+func TestSetEffortThenSendNowKeepsTheUsersLevel(t *testing.T) {
+	started := make(chan struct{}, 1)
+	h := openThinkerHarness(t, Config{Tools: []tool.Tool{blockingTool(started)}})
+	levels := make(chan ai.ThinkingLevel, 3)
+	step := func(msg ai.AssistantMessage) ai.FauxResponseStep {
+		return ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+			levels <- o.Thinking
+			return msg, nil
+		})
+	}
+	block := ai.FauxAssistantMessage(
+		ai.FauxContentBlocks{ai.FauxToolCall("Block", map[string]any{}, &ai.FauxToolCallOptions{ID: "c1"})},
+		ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)},
+	)
+	text := ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{})
+	h.faux.SetResponses([]ai.FauxResponseStep{step(block), step(text)})
+
+	w, err := h.c.Submit(t.Context(), Main, "ultrathink")
+	require.NoError(t, err)
+	wait(t, started)
+	require.NotEqual(t, "low", h.c.main.sess.Effort())
+	require.NoError(t, h.c.main.sess.SetEffort(pigruntime.LowEffort))
+	require.NoError(t, h.c.SendNow(t.Context(), Main, "instead"))
+	wait(t, w.Done())
+
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels)
+	assert.Equal(t, ai.ThinkingLevelLow, <-levels, "the send-now continuation keeps the level /effort set")
+	assert.Equal(t, "low", h.c.main.sess.Effort())
+}
+
+// A send-now that cancels the continuation before its send starts must not
+// drop the raise.
+func TestSendNowBeforeTheContinuationStartsKeepsTheUltrathinkRaise(t *testing.T) {
+	started := make(chan struct{}, 1)
+	h := openThinkerHarness(t, Config{Tools: []tool.Tool{blockingTool(started)}})
+	levels := make(chan ai.ThinkingLevel, 3)
+	step := func(msg ai.AssistantMessage) ai.FauxResponseStep {
+		return ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+			levels <- o.Thinking
+			return msg, nil
+		})
+	}
+	block := ai.FauxAssistantMessage(
+		ai.FauxContentBlocks{ai.FauxToolCall("Block", map[string]any{}, &ai.FauxToolCallOptions{ID: "c1"})},
+		ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)},
+	)
+	text := ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{})
+	h.faux.SetResponses([]ai.FauxResponseStep{step(block), step(text)})
+
+	w, err := h.c.Submit(t.Context(), Main, "ultrathink")
+	require.NoError(t, err)
+	wait(t, started)
+	// The listener runs inside runTurn with the queue held, before the
+	// continuation's send, so cancelling there is the send-now that lands first.
+	var starts int
+	h.c.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.TurnStart); ok {
+			if starts++; starts == 1 {
+				w.cancel()
+			}
+		}
+	})
+	require.NoError(t, h.c.SendNow(t.Context(), Main, "instead"))
+	wait(t, w.Done())
+
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels)
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels, "the continuation that ran after the cancelled one")
+}
+
+func TestSubmitUltrathinkToASubagentLeavesItsEffortAlone(t *testing.T) {
+	def := agentDef("explorer")
+	def.Effort = "low"
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, def)
+	requests := make(chan childRequest, 2)
+	a.child.SetResponses([]ai.FauxResponseStep{captureChild(requests, nil, "first"), captureChild(requests, nil, "second")})
+	a.rootAcks(2)
+	id := a.launch(t, "explorer", "find it", "go")
+	a.untilStatus(t, id, tool.TaskCompleted)
+	a.until(t, func() bool { return a.workOf(a.childOf(id)) == nil })
+	require.Equal(t, ai.ThinkingLevelLow, receiveChild(t, requests).thinking)
+
+	w, err := a.c.Submit(t.Context(), id, "ultrathink")
+	require.NoError(t, err)
+	require.NotNil(t, w)
+	wait(t, w.Done())
+
+	assert.Equal(t, ai.ThinkingLevelLow, receiveChild(t, requests).thinking)
+	assert.Equal(t, "low", a.childOf(id).sess.Effort())
+}
+
 func TestPromptUltrathinkRaisesEffortForTheRunOnly(t *testing.T) {
 	h := openThinkerHarness(t, Config{})
 	levels := make(chan ai.ThinkingLevel, 1)
@@ -3106,7 +3225,7 @@ func TestPromptUltrathinkRaisesEffortForTheRunOnly(t *testing.T) {
 	w, err := h.c.Prompt(t.Context(), "ultrathink")
 	require.NoError(t, err)
 	wait(t, w.Done())
-	assert.NotEqual(t, before, string(<-levels))
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels)
 	assert.Equal(t, before, h.c.main.sess.Effort())
 }
 

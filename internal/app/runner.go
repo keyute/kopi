@@ -311,6 +311,9 @@ func (r *runner) runTurn(ctx context.Context, sess *pigruntime.Session, emit fun
 		carry = pigruntime.DefaultEffort
 		if cancelled {
 			carry = res.Effort
+			if !res.Sent {
+				carry = p.Effort
+			}
 		}
 		if len(next) > 0 || wake {
 			ctx, w.cancel = context.WithCancel(w.base)

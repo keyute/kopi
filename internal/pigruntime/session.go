@@ -35,12 +35,10 @@ type Session struct {
 	toolsMu sync.Mutex
 	// effortMu guards raised and restore.
 	effortMu sync.Mutex
-	// raised is set while a Send has lifted the level; restore is the level to
-	// put back when it ends.
-	raised  bool
+	// raised is the Effort that lifted the level while a Send runs, and
+	// DefaultEffort when none did; restore is the level to put back when it ends.
+	raised  Effort
 	restore ai.ModelThinkingLevel
-	// raisedWith is the Effort that last raised the level.
-	raisedWith Effort
 }
 
 type listener struct {
@@ -190,7 +188,7 @@ func (s *Session) Effort() string {
 func (s *Session) SetEffort(e Effort) error {
 	s.effortMu.Lock()
 	defer s.effortMu.Unlock()
-	s.raised = false
+	s.raised = DefaultEffort
 	if err := s.inner.SetThinkingLevel(e.thinkingLevel()); err != nil {
 		return fmt.Errorf("failed to set effort: %w", err)
 	}
@@ -208,15 +206,16 @@ func (s *Session) raise(e Effort) {
 	}
 	s.effortMu.Lock()
 	defer s.effortMu.Unlock()
-	if s.raised {
+	if s.raised != DefaultEffort {
 		return
 	}
 	prev := s.inner.ThinkingLevel()
+	// PiG sets the agent's level before it records the change, so a failed call
+	// may still have raised it; the raise is kept so restoreEffort puts it back.
 	if err := s.inner.SetThinkingLevel(e.thinkingLevel()); err != nil {
 		slog.Warn("failed to raise effort", "error", err)
-		return
 	}
-	s.raised, s.restore, s.raisedWith = true, prev, e
+	s.raised, s.restore = e, prev
 	if s.inner.ThinkingLevel() != prev {
 		s.notify(event.EffortChanged{})
 	}
@@ -226,16 +225,17 @@ func (s *Session) raise(e Effort) {
 func (s *Session) restoreEffort() {
 	s.effortMu.Lock()
 	defer s.effortMu.Unlock()
-	if !s.raised {
+	if s.raised == DefaultEffort {
 		return
 	}
-	s.raised = false
+	s.raised = DefaultEffort
 	raisedTo := s.inner.ThinkingLevel()
+	// PiG sets the agent's level before it records the change, so a failed call
+	// still restores the level in memory.
 	if err := s.inner.SetThinkingLevel(s.restore); err != nil {
 		slog.Warn("failed to restore effort", "error", err)
-		return
 	}
-	if raisedTo != s.restore {
+	if s.inner.ThinkingLevel() != raisedTo {
 		s.notify(event.EffortChanged{})
 	}
 }
@@ -490,9 +490,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	s.inner.Agent().TakePendingNextTurn()
 	res := SendResult{Sent: sent, Undelivered: handed, UndeliveredNotices: pending, ModeUndelivered: modeUndelivered}
 	s.effortMu.Lock()
-	if s.raised {
-		res.Effort = s.raisedWith
-	}
+	res.Effort = s.raised
 	s.effortMu.Unlock()
 	if err != nil {
 		return res, err
