@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/pigruntime"
 )
 
 type Command struct {
@@ -35,6 +36,7 @@ func commandTable() []command {
 			c.EnterExecute()
 			return nil
 		}},
+		{Command: Command{Name: "effort", Summary: "set the reasoning effort for this session"}, run: (*Controller).effortCommand, args: (*Controller).effortCandidates},
 		{Command: Command{Name: "new", Summary: "start a new session"}, run: func(c *Controller, ctx context.Context, _ string) error {
 			return c.switchTo(ctx, OpenRequest{})
 		}},
@@ -96,6 +98,52 @@ func (c *Controller) resumeCommand(ctx context.Context, id string) error {
 		return fmt.Errorf("%w: /resume needs a session id", ErrMissingArgument)
 	}
 	return c.switchTo(ctx, OpenRequest{ResumeID: id})
+}
+
+// effortCommand sets the main session's effort for this session only.
+func (c *Controller) effortCommand(_ context.Context, arg string) error {
+	if arg == "" {
+		return fmt.Errorf("%w: /effort needs a level", ErrMissingArgument)
+	}
+	e, err := pigruntime.ParseEffort(arg)
+	if err != nil {
+		return fmt.Errorf("%w: /effort takes off, minimal, low, medium, high, xhigh or max, got %q", ErrUnknownArgument, arg)
+	}
+	c.mu.Lock()
+	sess := c.main.sess
+	c.mu.Unlock()
+	if sess == nil {
+		return ErrNoSession
+	}
+	if sess.Effort() == "" {
+		c.relay.emit(event.Notice{Text: "This model does not reason."})
+		return nil
+	}
+	if err := sess.SetEffort(e); err != nil {
+		return err
+	}
+	c.relay.emit(event.EffortChanged{})
+	c.relay.emit(event.Notice{Text: fmt.Sprintf("Effort set to %s for this session.", sess.Effort())})
+	return nil
+}
+
+func (c *Controller) effortCandidates() ([]Candidate, error) {
+	c.mu.Lock()
+	sess := c.main.sess
+	c.mu.Unlock()
+	if sess == nil {
+		return nil, nil
+	}
+	current := sess.Effort()
+	var out []Candidate
+	for _, name := range sess.Efforts() {
+		cand := Candidate{Value: name}
+		if name == current {
+			cand.Description = "current"
+		}
+		out = append(out, cand)
+	}
+	return out, nil
 }
 
 // Arguments returns the candidates for command name's argument; nil when it takes

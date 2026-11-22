@@ -648,6 +648,31 @@ func TestEffortNamesTheLevelOnlyForAReasoningModel(t *testing.T) {
 	assert.Equal(t, "low", sess.Effort())
 }
 
+func TestSetEffortChangesTheLevelForTheSessionAndItsResume(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	assert.Nil(t, openTestSession(t, r).Efforts(), "faux-1 does not reason")
+
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "faux-thinker", Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, r.RegisterProvider(thinker.Provider()))
+	opts := OpenOptions{Model: "faux-thinker/thinker", Effort: LowEffort, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()}
+	sess, err := r.Open(t.Context(), opts)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+
+	require.NoError(t, sess.SetEffort(HighEffort))
+	assert.Equal(t, "high", sess.Effort())
+	assert.Contains(t, sess.Efforts(), "high")
+
+	thinker.SetResponses([]ai.FauxResponseStep{reply("noted")})
+	_, err = sess.Send(t.Context(), Prompt{Text: "hello"}, nil, nil)
+	require.NoError(t, err)
+	opts.Effort, opts.ResumeID = DefaultEffort, sess.ID()
+	resumed, err := r.Open(t.Context(), opts)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, resumed.Close(context.Background())) })
+	assert.Equal(t, "high", resumed.Effort())
+}
+
 func TestUsageMirrorsPiGsSessionStats(t *testing.T) {
 	r, _ := newTestRuntime(t, newSandbox(t))
 	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "faux-thinker", Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})

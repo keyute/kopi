@@ -31,6 +31,7 @@ Commands in the fullscreen interface:
 | `/plan` | Switch to plan mode |
 | `/plan open` | Open the session's [plan file](tools.md#exitplanmode) in `$VISUAL`, else `$EDITOR` |
 | `/execute` | Switch to execute mode |
+| `/effort <level>` | Set the main agent's reasoning effort for this session; never saved to `config.json`. A resumed session keeps the level it was set to |
 | `/new` | Start a new session |
 | `/resume <id>` | Resume a session |
 | `/login <provider>` | Log in to a provider |

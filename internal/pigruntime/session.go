@@ -173,6 +173,29 @@ func (s *Session) Effort() string {
 	return string(s.inner.ThinkingLevel())
 }
 
+// SetEffort changes the level the session runs at, from its next request, for
+// this session only. e is not DefaultEffort. PiG clamps a level the model lacks
+// to the nearest it has; Effort reports the level in effect.
+func (s *Session) SetEffort(e Effort) error {
+	if err := s.inner.SetThinkingLevel(e.thinkingLevel()); err != nil {
+		return fmt.Errorf("failed to set effort: %w", err)
+	}
+	return nil
+}
+
+// Efforts lists the levels the model supports, in the names ParseEffort takes.
+// It is nil when the model does not reason.
+func (s *Session) Efforts() []string {
+	if s.Effort() == "" {
+		return nil
+	}
+	var out []string
+	for _, l := range s.inner.AvailableThinkingLevels() {
+		out = append(out, string(l))
+	}
+	return out
+}
+
 // Usage reports the tool calls the session has made and the cost of its
 // requests in dollars, computed from the model's price.
 func (s *Session) Usage() (toolCalls int, cost float64) {
