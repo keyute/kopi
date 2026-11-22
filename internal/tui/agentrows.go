@@ -130,9 +130,13 @@ func compactCount(n int) string {
 func (m *model) entries() []entry {
 	var es []entry
 	for _, a := range m.agents {
+		if a.ID == app.Main {
+			es = append(es, entry{AgentStatus: a})
+			continue
+		}
 		e := entry{AgentStatus: a}
 		held := false
-		if v := m.views[a.ID]; v != nil && a.ID != app.Main {
+		if v := m.views[a.ID]; v != nil {
 			if e.busy = v.busy; e.busy {
 				e.since = v.turnStart
 			}
@@ -141,7 +145,7 @@ func (m *model) entries() []entry {
 			}
 			held = len(v.unsent) > 0
 		}
-		if a.ID != app.Main && !e.busy && !held && a.ID != m.shown {
+		if !e.busy && !held && a.ID != m.shown {
 			continue
 		}
 		es = append(es, e)

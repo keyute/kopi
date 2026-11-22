@@ -187,6 +187,13 @@ func TestCursorRowPaintsLiteralText(t *testing.T) {
 	assert.Equal(t, accent.Render(cursorMark+"○ ")+accent.Render("at ")+accent.Render("t1"), m.agentRows(10)[1])
 }
 
+func TestCursorPaintsTheMainRow(t *testing.T) {
+	m, _ := focused(t, explorer("t1"))
+	require.Equal(t, app.Main, m.focus.id)
+
+	assert.Equal(t, fg(m.th.accent).Render(cursorMark+"● main"), m.agentRows(10)[0])
+}
+
 func TestStateAndIDSegments(t *testing.T) {
 	state := subagentSegments["state"]
 	got, ok := state(entry{AgentStatus: app.AgentStatus{ID: "t1", State: "failed"}}, testThemes.dark)
@@ -259,19 +266,11 @@ func TestMultilineActivityStaysOnOneAgentRow(t *testing.T) {
 	}
 }
 
-func TestMainRowStaysMainWhileATurnRuns(t *testing.T) {
-	m, _ := subagentLineModel(t, 60, lineOf([]string{"$agent", "$state"}), explorer("t1"))
-	assert.Equal(t, "  ● main", lastRows(m, 2)[0])
-
-	send(m, event.TurnStart{Prompt: "go"})
-	assert.Equal(t, "  ● main", lastRows(m, 2)[0])
-
-	send(m, event.TurnEnd{})
-	assert.Equal(t, "  ● main", lastRows(m, 2)[0])
-}
-
 func TestMainRowIgnoresTheSubagentLine(t *testing.T) {
 	m, _ := subagentLineModel(t, 60, lineOf([]string{"$agent", "$tokens"}, "$model"), explorer("t1"))
+	assert.Equal(t, "  ● main", m.agentRow(m.entries()[0]))
+
+	send(m, event.TurnStart{Prompt: "go"})
 	assert.Equal(t, "  ● main", m.agentRow(m.entries()[0]))
 }
 
