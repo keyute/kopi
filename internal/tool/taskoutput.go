@@ -34,7 +34,7 @@ func NewTaskOutput(tasks *Tasks) Tool {
 			if err != nil {
 				return Result{}, err
 			}
-			return Result{Text: fmt.Sprintf("Task %s %s.\n%s\n%s", info.ID, info.StatusText(), taskName(info), info.Output)}, nil
+			return Result{Text: fmt.Sprintf("Task %s %s.%s\n%s\n%s", info.ID, info.StatusText(), namedTaskResult, taskName(info), info.Output)}, nil
 		},
 		Display: Display{
 			Title:   taskTitle("TaskOutput"),
@@ -92,15 +92,20 @@ func taskTitle(label string) func(json.RawMessage) string {
 	}
 }
 
-// taskSummary relies on both tools' first line reading "Task <id> <status>.".
+// taskSummary relies on both tools' first line reading "Task <id> <status>.",
+// optionally followed by the named-result discriminator.
 func taskSummary(output string) string {
 	first, _, _ := strings.Cut(output, "\n")
-	parts := strings.SplitN(first, " ", 3)
+	parts := strings.SplitN(strings.TrimSuffix(first, namedTaskResult), " ", 3)
 	if len(parts) < 3 {
 		return ""
 	}
 	return strings.TrimSuffix(parts[2], ".")
 }
+
+// namedTaskResult distinguishes metadata from legacy output beginning with a
+// name-like line. Unmarked results must keep that line as output.
+const namedTaskResult = " [named task]"
 
 // Kinds of the name line a task result carries after its first line.
 const (
@@ -126,7 +131,10 @@ func taskName(info TaskInfo) string {
 // readTaskName returns the kind and name of the name line on output's second
 // line; ok is false for a result without one.
 func readTaskName(output string) (kind, name string, ok bool) {
-	_, rest, _ := strings.Cut(output, "\n")
+	first, rest, _ := strings.Cut(output, "\n")
+	if !strings.HasSuffix(first, namedTaskResult) {
+		return "", "", false
+	}
 	line, _, _ := strings.Cut(rest, "\n")
 	for _, k := range []string{nameAgent, nameCommand, nameWorkflow} {
 		if name, ok := strings.CutPrefix(line, k+": "); ok {

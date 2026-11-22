@@ -33,8 +33,8 @@ func TestSendMessageQueuesAndResumes(t *testing.T) {
 		resumed bool
 		text    string
 	}{
-		{false, "Message queued for t3.\nAgent: explore › look"},
-		{true, "Agent t3 continued.\nAgent: explore › look"},
+		{false, "Message queued for t3. [named task]\nAgent: explore › look"},
+		{true, "Agent t3 continued. [named task]\nAgent: explore › look"},
 	} {
 		agents := &fakeAgents{resumed: tc.resumed, to: to}
 		admit := func(target policy.Target) (policy.Mode, error) {
@@ -89,8 +89,8 @@ func TestSendMessageDisplay(t *testing.T) {
 	assert.Equal(t, "SendMessage", tool.Display.Title(json.RawMessage(`{}`)))
 	assert.Equal(t, "Messaged t3", tool.Display.Done(json.RawMessage(`{"to":"t3","message":"hi"}`)))
 	assert.Nil(t, tool.Display.Body)
-	assert.Equal(t, "queued", tool.Display.Summary("Message queued for t3.\nAgent: explore › look"))
-	assert.Equal(t, "continued", tool.Display.Summary("Agent t3 continued.\nAgent: explore › look"))
+	assert.Equal(t, "queued", tool.Display.Summary("Message queued for t3. [named task]\nAgent: explore › look"))
+	assert.Equal(t, "continued", tool.Display.Summary("Agent t3 continued. [named task]\nAgent: explore › look"))
 	assert.Equal(t, "queued", tool.Display.Summary("Message queued for t3."))
 	assert.Equal(t, "continued", tool.Display.Summary("Agent t3 continued."))
 
@@ -102,7 +102,7 @@ func TestSendMessageOutcome(t *testing.T) {
 	tool := NewSendMessage(nil)
 	args := json.RawMessage(`{"to":"t3","message":"hi"}`)
 
-	done, action := tool.Display.Outcome(args, "Agent t3 continued.\nAgent: explore › look")
+	done, action := tool.Display.Outcome(args, "Agent t3 continued. [named task]\nAgent: explore › look")
 	assert.Equal(t, "Messaged explore › look", done)
 	assert.Equal(t, Action{Verb: "Messaged", One: "agent", Many: "agents"}, action)
 

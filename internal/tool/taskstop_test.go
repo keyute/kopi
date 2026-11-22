@@ -38,14 +38,14 @@ func TestTaskStopStopsRunningTask(t *testing.T) {
 
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 	require.NoError(t, err)
-	assert.Equal(t, "Task t1 stopped.\nCommand: sleep 600", out.Text)
+	assert.Equal(t, "Task t1 stopped. [named task]\nCommand: sleep 600", out.Text)
 	ended := nextEvent(t, events)
 	assert.Equal(t, "t1", ended.ID)
 	assert.Equal(t, TaskStopped, ended.Status)
 
 	out, err = tool.Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 	require.NoError(t, err)
-	assert.Equal(t, "Task t1 already stopped.\nCommand: sleep 600", out.Text)
+	assert.Equal(t, "Task t1 already stopped. [named task]\nCommand: sleep 600", out.Text)
 }
 
 func TestTaskStopReportsEndedTask(t *testing.T) {
@@ -58,7 +58,7 @@ func TestTaskStopReportsEndedTask(t *testing.T) {
 	out, err := NewTaskStop(tasks).Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 
 	require.NoError(t, err)
-	assert.Equal(t, "Task t1 already completed (exit code 0).\nCommand: true", out.Text)
+	assert.Equal(t, "Task t1 already completed (exit code 0). [named task]\nCommand: true", out.Text)
 }
 
 func TestTaskStopStopsAgentTask(t *testing.T) {
@@ -69,18 +69,18 @@ func TestTaskStopStopsAgentTask(t *testing.T) {
 
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 	require.NoError(t, err)
-	assert.Equal(t, "Task t1 stopped.\nAgent: explore › find it", out.Text)
+	assert.Equal(t, "Task t1 stopped. [named task]\nAgent: explore › find it", out.Text)
 
 	out, err = tool.Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 	require.NoError(t, err)
-	assert.Equal(t, "Task t1 already stopped.\nAgent: explore › find it", out.Text)
+	assert.Equal(t, "Task t1 already stopped. [named task]\nAgent: explore › find it", out.Text)
 
 	done := startAgent(tasks, "again")
 	_, ok := done.End(TaskFailed, "boom", "")
 	require.True(t, ok)
 	out, err = tool.Run(t.Context(), json.RawMessage(`{"task_id":"t2"}`), allowTarget)
 	require.NoError(t, err)
-	assert.Equal(t, "Task t2 already failed (boom).\nAgent: explore › again", out.Text)
+	assert.Equal(t, "Task t2 already failed (boom). [named task]\nAgent: explore › again", out.Text)
 }
 
 func TestTaskStopRefusesUnknownTask(t *testing.T) {
@@ -136,13 +136,13 @@ func TestTaskStopOutcome(t *testing.T) {
 		name, output, done string
 		action             Action
 	}{
-		{"stopped agent", "Task t1 stopped.\nAgent: explore › look", "Stopped explore › look", Action{Verb: "Stopped", One: "agent", Many: "agents"}},
-		{"stopped shell", "Task t1 stopped.\nCommand: make", "Stopped shell make", Action{Verb: "Stopped", One: "shell", Many: "shells"}},
-		{"stopped workflow", "Task t1 stopped.\nWorkflow: audit", "Stopped workflow › audit", Action{Verb: "Stopped", One: "workflow", Many: "workflows"}},
+		{"stopped agent", "Task t1 stopped. [named task]\nAgent: explore › look", "Stopped explore › look", Action{Verb: "Stopped", One: "agent", Many: "agents"}},
+		{"stopped shell", "Task t1 stopped. [named task]\nCommand: make", "Stopped shell make", Action{Verb: "Stopped", One: "shell", Many: "shells"}},
+		{"stopped workflow", "Task t1 stopped. [named task]\nWorkflow: audit", "Stopped workflow › audit", Action{Verb: "Stopped", One: "workflow", Many: "workflows"}},
 		{"stopped without name", "Task t1 stopped.", "", Action{}},
-		{"over agent", "Task t1 already failed (boom).\nAgent: explore › look", "TaskStop explore › look", Action{Verb: "Checked on", One: "agent", Many: "agents"}},
-		{"over shell", "Task t1 already completed (exit code 0).\nCommand: make", "TaskStop shell make", Action{Verb: "Checked on", One: "shell", Many: "shells"}},
-		{"over workflow", "Task t1 already completed.\nWorkflow: audit", "TaskStop workflow › audit", Action{Verb: "Checked on", One: "workflow", Many: "workflows"}},
+		{"over agent", "Task t1 already failed (boom). [named task]\nAgent: explore › look", "TaskStop explore › look", Action{Verb: "Checked on", One: "agent", Many: "agents"}},
+		{"over shell", "Task t1 already completed (exit code 0). [named task]\nCommand: make", "TaskStop shell make", Action{Verb: "Checked on", One: "shell", Many: "shells"}},
+		{"over workflow", "Task t1 already completed. [named task]\nWorkflow: audit", "TaskStop workflow › audit", Action{Verb: "Checked on", One: "workflow", Many: "workflows"}},
 		{"over without name", "Task t1 already completed.", "TaskStop t1", Action{Verb: "Checked", One: "task", Many: "tasks"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

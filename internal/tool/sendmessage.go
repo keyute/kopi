@@ -59,7 +59,7 @@ func NewSendMessage(agents Agents) Tool {
 				text = fmt.Sprintf("Agent %s continued.", args.To)
 			}
 			if to.ID != "" {
-				text += "\n" + taskName(to)
+				text += namedTaskResult + "\n" + taskName(to)
 			}
 			return Result{Text: text}, nil
 		},
@@ -68,7 +68,7 @@ func NewSendMessage(agents Agents) Tool {
 			Done:  sendMessageTitle("Messaged"),
 			Summary: func(output string) string {
 				first, _, _ := strings.Cut(output, "\n")
-				if strings.HasSuffix(first, " continued.") {
+				if strings.HasSuffix(strings.TrimSuffix(first, namedTaskResult), " continued.") {
 					return "continued"
 				}
 				return "queued"

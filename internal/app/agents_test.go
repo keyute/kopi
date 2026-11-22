@@ -454,7 +454,7 @@ func TestSendMessageResultNamesTheAgent(t *testing.T) {
 	require.NoError(t, err)
 	a.untilStatus(t, id, tool.TaskCompleted)
 
-	assert.Equal(t, fmt.Sprintf("Agent %s continued.\nAgent: explorer › find it", id), result.Text)
+	assert.Equal(t, fmt.Sprintf("Agent %s continued. [named task]\nAgent: explorer › find it", id), result.Text)
 }
 
 func TestMessageToOtherTasksIsUnknown(t *testing.T) {

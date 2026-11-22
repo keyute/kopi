@@ -29,9 +29,9 @@ func NewTaskStop(tasks *Tasks) Tool {
 				return Result{}, err
 			}
 			if stopped {
-				return Result{Text: fmt.Sprintf("Task %s stopped.\n%s", info.ID, taskName(info))}, nil
+				return Result{Text: fmt.Sprintf("Task %s stopped.%s\n%s", info.ID, namedTaskResult, taskName(info))}, nil
 			}
-			return Result{Text: fmt.Sprintf("Task %s already %s.\n%s", info.ID, info.StatusText(), taskName(info))}, nil
+			return Result{Text: fmt.Sprintf("Task %s already %s.%s\n%s", info.ID, info.StatusText(), namedTaskResult, taskName(info))}, nil
 		},
 		Display: Display{
 			Title:   taskTitle("TaskStop"),
