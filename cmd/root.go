@@ -480,7 +480,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		Errors: slices.Concat(set.errs, instructionErrs, skillErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review, Outputs: outputs,
 		Skills: skills, SkillPrefix: resolved.Config.Skills.Prefix,
 		WorkflowModel: resolved.Config.Workflows.Model, MaxWorkflows: resolved.Config.Workflows.MaxWorkflows, MaxAgents: resolved.Config.Workflows.MaxAgents,
-		Title: fullscreen && resolved.Config.Terminal.Title && resolved.Config.SmallModel != "",
+		Title: fullscreen && resolved.Config.Terminal.Title,
 	}
 	// Naming a plan limit segment in the layout is what makes Kopi call the provider.
 	cfg.Limits = fullscreen && slices.ContainsFunc(config.SegmentNames(resolved.Config.StatusLine.Left, resolved.Config.StatusLine.Right), func(name string) bool {

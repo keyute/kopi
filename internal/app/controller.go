@@ -288,7 +288,7 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	var search []tool.Tool
 	if small := c.SmallModel(); small != "" && c.rt.CanSearch(small) && !c.cfg.Rules.Removes("WebSearch") {
 		search = append(search, tool.NewWebSearch(func(ctx context.Context, system, query string) (tool.SearchResult, error) {
-			return c.sideSearch(ctx, small, system, query)
+			return c.sideSearch(ctx, c.SmallModel(), system, query)
 		}))
 		tools = append(tools, search...)
 	}

@@ -54,6 +54,7 @@
 - Add a key only for a setting someone needs to change, never to move mechanics out of the binary.
 - A number in the binary bounds what one call does or returns, or stops a runaway, and is a constant. The exception is a number sized to something outside Kopi (a model's context, a slow server): it becomes a key when someone hits it, not before.
 - An unset `model` is PiG's default model for a provider with a credential, chosen at each start and never saved.
+- A model key (`smallModel`, `classifier.model`, `workflows.model`, a definition's `model`) only picks a model; unset, it falls back at the moment of use, ending at the session model, so it follows `/model`. It never switches a feature on or off: a feature key does. A model's capability may still limit a tool. A session already running keeps its model; one started later (a subagent, a workflow's `agent()` call, a side call) uses the current one.
 - When it is unclear which side something is on, check what peer agents build in and follow the majority.
 
 ## Model-facing text

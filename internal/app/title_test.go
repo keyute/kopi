@@ -57,6 +57,18 @@ func TestFirstPromptNamesSessionOnce(t *testing.T) {
 	assert.Empty(t, named)
 }
 
+func TestTitleUsesTheSessionModelWhenSmallModelIsUnset(t *testing.T) {
+	h, _ := unopenedTitleHarness(t, Config{Title: true})
+	h.c.cfg.SmallModel = ""
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("Session titled"), pigruntimetest.Text("Session titled")})
+	named := subscribeTo[event.SessionNamed](h.c)
+
+	h.turn(t, "fix the build")
+
+	assert.Equal(t, event.SessionNamed{Name: "Session titled"}, receiveEvent(t, named))
+}
+
 func TestSuccessfulTitleChargesTheTotal(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	priced := sb.PricedModel(t)

@@ -6,8 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1946,6 +1949,42 @@ func TestWebSearchChargesTheTotal(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, pigruntimetest.PricedModelCost, h.c.Status().TotalCost)
+}
+
+func TestWebSearchFollowsModelCommandWhenSmallModelIsUnset(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	models := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		select {
+		case models <- body.Model:
+		default:
+		}
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	t.Cleanup(server.Close)
+	config := fmt.Sprintf(`{"providers":{`+
+		`"kopi-search":{"baseUrl":"http://127.0.0.1:1","api":"openai-responses","apiKey":"synthetic-key","models":[{"id":"search-1"}]},`+
+		`"kopi-search-new":{"baseUrl":%q,"api":"openai-responses","apiKey":"synthetic-key","models":[{"id":"search-2"}]}}}`, server.URL)
+	require.NoError(t, os.WriteFile(filepath.Join(sb.AgentDir, "models.json"), []byte(config), 0o600))
+	h := newHarness(t, sb, Config{Model: "kopi-search/search-1"})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	i := slices.IndexFunc(h.c.tools, func(t tool.Tool) bool { return t.Name == "WebSearch" })
+	require.NotEqual(t, -1, i)
+	_, err := h.c.Submit(t.Context(), Main, "/model kopi-search-new/search-2")
+	require.NoError(t, err)
+
+	_, _ = h.c.tools[i].Run(t.Context(), json.RawMessage(`{"query":"kopi"}`), func(policy.Target) (policy.Mode, error) { return policy.Execute, nil })
+
+	select {
+	case got := <-models:
+		assert.Equal(t, "search-2", got)
+	case <-time.After(waitLimit):
+		require.Fail(t, "no search request reached the new model")
+	}
 }
 
 func TestWebSearchIsAbsentForANonSearchingModel(t *testing.T) {

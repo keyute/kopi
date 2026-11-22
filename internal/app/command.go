@@ -165,7 +165,9 @@ func (c *Controller) effortCandidates() ([]Candidate, error) {
 }
 
 // modelCommand switches the main session to ref. Later sessions and work that
-// names no model follow it; running subagents and workflows keep theirs.
+// names no model follow it, among them a running workflow's later agent() calls
+// and the WebFetch, WebSearch and classifier calls of running agents; running
+// subagents keep their model.
 func (c *Controller) modelCommand(ctx context.Context, ref string) error {
 	if ref == "" {
 		return fmt.Errorf("%w: /model needs a provider/id", ErrMissingArgument)
