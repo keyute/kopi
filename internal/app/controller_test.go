@@ -3258,9 +3258,11 @@ func TestStatusUltracodeFollowsTheKeywordPrompt(t *testing.T) {
 
 	h.turn(t, "plain prompt")
 	assert.False(t, h.c.Status().Ultracode)
+	assert.Empty(t, ofType[event.ToolsChanged](h.rec.all()))
 
 	h.turn(t, "please ultracode this")
 	assert.True(t, h.c.Status().Ultracode)
+	assert.Len(t, ofType[event.ToolsChanged](h.rec.all()), 1)
 
 	require.NoError(t, h.c.NewSession(t.Context()))
 	assert.False(t, h.c.Status().Ultracode)

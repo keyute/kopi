@@ -239,11 +239,11 @@ func TestUnknownToolsDoNotReportToolsChanged(t *testing.T) {
 	var ran atomic.Bool
 	sess := openTestSession(t, r, deferredTool(&ran))
 	changed := 0
-	sess.Subscribe(func(ev event.Event) {
+	t.Cleanup(sess.Subscribe(func(ev event.Event) {
 		if _, ok := ev.(event.ToolsChanged); ok {
 			changed++
 		}
-	})
+	}))
 
 	sess.loadTools([]string{"Missing"})
 	assert.False(t, sess.Callable("Missing"))
@@ -270,11 +270,11 @@ func TestCallableAndToolsChangedFollowLoadedTools(t *testing.T) {
 	var ran atomic.Bool
 	sess := openTestSession(t, r, deferredTool(&ran))
 	changed := 0
-	sess.Subscribe(func(ev event.Event) {
+	t.Cleanup(sess.Subscribe(func(ev event.Event) {
 		if _, ok := ev.(event.ToolsChanged); ok {
 			changed++
 		}
-	})
+	}))
 	require.False(t, sess.Callable("Deferred"))
 
 	_, err := sess.Send(t.Context(), Prompt{Text: "a", Tools: []string{"Deferred"}}, nil, nil)

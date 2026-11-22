@@ -180,9 +180,11 @@ func (s *Session) Usage() (toolCalls int, cost float64) {
 	return st.ToolCalls, st.Cost
 }
 
-// Subscribe registers fn to run synchronously on PiG's event executor. A slow
-// fn stalls the turn, and fn must not call back into the Session. Every call
-// for a turn has run when Send returns.
+// Subscribe registers fn to run synchronously on PiG's event executor, and for
+// event.ToolsChanged on the goroutine that changed the active tools, so fn may
+// run concurrently with executor events. A slow fn stalls the turn, and fn must
+// not call back into the Session. Every call for a turn has run when Send
+// returns.
 func (s *Session) Subscribe(fn func(event.Event)) func() {
 	s.listenersMu.Lock()
 	s.nextID++

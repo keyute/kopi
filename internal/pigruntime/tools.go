@@ -32,16 +32,18 @@ func (s *Session) addTools(names []string) bool {
 	s.toolsMu.Lock()
 	defer s.toolsMu.Unlock()
 	active := s.inner.ActiveToolNames()
-	initialCount := len(active)
+	before := len(active)
 	for _, name := range names {
 		if !slices.Contains(active, name) {
 			active = append(active, name)
 		}
 	}
-	if len(active) > initialCount {
-		s.inner.SetActiveToolsByName(active)
+	if len(active) == before {
+		return false
 	}
-	return len(s.inner.ActiveToolNames()) > initialCount
+	// PiG's SetActiveToolsByName ignores names the session does not have.
+	s.inner.SetActiveToolsByName(active)
+	return len(s.inner.ActiveToolNames()) > before
 }
 
 // Callable reports whether the named tool is callable from the session's next
