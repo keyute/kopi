@@ -167,7 +167,7 @@ func (s *Session) ContextUsage() (tokens, window int, ok bool) {
 // Effort reports the reasoning level the session runs at, in the names
 // ParseEffort takes. It is "" when the model does not reason.
 func (s *Session) Effort() string {
-	if !slices.ContainsFunc(s.inner.AvailableThinkingLevels(), func(l ai.ModelThinkingLevel) bool { return l != ai.ThinkingOff }) {
+	if !reasons(s.inner.AvailableThinkingLevels()) {
 		return ""
 	}
 	return string(s.inner.ThinkingLevel())
@@ -186,14 +186,19 @@ func (s *Session) SetEffort(e Effort) error {
 // Efforts lists the levels the model supports, in the names ParseEffort takes.
 // It is nil when the model does not reason.
 func (s *Session) Efforts() []string {
-	if s.Effort() == "" {
+	levels := s.inner.AvailableThinkingLevels()
+	if !reasons(levels) {
 		return nil
 	}
 	var out []string
-	for _, l := range s.inner.AvailableThinkingLevels() {
+	for _, l := range levels {
 		out = append(out, string(l))
 	}
 	return out
+}
+
+func reasons(levels []ai.ModelThinkingLevel) bool {
+	return slices.ContainsFunc(levels, func(l ai.ModelThinkingLevel) bool { return l != ai.ThinkingOff })
 }
 
 // Usage reports the tool calls the session has made and the cost of its

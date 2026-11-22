@@ -108,25 +108,25 @@ func (c *Controller) effortCommand(_ context.Context, arg string) error {
 	if err != nil {
 		return fmt.Errorf("%w: /effort: %w", ErrUnknownArgument, err)
 	}
+	// Checked before life, which a switch holds while it joins old work: the TUI
+	// submits on its event loop.
 	c.mu.Lock()
-	sess, switching := c.main.sess, c.switching != nil
-	c.mu.Unlock()
 	switch {
-	case sess == nil:
+	case c.closed:
+		c.mu.Unlock()
 		return ErrNoSession
-	case switching:
+	case c.switching != nil:
+		c.mu.Unlock()
 		return ErrBusy
 	}
+	c.mu.Unlock()
 	// Held so that it cannot touch the runtime after Close.
 	c.life.Lock()
 	defer c.life.Unlock()
-	if c.isClosed() {
-		return ErrNoSession
-	}
 	c.mu.Lock()
-	sess = c.main.sess
+	closed, sess := c.closed, c.main.sess
 	c.mu.Unlock()
-	if sess == nil {
+	if closed || sess == nil {
 		return ErrNoSession
 	}
 	if sess.Effort() == "" {
@@ -149,6 +149,9 @@ func (c *Controller) effortCandidates() ([]Candidate, error) {
 		return nil, nil
 	}
 	current := sess.Effort()
+	if current == "" {
+		return nil, nil
+	}
 	var out []Candidate
 	for _, name := range sess.Efforts() {
 		cand := Candidate{Value: name}

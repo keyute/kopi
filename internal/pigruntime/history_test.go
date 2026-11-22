@@ -677,6 +677,19 @@ func TestSetEffortChangesTheLevelForTheSessionAndItsResume(t *testing.T) {
 	assert.Equal(t, "high", resumed.Effort())
 }
 
+func TestEffortTreatsAMaxThinkingModelAsReasoning(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "faux-thinker", Models: []ai.FauxModelDefinition{{ID: "thinker"}}})
+	thinker.Models()[0].Capabilities.MaxThinking = ai.ThinkingLevelHigh
+	require.False(t, thinker.Models()[0].ProviderMeta.Reasoning)
+	require.NoError(t, r.RegisterProvider(thinker.Provider()))
+	sess, err := r.Open(t.Context(), OpenOptions{Model: "faux-thinker/thinker", Effort: LowEffort, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+	assert.Equal(t, "low", sess.Effort())
+	assert.Contains(t, sess.Efforts(), "high")
+}
+
 func TestUsageMirrorsPiGsSessionStats(t *testing.T) {
 	r, _ := newTestRuntime(t, newSandbox(t))
 	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "faux-thinker", Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})

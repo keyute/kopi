@@ -148,6 +148,13 @@ func TestEffortCommandSetsTheLevelForAReasoningModel(t *testing.T) {
 	assert.Equal(t, []string{"low"}, current)
 	assert.Equal(t, h.c.main.sess.Efforts(), values(cs))
 
+	for _, level := range []string{"off", "high"} {
+		_, err = h.c.Submit(t.Context(), Main, "/effort "+level)
+		require.NoError(t, err)
+		receiveEvent(t, changed)
+		assert.Equal(t, event.Notice{Text: "Effort set to " + level + " for this session."}, receiveEvent(t, notices))
+	}
+
 	// A switch holds the old session until it finishes.
 	switched := subscribeTo[event.SessionChanged](h.c)
 	h.c.life.Lock()
