@@ -167,10 +167,38 @@ func (s *Session) ContextUsage() (tokens, window int, ok bool) {
 // Effort reports the reasoning level the session runs at, in the names
 // ParseEffort takes. It is "" when the model does not reason.
 func (s *Session) Effort() string {
-	if m := s.inner.Model(); m == nil || !m.ProviderMeta.Reasoning {
+	if !reasons(s.inner.AvailableThinkingLevels()) {
 		return ""
 	}
 	return string(s.inner.ThinkingLevel())
+}
+
+// SetEffort changes the level the session runs at, from the next prompt, for
+// this session only. e is not DefaultEffort. PiG clamps a level the model lacks
+// to the nearest it has; Effort reports the level in effect.
+func (s *Session) SetEffort(e Effort) error {
+	if err := s.inner.SetThinkingLevel(e.thinkingLevel()); err != nil {
+		return fmt.Errorf("failed to set effort: %w", err)
+	}
+	return nil
+}
+
+// Efforts lists the levels the model supports, in the names ParseEffort takes.
+// It is nil when the model does not reason.
+func (s *Session) Efforts() []string {
+	levels := s.inner.AvailableThinkingLevels()
+	if !reasons(levels) {
+		return nil
+	}
+	var out []string
+	for _, l := range levels {
+		out = append(out, string(l))
+	}
+	return out
+}
+
+func reasons(levels []ai.ModelThinkingLevel) bool {
+	return slices.ContainsFunc(levels, func(l ai.ModelThinkingLevel) bool { return l != ai.ThinkingOff })
 }
 
 // Usage reports the tool calls the session has made and the cost of its

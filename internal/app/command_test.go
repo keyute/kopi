@@ -109,3 +109,73 @@ func TestPlanCommandEntersPlanModeAndOpensThePlanFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, policy.Plan, h.c.Status().Mode)
 }
+
+func TestEffortCommandSetsTheLevelForAReasoningModel(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	rt := pigruntimetest.NewRuntime(t, sb)
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: fauxProvider, Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, rt.RegisterProvider(thinker.Provider()))
+	h := buildHarness(t, rt, thinker, sb, Config{Model: fauxProvider + "/thinker"})
+	_, err := h.c.Submit(t.Context(), Main, "/effort high")
+	require.ErrorIs(t, err, ErrNoSession)
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	changed, notices := subscribeTo[event.EffortChanged](h.c), subscribeTo[event.Notice](h.c)
+
+	for arg, want := range map[string]error{"": ErrMissingArgument, "loud": ErrUnknownArgument} {
+		_, err = h.c.Submit(t.Context(), Main, "/effort "+arg)
+		assert.ErrorIs(t, err, want, arg)
+	}
+
+	// The faux model tops out at high, so max clamps to it.
+	_, err = h.c.Submit(t.Context(), Main, "/effort max")
+	require.NoError(t, err)
+	receiveEvent(t, changed)
+	assert.Equal(t, event.Notice{Text: "Effort set to high for this session."}, receiveEvent(t, notices))
+
+	_, err = h.c.Submit(t.Context(), Main, "/effort low")
+	require.NoError(t, err)
+	assert.Equal(t, "low", h.c.Agents()[0].Effort)
+	receiveEvent(t, changed)
+	assert.Equal(t, event.Notice{Text: "Effort set to low for this session."}, receiveEvent(t, notices))
+	cs, err := h.c.Arguments("effort")
+	require.NoError(t, err)
+	var current []string
+	for _, cand := range cs {
+		if cand.Description == "current" {
+			current = append(current, cand.Value)
+		}
+	}
+	assert.Equal(t, []string{"low"}, current)
+	assert.Equal(t, h.c.main.sess.Efforts(), values(cs))
+
+	for _, level := range []string{"off", "high"} {
+		_, err = h.c.Submit(t.Context(), Main, "/effort "+level)
+		require.NoError(t, err)
+		receiveEvent(t, changed)
+		assert.Equal(t, event.Notice{Text: "Effort set to " + level + " for this session."}, receiveEvent(t, notices))
+	}
+
+	// A switch holds the old session until it finishes.
+	switched := subscribeTo[event.SessionChanged](h.c)
+	h.c.life.Lock()
+	_, err = h.c.Submit(t.Context(), Main, "/new")
+	assert.NoError(t, err)
+	_, err = h.c.Submit(t.Context(), Main, "/effort high")
+	assert.ErrorIs(t, err, ErrBusy)
+	h.c.life.Unlock()
+	receiveEvent(t, switched)
+	assertSwitchDone(t, h)
+	assert.Equal(t, "medium", h.c.Agents()[0].Effort)
+}
+
+func TestEffortCommandRefusesAModelThatDoesNotReason(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	notices := subscribeTo[event.Notice](h.c)
+	_, err := h.c.Submit(t.Context(), Main, "/effort high")
+	require.NoError(t, err)
+	assert.Equal(t, event.Notice{Text: "This model does not reason."}, receiveEvent(t, notices))
+	assert.Empty(t, h.c.Agents()[0].Effort)
+	cs, err := h.c.Arguments("effort")
+	require.NoError(t, err)
+	assert.Empty(t, cs)
+}
