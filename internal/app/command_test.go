@@ -139,7 +139,13 @@ func TestEffortCommandSetsTheLevelForAReasoningModel(t *testing.T) {
 	assert.Equal(t, event.Notice{Text: "Effort set to low for this session."}, receiveEvent(t, notices))
 	cs, err := h.c.Arguments("effort")
 	require.NoError(t, err)
-	assert.Contains(t, cs, Candidate{Value: "low", Description: "current"})
+	var current []string
+	for _, cand := range cs {
+		if cand.Description == "current" {
+			current = append(current, cand.Value)
+		}
+	}
+	assert.Equal(t, []string{"low"}, current)
 	assert.Equal(t, h.c.main.sess.Efforts(), values(cs))
 
 	// A switch holds the old session until it finishes.
@@ -152,6 +158,7 @@ func TestEffortCommandSetsTheLevelForAReasoningModel(t *testing.T) {
 	h.c.life.Unlock()
 	receiveEvent(t, switched)
 	assertSwitchDone(t, h)
+	assert.Equal(t, "medium", h.c.Agents()[0].Effort)
 }
 
 func TestEffortCommandRefusesAModelThatDoesNotReason(t *testing.T) {

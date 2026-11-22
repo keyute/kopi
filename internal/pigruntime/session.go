@@ -173,7 +173,7 @@ func (s *Session) Effort() string {
 	return string(s.inner.ThinkingLevel())
 }
 
-// SetEffort changes the level the session runs at, from its next request, for
+// SetEffort changes the level the session runs at, from the next prompt, for
 // this session only. e is not DefaultEffort. PiG clamps a level the model lacks
 // to the nearest it has; Effort reports the level in effect.
 func (s *Session) SetEffort(e Effort) error {

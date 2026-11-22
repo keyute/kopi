@@ -100,7 +100,6 @@ func (c *Controller) resumeCommand(ctx context.Context, id string) error {
 	return c.switchTo(ctx, OpenRequest{ResumeID: id})
 }
 
-// effortCommand sets the main session's effort for this session only.
 func (c *Controller) effortCommand(_ context.Context, arg string) error {
 	if arg == "" {
 		return fmt.Errorf("%w: /effort needs a level", ErrMissingArgument)
@@ -117,6 +116,18 @@ func (c *Controller) effortCommand(_ context.Context, arg string) error {
 		return ErrNoSession
 	case switching:
 		return ErrBusy
+	}
+	// Held so that it cannot touch the runtime after Close.
+	c.life.Lock()
+	defer c.life.Unlock()
+	if c.isClosed() {
+		return ErrNoSession
+	}
+	c.mu.Lock()
+	sess = c.main.sess
+	c.mu.Unlock()
+	if sess == nil {
+		return ErrNoSession
 	}
 	if sess.Effort() == "" {
 		c.relay.emit(event.Notice{Text: "This model does not reason."})
