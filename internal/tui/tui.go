@@ -70,16 +70,16 @@ type Controller interface {
 
 // Options are the frontend's settings. Keys maps action names to key
 // strings; an action without keys is disabled. StatusLine is the config's
-// status line, AgentLine its agent rows'. ImageDir holds saved clipboard images. Themes
+// status line, SubagentLine its subagent rows'. ImageDir holds saved clipboard images. Themes
 // come from LoadThemes.
 type Options struct {
-	Version    string
-	Keys       map[string][]string
-	StatusLine config.StatusLine
-	AgentLine  config.AgentLine
-	ImageDir   string
-	Themes     Themes
-	Terminal   config.Terminal
+	Version      string
+	Keys         map[string][]string
+	StatusLine   config.StatusLine
+	SubagentLine config.SubagentLine
+	ImageDir     string
+	Themes       Themes
+	Terminal     config.Terminal
 }
 
 type statusCommands interface {

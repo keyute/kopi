@@ -55,8 +55,8 @@ var LimitSegments = func() []string {
 // StatusSegments lists every segment the status line can show.
 var StatusSegments = slices.Concat([]string{"model", "effort", "context", "tools", "cost", "total", "branch", "mode", "notice", "sandbox", "agents", "shells", "workflows", "ultracode", "tokens", "changes", "cwd"}, LimitSegments)
 
-// AgentSegments lists every segment an agent row can show.
-var AgentSegments = []string{"agent", "tokens", "model", "effort", "context", "tools", "cost", "elapsed", "state", "activity", "id"}
+// SubagentSegments lists every segment a subagent row can show.
+var SubagentSegments = []string{"agent", "tokens", "model", "effort", "context", "tools", "cost", "elapsed", "state", "activity", "id"}
 
 // ThemeRoles lists every colour role a theme defines.
 var ThemeRoles = []string{"accent", "success", "error", "warning", "muted", "dim", "text", "userMessageBg", "heading", "link", "code", "frame"}
@@ -69,7 +69,7 @@ type StatusLine struct {
 	Segments  map[string]StatusSegment `koanf:"segments"`
 }
 
-type AgentLine struct {
+type SubagentLine struct {
 	Left  []string `koanf:"left"`
 	Right []string `koanf:"right"`
 	// Separator is drawn between segments; "" is a valid choice.
@@ -141,8 +141,8 @@ func DefaultStatusLine() StatusLine {
 	return StatusLine{Left: []string{"$model", "$context", "$branch( $changes)"}, Right: []string{"$notice", "$shells", "$ultracode", "$sandbox", "$mode"}, Separator: " · "}
 }
 
-func DefaultAgentLine() AgentLine {
-	return AgentLine{Left: []string{"$agent", "$model", "$tokens"}, Right: []string{}, Separator: " · "}
+func DefaultSubagentLine() SubagentLine {
+	return SubagentLine{Left: []string{"$agent", "$model", "$tokens"}, Right: []string{}, Separator: " · "}
 }
 
 // uiDefaults is the default layer's share of the UI blocks. Nested values must
@@ -154,15 +154,15 @@ func uiDefaults() map[string]any {
 		keys[action] = ks
 	}
 	s := DefaultStatusLine()
-	a := DefaultAgentLine()
+	a := DefaultSubagentLine()
 	t := DefaultTheme()
 	term := DefaultTerminal()
 	return map[string]any{
-		"keys":       keys,
-		"statusline": map[string]any{"left": s.Left, "right": s.Right, "separator": s.Separator, "segments": map[string]any{}},
-		"agentline":  map[string]any{"left": a.Left, "right": a.Right, "separator": a.Separator},
-		"theme":      map[string]any{"dark": t.Dark, "light": t.Light},
-		"terminal":   map[string]any{"title": term.Title, "progress": term.Progress, "notifications": term.Notifications},
+		"keys":         keys,
+		"statusline":   map[string]any{"left": s.Left, "right": s.Right, "separator": s.Separator, "segments": map[string]any{}},
+		"subagentline": map[string]any{"left": a.Left, "right": a.Right, "separator": a.Separator},
+		"theme":        map[string]any{"dark": t.Dark, "light": t.Light},
+		"terminal":     map[string]any{"title": term.Title, "progress": term.Progress, "notifications": term.Notifications},
 	}
 }
 
@@ -185,8 +185,8 @@ func validateUI(c Config) error {
 	if strings.ContainsFunc(c.StatusLine.Separator, unicode.IsControl) {
 		return fmt.Errorf("%w: statusline.separator: control character", ErrInvalidValue)
 	}
-	if strings.ContainsFunc(c.AgentLine.Separator, unicode.IsControl) {
-		return fmt.Errorf("%w: agentline.separator: control character", ErrInvalidValue)
+	if strings.ContainsFunc(c.SubagentLine.Separator, unicode.IsControl) {
+		return fmt.Errorf("%w: subagentline.separator: control character", ErrInvalidValue)
 	}
 	return validateSegments(c.StatusLine.Segments)
 }
@@ -290,7 +290,7 @@ type Part struct {
 	Parts []Part
 }
 
-// Format is a parsed status line or agent row entry.
+// Format is a parsed status line or subagent row entry.
 type Format []Part
 
 // SegmentNames lists the segments named by every entry of sides, which must

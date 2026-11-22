@@ -187,7 +187,7 @@ func TestResetText(t *testing.T) {
 }
 
 func TestStatusInputKeepsTheTotalWithASubagentOpen(t *testing.T) {
-	m, c := agentLineModel(t, 60, config.DefaultAgentLine(), explorer("t1"))
+	m, c := subagentLineModel(t, 60, config.DefaultSubagentLine(), explorer("t1"))
 	c.status.TotalCost = 3
 	send(m, event.TasksChanged{})
 	assert.Equal(t, 3.0, m.statusInput().TotalCost)
@@ -199,7 +199,7 @@ func TestStatusInputKeepsTheTotalWithASubagentOpen(t *testing.T) {
 func TestStatusInputTakesTheOpenSubagentsEffortToolsAndCost(t *testing.T) {
 	sub := explorer("t1")
 	sub.Effort, sub.ToolCalls, sub.Cost = "low", 3, 0.5
-	m, c := agentLineModel(t, 60, config.DefaultAgentLine(), sub)
+	m, c := subagentLineModel(t, 60, config.DefaultSubagentLine(), sub)
 	c.agents[0].Effort, c.agents[0].ToolCalls, c.agents[0].Cost = "high", 12, 2
 	send(m, event.TasksChanged{})
 

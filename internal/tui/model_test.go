@@ -246,7 +246,7 @@ func (f *fakeController) WorkflowHistory(id string, n int) ([]event.Event, error
 
 // testOptions are the options config's defaults resolve to.
 func testOptions() Options {
-	return Options{Version: "v1.2.3", Keys: config.DefaultKeys(), StatusLine: config.DefaultStatusLine(), AgentLine: config.DefaultAgentLine(), Themes: testThemes, Terminal: config.DefaultTerminal()}
+	return Options{Version: "v1.2.3", Keys: config.DefaultKeys(), StatusLine: config.DefaultStatusLine(), SubagentLine: config.DefaultSubagentLine(), Themes: testThemes, Terminal: config.DefaultTerminal()}
 }
 
 var testThemes = Themes{dark: mocha(), light: latte()}
@@ -500,7 +500,7 @@ func TestStatusRefreshesOnALimitsReading(t *testing.T) {
 func TestStatusLimitsFollowTheShownAgentsProvider(t *testing.T) {
 	opts := testOptions()
 	opts.StatusLine = config.StatusLine{Left: []string{"(wk $limit_wk)"}, Separator: " "}
-	opts.AgentLine = config.DefaultAgentLine()
+	opts.SubagentLine = config.DefaultSubagentLine()
 	m, c := newTestModelWith(t, 40, 20, opts)
 	main := app.AgentStatus{ID: app.Main, Model: "openai-codex/gpt-5.2-codex"}
 	child := app.AgentStatus{ID: "t1", Agent: "explorer", Model: "xai/grok-4", State: "running"}
