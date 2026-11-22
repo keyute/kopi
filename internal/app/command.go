@@ -107,13 +107,16 @@ func (c *Controller) effortCommand(_ context.Context, arg string) error {
 	}
 	e, err := pigruntime.ParseEffort(arg)
 	if err != nil {
-		return fmt.Errorf("%w: /effort takes off, minimal, low, medium, high, xhigh or max, got %q", ErrUnknownArgument, arg)
+		return fmt.Errorf("%w: /effort: %w", ErrUnknownArgument, err)
 	}
 	c.mu.Lock()
-	sess := c.main.sess
+	sess, switching := c.main.sess, c.switching != nil
 	c.mu.Unlock()
-	if sess == nil {
+	switch {
+	case sess == nil:
 		return ErrNoSession
+	case switching:
+		return ErrBusy
 	}
 	if sess.Effort() == "" {
 		c.relay.emit(event.Notice{Text: "This model does not reason."})

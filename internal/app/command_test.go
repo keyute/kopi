@@ -126,20 +126,32 @@ func TestEffortCommandSetsTheLevelForAReasoningModel(t *testing.T) {
 		assert.ErrorIs(t, err, want, arg)
 	}
 
-	_, err = h.c.Submit(t.Context(), Main, "/effort high")
+	// The faux model tops out at high, so max clamps to it.
+	_, err = h.c.Submit(t.Context(), Main, "/effort max")
 	require.NoError(t, err)
-	assert.Equal(t, "high", h.c.Agents()[0].Effort)
 	receiveEvent(t, changed)
 	assert.Equal(t, event.Notice{Text: "Effort set to high for this session."}, receiveEvent(t, notices))
+
+	_, err = h.c.Submit(t.Context(), Main, "/effort low")
+	require.NoError(t, err)
+	assert.Equal(t, "low", h.c.Agents()[0].Effort)
+	receiveEvent(t, changed)
+	assert.Equal(t, event.Notice{Text: "Effort set to low for this session."}, receiveEvent(t, notices))
 	cs, err := h.c.Arguments("effort")
 	require.NoError(t, err)
-	var current []string
-	for _, cand := range cs {
-		if cand.Description == "current" {
-			current = append(current, cand.Value)
-		}
-	}
-	assert.Equal(t, []string{"high"}, current)
+	assert.Contains(t, cs, Candidate{Value: "low", Description: "current"})
+	assert.Equal(t, h.c.main.sess.Efforts(), values(cs))
+
+	// A switch holds the old session until it finishes.
+	switched := subscribeTo[event.SessionChanged](h.c)
+	h.c.life.Lock()
+	_, err = h.c.Submit(t.Context(), Main, "/new")
+	assert.NoError(t, err)
+	_, err = h.c.Submit(t.Context(), Main, "/effort high")
+	assert.ErrorIs(t, err, ErrBusy)
+	h.c.life.Unlock()
+	receiveEvent(t, switched)
+	assertSwitchDone(t, h)
 }
 
 func TestEffortCommandRefusesAModelThatDoesNotReason(t *testing.T) {

@@ -508,6 +508,19 @@ func TestStatusRefreshesOnToolsChanged(t *testing.T) {
 	assert.Equal(t, "  model-1             ultracode · plan", last())
 }
 
+func TestStatusRefreshesOnEffortChanged(t *testing.T) {
+	opts := testOptions()
+	opts.StatusLine = config.StatusLine{Left: []string{"$effort"}, Right: []string{"$mode"}, Separator: " "}
+	m, c := newTestModelWith(t, 40, 20, opts)
+	last := func() string { return screen(m)[len(screen(m))-1] }
+	assert.Equal(t, strings.Repeat(" ", 34)+"plan", last())
+
+	c.agents = []app.AgentStatus{{ID: app.Main, Effort: "high"}}
+	send(m, event.EffortChanged{})
+
+	assert.Equal(t, "  high"+strings.Repeat(" ", 28)+"plan", last())
+}
+
 func TestStatusLimitsFollowTheShownAgentsProvider(t *testing.T) {
 	opts := testOptions()
 	opts.StatusLine = config.StatusLine{Left: []string{"(wk $limit_wk)"}, Separator: " "}

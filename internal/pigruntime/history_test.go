@@ -662,6 +662,10 @@ func TestSetEffortChangesTheLevelForTheSessionAndItsResume(t *testing.T) {
 	require.NoError(t, sess.SetEffort(HighEffort))
 	assert.Equal(t, "high", sess.Effort())
 	assert.Contains(t, sess.Efforts(), "high")
+	for _, name := range sess.Efforts() {
+		_, err := ParseEffort(name)
+		assert.NoError(t, err, name)
+	}
 
 	thinker.SetResponses([]ai.FauxResponseStep{reply("noted")})
 	_, err = sess.Send(t.Context(), Prompt{Text: "hello"}, nil, nil)
