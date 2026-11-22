@@ -30,7 +30,7 @@ func withDefaults(c Config) Config {
 	c.Keys = DefaultKeys()
 	c.StatusLine = DefaultStatusLine()
 	c.StatusLine.Segments = map[string]StatusSegment{}
-	c.AgentLine = DefaultAgentLine()
+	c.SubagentLine = DefaultSubagentLine()
 	c.Theme = DefaultTheme()
 	c.Terminal = DefaultTerminal()
 	c.Permissions = Permissions{Allow: []string{}, Ask: []string{}, Deny: []string{}}
@@ -50,7 +50,7 @@ func TestResolveDefaultsOnly(t *testing.T) {
 	assert.Equal(t, "default", r.Origins["keys.submit"])
 	assert.Equal(t, "default", r.Origins["statusline.left"])
 	assert.Equal(t, "default", r.Origins["mode"])
-	assert.Equal(t, DefaultAgentLine(), r.Config.AgentLine)
+	assert.Equal(t, DefaultSubagentLine(), r.Config.SubagentLine)
 	assert.NotContains(t, r.Origins, "model")
 }
 
@@ -297,24 +297,24 @@ func TestResolveOverridesOneStatusLineSide(t *testing.T) {
 	assert.Equal(t, "default", r.Origins["statusline.right"])
 }
 
-func TestResolveOverridesOneAgentLineSide(t *testing.T) {
-	global := globalLayer(t, `{"agentline": {"left": ["$state"]}}`)
+func TestResolveOverridesOneSubagentLineSide(t *testing.T) {
+	global := globalLayer(t, `{"subagentline": {"left": ["$state"]}}`)
 	r, err := Resolve(Defaults(), global)
 	require.NoError(t, err)
-	want := DefaultAgentLine()
+	want := DefaultSubagentLine()
 	want.Left = []string{"$state"}
-	assert.Equal(t, want, r.Config.AgentLine)
-	assert.Equal(t, global.Name, r.Origins["agentline.left"])
-	assert.Equal(t, "default", r.Origins["agentline.right"])
+	assert.Equal(t, want, r.Config.SubagentLine)
+	assert.Equal(t, global.Name, r.Origins["subagentline.left"])
+	assert.Equal(t, "default", r.Origins["subagentline.right"])
 }
 
-func TestResolveRejectsUnknownAgentSegmentNamingLayer(t *testing.T) {
+func TestResolveRejectsUnknownSubagentSegmentNamingLayer(t *testing.T) {
 	for _, side := range []string{"left", "right"} {
-		global := globalLayer(t, `{"agentline": {"`+side+`": ["$agent", "$weather"]}}`)
+		global := globalLayer(t, `{"subagentline": {"`+side+`": ["$agent", "$weather"]}}`)
 		_, err := Resolve(Defaults(), global)
 		require.ErrorIs(t, err, ErrInvalidValue)
 		assert.Contains(t, err.Error(), global.Name)
-		assert.Contains(t, err.Error(), `agentline.`+side+`: unknown segment "weather"`)
+		assert.Contains(t, err.Error(), `subagentline.`+side+`: unknown segment "weather"`)
 	}
 }
 
@@ -346,9 +346,9 @@ func TestResolveAcceptsTheLimitSegmentsOnlyInTheStatusLine(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, entries, r.Config.StatusLine.Left)
 
-	_, err = Resolve(Defaults(), globalLayer(t, `{"agentline": {"left": ["$limit_5h"]}}`))
+	_, err = Resolve(Defaults(), globalLayer(t, `{"subagentline": {"left": ["$limit_5h"]}}`))
 	require.ErrorIs(t, err, ErrInvalidValue)
-	assert.Contains(t, err.Error(), `agentline.left: unknown segment "limit_5h"`)
+	assert.Contains(t, err.Error(), `subagentline.left: unknown segment "limit_5h"`)
 }
 
 func TestResolveRejectsInvalidEntries(t *testing.T) {
@@ -371,7 +371,7 @@ func TestResolveRejectsInvalidEntries(t *testing.T) {
 		{"nested group without a segment", `($model(at home))`, `"($model(at home))": a group names no segment`},
 		{"control character", `$model\u001b[0m`, `"$model\x1b[0m": control character`},
 	} {
-		for _, bar := range []string{"statusline", "agentline"} {
+		for _, bar := range []string{"statusline", "subagentline"} {
 			for _, side := range []string{"left", "right"} {
 				t.Run(tc.name+" "+bar+" "+side, func(t *testing.T) {
 					global := globalLayer(t, `{"`+bar+`": {"`+side+`": ["$model", "`+tc.entry+`"]}}`)
@@ -394,11 +394,11 @@ func TestResolveRejectsAUserSegmentNameThatCannotBeReferenced(t *testing.T) {
 }
 
 func TestResolveAcceptsTheEffortContextToolsAndCostSegments(t *testing.T) {
-	global := globalLayer(t, `{"statusline": {"right": ["$effort", "$tools", "$cost"]}, "agentline": {"right": ["$effort", "$context", "$tools", "$cost"]}}`)
+	global := globalLayer(t, `{"statusline": {"right": ["$effort", "$tools", "$cost"]}, "subagentline": {"right": ["$effort", "$context", "$tools", "$cost"]}}`)
 	r, err := Resolve(Defaults(), global)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"$effort", "$tools", "$cost"}, r.Config.StatusLine.Right)
-	assert.Equal(t, []string{"$effort", "$context", "$tools", "$cost"}, r.Config.AgentLine.Right)
+	assert.Equal(t, []string{"$effort", "$context", "$tools", "$cost"}, r.Config.SubagentLine.Right)
 }
 
 func TestResolveAcceptsNoticeOnEitherSide(t *testing.T) {
@@ -594,7 +594,7 @@ func TestResolveRejectsInvalidStatusSegment(t *testing.T) {
 }
 
 func TestResolveRejectsControlCharacterInSeparator(t *testing.T) {
-	for _, line := range []string{"statusline", "agentline"} {
+	for _, line := range []string{"statusline", "subagentline"} {
 		for _, sep := range []string{`\n`, `\t`, ` \u001b[0m `} {
 			global := globalLayer(t, `{"`+line+`": {"separator": "`+sep+`"}}`)
 			_, err := Resolve(Defaults(), global)

@@ -508,13 +508,13 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	if fullscreen {
 		// Created before Start so the TUI shows the events Start emits.
 		f = tui.New(c, cmd.InOrStdin(), cmd.OutOrStdout(), tui.Options{
-			Version:    kopiVersion(),
-			Keys:       resolved.Config.Keys,
-			StatusLine: resolved.Config.StatusLine,
-			AgentLine:  resolved.Config.AgentLine,
-			ImageDir:   paths.ImageDir,
-			Themes:     themes,
-			Terminal:   resolved.Config.Terminal,
+			Version:      kopiVersion(),
+			Keys:         resolved.Config.Keys,
+			StatusLine:   resolved.Config.StatusLine,
+			SubagentLine: resolved.Config.SubagentLine,
+			ImageDir:     paths.ImageDir,
+			Themes:       themes,
+			Terminal:     resolved.Config.Terminal,
 		})
 	} else {
 		f = headless.New(c, prompt, cmd.OutOrStdout())

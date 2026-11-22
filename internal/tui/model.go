@@ -79,8 +79,8 @@ type model struct {
 	composer      composer
 	spinner       spinner.Model
 	layout        statusLayout
-	agentLine     agentLayout
-	// usesActivity and usesElapsed report whether agentLine shows those segments.
+	subagentLine  subagentLayout
+	// usesActivity and usesElapsed report whether subagentLine shows those segments.
 	usesActivity, usesElapsed bool
 	home                      string
 	commands                  statusCommands
@@ -173,16 +173,16 @@ type model struct {
 
 func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model {
 	th, km := opts.Themes.dark, newKeyMap(opts.Keys)
-	agentLine := newAgentLayout(opts.AgentLine)
+	subagentLine := newSubagentLayout(opts.SubagentLine)
 	var agentNames []string
-	for _, f := range slices.Concat(agentLine.left, agentLine.right) {
+	for _, f := range slices.Concat(subagentLine.left, subagentLine.right) {
 		agentNames = append(agentNames, f.Segments()...)
 	}
 	m := &model{
 		ctx: ctx, c: c, bridge: b, version: opts.Version,
 		th: th, themes: opts.Themes, keys: km, composer: newComposer(th, km.newline), spinner: newSpinner(th),
 		layout:       newStatusLayout(opts.StatusLine),
-		agentLine:    agentLine,
+		subagentLine: subagentLine,
 		usesActivity: slices.Contains(agentNames, "activity"),
 		usesElapsed:  slices.Contains(agentNames, "elapsed"),
 		commandOut:   map[string]string{},

@@ -42,17 +42,17 @@ type Config struct {
 	// without an AGENTS.md.
 	InstructionFallbacks []string `koanf:"instructionFallbacks"`
 	// Keys maps an action from KeyActions to the keys bound to it.
-	Keys        map[string][]string  `koanf:"keys"`
-	StatusLine  StatusLine           `koanf:"statusline"`
-	AgentLine   AgentLine            `koanf:"agentline"`
-	Theme       Theme                `koanf:"theme"`
-	Terminal    Terminal             `koanf:"terminal"`
-	Permissions Permissions          `koanf:"permissions"`
-	Sandbox     Sandbox              `koanf:"sandbox"`
-	Skills      Skills               `koanf:"skills"`
-	Classifier  Classifier           `koanf:"classifier"`
-	Workflows   Workflows            `koanf:"workflows"`
-	MCPServers  map[string]MCPServer `koanf:"mcpServers"`
+	Keys         map[string][]string  `koanf:"keys"`
+	StatusLine   StatusLine           `koanf:"statusline"`
+	SubagentLine SubagentLine         `koanf:"subagentline"`
+	Theme        Theme                `koanf:"theme"`
+	Terminal     Terminal             `koanf:"terminal"`
+	Permissions  Permissions          `koanf:"permissions"`
+	Sandbox      Sandbox              `koanf:"sandbox"`
+	Skills       Skills               `koanf:"skills"`
+	Classifier   Classifier           `koanf:"classifier"`
+	Workflows    Workflows            `koanf:"workflows"`
+	MCPServers   map[string]MCPServer `koanf:"mcpServers"`
 }
 
 // Permissions holds rule strings checked only for syntax here; a later layer's
@@ -275,8 +275,8 @@ func Resolve(layers ...Layer) (*Resolved, error) {
 	}, origins); err != nil {
 		return nil, err
 	}
-	if err := validateSegmentRefs("agentline", c.AgentLine.Left, c.AgentLine.Right, func(name string) bool {
-		return slices.Contains(AgentSegments, name)
+	if err := validateSegmentRefs("subagentline", c.SubagentLine.Left, c.SubagentLine.Right, func(name string) bool {
+		return slices.Contains(SubagentSegments, name)
 	}, origins); err != nil {
 		return nil, err
 	}
@@ -473,9 +473,9 @@ func (r *Resolved) Entries() []Entry {
 		"statusline.left":          c.StatusLine.Left,
 		"statusline.right":         c.StatusLine.Right,
 		"statusline.separator":     c.StatusLine.Separator,
-		"agentline.left":           c.AgentLine.Left,
-		"agentline.right":          c.AgentLine.Right,
-		"agentline.separator":      c.AgentLine.Separator,
+		"subagentline.left":        c.SubagentLine.Left,
+		"subagentline.right":       c.SubagentLine.Right,
+		"subagentline.separator":   c.SubagentLine.Separator,
 		"theme.dark":               c.Theme.Dark,
 		"theme.light":              c.Theme.Light,
 		"terminal.title":           c.Terminal.Title,

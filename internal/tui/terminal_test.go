@@ -175,7 +175,7 @@ func TestProgramStatusStates(t *testing.T) {
 }
 
 func TestProgramStatusIgnoresTheShownView(t *testing.T) {
-	m, c := agentLineModel(t, 60, config.DefaultAgentLine(), explorer("t1"))
+	m, c := subagentLineModel(t, 60, config.DefaultSubagentLine(), explorer("t1"))
 	c.status.Agents = 1
 	send(m, event.TasksChanged{})
 	require.Equal(t, tea.ProgramStateWorking, state(m))
@@ -292,7 +292,7 @@ func TestChildRecordTitleIsTheAgentRowsText(t *testing.T) {
 	c.agents = []app.AgentStatus{r}
 	sendRecords(t, m, event.TasksChanged{})
 
-	text, ok := agentSegments["agent"](entry{AgentStatus: r}, theme{})
+	text, ok := subagentSegments["agent"](entry{AgentStatus: r}, theme{})
 	require.True(t, ok)
 	assert.Equal(t, []any{ansi.SetProgramStatus(ansi.ProgramStatus{State: ansi.ProgramStateWorking, ID: "t1", App: "kopi", Title: text})}, *raw)
 }
