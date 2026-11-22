@@ -174,6 +174,10 @@ type TasksChanged struct{}
 // their status.
 type LimitsChanged struct{}
 
+// EffortChanged reports that the main session's effort changed; frontends
+// re-read their status.
+type EffortChanged struct{}
+
 // ToolsChanged reports that a session's callable tools changed; frontends
 // re-read their status.
 type ToolsChanged struct{}
@@ -238,6 +242,7 @@ func (TurnEnd) isEvent()             {}
 func (TaskEnded) isEvent()           {}
 func (TasksChanged) isEvent()        {}
 func (LimitsChanged) isEvent()       {}
+func (EffortChanged) isEvent()       {}
 func (ToolsChanged) isEvent()        {}
 func (ModeChanged) isEvent()         {}
 func (SessionChanged) isEvent()      {}
