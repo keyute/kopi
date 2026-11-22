@@ -21,7 +21,7 @@ type Tasks interface {
 	Foreground() bool
 	List() []tool.TaskInfo
 	Output(id string) (tool.TaskInfo, error)
-	Stop(id string) (tool.TaskInfo, error)
+	Stop(id string) (info tool.TaskInfo, stopped bool, err error)
 	StopAll()
 	StartAgent(agent, description string, stop func()) *tool.AgentTask
 }
@@ -145,7 +145,7 @@ func (c *Controller) StopTask(id string) error {
 		}
 		return nil
 	}
-	info, err = c.cfg.Tasks.Stop(id)
+	info, _, err = c.cfg.Tasks.Stop(id)
 	if err != nil {
 		return err
 	}

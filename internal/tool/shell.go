@@ -124,8 +124,16 @@ func (s *Shell) start(ctx context.Context, command string) (*process, error) {
 
 // stop kills the command's process group, recording reason as why it ended.
 // It has no effect once the supervisor has finished.
-func (p *process) stop(reason error) {
-	p.once.Do(func() { p.stopCh <- reason })
+func (p *process) stop(reason error) { p.stopFirst(reason) }
+
+// stopFirst is stop, reporting whether this call was the first to ask.
+func (p *process) stopFirst(reason error) bool {
+	first := false
+	p.once.Do(func() {
+		first = true
+		p.stopCh <- reason
+	})
+	return first
 }
 
 // supervise waits for the command, kills it on stop, and reaps it.

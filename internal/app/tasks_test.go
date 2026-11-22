@@ -88,28 +88,30 @@ func (f *fakeTasks) Output(id string) (tool.TaskInfo, error) {
 	return f.infos[i], nil
 }
 
-func (f *fakeTasks) Stop(id string) (tool.TaskInfo, error) {
+func (f *fakeTasks) Stop(id string) (tool.TaskInfo, bool, error) {
 	f.mu.Lock()
 	f.stops = append(f.stops, id)
 	i := slices.IndexFunc(f.infos, func(info tool.TaskInfo) bool { return info.ID == id })
 	if i < 0 {
 		f.mu.Unlock()
-		return tool.TaskInfo{}, fmt.Errorf("failed to find task %q: %w", id, tool.ErrUnknownTask)
+		return tool.TaskInfo{}, false, fmt.Errorf("failed to find task %q: %w", id, tool.ErrUnknownTask)
 	}
-	if f.infos[i].Status == tool.TaskRunning {
+	running := f.infos[i].Status == tool.TaskRunning
+	if running {
 		f.infos[i].Status = tool.TaskStopped
 		f.infos[i].Ended = f.infos[i].Started.Add(3 * time.Second)
 	}
 	info, stop, agents := f.infos[i], f.stop, f.agents
 	f.mu.Unlock()
 	if info.Agent != "" {
-		info, _ = agents.Stop(id)
+		info, _, _ = agents.Stop(id)
 		f.set(info)
 	}
 	if stop != nil {
-		return stop(info)
+		info, err := stop(info)
+		return info, running, err
 	}
-	return info, nil
+	return info, running, nil
 }
 
 // StartAgent starts the task in a real registry and mirrors it into infos;
@@ -1092,4 +1094,5 @@ func TestTaskNoticeNamesTheSavedOutput(t *testing.T) {
 	text := notice(info, head).Text
 	assert.Equal(t, 1, strings.Count(text, "/kopi/outputs/s1/a.txt"))
 	assert.NotContains(t, text, "[Output saved to")
+	assert.Equal(t, info.Output, notice(info, head).Shown.Result)
 }

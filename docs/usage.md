@@ -109,16 +109,16 @@ A row says what happened instead of the tool's usual verb when that verb would b
 ```text
 • Moved go test ./... to background
 • TaskStop researcher › survey peers
-  ↳ already completed
+  ↳ already completed (exit code 0)
 • WebFetch example.com
   ↳ redirected
 ```
 
 - `Moved <command> to background` is a command you moved with the `background` key, or that its timeout moved (`↳ timed out`).
-- A `TaskStop` on a task that was already over keeps the tool's name and says how it ended: `↳ already completed`, `↳ already failed` or `↳ already stopped`.
+- A `TaskStop` on a task that was already over keeps the tool's name and says how it ended: `↳ already completed (exit code 0)`, `↳ already failed (exit code 1)` or `↳ already stopped`.
 - A `WebFetch` that only got a redirect keeps the tool's name.
 - A task row that is running, waiting for approval, failed or denied shows the task id (`TaskOutput t3`).
-- A session saved before a task's name was recorded in its result shows `Checked task t3`.
+- A session saved before a task's name was recorded in its result shows each as its tool does: `Checked task t3`, `Stopped task t3`, `TaskStop t3` for a task that was already over, or `Messaged t3`.
 
 A call that did not succeed is one of:
 

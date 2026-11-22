@@ -303,11 +303,11 @@ func (m *Tasks) Output(id string) (TaskInfo, error) {
 
 // Stop kills the task's process group, or asks an agent task to stop, and
 // returns its final info once the task has ended; on a task that has already
-// ended it only returns that.
-func (m *Tasks) Stop(id string) (TaskInfo, error) {
+// ended it only returns that. stopped reports that this call ended the task.
+func (m *Tasks) Stop(id string) (info TaskInfo, stopped bool, err error) {
 	t, err := m.find(id)
 	if err != nil {
-		return TaskInfo{}, err
+		return TaskInfo{}, false, err
 	}
 	if t.a != nil {
 		run, stop := t.a.selectStop()
@@ -315,14 +315,15 @@ func (m *Tasks) Stop(id string) (TaskInfo, error) {
 			stop()
 		}
 		<-run.done
-		info := t.infoOutcome(run.outcome())
+		info = t.infoOutcome(run.outcome())
 		info.Output = t.a.text()
-		return info, nil
+		return info, stop != nil, nil
 	}
 	done := t.p.finished()
-	t.p.stop(ErrStopped)
+	first := t.p.stopFirst(ErrStopped)
 	<-done
-	return t.report(), nil
+	// A stop that reaches a command after it exited leaves no reason.
+	return t.report(), first && t.p.reason != nil, nil
 }
 
 // StopAll stops every pending, foreground and background command and agent

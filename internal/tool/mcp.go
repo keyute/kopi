@@ -125,14 +125,17 @@ func NewMCP(t MCPTool, call func(ctx context.Context, args json.RawMessage) (str
 				}
 				return lineCount(countLines(output))
 			},
-			Preview: func(raw json.RawMessage) []PreviewLine {
-				var pretty bytes.Buffer
-				if json.Indent(&pretty, raw, "", "  ") != nil {
-					return previewLines(Context, string(raw))
-				}
-				return previewLines(Context, pretty.String())
-			},
-			Action: Action{Verb: "Called", One: "MCP tool", Many: "MCP tools"},
+			Preview: jsonPreview,
+			Action:  Action{Verb: "Called", One: "MCP tool", Many: "MCP tools"},
 		},
 	}
+}
+
+// jsonPreview is raw indented, or as it is when it is not valid JSON.
+func jsonPreview(raw json.RawMessage) []PreviewLine {
+	var pretty bytes.Buffer
+	if json.Indent(&pretty, raw, "", "  ") != nil {
+		return previewLines(Context, string(raw))
+	}
+	return previewLines(Context, pretty.String())
 }

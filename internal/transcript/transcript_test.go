@@ -298,7 +298,7 @@ func TestRestoreMatchesApplyForOutcomeRows(t *testing.T) {
 		event.ToolEnd{CallID: "b", Name: "Bash", Done: "Moved make to background", Action: tool.Action{Verb: "Started", One: "shell", Many: "shells"}},
 		event.TextDelta{Text: "x"},
 		event.ToolStart{CallID: "c", Name: "WebFetch", Title: "WebFetch example.com", Done: "Fetched example.com", Action: tool.Action{Verb: "Fetched", One: "page", Many: "pages"}},
-		event.ToolEnd{CallID: "c", Name: "WebFetch", Done: "WebFetch example.com", Summary: "redirected"},
+		event.ToolEnd{CallID: "c", Name: "WebFetch", Done: "WebFetch example.com", Summary: "redirected", Action: tool.Action{Verb: "Hit", One: "redirect", Many: "redirects"}},
 		event.TextDelta{Text: "x"},
 		event.ToolStart{CallID: "d", Name: "Edit", Title: "Edit plan.md", Done: "Edited plan.md", Change: "+1 -1", Action: tool.Action{Verb: "Edited", One: "file", Many: "files"}},
 		event.ToolEnd{CallID: "d", Name: "Edit", Done: "Edited the plan", Action: tool.Action{Verb: "Edited", One: "the plan"}},

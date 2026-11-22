@@ -283,6 +283,8 @@ func TestBashDisplayOutcome(t *testing.T) {
 	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), nil), NewTasks(), true)
 	done, _ = sandboxed.Display.Outcome(json.RawMessage(`{"command":"sleep 5","unsandboxed":true}`), moved)
 	assert.Equal(t, "Moved sleep 5 to background · unsandboxed", done)
+	done, _ = tool.Display.Outcome(json.RawMessage(`{"command":"sleep 5","unsandboxed":true}`), moved)
+	assert.Equal(t, "Moved sleep 5 to background", done)
 
 	done, action = tool.Display.Outcome(json.RawMessage(`{"command":"ls"}`), "a\n")
 	assert.Empty(t, done)

@@ -107,7 +107,6 @@ func (l agentLauncher) Message(ctx context.Context, id, message string) (tool.Ta
 	if err != nil {
 		return tool.TaskInfo{}, false, err
 	}
-	// A failed lookup leaves the info zero, which the tool leaves unnamed.
 	to, _ := l.c.cfg.Tasks.Output(id)
 	return to, resumed, nil
 }

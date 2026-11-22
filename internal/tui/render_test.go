@@ -302,11 +302,16 @@ func TestGroupSentenceFollowsItsRowsVerbs(t *testing.T) {
 	web := tool.Action{Verb: "Searched", One: "the web"}
 	shell := tool.Action{Verb: "Started", One: "shell", Many: "shells"}
 	agents := tool.Action{Verb: "Checked on", One: "agent", Many: "agents"}
-	call := func(id, name, title string, action tool.Action) []event.Event {
+	task := tool.Action{Verb: "Checked", One: "task", Many: "tasks"}
+	// The start carries the tool's static action; only the end's outcome names the shells and agents.
+	callAs := func(id, name, title string, static, outcome tool.Action) []event.Event {
 		return []event.Event{
-			event.ToolStart{CallID: id, Name: name, Title: title, Done: title, Action: action},
-			event.ToolEnd{CallID: id, Name: name, Done: title, Action: action},
+			event.ToolStart{CallID: id, Name: name, Title: title, Done: title, Action: static},
+			event.ToolEnd{CallID: id, Name: name, Done: title, Action: outcome},
 		}
+	}
+	call := func(id, name, title string, action tool.Action) []event.Event {
+		return callAs(id, name, title, action, action)
 	}
 	var events []event.Event
 	for _, c := range [][]event.Event{
@@ -316,9 +321,9 @@ func TestGroupSentenceFollowsItsRowsVerbs(t *testing.T) {
 		call("d", "WebSearch", "Searched the web for x", web),
 		call("e", "WebSearch", "Searched the web for y", web),
 		call("f", "WebSearch", "Searched the web for z", web),
-		call("g", "Bash", "Started make in background", shell),
-		call("h", "TaskOutput", "Checked on researcher › survey peers", agents),
-		call("i", "TaskOutput", "Checked on explorer › map the repo", agents),
+		callAs("g", "Bash", "Started make in background", tool.Action{}, shell),
+		callAs("h", "TaskOutput", "Checked on researcher › survey peers", task, agents),
+		callAs("i", "TaskOutput", "Checked on explorer › map the repo", task, agents),
 	} {
 		events = append(events, c...)
 	}

@@ -1,7 +1,6 @@
 package tool
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -123,11 +122,7 @@ func NewStructuredOutput(schema map[string]any, record func(json.RawMessage)) To
 		Display: Display{
 			Done: func(json.RawMessage) string { return "Returned result" },
 			Change: func(raw json.RawMessage) (string, []PreviewLine) {
-				var pretty bytes.Buffer
-				if json.Indent(&pretty, raw, "", "  ") != nil {
-					return "", previewLines(Context, string(raw))
-				}
-				return "", previewLines(Context, pretty.String())
+				return "", jsonPreview(raw)
 			},
 			Action: Action{Verb: "Returned", One: "result", Many: "results"},
 		},

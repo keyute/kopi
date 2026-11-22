@@ -47,18 +47,18 @@ func resultPattern(format string, args ...string) *regexp.Regexp {
 	return regexp.MustCompile("^" + fmt.Sprintf(regexp.QuoteMeta(format), verbs...) + "$")
 }
 
-// backgroundTask returns the task id output names when it is one of the
-// background results, and whether the task was started rather than moved.
-func backgroundTask(output string) (id string, started, ok bool) {
-	if m := startedResult.FindStringSubmatch(output); m != nil {
-		return m[1], true, true
+// backgroundTask reports whether output is one of the background results, and
+// whether the task was started rather than moved.
+func backgroundTask(output string) (started, ok bool) {
+	if startedResult.MatchString(output) {
+		return true, true
 	}
 	for _, re := range []*regexp.Regexp{movedResult, timeoutResult} {
-		if m := re.FindStringSubmatch(output); m != nil {
-			return m[1], false, true
+		if re.MatchString(output) {
+			return false, true
 		}
 	}
-	return "", false, false
+	return false, false
 }
 
 // NewBash runs execute-mode calls in sh and plan-mode calls in plan, which
@@ -205,7 +205,7 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 				return done
 			},
 			Outcome: func(raw json.RawMessage, output string) (string, Action) {
-				_, started, ok := backgroundTask(output)
+				started, ok := backgroundTask(output)
 				if !ok {
 					return "", Action{}
 				}
@@ -222,7 +222,7 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 				return done, action
 			},
 			Summary: func(output string) string {
-				_, _, ok := backgroundTask(output)
+				_, ok := backgroundTask(output)
 				switch {
 				case !ok && output == noOutputNotice:
 					return "no output"
@@ -234,7 +234,7 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 				return ""
 			},
 			Body: func(output string) string {
-				if _, _, ok := backgroundTask(output); ok || output == noOutputNotice {
+				if _, ok := backgroundTask(output); ok || output == noOutputNotice {
 					return ""
 				}
 				return output
