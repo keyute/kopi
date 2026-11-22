@@ -167,7 +167,7 @@ func (s *Session) ContextUsage() (tokens, window int, ok bool) {
 // Effort reports the reasoning level the session runs at, in the names
 // ParseEffort takes. It is "" when the model does not reason.
 func (s *Session) Effort() string {
-	if m := s.inner.Model(); m == nil || !m.ProviderMeta.Reasoning {
+	if !slices.ContainsFunc(s.inner.AvailableThinkingLevels(), func(l ai.ModelThinkingLevel) bool { return l != ai.ThinkingOff }) {
 		return ""
 	}
 	return string(s.inner.ThinkingLevel())
