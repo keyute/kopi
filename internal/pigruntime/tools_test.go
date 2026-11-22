@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
 )
@@ -229,4 +230,59 @@ func TestHandedOverPromptToolsDeclareTheToolInTheNextRequest(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "done", res.Reply)
 	assert.ElementsMatch(t, []string{"Probe", "Deferred"}, declared(<-requests))
+}
+
+func TestUnknownToolsDoNotReportToolsChanged(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+
+	var ran atomic.Bool
+	sess := openTestSession(t, r, deferredTool(&ran))
+	changed := 0
+	t.Cleanup(sess.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.ToolsChanged); ok {
+			changed++
+		}
+	}))
+
+	sess.loadTools([]string{"Missing"})
+	assert.False(t, sess.Callable("Missing"))
+	assert.False(t, sess.Callable("Deferred"))
+	assert.Zero(t, changed)
+
+	sess.loadTools([]string{"Deferred", "Missing"})
+	assert.True(t, sess.Callable("Deferred"))
+	assert.False(t, sess.Callable("Missing"))
+	assert.Equal(t, 1, changed)
+
+	sess.loadTools([]string{"Deferred", "Missing"})
+	sess.loadTools([]string{"Missing"})
+	assert.False(t, sess.Callable("Missing"))
+	assert.Equal(t, 1, changed, "repeat loads add nothing")
+}
+
+func TestCallableAndToolsChangedFollowLoadedTools(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 2)
+	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "a"), captureRequest(requests, "b")})
+
+	var ran atomic.Bool
+	sess := openTestSession(t, r, deferredTool(&ran))
+	changed := 0
+	t.Cleanup(sess.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.ToolsChanged); ok {
+			changed++
+		}
+	}))
+	require.False(t, sess.Callable("Deferred"))
+
+	_, err := sess.Send(t.Context(), Prompt{Text: "a", Tools: []string{"Deferred"}}, nil, nil)
+	require.NoError(t, err)
+	assert.True(t, sess.Callable("Deferred"))
+	assert.Equal(t, 1, changed)
+
+	_, err = sess.Send(t.Context(), Prompt{Text: "b", Tools: []string{"Deferred"}}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, changed, "a repeat load adds nothing")
 }

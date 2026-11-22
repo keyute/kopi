@@ -3250,3 +3250,20 @@ func TestAnsweredApprovalLeavesNoOpenRequest(t *testing.T) {
 	assert.Equal(t, event.ApprovalEnded{Token: req.Token}, receiveEvent(t, ended))
 	assert.Zero(t, openRequests(h.c))
 }
+
+func TestStatusUltracodeFollowsTheKeywordPrompt(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("one"), pigruntimetest.Text("two")})
+	assert.False(t, h.c.Status().Ultracode)
+
+	h.turn(t, "plain prompt")
+	assert.False(t, h.c.Status().Ultracode)
+	assert.Empty(t, ofType[event.ToolsChanged](h.rec.all()))
+
+	h.turn(t, "please ultracode this")
+	assert.True(t, h.c.Status().Ultracode)
+	assert.Len(t, ofType[event.ToolsChanged](h.rec.all()), 1)
+
+	require.NoError(t, h.c.NewSession(t.Context()))
+	assert.False(t, h.c.Status().Ultracode)
+}

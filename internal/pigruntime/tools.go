@@ -6,6 +6,7 @@ import (
 
 	"github.com/MichaelKinsy/PiG/coding/extension/builtin/toolsearch"
 
+	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -22,19 +23,35 @@ func LoadTools(ctx context.Context, names []string) error {
 }
 
 func (s *Session) loadTools(names []string) {
+	if s.addTools(names) {
+		s.notify(event.ToolsChanged{})
+	}
+}
+
+func (s *Session) addTools(names []string) bool {
 	s.toolsMu.Lock()
 	defer s.toolsMu.Unlock()
 	active := s.inner.ActiveToolNames()
-	added := false
+	before := len(active)
 	for _, name := range names {
 		if !slices.Contains(active, name) {
 			active = append(active, name)
-			added = true
 		}
 	}
-	if added {
-		s.inner.SetActiveToolsByName(active)
+	if len(active) == before {
+		return false
 	}
+	// PiG's SetActiveToolsByName ignores names the session does not have.
+	s.inner.SetActiveToolsByName(active)
+	return len(s.inner.ActiveToolNames()) > before
+}
+
+// Callable reports whether the named tool is callable from the session's next
+// model request.
+func (s *Session) Callable(name string) bool {
+	s.toolsMu.Lock()
+	defer s.toolsMu.Unlock()
+	return slices.Contains(s.inner.ActiveToolNames(), name)
 }
 
 // RankTools returns the names of at most limit tools matching query by name

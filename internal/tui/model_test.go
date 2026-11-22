@@ -497,6 +497,17 @@ func TestStatusRefreshesOnALimitsReading(t *testing.T) {
 	assert.Equal(t, "  wk 40%"+strings.Repeat(" ", 26)+"plan", last())
 }
 
+func TestStatusRefreshesOnToolsChanged(t *testing.T) {
+	m, c := newTestModel(t, 40, 20)
+	last := func() string { return screen(m)[len(screen(m))-1] }
+	assert.NotContains(t, last(), "ultracode")
+
+	c.status.Ultracode = true
+	send(m, event.ToolsChanged{})
+
+	assert.Equal(t, "  model-1             ultracode · plan", last())
+}
+
 func TestStatusLimitsFollowTheShownAgentsProvider(t *testing.T) {
 	opts := testOptions()
 	opts.StatusLine = config.StatusLine{Left: []string{"(wk $limit_wk)"}, Separator: " "}

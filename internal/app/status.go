@@ -35,6 +35,8 @@ type Status struct {
 	// Limits is the last reading of the main model's provider's plan limits;
 	// zero until one is read, and kept while a later read fails.
 	Limits quota.Limits
+	// Ultracode reports that the main session's Workflow tool is callable.
+	Ultracode bool
 }
 
 // AgentStatus describes one session for a frontend: the main session or a subagent's.
