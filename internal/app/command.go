@@ -37,6 +37,7 @@ func commandTable() []command {
 			return nil
 		}},
 		{Command: Command{Name: "effort", Summary: "set the reasoning effort for this session"}, run: (*Controller).effortCommand, args: (*Controller).effortCandidates},
+		{Command: Command{Name: "model", Summary: "switch the model until kopi exits"}, run: (*Controller).modelCommand, args: (*Controller).modelCandidates},
 		{Command: Command{Name: "new", Summary: "start a new session"}, run: func(c *Controller, ctx context.Context, _ string) error {
 			return c.switchTo(ctx, OpenRequest{})
 		}},
@@ -163,6 +164,48 @@ func (c *Controller) effortCandidates() ([]Candidate, error) {
 	return out, nil
 }
 
+// modelCommand switches the main session to ref. Later sessions and work that
+// names no model follow it; running subagents and workflows keep theirs.
+func (c *Controller) modelCommand(ctx context.Context, ref string) error {
+	if ref == "" {
+		return fmt.Errorf("%w: /model needs a provider/id", ErrMissingArgument)
+	}
+	sess, err := c.mainForModel()
+	if err != nil {
+		return err
+	}
+	if err := c.rt.SetModel(ctx, sess, ref); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.model = ref
+	c.mu.Unlock()
+	c.limits.force()
+	c.relay.emit(event.ModelChanged{Model: ref})
+	c.relay.emit(event.Notice{Text: fmt.Sprintf("Using %s until kopi exits. Set \"model\" in %s to keep it.", ref, c.cfg.ConfigFile)})
+	return nil
+}
+
+// mainForModel returns the main session once nothing prevents changing its
+// model.
+func (c *Controller) mainForModel() (*pigruntime.Session, error) {
+	c.queue.Lock()
+	defer c.queue.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch {
+	case c.closed:
+		return nil, ErrNoSession
+	case c.switching != nil:
+		return nil, ErrBusy
+	case c.main.work != nil:
+		return nil, fmt.Errorf("failed to change model: %w", ErrWorkStillRunning)
+	case c.main.sess == nil:
+		return nil, ErrNoSession
+	}
+	return c.main.sess, nil
+}
+
 // Arguments returns the candidates for command name's argument; nil when it takes
 // none. It may read every session file, so frontends call it off their event loop.
 func (c *Controller) Arguments(name string) ([]Candidate, error) {
@@ -181,6 +224,23 @@ func (c *Controller) Arguments(name string) ([]Candidate, error) {
 		return nil, nil
 	}
 	return cmds[i].args(c)
+}
+
+func (c *Controller) modelCandidates() ([]Candidate, error) {
+	models, err := c.rt.Models(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	current := c.Model()
+	out := make([]Candidate, 0, len(models))
+	for _, m := range models {
+		desc := m.Name
+		if m.Ref == current {
+			desc += " (current)"
+		}
+		out = append(out, Candidate{Value: m.Ref, Description: desc})
+	}
+	return out, nil
 }
 
 func (c *Controller) sessionCandidates() ([]Candidate, error) {

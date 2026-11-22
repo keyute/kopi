@@ -34,6 +34,7 @@ Commands in the fullscreen interface:
 | `/effort <level>` | Set the main agent's reasoning effort for this session; never saved to `config.json`. A resumed session keeps the level it was set to |
 | `/new` | Start a new session |
 | `/resume <id>` | Resume a session |
+| `/model <provider/id>` | Switch the model until Kopi exits; `config.json` is untouched and `/new` and `/resume` keep the choice, and running subagents and workflow agents keep their model. Refused while a turn runs |
 | `/login <provider>` | Log in to a provider |
 | `/logout <provider>` | Remove a provider's stored credential |
 | `/tasks` | List background tasks, [subagents](subagents.md) and [workflows](workflows.md), show one's output, open a subagent's view or a workflow's [progress dialog](workflows.md#progress-dialog) and stop them |

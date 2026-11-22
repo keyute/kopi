@@ -46,7 +46,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 ## `model`
 
-- `provider/id` of the session model; `--model` overrides it. An id Kopi does not know is fetched or declared as described in [models](providers.md#models).
+- `provider/id` of the session model; `--model` overrides it, and [`/model`](usage.md#commands) switches it until Kopi exits. An id Kopi does not know is fetched or declared as described in [models](providers.md#models).
 - Unset, each start uses the default model of a provider with a credential, environment credentials included. Nothing is saved, and a notice names the model and the config file to set it in.
 - With credentials for several providers, the default depends on the order the runtime prefers; set `model` to pin it.
 - With no credential at all, the fullscreen interface asks which provider to log in to, then opens the session; print mode fails with a hint to run `kopi login`. Start fails first, naming the provider, when `smallModel`, an enabled `classifier.model`, `workflows.model` (checked only in the fullscreen interface and when no rule denies `Workflow`) or a [subagent](subagents.md) definition's `model` names a provider with no credential.
@@ -58,7 +58,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 ## `smallModel`
 
 - `provider/id` of the model that answers `WebFetch` and `WebSearch` calls and writes the session title shown in the terminal tab, see [terminal](usage.md#terminal).
-- Unset, it is the session model for `WebFetch` and `WebSearch`, so set it to a cheaper model; no title is generated, with no fallback to the session model; a stored title still shows.
+- Unset, it is the session model for `WebFetch` and `WebSearch`, so set it to a cheaper model; after [`/model`](usage.md#commands), `WebFetch` follows the new model while `WebSearch` stays on the model Kopi started with; no title is generated, with no fallback to the session model; a stored title still shows.
 - A wrong value, an unknown model or one whose provider has no credential fails at start.
 - In the fullscreen interface, a `smallModel` that shares the provider of a configured `model` without a credential gets the first-run login instead when that provider offers a sign-in or an API key and the id is one Kopi knows; an unknown id fails at start with the login hint.
 

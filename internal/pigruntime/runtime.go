@@ -383,6 +383,37 @@ func (r *Runtime) DefaultModel(ctx context.Context) (string, error) {
 	return model.ProviderMeta.ProviderID + "/" + model.ID, nil
 }
 
+// Model is an available model in Kopi's terms.
+type Model struct{ Ref, Name string }
+
+// Models lists the models of the providers that have a credential, sorted by
+// Ref.
+func (r *Runtime) Models(ctx context.Context) ([]Model, error) {
+	available, err := r.svcs.ModelRuntime().GetAvailable(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list models: %w", reword(err))
+	}
+	out := make([]Model, 0, len(available))
+	for _, m := range available {
+		out = append(out, Model{Ref: m.ProviderMeta.ProviderID + "/" + m.ID, Name: m.DisplayName})
+	}
+	slices.SortFunc(out, func(a, b Model) int { return strings.Compare(a.Ref, b.Ref) })
+	return out, nil
+}
+
+// SetModel switches s to the model ref names, keeping its history. ref is
+// checked as Open checks it; on failure the model stays.
+func (r *Runtime) SetModel(ctx context.Context, s *Session, ref string) error {
+	model, err := r.usableModel(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("failed to change model to %q: %w", ref, err)
+	}
+	if err := s.inner.SetModel(model); err != nil {
+		return fmt.Errorf("failed to change model to %q: %w", ref, reword(err))
+	}
+	return nil
+}
+
 // newChild starts a new session that has an extension runner of its own.
 // Runtime.New would hand it the runtime's single extension runner, which every
 // session started through the runtime rebinds in NewSession; that write races

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
@@ -178,4 +179,68 @@ func TestEffortCommandRefusesAModelThatDoesNotReason(t *testing.T) {
 	cs, err := h.c.Arguments("effort")
 	require.NoError(t, err)
 	assert.Empty(t, cs)
+}
+
+func TestModelCommandSwitchesModelAndKeepsItAcrossNew(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	h, _ := openHarness(t, Config{ConfigFile: "/kopi/config.json"})
+	other, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
+	changed := subscribeTo[event.ModelChanged](h.c)
+	notices := subscribeTo[event.Notice](h.c)
+	sessions := subscribeTo[event.SessionChanged](h.c)
+
+	_, err := h.c.Submit(t.Context(), Main, "/model "+otherRef)
+	require.NoError(t, err)
+
+	assert.Equal(t, otherRef, h.c.Model())
+	assert.Equal(t, event.ModelChanged{Model: otherRef}, receiveEvent(t, changed))
+	assert.Equal(t, event.Notice{Text: "Using " + otherRef + " until kopi exits. Set \"model\" in /kopi/config.json to keep it."}, receiveEvent(t, notices))
+
+	_, err = h.c.Submit(t.Context(), Main, "/new")
+	require.NoError(t, err)
+	receiveEvent(t, sessions)
+	requests := make(chan pigruntimetest.Request, 1)
+	other.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "answer")})
+	h.turn(t, "hello")
+	receive(t, requests)
+	assert.Equal(t, otherRef, h.c.Model())
+}
+
+func TestModelCommandFailures(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	started, release := make(chan struct{}), make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
+	before := h.c.Model()
+
+	_, err := h.c.Submit(t.Context(), Main, "/model")
+	assert.ErrorIs(t, err, ErrMissingArgument)
+
+	_, err = h.c.Submit(t.Context(), Main, "/model "+fauxProvider+"/missing")
+	assert.ErrorIs(t, err, pigruntime.ErrUnknownModel)
+	assert.Equal(t, before, h.c.Model())
+
+	_, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("done")})
+	w, err := h.c.Submit(t.Context(), Main, "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	_, err = h.c.Submit(t.Context(), Main, "/model "+otherRef)
+	assert.ErrorIs(t, err, ErrWorkStillRunning)
+	assert.Equal(t, before, h.c.Model())
+	close(release)
+	wait(t, w.Done())
+}
+
+func TestArgumentsListsAvailableModelsForModel(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	h, _ := openHarness(t, Config{})
+	_, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
+
+	cs, err := h.c.Arguments("model")
+
+	require.NoError(t, err)
+	assert.Equal(t, []Candidate{
+		{Value: fauxProvider + "/faux-1", Description: "Faux Model (current)"},
+		{Value: otherRef, Description: "Faux Model"},
+	}, cs)
 }

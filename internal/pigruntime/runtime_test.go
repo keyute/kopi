@@ -1204,3 +1204,36 @@ func TestModelsFileEntryInheritsProviderAndCredential(t *testing.T) {
 	assert.Equal(t, bundled.ProviderMeta.BaseURL, declared.ProviderMeta.BaseURL)
 	assert.NotEmpty(t, declared.ProviderMeta.BaseURL)
 }
+
+func TestSetModelSwitchesSessionAndRejectsUnknown(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	otherModel := registerSecondFaux(t, r, "kopi-other")
+	s := openTestSession(t, r)
+
+	require.NoError(t, r.SetModel(t.Context(), s, otherModel))
+	assert.Equal(t, otherModel, s.inner.Model().ProviderMeta.ProviderID+"/"+s.inner.Model().ID)
+
+	err := r.SetModel(t.Context(), s, fauxProvider+"/missing")
+	require.ErrorIs(t, err, ErrUnknownModel)
+	assert.Equal(t, otherModel, s.inner.Model().ProviderMeta.ProviderID+"/"+s.inner.Model().ID)
+}
+
+func TestModelsListsCredentialedProvidersSorted(t *testing.T) {
+	clearEnv(t)
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	registerSecondFaux(t, r, "aaa-faux")
+
+	models, err := r.Models(t.Context())
+
+	require.NoError(t, err)
+	assert.Equal(t, []Model{{Ref: "aaa-faux/faux-1", Name: "Faux Model"}, {Ref: fauxModel, Name: "Faux Model"}}, models)
+}
+
+func registerSecondFaux(t *testing.T, r *Runtime, id string) string {
+	t.Helper()
+	faux := ai.NewFauxProvider(ai.FauxConfig{ProviderID: id, Model: "faux-1"})
+	require.NoError(t, r.RegisterProvider(faux.Provider()))
+	return id + "/faux-1"
+}

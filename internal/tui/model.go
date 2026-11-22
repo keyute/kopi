@@ -510,7 +510,7 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 			pureThinking = false
 		}
 		switch inner.(type) {
-		case event.SessionChanged, event.ModeChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged, event.LimitsChanged, event.ToolsChanged, event.EffortChanged:
+		case event.SessionChanged, event.ModeChanged, event.ModelChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged, event.LimitsChanged, event.ToolsChanged, event.EffortChanged:
 			refresh = true
 		}
 		if m.commands != nil {
