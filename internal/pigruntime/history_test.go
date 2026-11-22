@@ -677,6 +677,104 @@ func TestSetEffortChangesTheLevelForTheSessionAndItsResume(t *testing.T) {
 	assert.Equal(t, "high", resumed.Effort())
 }
 
+// openThinker opens a session on a reasoning model at low effort.
+func openThinker(t *testing.T, r *Runtime, tools ...tool.Tool) (*Session, *ai.FauxProviderHandle, OpenOptions) {
+	t.Helper()
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "faux-thinker", Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, r.RegisterProvider(thinker.Provider()))
+	opts := OpenOptions{Model: "faux-thinker/thinker", Effort: LowEffort, SystemPrompt: kopiPrompt, Tools: tools, Authority: policy.NewAuthority()}
+	sess, err := r.Open(t.Context(), opts)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+	return sess, thinker, opts
+}
+
+func TestSendRaisesEffortForTheRunAndRestoresIt(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	sess, thinker, opts := openThinker(t, r)
+	levels := make(chan ai.ThinkingLevel, 1)
+	thinker.SetResponses([]ai.FauxResponseStep{
+		ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+			levels <- o.Thinking
+			return ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{}), nil
+		}),
+	})
+	var changes int
+	sess.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.EffortChanged); ok {
+			changes++
+		}
+	})
+	_, err := sess.Send(t.Context(), Prompt{Text: "think", Effort: MaxEffort}, nil, nil)
+	require.NoError(t, err)
+
+	got := <-levels
+	assert.Equal(t, ai.ThinkingLevelHigh, got, "PiG clamps max to the model's highest level")
+	assert.Equal(t, "low", sess.Effort())
+	assert.Equal(t, 2, changes, "raise and restore")
+
+	opts.Effort, opts.ResumeID = DefaultEffort, sess.ID()
+	resumed, err := r.Open(t.Context(), opts)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, resumed.Close(context.Background())) })
+	assert.Equal(t, "low", resumed.Effort())
+}
+
+func TestSendRaisesEffortForAHandedOverPrompt(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	sess, thinker, _ := openThinker(t, r, probeTool(okProbe))
+	levels := make(chan ai.ThinkingLevel, 2)
+	final := ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+		levels <- o.Thinking
+		return ai.FauxAssistantMessage(ai.FauxContentString("done"), ai.FauxAssistantMessageOptions{}), nil
+	})
+	call := ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+		levels <- o.Thinking
+		return ai.FauxAssistantMessage(
+			ai.FauxContentBlocks{ai.FauxToolCall("Probe", map[string]any{}, &ai.FauxToolCallOptions{ID: "call-1"})},
+			ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)},
+		), nil
+	})
+	thinker.SetResponses([]ai.FauxResponseStep{call, final})
+	more, _ := moreOnce(Prompt{Text: "think hard", Effort: MaxEffort})
+	_, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, more)
+	require.NoError(t, err)
+
+	assert.Equal(t, ai.ThinkingLevelLow, <-levels, "the request before the hand-over")
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels, "the request carrying the handed-over prompt")
+	assert.Equal(t, "low", sess.Effort())
+}
+
+func TestSetEffortDuringARaisedRunKeepsTheUsersLevel(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	sess, thinker, _ := openThinker(t, r)
+	thinker.SetResponses([]ai.FauxResponseStep{
+		ai.FauxFactoryStep(func(_ ai.TranscriptContext, _ ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+			assert.NoError(t, sess.SetEffort(MediumEffort))
+			return ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{}), nil
+		}),
+	})
+	_, err := sess.Send(t.Context(), Prompt{Text: "think", Effort: MaxEffort}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "medium", sess.Effort())
+}
+
+func TestSendLeavesEffortAloneWhenTheModelDoesNotReason(t *testing.T) {
+	r, faux := newTestRuntime(t, newSandbox(t))
+	sess := openTestSession(t, r)
+	faux.SetResponses([]ai.FauxResponseStep{reply("ok")})
+	var changes int
+	sess.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.EffortChanged); ok {
+			changes++
+		}
+	})
+	_, err := sess.Send(t.Context(), Prompt{Text: "think", Effort: MaxEffort}, nil, nil)
+	require.NoError(t, err)
+	assert.Zero(t, changes)
+	assert.Empty(t, sess.Effort())
+}
+
 func TestEffortTreatsAMaxThinkingModelAsReasoning(t *testing.T) {
 	r, _ := newTestRuntime(t, newSandbox(t))
 	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "faux-thinker", Models: []ai.FauxModelDefinition{{ID: "thinker"}}})

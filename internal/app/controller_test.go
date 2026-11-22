@@ -3017,6 +3017,107 @@ func TestControllerSpansHighlightTheKeywordOnlyWhereItTriggers(t *testing.T) {
 	assert.Nil(t, NewController(nil, Config{Rules: deny}).PromptSpans(Main, "ultracode"), "removed by a rule")
 }
 
+func TestControllerSpansHighlightUltrathinkOnlyWhereItTriggers(t *testing.T) {
+	want := []Span{{Start: 0, End: 10, Kind: KindCommand}}
+	h := openThinkerHarness(t, Config{})
+	assert.Equal(t, want, h.c.Spans(Main, "ultrathink"))
+	assert.Equal(t, want, h.c.PromptSpans(Main, "ultrathink"))
+	assert.Nil(t, h.c.Spans("t1", "ultrathink"), "a subagent's view")
+	assert.Nil(t, h.c.PromptSpans("t1", "ultrathink"), "a subagent's view")
+
+	plain, _ := openHarness(t, Config{})
+	assert.Nil(t, plain.c.Spans(Main, "ultrathink"), "the model does not reason")
+	assert.Nil(t, plain.c.PromptSpans(Main, "ultrathink"), "the model does not reason")
+}
+
+// openThinkerHarness opens a harness whose model reasons.
+func openThinkerHarness(t *testing.T, cfg Config) *harness {
+	t.Helper()
+	sb := pigruntimetest.NewSandbox(t)
+	rt := pigruntimetest.NewRuntime(t, sb)
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: fauxProvider, Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, rt.RegisterProvider(thinker.Provider()))
+	cfg.Model = fauxProvider + "/thinker"
+	h := buildHarness(t, rt, thinker, sb, cfg)
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	return h
+}
+
+func TestSubmitUltrathinkRaisesEffortForTheTurnOnly(t *testing.T) {
+	h := openThinkerHarness(t, Config{})
+	levels := make(chan ai.ThinkingLevel, 2)
+	step := ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+		levels <- o.Thinking
+		return ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{}), nil
+	})
+	h.faux.SetResponses([]ai.FauxResponseStep{step, step})
+	before := h.c.main.sess.Effort()
+	require.NotEmpty(t, before)
+
+	h.turn(t, "plain")
+	plain := <-levels
+	h.turn(t, "please ultrathink")
+	assert.NotEqual(t, plain, <-levels)
+	assert.Equal(t, before, h.c.main.sess.Effort(), "restored when the turn ends")
+	assert.NotEmpty(t, ofType[event.EffortChanged](h.rec.all()))
+}
+
+func TestSendNowKeepsTheUltrathinkRaiseForTheTurn(t *testing.T) {
+	started := make(chan struct{}, 1)
+	h := openThinkerHarness(t, Config{Tools: []tool.Tool{blockingTool(started)}})
+	levels := make(chan ai.ThinkingLevel, 3)
+	step := func(msg ai.AssistantMessage) ai.FauxResponseStep {
+		return ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+			levels <- o.Thinking
+			return msg, nil
+		})
+	}
+	block := ai.FauxAssistantMessage(
+		ai.FauxContentBlocks{ai.FauxToolCall("Block", map[string]any{}, &ai.FauxToolCallOptions{ID: "c1"})},
+		ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)},
+	)
+	text := ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{})
+	h.faux.SetResponses([]ai.FauxResponseStep{step(block), step(text), step(text)})
+	before := h.c.main.sess.Effort()
+
+	w, err := h.c.Submit(t.Context(), Main, "ultrathink")
+	require.NoError(t, err)
+	wait(t, started)
+	require.NoError(t, h.c.SendNow(t.Context(), Main, "instead"))
+	wait(t, w.Done())
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels)
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels, "the send-now continuation of the turn")
+	assert.Equal(t, before, h.c.main.sess.Effort())
+
+	h.turn(t, "plain")
+	assert.NotEqual(t, ai.ThinkingLevelHigh, <-levels, "the next turn")
+}
+
+func TestPromptUltrathinkRaisesEffortForTheRunOnly(t *testing.T) {
+	h := openThinkerHarness(t, Config{})
+	levels := make(chan ai.ThinkingLevel, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+			levels <- o.Thinking
+			return ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{}), nil
+		}),
+	})
+	before := h.c.main.sess.Effort()
+	w, err := h.c.Prompt(t.Context(), "ultrathink")
+	require.NoError(t, err)
+	wait(t, w.Done())
+	assert.NotEqual(t, before, string(<-levels))
+	assert.Equal(t, before, h.c.main.sess.Effort())
+}
+
+func TestSubmitUltrathinkIsIgnoredWhenTheModelDoesNotReason(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("one")})
+	h.turn(t, "ultrathink")
+	assert.Empty(t, ofType[event.EffortChanged](h.rec.all()))
+	assert.Empty(t, h.c.main.sess.Effort())
+}
+
 // modeHarness opens a harness whose sessions have a plan file and tell the
 // model their mode, the way a real first prompt does.
 func modeHarness(t *testing.T) *harness {

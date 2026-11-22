@@ -30,9 +30,9 @@ type Span struct {
 
 // Spans returns the input's highlighted runs in line and rune-offset order.
 // A control command is highlighted alone; any other input gets its @ references,
-// the skill commands skills types and, when ultracode is set, the keyword that
-// turns it on, unless it opens with an unknown command.
-func Spans(text string, skills *skill.Set, ultracode bool) []Span {
+// the skill commands skills types and, when ultracode or ultrathink is set, the
+// keyword that turns it on, unless it opens with an unknown command.
+func Spans(text string, skills *skill.Set, ultracode, ultrathink bool) []Span {
 	if line, col, ok := commandAt(text); ok {
 		name, _, _ := parse(text)
 		if isControl(name) {
@@ -42,12 +42,12 @@ func Spans(text string, skills *skill.Set, ultracode bool) []Span {
 			return nil
 		}
 	}
-	return promptSpans(text, skills, ultracode)
+	return promptSpans(text, skills, ultracode, ultrathink)
 }
 
 // promptSpans returns the @ references, the skill commands skills types and,
-// when ultracode is set, the keyword, of text taken as a prompt.
-func promptSpans(text string, skills *skill.Set, ultracode bool) []Span {
+// when ultracode or ultrathink is set, that keyword, of text taken as a prompt.
+func promptSpans(text string, skills *skill.Set, ultracode, ultrathink bool) []Span {
 	var spans []Span
 	for i, l := range strings.Split(text, "\n") {
 		for _, r := range references([]rune(l)) {
@@ -63,18 +63,25 @@ func promptSpans(text string, skills *skill.Set, ultracode bool) []Span {
 		}
 	}
 	if ultracode {
-		spans = append(spans, keywordSpans(text, skills)...)
+		spans = append(spans, keywordSpans(text, skills, ultracodeWord)...)
+	}
+	if ultrathink {
+		spans = append(spans, keywordSpans(text, skills, ultrathinkWord)...)
 	}
 	slices.SortStableFunc(spans, func(a, b Span) int { return cmp.Or(cmp.Compare(a.Line, b.Line), cmp.Compare(a.Start, b.Start)) })
 	return spans
 }
 
-// keyword is the word that makes the Workflow tool callable.
-const keyword = "ultracode"
+const (
+	// ultracodeWord makes the Workflow tool callable.
+	ultracodeWord = "ultracode"
+	// ultrathinkWord raises the main session's effort for the run.
+	ultrathinkWord = "ultrathink"
+)
 
 // keywordSpans returns the runs of the whole word keyword, ignoring case, outside
 // @ references and skill commands.
-func keywordSpans(text string, skills *skill.Set) []Span {
+func keywordSpans(text string, skills *skill.Set, keyword string) []Span {
 	var spans []Span
 	tokens := skills.Tokens(text)
 	for i, l := range strings.Split(text, "\n") {

@@ -33,6 +33,14 @@ type Session struct {
 	nextID      int
 	// toolsMu serializes LoadTools' read-modify-write of the active tools.
 	toolsMu sync.Mutex
+	// effortMu guards raised and restore.
+	effortMu sync.Mutex
+	// raised is set while a Send has lifted the level; restore is the level to
+	// put back when it ends.
+	raised  bool
+	restore ai.ModelThinkingLevel
+	// raisedWith is the Effort that last raised the level.
+	raisedWith Effort
 }
 
 type listener struct {
@@ -62,6 +70,9 @@ type Prompt struct {
 	// model request that carries it. Names the session does not have are
 	// ignored.
 	Tools []string
+	// Effort is the level the run reads this prompt at and keeps until it
+	// ends, when the model reasons; DefaultEffort leaves the session's level.
+	Effort Effort
 }
 
 // skillType is the PiG custom type of a skill text, stored in session history.
@@ -177,10 +188,56 @@ func (s *Session) Effort() string {
 // this session only. e is not DefaultEffort. PiG clamps a level the model lacks
 // to the nearest it has; Effort reports the level in effect.
 func (s *Session) SetEffort(e Effort) error {
+	s.effortMu.Lock()
+	defer s.effortMu.Unlock()
+	s.raised = false
 	if err := s.inner.SetThinkingLevel(e.thinkingLevel()); err != nil {
 		return fmt.Errorf("failed to set effort: %w", err)
 	}
 	return nil
+}
+
+// raise lifts the level to e for the rest of the Send, remembering the level
+// to restore. PiG re-reads the level before every provider request, so a raise
+// between turns reaches the next request. Every level change is a
+// thinking_level_change entry in PiG's session file, so the restore is what a
+// resume reads; a crash mid-run leaves the raised level saved.
+func (s *Session) raise(e Effort) {
+	if e == DefaultEffort || !reasons(s.inner.AvailableThinkingLevels()) {
+		return
+	}
+	s.effortMu.Lock()
+	defer s.effortMu.Unlock()
+	if s.raised {
+		return
+	}
+	prev := s.inner.ThinkingLevel()
+	if err := s.inner.SetThinkingLevel(e.thinkingLevel()); err != nil {
+		slog.Warn("failed to raise effort", "error", err)
+		return
+	}
+	s.raised, s.restore, s.raisedWith = true, prev, e
+	if s.inner.ThinkingLevel() != prev {
+		s.notify(event.EffortChanged{})
+	}
+}
+
+// restoreEffort puts back the level raise replaced, unless SetEffort ran since.
+func (s *Session) restoreEffort() {
+	s.effortMu.Lock()
+	defer s.effortMu.Unlock()
+	if !s.raised {
+		return
+	}
+	s.raised = false
+	raisedTo := s.inner.ThinkingLevel()
+	if err := s.inner.SetThinkingLevel(s.restore); err != nil {
+		slog.Warn("failed to restore effort", "error", err)
+		return
+	}
+	if raisedTo != s.restore {
+		s.notify(event.EffortChanged{})
+	}
 }
 
 // Efforts lists the levels the model supports, in the names ParseEffort takes.
@@ -250,6 +307,10 @@ type SendResult struct {
 	// ModeUndelivered reports that a handed-over prompt's mode line failed to
 	// reach the model, so the caller must offer it again.
 	ModeUndelivered bool
+	// Effort is the level the send raised the session to, as the Effort of the
+	// prompt that raised it; DefaultEffort when it raised none or /effort
+	// replaced the raise. A send that continues this turn passes it on.
+	Effort Effort
 }
 
 type (
@@ -380,6 +441,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 				text, images := s.steerContent(q)
 				handed = append(handed, q)
 				s.loadTools(q.Tools)
+				s.raise(q.Effort)
 				s.inner.QueueSteer(text, images)
 				for _, sk := range q.Skills {
 					if err := s.inner.SendCustomMessage(pigCtx, skillMessage(sk), &extension.SendMessageOptions{DeliverAs: extension.DeliverAsSteer}); err != nil {
@@ -413,6 +475,8 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 		abort()
 	})
 	s.loadTools(p.Tools)
+	defer s.restoreEffort()
+	s.raise(p.Effort)
 	err := s.deliver(pigCtx, p, notices)
 	// An abort already under way must finish before Send returns, or its
 	// RequestAbort could land on the following turn.
@@ -425,6 +489,11 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	s.inner.Agent().ClearSteeringQueue()
 	s.inner.Agent().TakePendingNextTurn()
 	res := SendResult{Sent: sent, Undelivered: handed, UndeliveredNotices: pending, ModeUndelivered: modeUndelivered}
+	s.effortMu.Lock()
+	if s.raised {
+		res.Effort = s.raisedWith
+	}
+	s.effortMu.Unlock()
 	if err != nil {
 		return res, err
 	}
