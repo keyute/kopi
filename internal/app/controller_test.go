@@ -3487,3 +3487,67 @@ func TestStatusUltracodeFollowsTheKeywordPrompt(t *testing.T) {
 	require.NoError(t, h.c.NewSession(t.Context()))
 	assert.False(t, h.c.Status().Ultracode)
 }
+
+func TestSetEffortAtTheContinuationBoundaryInvalidatesTheRaise(t *testing.T) {
+	for _, preCancelled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "next send", true: "after pre-cancelled send"}[preCancelled], func(t *testing.T) {
+			started := make(chan struct{}, 1)
+			h := openThinkerHarness(t, Config{Tools: []tool.Tool{blockingTool(started)}})
+			levels := make(chan ai.ThinkingLevel, 2)
+			step := func(msg ai.AssistantMessage) ai.FauxResponseStep {
+				return ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+					levels <- o.Thinking
+					return msg, nil
+				})
+			}
+			block := ai.FauxAssistantMessage(
+				ai.FauxContentBlocks{ai.FauxToolCall("Block", map[string]any{}, &ai.FauxToolCallOptions{ID: "c1"})},
+				ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)},
+			)
+			text := ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{})
+			h.faux.SetResponses([]ai.FauxResponseStep{step(block), step(text)})
+			w, err := h.c.Submit(t.Context(), Main, "ultrathink")
+			require.NoError(t, err)
+			wait(t, started)
+			var starts int
+			h.c.Subscribe(func(ev event.Event) {
+				if _, ok := ev.(event.TurnStart); !ok {
+					return
+				}
+				starts++
+				if starts == 1 && preCancelled {
+					w.cancel()
+					return
+				}
+				assert.NoError(t, h.c.main.sess.SetEffort(pigruntime.LowEffort))
+			})
+			require.NoError(t, h.c.SendNow(t.Context(), Main, "instead"))
+			wait(t, w.Done())
+			assert.Equal(t, ai.ThinkingLevelHigh, <-levels)
+			assert.Equal(t, ai.ThinkingLevelLow, <-levels)
+			assert.Equal(t, "low", h.c.main.sess.Effort())
+		})
+	}
+}
+
+func TestPreCancelledFreshPromptKeepsItsExplicitRaise(t *testing.T) {
+	h := openThinkerHarness(t, Config{})
+	levels := make(chan ai.ThinkingLevel, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+		levels <- o.Thinking
+		return ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{}), nil
+	})})
+	var starts int
+	h.c.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.TurnStart); ok {
+			if starts++; starts == 1 {
+				h.c.main.work.cancel()
+				assert.NoError(t, h.c.main.sess.SetEffort(pigruntime.LowEffort))
+			}
+		}
+	})
+	h.turn(t, "ultrathink")
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels)
+	assert.Equal(t, "low", h.c.main.sess.Effort())
+	assert.Equal(t, 1, h.faux.CallCount())
+}

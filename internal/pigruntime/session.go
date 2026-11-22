@@ -33,8 +33,9 @@ type Session struct {
 	nextID      int
 	// toolsMu serializes LoadTools' read-modify-write of the active tools.
 	toolsMu sync.Mutex
-	// effortMu guards raised and restore.
-	effortMu sync.Mutex
+	// effortMu guards raised, restore and effortRevision.
+	effortMu       sync.Mutex
+	effortRevision uint64
 	// raised is the Effort that lifted the level while a Send runs, and
 	// DefaultEffort when none did; restore is the level to put back when it ends.
 	raised  Effort
@@ -71,6 +72,17 @@ type Prompt struct {
 	// Effort is the level the run reads this prompt at and keeps until it
 	// ends, when the model reasons; DefaultEffort leaves the session's level.
 	Effort Effort
+	// Continuation keeps an interrupted send's raise unless SetEffort has
+	// replaced it. An explicit Effort takes precedence.
+	Continuation *EffortContinuation
+}
+
+// EffortContinuation is opaque, session-bound state passed from a SendResult
+// to the prompt that continues its interrupted turn.
+type EffortContinuation struct {
+	session  *Session
+	revision uint64
+	effort   Effort
 }
 
 // skillType is the PiG custom type of a skill text, stored in session history.
@@ -189,6 +201,7 @@ func (s *Session) SetEffort(e Effort) error {
 	s.effortMu.Lock()
 	defer s.effortMu.Unlock()
 	s.raised = DefaultEffort
+	s.effortRevision++
 	if err := s.inner.SetThinkingLevel(e.thinkingLevel()); err != nil {
 		return fmt.Errorf("failed to set effort: %w", err)
 	}
@@ -200,12 +213,15 @@ func (s *Session) SetEffort(e Effort) error {
 // between turns reaches the next request. Every level change is a
 // thinking_level_change entry in PiG's session file, so the restore is what a
 // resume reads; a crash mid-run leaves the raised level saved.
-func (s *Session) raise(e Effort) {
+func (s *Session) raise(e Effort, continuation *EffortContinuation) {
+	s.effortMu.Lock()
+	defer s.effortMu.Unlock()
+	if e == DefaultEffort && continuation != nil && continuation.session == s && continuation.revision == s.effortRevision {
+		e = continuation.effort
+	}
 	if e == DefaultEffort || !reasons(s.inner.AvailableThinkingLevels()) {
 		return
 	}
-	s.effortMu.Lock()
-	defer s.effortMu.Unlock()
 	if s.raised != DefaultEffort {
 		return
 	}
@@ -307,10 +323,10 @@ type SendResult struct {
 	// ModeUndelivered reports that a handed-over prompt's mode line failed to
 	// reach the model, so the caller must offer it again.
 	ModeUndelivered bool
-	// Effort is the level the send raised the session to, as the Effort of the
-	// prompt that raised it; DefaultEffort when it raised none or /effort
-	// replaced the raise. A send that continues this turn passes it on.
-	Effort Effort
+	// Continuation keeps this send's raise for a continuation of the turn.
+	// SetEffort invalidates it, including after Send returns. A pre-cancelled
+	// send passes its prompt's continuation through without applying it.
+	Continuation *EffortContinuation
 }
 
 type (
@@ -368,7 +384,7 @@ func InterruptTurn(ctx context.Context) bool {
 // delivered.
 func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more func() ([]Prompt, []Notice)) (SendResult, error) {
 	if ctx.Err() != nil {
-		return SendResult{Outcome: event.Outcome{Status: event.Interrupted}, UndeliveredNotices: notices}, nil
+		return SendResult{Outcome: event.Outcome{Status: event.Interrupted}, UndeliveredNotices: notices, Continuation: p.Continuation}, nil
 	}
 	if !s.sendInProgress.CompareAndSwap(false, true) {
 		return SendResult{UndeliveredNotices: notices}, fmt.Errorf("failed to send prompt: %w", ErrSendInProgress)
@@ -441,7 +457,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 				text, images := s.steerContent(q)
 				handed = append(handed, q)
 				s.loadTools(q.Tools)
-				s.raise(q.Effort)
+				s.raise(q.Effort, nil)
 				s.inner.QueueSteer(text, images)
 				for _, sk := range q.Skills {
 					if err := s.inner.SendCustomMessage(pigCtx, skillMessage(sk), &extension.SendMessageOptions{DeliverAs: extension.DeliverAsSteer}); err != nil {
@@ -476,7 +492,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	})
 	s.loadTools(p.Tools)
 	defer s.restoreEffort()
-	s.raise(p.Effort)
+	s.raise(p.Effort, p.Continuation)
 	err := s.deliver(pigCtx, p, notices)
 	// An abort already under way must finish before Send returns, or its
 	// RequestAbort could land on the following turn.
@@ -490,7 +506,9 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	s.inner.Agent().TakePendingNextTurn()
 	res := SendResult{Sent: sent, Undelivered: handed, UndeliveredNotices: pending, ModeUndelivered: modeUndelivered}
 	s.effortMu.Lock()
-	res.Effort = s.raised
+	if s.raised != DefaultEffort {
+		res.Continuation = &EffortContinuation{session: s, revision: s.effortRevision, effort: s.raised}
+	}
 	s.effortMu.Unlock()
 	if err != nil {
 		return res, err

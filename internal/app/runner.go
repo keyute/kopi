@@ -273,15 +273,13 @@ func (r *runner) start(w *Work, parts []pigruntime.Prompt) {
 // deregistration; the switch resolves it before advancing the relay epoch.
 func (r *runner) runTurn(ctx context.Context, sess *pigruntime.Session, emit func(event.Event), w *Work, parts []pigruntime.Prompt, notices []pigruntime.Notice) {
 	c := r.c
-	// carry is the level a send-now interrupted, which the send that continues
-	// its turn keeps; a turn that follows a completed send starts at its own.
-	var carry pigruntime.Effort
+	// carry keeps a send-now's raise subject to the session's effort revision;
+	// a turn that follows a completed send starts at its own level.
+	var carry *pigruntime.EffortContinuation
 	for {
 		start := time.Now()
 		p := joined(parts)
-		if p.Effort == pigruntime.DefaultEffort {
-			p.Effort = carry
-		}
+		p.Continuation = carry
 		res, err := sess.Send(ctx, p, notices, r.pull(ctx, emit))
 		elapsed := time.Since(start)
 		if err != nil {
@@ -308,12 +306,9 @@ func (r *runner) runTurn(ctx context.Context, sess *pigruntime.Session, emit fun
 		// A failed or unsent send never continues for notices alone, so a
 		// failing provider cannot be woken in a loop.
 		wake := !w.stopped && (cancelled || res.Outcome.Status == event.Completed && res.Sent) && r.waking()
-		carry = pigruntime.DefaultEffort
+		carry = nil
 		if cancelled {
-			carry = res.Effort
-			if !res.Sent {
-				carry = p.Effort
-			}
+			carry = res.Continuation
 		}
 		if len(next) > 0 || wake {
 			ctx, w.cancel = context.WithCancel(w.base)
