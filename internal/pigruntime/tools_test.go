@@ -232,6 +232,35 @@ func TestHandedOverPromptToolsDeclareTheToolInTheNextRequest(t *testing.T) {
 	assert.ElementsMatch(t, []string{"Probe", "Deferred"}, declared(<-requests))
 }
 
+func TestUnknownToolsDoNotReportToolsChanged(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+
+	var ran atomic.Bool
+	sess := openTestSession(t, r, deferredTool(&ran))
+	changed := 0
+	sess.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.ToolsChanged); ok {
+			changed++
+		}
+	})
+
+	sess.loadTools([]string{"Missing"})
+	assert.False(t, sess.Callable("Missing"))
+	assert.False(t, sess.Callable("Deferred"))
+	assert.Zero(t, changed)
+
+	sess.loadTools([]string{"Deferred", "Missing"})
+	assert.True(t, sess.Callable("Deferred"))
+	assert.False(t, sess.Callable("Missing"))
+	assert.Equal(t, 1, changed)
+
+	sess.loadTools([]string{"Deferred", "Missing"})
+	sess.loadTools([]string{"Missing"})
+	assert.False(t, sess.Callable("Missing"))
+	assert.Equal(t, 1, changed, "repeat loads add nothing")
+}
+
 func TestCallableAndToolsChangedFollowLoadedTools(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)

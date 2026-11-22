@@ -32,17 +32,16 @@ func (s *Session) addTools(names []string) bool {
 	s.toolsMu.Lock()
 	defer s.toolsMu.Unlock()
 	active := s.inner.ActiveToolNames()
-	added := false
+	initialCount := len(active)
 	for _, name := range names {
 		if !slices.Contains(active, name) {
 			active = append(active, name)
-			added = true
 		}
 	}
-	if added {
+	if len(active) > initialCount {
 		s.inner.SetActiveToolsByName(active)
 	}
-	return added
+	return len(s.inner.ActiveToolNames()) > initialCount
 }
 
 // Callable reports whether the named tool is callable from the session's next
