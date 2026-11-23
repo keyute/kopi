@@ -78,8 +78,9 @@
 
 - Copilot's zero-allowance placeholders (explicit zero entitlement and zero remaining) are omitted. Token-billing credits are not displayed.
 - The endpoints are undocumented, so their answers can change without notice.
-- Kopi calls them only in the fullscreen interface, with a `limit_` or `reset_` segment in the layout and an account sign-in for the provider; an API key has no plan to read. Headless use never calls.
+- Kopi calls them only in the fullscreen interface, with a `limit_` or `reset_` segment in the layout or `/usage` opened, and an account sign-in for the provider; an API key has no plan to read. Headless use never calls.
 - A read follows activity, such as a turn starting or ending, at most once a minute, and never while idle, so a reset time that has passed stays until the next activity.
+- Opening [`/usage`](usage.md#usage-1) also makes Kopi call the provider, and shows the windows it reads. While it is open, activity reads again at most once a minute, and never while idle. From then on a model or sign-in change reads again, as with a `limit_` or `reset_` segment.
 - A failed read keeps the last values.
 - Requests carry only the credential and an `Accept` header, with Go's default user agent.
 
@@ -94,7 +95,7 @@
 
 ## Not implemented
 
-- `/usage`, and a way to force a fresh read of the plan limits.
+- A way to force a fresh read of the plan limits.
 - Plan limits for `anthropic`: its third-party usage is billed as extra usage, not from the plan's windows, so read `cost` and `total`; there is no extra-usage figure either.
 - Plan limits for `openai` and `meta`, and for a subagent's or workflow agent's provider.
 - Kimi's `limits[]` and `usage` counts: only the `usages` ratios are read, so on a plan whose ratios read 0 its `limit_` segments show 0%.

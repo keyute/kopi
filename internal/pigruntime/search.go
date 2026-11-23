@@ -122,20 +122,20 @@ func (r *Runtime) CanSearch(model string) bool {
 }
 
 // Search has model ("provider/id") answer query under system with its
-// provider's hosted web search, outside any session. It also returns the
-// request's cost in dollars, estimated from the model's price as
+// provider's hosted web search, outside any session. It also returns what the
+// request used, with its cost estimated from the model's price as
 // Session.Usage estimates it.
-func (r *Runtime) Search(ctx context.Context, model, system, query string) (tool.SearchResult, float64, error) {
+func (r *Runtime) Search(ctx context.Context, model, system, query string) (tool.SearchResult, Usage, error) {
 	m, err := r.usableModel(ctx, model)
 	if err != nil {
-		return tool.SearchResult{}, 0, fmt.Errorf("failed to search with model %q: %w", model, err)
+		return tool.SearchResult{}, Usage{}, fmt.Errorf("failed to search with model %q: %w", model, err)
 	}
 	proto, ok := searchProtocols[m.ProviderMeta.API]
 	if !ok {
-		return tool.SearchResult{}, 0, fmt.Errorf("failed to search with model %q: %w", model, ErrNoSearch)
+		return tool.SearchResult{}, Usage{}, fmt.Errorf("failed to search with model %q: %w", model, ErrNoSearch)
 	}
 	var f found
-	text, cost, err := r.complete(ctx, m, system, query, func(content []ai.AssistantContentBlock) string {
+	text, used, err := r.complete(ctx, m, system, query, func(content []ai.AssistantContentBlock) string {
 		return f.join(content, proto.sep)
 	}, ai.StreamOptions{
 		OnPayload: func(payload any, _ *ai.Model) (any, error) {
@@ -150,11 +150,11 @@ func (r *Runtime) Search(ctx context.Context, model, system, query string) (tool
 	})
 	if err != nil {
 		if ctx.Err() != nil {
-			return tool.SearchResult{}, cost, err
+			return tool.SearchResult{}, used, err
 		}
-		return tool.SearchResult{}, cost, fmt.Errorf("failed to search with model %q: %w", model, err)
+		return tool.SearchResult{}, used, fmt.Errorf("failed to search with model %q: %w", model, err)
 	}
-	return tool.SearchResult{Answer: text, Sources: f.sources()}, cost, nil
+	return tool.SearchResult{Answer: text, Sources: f.sources()}, used, nil
 }
 
 // editPayload returns payload as a JSON object with enable applied. PiG hands

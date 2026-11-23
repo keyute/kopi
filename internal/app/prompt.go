@@ -115,6 +115,47 @@ func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group
 	return parts
 }
 
+// contextOf sorts the estimated sizes of a session's prompt parts, named as
+// buildPrompt names them, and of its loaded tool definitions into categories,
+// and gives Messages what they leave of total. Estimates that exceed total,
+// which is itself an estimate until a reply reports usage, are scaled down to it.
+func contextOf(total int, parts, tools []pigruntime.Size) Context {
+	var c Context
+	for _, p := range parts {
+		switch {
+		case strings.HasPrefix(p.Name, "instructions "):
+			c.Instructions += p.Tokens
+		case p.Name == "mcp-servers":
+			c.MCP += p.Tokens
+		default:
+			c.SystemPrompt += p.Tokens
+		}
+	}
+	for _, t := range tools {
+		switch {
+		case t.Name == "Skill":
+			c.Skills += t.Tokens
+		case t.Name == "Agent":
+			c.Agents += t.Tokens
+		case strings.HasPrefix(t.Name, policy.MCPPrefix):
+			c.MCP += t.Tokens
+		default:
+			c.Tools += t.Tokens
+		}
+	}
+	estimated := c.SystemPrompt + c.Tools + c.Instructions + c.Skills + c.Agents + c.MCP
+	if estimated <= total {
+		c.Messages = total - estimated
+		return c
+	}
+	c.Messages = total
+	for _, n := range []*int{&c.SystemPrompt, &c.Tools, &c.Instructions, &c.Skills, &c.Agents, &c.MCP} {
+		*n = *n * total / estimated
+		c.Messages -= *n
+	}
+	return c
+}
+
 // truncate cuts s to at most n bytes without splitting a character.
 func truncate(s string, n int) string {
 	if len(s) <= n {

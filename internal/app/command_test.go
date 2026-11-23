@@ -291,6 +291,67 @@ func TestModelCommandReadsTheNewProvidersLimits(t *testing.T) {
 	assert.Equal(t, "kopi-other", h.c.Status().Limits.Provider, "the minute's throttle does not hold back the new provider")
 }
 
+func TestUsageCommandShowsUsage(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+
+	got, err := h.c.Submit(t.Context(), Main, "/usage")
+
+	assert.ErrorIs(t, err, ErrShowUsage)
+	assert.Nil(t, got)
+}
+
+func TestUsageReadsTheLimitsOnceWithoutALimitSegment(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	limits := subscribeTo[event.LimitsChanged](h.c)
+
+	h.c.Usage()
+	receiveEvent(t, limits)
+	h.c.limits.mu.Lock()
+	attempted := h.c.limits.attempted
+	h.c.limits.mu.Unlock()
+
+	require.Equal(t, fauxProvider, h.c.Usage().Limits.Provider)
+
+	h.c.limits.mu.Lock()
+	defer h.c.limits.mu.Unlock()
+	assert.Equal(t, attempted, h.c.limits.attempted, "the second call is inside the minute")
+	assert.False(t, h.c.limits.running)
+}
+
+func TestModelCommandReadsNoLimitsBeforeUsageIsAsked(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	h, _ := openHarness(t, Config{})
+	_, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
+	changed := subscribeTo[event.ModelChanged](h.c)
+
+	_, err := h.c.Submit(t.Context(), Main, "/model "+otherRef)
+	require.NoError(t, err)
+	receiveEvent(t, changed)
+	assertModelChangeDone(t, h)
+
+	h.c.limits.mu.Lock()
+	defer h.c.limits.mu.Unlock()
+	assert.True(t, h.c.limits.attempted.IsZero(), "no read was started")
+	assert.False(t, h.c.limits.running)
+}
+
+func TestModelCommandReadsTheNewProvidersLimitsAfterUsageWasAsked(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	h, _ := openHarness(t, Config{})
+	_, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
+	limits := subscribeTo[event.LimitsChanged](h.c)
+	changed := subscribeTo[event.ModelChanged](h.c)
+	h.c.Usage()
+	receiveEvent(t, limits)
+
+	_, err := h.c.Submit(t.Context(), Main, "/model "+otherRef)
+	require.NoError(t, err)
+	receiveEvent(t, changed)
+
+	receiveEvent(t, limits)
+	assert.Equal(t, "kopi-other", h.c.Usage().Limits.Provider)
+}
+
 func TestModelCommandRefusesDuringNew(t *testing.T) {
 	pigruntimetest.ClearEnv(t)
 	h, _ := openHarness(t, Config{})

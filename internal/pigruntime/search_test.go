@@ -125,10 +125,11 @@ func TestSearchReturnsTheRequestsCost(t *testing.T) {
 		responsesStream(w, "An answer.", nil)
 	})
 
-	_, cost, err := r.Search(t.Context(), searchModel, "system", "q")
+	_, used, err := r.Search(t.Context(), searchModel, "system", "q")
 
 	require.NoError(t, err)
-	assert.Equal(t, 4.0, cost)
+	assert.Equal(t, 4.0, used.Cost())
+	assert.Equal(t, Usage{Tokens: Tokens{Input: 1, Output: 1}, Models: []ModelUsage{{Model: searchModel, Tokens: 2, Cost: 4}}}, used)
 }
 
 func TestSearchFallsBackToConsultedSources(t *testing.T) {
@@ -392,11 +393,11 @@ func TestSearchEmptyAnswerFails(t *testing.T) {
 		responsesStream(w, " ", nil)
 	})
 
-	_, cost, err := r.Search(t.Context(), searchModel, "system", "q")
+	_, used, err := r.Search(t.Context(), searchModel, "system", "q")
 
 	require.ErrorIs(t, err, ErrNoAnswer)
 	assert.Contains(t, err.Error(), searchModel)
-	assert.Equal(t, 4.0, cost)
+	assert.Equal(t, 4.0, used.Cost())
 }
 
 func TestSearchReportsProviderError(t *testing.T) {
