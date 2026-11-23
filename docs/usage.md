@@ -161,6 +161,7 @@ Rejected, denied and interrupted rows have a warning-coloured bullet, a failed r
 ## Menus and highlighting
 
 - `/` at the start of the input lists commands and skills; a skill is filled in rather than run.
+- A space after a command lists its arguments: `/plan` lists `open`; `/effort`, `/model`, `/login` and `/logout` list their values.
 - Picking `/resume` from the menu lists this directory's sessions, which you filter by date or first message.
 - `@` at the start of the input or after a space lists files and directories under the start directory, leaving out:
   - `.git`
@@ -168,7 +169,8 @@ Rejected, denied and interrupted rows have a warning-coloured bullet, a failed r
   - Kopi's home
 - While a menu shows:
   - Up and Down choose, Tab fills in, Esc closes the menu.
-  - Enter fills in and runs a command; a command that takes an argument, or a file reference, is only filled in.
+  - Enter fills in and runs a command; a command that needs an argument, or a file reference, is only filled in.
+  - Enter sends the input as typed when it already runs as it stands: `/plan ` with nothing after it, or an argument typed in full. No row is highlighted then; Up, Down or Tab chooses one.
 - Known commands, skill commands (wherever they appear in the input) and `@` references are highlighted in the input. Sent and queued messages highlight the same skill commands and references.
 - An `@path` is sent as written; a space in an inserted path is written `\ `.
 
