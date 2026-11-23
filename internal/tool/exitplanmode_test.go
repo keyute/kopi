@@ -124,10 +124,11 @@ func TestExitPlanModeReportsTheAnswer(t *testing.T) {
 		rewrite string
 		want    string
 	}{
-		{"approved", PlanAnswer{Approved: true}, policy.Execute, "", "The user approved the plan. The session is in execute mode."},
+		{"approved", PlanAnswer{Approved: true}, policy.Execute, "", "The user approved the plan. The session is in execute mode. Carry out the plan now."},
+		{"approved but back in plan", PlanAnswer{Approved: true}, policy.Plan, "", "The user approved the plan. The session is in plan mode."},
 		{"feedback", PlanAnswer{Feedback: "smaller steps"}, policy.Plan, "", "The user asked for changes to the plan. The session is in plan mode. Their feedback:\nsmaller steps"},
 		{"dismissed", PlanAnswer{}, policy.Plan, "", "The user dismissed the plan without answering. The session is in plan mode."},
-		{"approved and edited", PlanAnswer{Approved: true}, policy.Execute, "# Edited\n", "The user approved the plan. The user edited the plan file before answering. The session is in execute mode."},
+		{"approved and edited", PlanAnswer{Approved: true}, policy.Execute, "# Edited\n", "The user approved the plan. The user edited the plan file before answering. The session is in execute mode. Carry out the plan now."},
 		{"feedback and edited", PlanAnswer{Feedback: "x"}, policy.Plan, "# Edited\n", "The user asked for changes to the plan. The user edited the plan file before answering. The session is in plan mode. Their feedback:\nx"},
 		{"dismissed and edited", PlanAnswer{}, policy.Plan, "# Edited\n", "The user dismissed the plan without answering. The user edited the plan file before answering. The session is in plan mode."},
 	} {
@@ -185,8 +186,8 @@ func TestExitPlanModeBody(t *testing.T) {
 func TestExitPlanModeSummary(t *testing.T) {
 	summary := NewExitPlanMode(nil, nil).Display.Summary
 
-	assert.Equal(t, "approved", summary("The user approved the plan. The session is in execute mode."))
-	assert.Equal(t, "approved", summary("The user approved the plan. The user edited the plan file before answering. The session is in execute mode."))
+	assert.Equal(t, "approved", summary("The user approved the plan. The session is in execute mode. Carry out the plan now."))
+	assert.Equal(t, "approved", summary("The user approved the plan. The user edited the plan file before answering. The session is in execute mode. Carry out the plan now."))
 	assert.Equal(t, "revision requested", summary("The user asked for changes to the plan. The session is in plan mode. Their feedback:\nx"))
 	assert.Equal(t, "dismissed", summary("The user dismissed the plan without answering. The session is in plan mode."))
 	assert.Empty(t, summary("something else"))

@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -500,15 +501,19 @@ func TestTasksReportTheSavedOutputFile(t *testing.T) {
 	assert.Equal(t, files[0], got.OutputFile)
 }
 
-func TestTasksWithoutSavedOutputHaveNoOutputFile(t *testing.T) {
-	outputs, _ := newSavedOutputs(t)
+func TestTasksSaveABackgroundCommandsOutputHoweverShort(t *testing.T) {
+	outputs, dir := newSavedOutputs(t)
 	m, events := newTasks(t)
 
-	_, err := m.Start(t.Context(), NewShell(t.TempDir(), nil).WithOutputs(outputs), "echo hi")
+	started, err := m.Start(t.Context(), NewShell(t.TempDir(), nil).WithOutputs(outputs), "echo hi")
 	require.NoError(t, err)
-	nextEvent(t, events)
+	assert.Equal(t, dir, filepath.Dir(started.OutputFile))
+	assert.Equal(t, started.OutputFile, nextEvent(t, events).OutputFile)
 
-	assert.Empty(t, nextEvent(t, events).OutputFile)
+	assert.Equal(t, started.OutputFile, nextEvent(t, events).OutputFile)
+	data, err := os.ReadFile(started.OutputFile)
+	require.NoError(t, err)
+	assert.Equal(t, "hi\n", string(data))
 	a := startAgent(m, "look")
 	got, err := m.Output(a.ID())
 	require.NoError(t, err)

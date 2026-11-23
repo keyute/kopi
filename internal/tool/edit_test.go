@@ -255,4 +255,6 @@ func TestEditDisplayOutcome(t *testing.T) {
 	assert.Equal(t, Action{}, action)
 	_, action = d.Outcome(json.RawMessage(`{"file_path":"plan"}`), "")
 	assert.Equal(t, Action{}, action)
+
+	assert.Equal(t, "a.go", d.Subject(json.RawMessage(`{"file_path":"a.go","old_string":"x","new_string":"y"}`), ""))
 }

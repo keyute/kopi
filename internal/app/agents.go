@@ -21,7 +21,7 @@ const maxAgents = 20
 
 // neverChild are the tools a subagent never has, whatever its definition says.
 // A subagent builds its own ToolSearch.
-var neverChild = []string{"Agent", "SendMessage", "TaskOutput", "TaskStop", "ToolSearch", "Workflow"}
+var neverChild = []string{"Agent", "SendMessage", "TaskStop", "ToolSearch", "Workflow"}
 
 // agentSpec is what a subagent or a workflow agent opens with, computed once
 // per process.

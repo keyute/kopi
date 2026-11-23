@@ -226,7 +226,7 @@ func exitReason(e *exec.ExitError) string {
 // outputBuffer keeps the first maxOutputPart bytes written and a sliding
 // window of the last maxOutputPart, so memory stays bounded however much a
 // command prints. With a dir, the output is also saved to a file from the first
-// write that would cut it. The zero value saves nothing.
+// write that would cut it, or from keep. The zero value saves nothing.
 type outputBuffer struct {
 	mu         sync.Mutex
 	head, tail []byte
@@ -234,6 +234,9 @@ type outputBuffer struct {
 
 	// dir is where the file is created, "" once there is nothing left to try.
 	dir string
+	// closed means the command ended: later writes only reach memory, but keep
+	// still saves what head and tail hold.
+	closed bool
 	// limit is the most bytes the file takes.
 	limit   int
 	f       *os.File
@@ -248,11 +251,8 @@ type outputBuffer struct {
 func (b *outputBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.dir != "" && b.total+len(p) > 2*maxOutputPart {
-		// Head and tail still hold every byte written before p.
-		b.create()
-		b.save(b.head)
-		b.save(b.tail)
+	if b.dir != "" && !b.closed && b.total+len(p) > 2*maxOutputPart {
+		b.start()
 	}
 	b.save(p)
 	b.total += len(p)
@@ -268,6 +268,30 @@ func (b *outputBuffer) Write(p []byte) (int, error) {
 	}
 	b.tail = append(b.tail, rest...)
 	return len(p), nil
+}
+
+// keep saves the output to the file from now on, however short it is: a
+// background command's output is read from the file while the command runs.
+// A command that already ended gets the file too.
+func (b *outputBuffer) keep() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.dir == "" {
+		return
+	}
+	b.start()
+	if b.closed && b.f != nil {
+		_ = b.f.Close()
+		b.f = nil
+	}
+}
+
+// start creates the file with what is written so far. Head and tail still
+// hold every byte written: nothing is cut before the file exists.
+func (b *outputBuffer) start() {
+	b.create()
+	b.save(b.head)
+	b.save(b.tail)
 }
 
 // create opens the file, once. A failure is logged and the buffer carries on
@@ -321,7 +345,7 @@ func (b *outputBuffer) save(data []byte) {
 func (b *outputBuffer) close() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.dir = ""
+	b.closed = true
 	if b.f != nil {
 		_ = b.f.Close()
 		b.f = nil

@@ -827,17 +827,17 @@ func TestHistoryRestoresTaskResultEnvelopes(t *testing.T) {
 			sess := openTestSession(t, r)
 			manager := sess.inner.SessionManager()
 			appendHistoryMessage(t, manager, `{"role":"user","content":"go","timestamp":1}`)
-			appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"toolCall","id":"call-1","name":"TaskOutput","arguments":{"task_id":"t1"}}],"stopReason":"toolUse","timestamp":2}`)
+			appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"toolCall","id":"call-1","name":"TaskStop","arguments":{"task_id":"t1"}}],"stopReason":"toolUse","timestamp":2}`)
 			encoded, err := json.Marshal(output)
 			require.NoError(t, err)
-			appendHistoryMessage(t, manager, `{"role":"toolResult","toolCallId":"call-1","toolName":"TaskOutput","content":[{"type":"text","text":`+string(encoded)+`}],"isError":false,"timestamp":3}`)
+			appendHistoryMessage(t, manager, `{"role":"toolResult","toolCallId":"call-1","toolName":"TaskStop","content":[{"type":"text","text":`+string(encoded)+`}],"isError":false,"timestamp":3}`)
 			require.NoError(t, sess.Close(t.Context()))
 
 			assert.Equal(t, []event.Event{
 				event.TurnStart{Prompt: "go"},
-				event.ToolStart{CallID: "call-1", Name: "TaskOutput", Args: `{"task_id":"t1"}`},
-				event.ToolEnd{CallID: "call-1", Name: "TaskOutput", Args: `{"task_id":"t1"}`, Output: output},
-			}, resume(t, r, sess.ID(), tool.NewTaskOutput(nil)).History())
+				event.ToolStart{CallID: "call-1", Name: "TaskStop", Args: `{"task_id":"t1"}`},
+				event.ToolEnd{CallID: "call-1", Name: "TaskStop", Args: `{"task_id":"t1"}`, Output: output},
+			}, resume(t, r, sess.ID(), tool.NewTaskStop(nil)).History())
 		})
 	}
 }

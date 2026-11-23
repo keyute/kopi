@@ -82,6 +82,11 @@ func NewSendMessage(agents Agents) Tool {
 			Outcome: func(_ json.RawMessage, output string) (string, Action) {
 				return taskOutcome("Messaged", output)
 			},
+			Subject: func(raw json.RawMessage, _ string) string {
+				var args sendMessageArgs
+				_ = json.Unmarshal(raw, &args)
+				return args.To
+			},
 		},
 	}
 }

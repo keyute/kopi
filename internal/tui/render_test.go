@@ -302,7 +302,7 @@ func TestGroupSentenceFollowsItsRowsVerbs(t *testing.T) {
 	web := tool.Action{Verb: "Searched", One: "the web"}
 	shell := tool.Action{Verb: "Started", One: "shell", Many: "shells"}
 	agents := tool.Action{Verb: "Checked on", One: "agent", Many: "agents"}
-	task := tool.Action{Verb: "Checked", One: "task", Many: "tasks"}
+	task := tool.Action{Verb: "Stopped", One: "task", Many: "tasks"}
 	// The start carries the tool's static action; only the end's outcome names the shells and agents.
 	callAs := func(id, name, title string, static, outcome tool.Action) []event.Event {
 		return []event.Event{
@@ -322,13 +322,13 @@ func TestGroupSentenceFollowsItsRowsVerbs(t *testing.T) {
 		call("e", "WebSearch", "Searched the web for y", web),
 		call("f", "WebSearch", "Searched the web for z", web),
 		callAs("g", "Bash", "Started make in background", tool.Action{}, shell),
-		callAs("h", "TaskOutput", "Checked on researcher › survey peers", task, agents),
-		callAs("i", "TaskOutput", "Checked on explorer › map the repo", task, agents),
+		callAs("h", "TaskStop", "TaskStop researcher › survey peers", task, agents),
+		callAs("i", "TaskStop", "TaskStop explorer › map the repo", task, agents),
 	} {
 		events = append(events, c...)
 	}
 	sentence := "Read 2 files, read the plan, searched the web 3 times, started 1 shell, checked on 2 agents"
-	members := []string{"  ↳ a.go", "  ↳ b.go", "  ↳ Read the plan", "  ↳ Searched the web for x", "  ↳ Searched the web for y", "  ↳ Searched the web for z", "  ↳ Started make in background", "  ↳ Checked on researcher › survey peers", "  ↳ Checked on explorer › map the repo"}
+	members := []string{"  ↳ a.go", "  ↳ b.go", "  ↳ Read the plan", "  ↳ Searched the web for x", "  ↳ Searched the web for y", "  ↳ Searched the web for z", "  ↳ Started make in background", "  ↳ TaskStop researcher › survey peers", "  ↳ TaskStop explorer › map the repo"}
 	m, _ := newTestModel(t, 120, 30)
 	send(m, events...)
 	assert.Equal(t, append([]string{"", "• " + sentence}, members...), body(m))
@@ -337,11 +337,11 @@ func TestGroupSentenceFollowsItsRowsVerbs(t *testing.T) {
 	assert.Equal(t, []string{"", "▸ " + sentence, "", "Done."}, body(m))
 }
 
-func TestTaskOutputRowWithoutANameLineReadsAsATask(t *testing.T) {
+func TestTaskStopRowWithoutANameLineReadsAsATask(t *testing.T) {
 	m, _ := newTestModel(t, 60, 20)
-	send(m, event.ToolStart{CallID: "a", Name: "TaskOutput", Title: "TaskOutput t3", Done: "Checked task t3", Action: tool.Action{Verb: "Checked", One: "task", Many: "tasks"}},
-		event.ToolEnd{CallID: "a", Name: "TaskOutput", Summary: "completed (exit code 0)", Output: "Task t3 completed (exit code 0).\nout", Body: "out"})
-	assert.Equal(t, []string{"", "• Checked task t3", "  ↳ completed (exit code 0)"}, body(m))
+	send(m, event.ToolStart{CallID: "a", Name: "TaskStop", Title: "TaskStop t3", Done: "Stopped task t3", Action: tool.Action{Verb: "Stopped", One: "task", Many: "tasks"}},
+		event.ToolEnd{CallID: "a", Name: "TaskStop", Output: "Task t3 stopped."})
+	assert.Equal(t, []string{"", "• Stopped task t3"}, body(m))
 }
 
 func TestAgentRowOpensToItsPromptOnlyWithAPreview(t *testing.T) {

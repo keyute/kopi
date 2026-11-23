@@ -35,6 +35,24 @@ func TestGroupSentence(t *testing.T) {
 	}
 }
 
+func TestGroupSentenceCountsASubjectOnce(t *testing.T) {
+	edited := tool.Action{Verb: "Edited", One: "file", Many: "files"}
+	ran := tool.Action{Verb: "Ran", One: "command", Many: "commands"}
+	plan := tool.Action{Verb: "Edited", One: "the plan"}
+	g := Group{Calls: []Call{
+		{Action: edited, Subject: "a.go"},
+		{Action: edited, Subject: "b.go"},
+		{Action: edited, Subject: "a.go"},
+		{Action: readAction, Subject: "a.go"},
+		{Action: readAction, Subject: "a.go"},
+		{Action: ran},
+		{Action: ran},
+		{Action: plan, Subject: "plan"},
+		{Action: plan, Subject: "plan"},
+	}}
+	assert.Equal(t, "Edited 2 files, read 1 file, ran 2 commands, edited the plan 2 times", g.Sentence())
+}
+
 func TestGroupSentenceCountsUnsandboxed(t *testing.T) {
 	ran := tool.Action{Verb: "Ran", One: "command", Many: "commands"}
 	g := Group{Calls: []Call{{Action: readAction}, {Action: ran}, {Action: ran, Unsandboxed: true}, {Action: ran}}}

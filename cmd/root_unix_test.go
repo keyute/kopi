@@ -372,7 +372,7 @@ func TestRootFullscreenStartupSubmitExit(t *testing.T) {
 	texts := messageTexts(t, server.next(t))
 	require.Len(t, texts, 3, texts)
 	assert.Equal(t, "fullscreen prompt", texts[1])
-	assert.Regexp(t, "^"+regexp.QuoteMeta("The session is in plan mode. Its plan file is "+filepath.Join(e.kopiHome, "plans")+string(filepath.Separator))+`[^/]+\.md`+regexp.QuoteMeta("; Read, Write and Edit work on that file in both modes.")+"$", texts[2])
+	assert.Regexp(t, "^"+regexp.QuoteMeta("Plan mode is on: do not change the workspace. When the request needs changes, research it, write a plan to "+filepath.Join(e.kopiHome, "plans")+string(filepath.Separator))+`[^/]+\.md`+regexp.QuoteMeta(" (Read, Write and Edit work on that file in both modes) and call ExitPlanMode for the user's approval instead of ending your turn; a request that needs no changes is just answered.")+"$", texts[2])
 	slog.Warn("fullscreen-log-marker")
 	close(respond)
 	select {

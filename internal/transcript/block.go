@@ -23,10 +23,11 @@ const (
 
 // Call is one tool call. Title is the call's name until it succeeds, then its
 // done form; Preview is a successful file change's lines; Command is the
-// command when Title does not show all of it.
+// command when Title does not show all of it; Subject is what a successful
+// call acted on, when a group counts that thing rather than the call.
 type Call struct {
 	ID, Title, Summary, Body string
-	Command                  string
+	Command, Subject         string
 	Action                   tool.Action
 	State                    State
 	Preview                  []tool.PreviewLine

@@ -1000,3 +1000,21 @@ func TestWorkspaceFileOutcome(t *testing.T) {
 	_, action := outcome(json.RawMessage(`{`), "")
 	assert.Equal(t, Action{}, action)
 }
+
+func TestWorkspaceFileSubject(t *testing.T) {
+	dir := t.TempDir()
+	ws, plan, outputs := newPlanWorkspace(t, dir)
+	subject := func(path string) string {
+		raw, err := json.Marshal(map[string]string{"file_path": path})
+		require.NoError(t, err)
+		return ws.fileSubject(raw, "")
+	}
+
+	assert.Equal(t, "a.go", subject("a.go"))
+	assert.Equal(t, subject("a.go"), subject(filepath.Join(dir, "a.go")), "one file however it is written")
+	assert.Equal(t, subject("a.go"), subject("./a.go"))
+	assert.Equal(t, subject("a.go"), subject(dir+"/./a.go"))
+	assert.Equal(t, "plan", subject(plan))
+	assert.Equal(t, "output bash-1.txt", subject(filepath.Join(outputs, "bash-1.txt")))
+	assert.Empty(t, ws.fileSubject(json.RawMessage(`{`), ""))
+}
