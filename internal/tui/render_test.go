@@ -573,7 +573,7 @@ func TestOpenedGroupMemberShowsItsCommand(t *testing.T) {
 func TestShadedBoxStylesSpansOnWrappedRows(t *testing.T) {
 	th := mocha()
 	set, _ := skill.NewSet("skill", []skill.Skill{{Name: "a"}}, nil)
-	spans := func(text string) []app.Span { return app.Spans(text, set, true) }
+	spans := func(text string) []app.Span { return app.Spans(text, set, true, false) }
 	text := "hello world /skill:a ultracode end"
 
 	flat := shadedBox("❯ ", shade(th), text, nil, 20, th)

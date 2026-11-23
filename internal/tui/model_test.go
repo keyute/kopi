@@ -189,11 +189,11 @@ func (f *fakeController) Agents() []app.AgentStatus { return f.agents }
 func (f *fakeController) Commands() []app.Command { return f.commands }
 
 func (f *fakeController) PromptSpans(session, text string) []app.Span {
-	return app.Spans(text, f.skills, session == app.Main)
+	return app.Spans(text, f.skills, session == app.Main, false)
 }
 
 func (f *fakeController) Spans(session, text string) []app.Span {
-	return app.Spans(text, f.skills, session == app.Main)
+	return app.Spans(text, f.skills, session == app.Main, false)
 }
 
 func (f *fakeController) Arguments(name string) ([]app.Candidate, error) { return f.args[name], nil }

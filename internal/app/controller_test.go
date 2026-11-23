@@ -3044,6 +3044,226 @@ func TestControllerSpansHighlightTheKeywordOnlyWhereItTriggers(t *testing.T) {
 	assert.Nil(t, NewController(nil, Config{Rules: deny}).PromptSpans(Main, "ultracode"), "removed by a rule")
 }
 
+func TestControllerSpansHighlightUltrathinkOnlyWhereItTriggers(t *testing.T) {
+	want := []Span{{Start: 0, End: 10, Kind: KindCommand}}
+	h := openThinkerHarness(t, Config{})
+	assert.Equal(t, want, h.c.Spans(Main, "ultrathink"))
+	assert.Equal(t, want, h.c.PromptSpans(Main, "ultrathink"))
+	assert.Nil(t, h.c.Spans("t1", "ultrathink"), "a subagent's view")
+	assert.Nil(t, h.c.PromptSpans("t1", "ultrathink"), "a subagent's view")
+
+	plain, _ := openHarness(t, Config{})
+	assert.Nil(t, plain.c.Spans(Main, "ultrathink"), "the model does not reason")
+	assert.Nil(t, plain.c.PromptSpans(Main, "ultrathink"), "the model does not reason")
+}
+
+// openThinkerHarness opens a harness whose model reasons.
+func openThinkerHarness(t *testing.T, cfg Config) *harness {
+	t.Helper()
+	sb := pigruntimetest.NewSandbox(t)
+	rt := pigruntimetest.NewRuntime(t, sb)
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: fauxProvider, Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, rt.RegisterProvider(thinker.Provider()))
+	cfg.Model = fauxProvider + "/thinker"
+	h := buildHarness(t, rt, thinker, sb, cfg)
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	return h
+}
+
+func TestSubmitUltrathinkRaisesEffortForTheTurnOnly(t *testing.T) {
+	h := openThinkerHarness(t, Config{})
+	levels := make(chan ai.ThinkingLevel, 2)
+	step := ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+		levels <- o.Thinking
+		return ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{}), nil
+	})
+	h.faux.SetResponses([]ai.FauxResponseStep{step, step})
+	before := h.c.main.sess.Effort()
+	require.NotEmpty(t, before)
+
+	h.turn(t, "plain")
+	plain := <-levels
+	h.turn(t, "please ultrathink")
+	assert.NotEqual(t, plain, <-levels)
+	assert.Equal(t, before, h.c.main.sess.Effort(), "restored when the turn ends")
+	assert.Len(t, ofType[event.EffortChanged](h.rec.all()), 2, "raise and restore")
+}
+
+func TestSendNowKeepsTheUltrathinkRaiseForTheTurn(t *testing.T) {
+	started := make(chan struct{}, 1)
+	h := openThinkerHarness(t, Config{Tools: []tool.Tool{blockingTool(started)}})
+	levels := make(chan ai.ThinkingLevel, 3)
+	step := func(msg ai.AssistantMessage) ai.FauxResponseStep {
+		return ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+			levels <- o.Thinking
+			return msg, nil
+		})
+	}
+	block := ai.FauxAssistantMessage(
+		ai.FauxContentBlocks{ai.FauxToolCall("Block", map[string]any{}, &ai.FauxToolCallOptions{ID: "c1"})},
+		ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)},
+	)
+	text := ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{})
+	h.faux.SetResponses([]ai.FauxResponseStep{step(block), step(text), step(text)})
+	before := h.c.main.sess.Effort()
+
+	w, err := h.c.Submit(t.Context(), Main, "ultrathink")
+	require.NoError(t, err)
+	wait(t, started)
+	require.NoError(t, h.c.SendNow(t.Context(), Main, "instead"))
+	wait(t, w.Done())
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels)
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels, "the send-now continuation of the turn")
+	assert.Equal(t, before, h.c.main.sess.Effort())
+
+	h.turn(t, "plain")
+	assert.NotEqual(t, ai.ThinkingLevelHigh, <-levels, "the next turn")
+}
+
+func TestPlainPromptAfterACompletedRaisedTurnIsNotRaised(t *testing.T) {
+	h := openThinkerHarness(t, Config{})
+	levels := make(chan ai.ThinkingLevel, 2)
+	step := ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+		levels <- o.Thinking
+		return ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{}), nil
+	})
+	h.faux.SetResponses([]ai.FauxResponseStep{step, step})
+	// The restore at the end of the send is the last thing that happens in it,
+	// after the final hand-over: input given then is left for the Work's next
+	// send.
+	var changes int
+	h.c.main.sess.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.EffortChanged); ok {
+			if changes++; changes == 2 {
+				_, err := h.c.Submit(t.Context(), Main, "plain")
+				assert.NoError(t, err)
+			}
+		}
+	})
+
+	w, err := h.c.Submit(t.Context(), Main, "ultrathink")
+	require.NoError(t, err)
+	wait(t, w.Done())
+
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels)
+	assert.NotEqual(t, ai.ThinkingLevelHigh, <-levels, "the follow-up prompt")
+}
+
+func TestSetEffortThenSendNowKeepsTheUsersLevel(t *testing.T) {
+	started := make(chan struct{}, 1)
+	h := openThinkerHarness(t, Config{Tools: []tool.Tool{blockingTool(started)}})
+	levels := make(chan ai.ThinkingLevel, 3)
+	step := func(msg ai.AssistantMessage) ai.FauxResponseStep {
+		return ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+			levels <- o.Thinking
+			return msg, nil
+		})
+	}
+	block := ai.FauxAssistantMessage(
+		ai.FauxContentBlocks{ai.FauxToolCall("Block", map[string]any{}, &ai.FauxToolCallOptions{ID: "c1"})},
+		ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)},
+	)
+	text := ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{})
+	h.faux.SetResponses([]ai.FauxResponseStep{step(block), step(text)})
+
+	w, err := h.c.Submit(t.Context(), Main, "ultrathink")
+	require.NoError(t, err)
+	wait(t, started)
+	require.NotEqual(t, "low", h.c.main.sess.Effort())
+	require.NoError(t, h.c.main.sess.SetEffort(pigruntime.LowEffort))
+	require.NoError(t, h.c.SendNow(t.Context(), Main, "instead"))
+	wait(t, w.Done())
+
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels)
+	assert.Equal(t, ai.ThinkingLevelLow, <-levels, "the send-now continuation keeps the level /effort set")
+	assert.Equal(t, "low", h.c.main.sess.Effort())
+}
+
+// A send-now that cancels the continuation before its send starts must not
+// drop the raise.
+func TestSendNowBeforeTheContinuationStartsKeepsTheUltrathinkRaise(t *testing.T) {
+	started := make(chan struct{}, 1)
+	h := openThinkerHarness(t, Config{Tools: []tool.Tool{blockingTool(started)}})
+	levels := make(chan ai.ThinkingLevel, 3)
+	step := func(msg ai.AssistantMessage) ai.FauxResponseStep {
+		return ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+			levels <- o.Thinking
+			return msg, nil
+		})
+	}
+	block := ai.FauxAssistantMessage(
+		ai.FauxContentBlocks{ai.FauxToolCall("Block", map[string]any{}, &ai.FauxToolCallOptions{ID: "c1"})},
+		ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)},
+	)
+	text := ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{})
+	h.faux.SetResponses([]ai.FauxResponseStep{step(block), step(text)})
+
+	w, err := h.c.Submit(t.Context(), Main, "ultrathink")
+	require.NoError(t, err)
+	wait(t, started)
+	// The listener runs inside runTurn with the queue held, before the
+	// continuation's send, so cancelling there is the send-now that lands first.
+	var starts int
+	h.c.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.TurnStart); ok {
+			if starts++; starts == 1 {
+				w.cancel()
+			}
+		}
+	})
+	require.NoError(t, h.c.SendNow(t.Context(), Main, "instead"))
+	wait(t, w.Done())
+
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels)
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels, "the continuation that ran after the cancelled one")
+}
+
+func TestSubmitUltrathinkToASubagentLeavesItsEffortAlone(t *testing.T) {
+	def := agentDef("explorer")
+	def.Effort = "low"
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, def)
+	requests := make(chan childRequest, 2)
+	a.child.SetResponses([]ai.FauxResponseStep{captureChild(requests, nil, "first"), captureChild(requests, nil, "second")})
+	a.rootAcks(2)
+	id := a.launch(t, "explorer", "find it", "go")
+	a.untilStatus(t, id, tool.TaskCompleted)
+	a.until(t, func() bool { return a.workOf(a.childOf(id)) == nil })
+	require.Equal(t, ai.ThinkingLevelLow, receiveChild(t, requests).thinking)
+
+	w, err := a.c.Submit(t.Context(), id, "ultrathink")
+	require.NoError(t, err)
+	require.NotNil(t, w)
+	wait(t, w.Done())
+
+	assert.Equal(t, ai.ThinkingLevelLow, receiveChild(t, requests).thinking)
+	assert.Equal(t, "low", a.childOf(id).sess.Effort())
+}
+
+func TestPromptUltrathinkRaisesEffortForTheRunOnly(t *testing.T) {
+	h := openThinkerHarness(t, Config{})
+	levels := make(chan ai.ThinkingLevel, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+			levels <- o.Thinking
+			return ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{}), nil
+		}),
+	})
+	before := h.c.main.sess.Effort()
+	w, err := h.c.Prompt(t.Context(), "ultrathink")
+	require.NoError(t, err)
+	wait(t, w.Done())
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels)
+	assert.Equal(t, before, h.c.main.sess.Effort())
+}
+
+func TestSubmitUltrathinkIsIgnoredWhenTheModelDoesNotReason(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("one")})
+	h.turn(t, "ultrathink")
+	assert.Empty(t, ofType[event.EffortChanged](h.rec.all()))
+	assert.Empty(t, h.c.main.sess.Effort())
+}
+
 // modeHarness opens a harness whose sessions have a plan file and tell the
 // model their mode, the way a real first prompt does.
 func modeHarness(t *testing.T) *harness {
@@ -3293,4 +3513,68 @@ func TestStatusUltracodeFollowsTheKeywordPrompt(t *testing.T) {
 
 	require.NoError(t, h.c.NewSession(t.Context()))
 	assert.False(t, h.c.Status().Ultracode)
+}
+
+func TestSetEffortAtTheContinuationBoundaryInvalidatesTheRaise(t *testing.T) {
+	for _, preCancelled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "next send", true: "after pre-cancelled send"}[preCancelled], func(t *testing.T) {
+			started := make(chan struct{}, 1)
+			h := openThinkerHarness(t, Config{Tools: []tool.Tool{blockingTool(started)}})
+			levels := make(chan ai.ThinkingLevel, 2)
+			step := func(msg ai.AssistantMessage) ai.FauxResponseStep {
+				return ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+					levels <- o.Thinking
+					return msg, nil
+				})
+			}
+			block := ai.FauxAssistantMessage(
+				ai.FauxContentBlocks{ai.FauxToolCall("Block", map[string]any{}, &ai.FauxToolCallOptions{ID: "c1"})},
+				ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)},
+			)
+			text := ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{})
+			h.faux.SetResponses([]ai.FauxResponseStep{step(block), step(text)})
+			w, err := h.c.Submit(t.Context(), Main, "ultrathink")
+			require.NoError(t, err)
+			wait(t, started)
+			var starts int
+			h.c.Subscribe(func(ev event.Event) {
+				if _, ok := ev.(event.TurnStart); !ok {
+					return
+				}
+				starts++
+				if starts == 1 && preCancelled {
+					w.cancel()
+					return
+				}
+				assert.NoError(t, h.c.main.sess.SetEffort(pigruntime.LowEffort))
+			})
+			require.NoError(t, h.c.SendNow(t.Context(), Main, "instead"))
+			wait(t, w.Done())
+			assert.Equal(t, ai.ThinkingLevelHigh, <-levels)
+			assert.Equal(t, ai.ThinkingLevelLow, <-levels)
+			assert.Equal(t, "low", h.c.main.sess.Effort())
+		})
+	}
+}
+
+func TestPreCancelledFreshPromptKeepsItsExplicitRaise(t *testing.T) {
+	h := openThinkerHarness(t, Config{})
+	levels := make(chan ai.ThinkingLevel, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+		levels <- o.Thinking
+		return ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{}), nil
+	})})
+	var starts int
+	h.c.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.TurnStart); ok {
+			if starts++; starts == 1 {
+				h.c.main.work.cancel()
+				assert.NoError(t, h.c.main.sess.SetEffort(pigruntime.LowEffort))
+			}
+		}
+	})
+	h.turn(t, "ultrathink")
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels)
+	assert.Equal(t, "low", h.c.main.sess.Effort())
+	assert.Equal(t, 1, h.faux.CallCount())
 }

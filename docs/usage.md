@@ -41,6 +41,16 @@ Commands in the fullscreen interface:
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
 
+### ultrathink
+
+The whole word `ultrathink`, in any case, in a prompt to the main agent raises its reasoning effort to the highest level the model supports. The raise starts with the request that carries the prompt, whether it opens the turn or joins a running one, and lasts to the end of that turn; the previous level is then put back, unless `/effort` was used during the turn, in which case that level stands. The prompt text goes to the model unchanged.
+
+- Works in the fullscreen interface and with `-p`.
+- Not matched inside an `@` reference, a skill command or a control command, and not typed to a subagent's view.
+- Ctrl+Enter keeps the raise, as it continues the turn. A turn that starts because a task ended or queued input followed a completed turn is not raised unless its own prompt says `ultrathink`.
+- No effect, and no highlight, on a model that does not reason.
+- A crash mid-turn leaves the raised level in the session.
+
 ## Keys
 
 Defaults; change them with [`keys`](configuration.md#keys).
