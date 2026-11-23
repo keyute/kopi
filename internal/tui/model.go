@@ -228,7 +228,7 @@ func (m *model) statusInput() statusInput {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	held, was := m.holding(), m.attention()
 	cmd := m.update(msg)
-	cmd = tea.Batch(cmd, m.syncInput(held), m.attend(msg, was), m.syncRecords(), m.beat())
+	cmd = tea.Batch(cmd, m.syncInput(held), m.attend(msg, was), m.syncRecords(), m.beat(), m.usageWake())
 	m.syncFocus()
 	m.arrange()
 	m.syncFocus()
@@ -475,6 +475,9 @@ func (m *model) submitted(err error) tea.Cmd {
 	case errors.Is(err, app.ErrShowTasks):
 		m.composer.reset()
 		return m.showTasks()
+	case errors.Is(err, app.ErrShowUsage):
+		m.composer.reset()
+		return m.showUsage()
 	case errors.Is(err, app.ErrOpenPlan):
 		m.composer.reset()
 		return m.openEditor(m.c.PlanFile())

@@ -81,6 +81,9 @@ type fakeController struct {
 	workflowReads int
 	// agentStops logs StopWorkflowAgent as "<id>#<n>".
 	agentStops []string
+	// usage is what Usage returns, counted in usageReads.
+	usage      app.Usage
+	usageReads int
 }
 
 // fakeRun is a workflow run the fake knows: its status and agents, and each
@@ -203,6 +206,11 @@ func (f *fakeController) Files() ([]app.Candidate, error) { return f.files, f.fi
 func (f *fakeController) Background() bool {
 	f.backgrounds++
 	return f.foreground
+}
+
+func (f *fakeController) Usage() app.Usage {
+	f.usageReads++
+	return f.usage
 }
 
 func (f *fakeController) Tasks() []tool.TaskInfo { return slices.Clone(f.tasks) }

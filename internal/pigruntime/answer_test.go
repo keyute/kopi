@@ -2,6 +2,7 @@ package pigruntime
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"testing"
 
@@ -34,10 +35,30 @@ func TestAnswerReturnsTheRequestsCost(t *testing.T) {
 		responsesStream(w, "An answer.", nil)
 	})
 
-	_, cost, err := r.Answer(t.Context(), searchModel, DefaultEffort, "system", "prompt")
+	_, used, err := r.Answer(t.Context(), searchModel, DefaultEffort, "system", "prompt")
 
 	require.NoError(t, err)
-	assert.Equal(t, 4.0, cost)
+	assert.Equal(t, 4.0, used.Cost())
+	assert.Equal(t, Usage{Tokens: Tokens{Input: 1, Output: 1}, Models: []ModelUsage{{Model: searchModel, Tokens: 2, Cost: 4}}}, used)
+}
+
+func TestAnswerNamesTheModelTheProviderRepliedAs(t *testing.T) {
+	r, _ := newSearchRuntime(t, "openai-completions", "synthetic-key", func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"model":"search-1-2026-11-01","choices":[{"delta":{"content":"An answer."},"finish_reason":null}]}
+
+data: {"model":"search-1-2026-11-01","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}
+
+data: [DONE]
+
+`)
+	})
+
+	_, used, err := r.Answer(t.Context(), searchModel, DefaultEffort, "system", "prompt")
+
+	require.NoError(t, err)
+	require.Len(t, used.Models, 1)
+	assert.Equal(t, "kopi-search/search-1-2026-11-01", used.Models[0].Model)
 }
 
 func TestAnswerReturnsTheCostOfAnEmptyAnswer(t *testing.T) {
@@ -45,10 +66,10 @@ func TestAnswerReturnsTheCostOfAnEmptyAnswer(t *testing.T) {
 		responsesStream(w, " ", nil)
 	})
 
-	_, cost, err := r.Answer(t.Context(), searchModel, DefaultEffort, "system", "prompt")
+	_, used, err := r.Answer(t.Context(), searchModel, DefaultEffort, "system", "prompt")
 
 	require.ErrorIs(t, err, ErrNoAnswer)
-	assert.Equal(t, 4.0, cost)
+	assert.Equal(t, 4.0, used.Cost())
 }
 
 func TestAnswerReportsProviderError(t *testing.T) {

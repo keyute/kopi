@@ -2707,7 +2707,7 @@ func TestStatusKeepsRootAndChildCostsTogetherDuringSwitch(t *testing.T) {
 	a.turn(t, "old root")
 	receiveEnd(t, ends)
 	child("old child")
-	a.c.chargeSide()(3)
+	a.c.chargeSide()(spentCost(3))
 	old := a.c.Status()
 	require.Equal(t, 3+3*pigruntimetest.PricedModelCost, old.TotalCost)
 
@@ -2749,7 +2749,7 @@ func TestStatusKeepsRootAndChildCostsTogetherDuringSwitch(t *testing.T) {
 	for range 2 {
 		child("new child")
 	}
-	a.c.chargeSide()(5)
+	a.c.chargeSide()(spentCost(5))
 	// Unlinking leaves the blocked reader on the pipe, but lets later status
 	// calls read the replacement HEAD without blocking.
 	require.NoError(t, os.Remove(head))

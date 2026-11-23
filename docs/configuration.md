@@ -179,7 +179,7 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 - `cost` is an estimate computed from the model's listed price; on a subscription sign-in it is not what you are billed. `total` is the same kind of estimate.
 - `total` always shows the whole session, whichever view is open. It leaves out a workflow agent that is still running. After a resume (`-c`, `-r` or `/resume`) it holds the main session's cost from before the resume, but not what subagents, workflow agents and those requests cost then.
 - `<window>` is `5h`, `wk`, `mo`, `mo_code`, `premium` or `chat`; [Plan limits](providers.md#plan-limits) lists which providers have which.
-- `limit_<window>` and `reset_<window>` draw no label and no separator; write them in the entry. None is in the default layout, and naming any makes Kopi call the provider's usage endpoint. See [Plan limits](providers.md#plan-limits) for what is sent and when.
+- `limit_<window>` and `reset_<window>` draw no label and no separator; write them in the entry. None is in the default layout, and naming any makes Kopi call the provider's usage endpoint; opening [`/usage`](usage.md#usage-1) does too. See [Plan limits](providers.md#plan-limits) for what is sent and when.
 - `limit_<window>` shows in the warning colour from 90%; `reset_<window>` does not.
 - `changes`:
   - Untracked files are not counted.

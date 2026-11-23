@@ -325,6 +325,28 @@ func TestLogout(t *testing.T) {
 	assert.False(t, h.loggedIn(t))
 }
 
+func TestLoginAndLogoutReadTheLimitsOnlyAfterUsageWasAsked(t *testing.T) {
+	h := openLoginHarness(t, Config{})
+	limits := subscribeTo[event.LimitsChanged](h.c)
+	run, req := h.startLogin(t)
+	require.True(t, h.c.AnswerLogin(req.Token, "synthetic-code"))
+	wait(t, run.done)
+	h.c.limits.mu.Lock()
+	assert.True(t, h.c.limits.attempted.IsZero(), "no read before /usage")
+	h.c.limits.mu.Unlock()
+
+	h.c.Usage()
+	receiveEvent(t, limits)
+
+	_, err := h.c.Submit(t.Context(), Main, "/logout "+loginProvider)
+	require.NoError(t, err)
+	receiveEvent(t, limits)
+	run, req = h.startLogin(t)
+	require.True(t, h.c.AnswerLogin(req.Token, "synthetic-code"))
+	wait(t, run.done)
+	receiveEvent(t, limits)
+}
+
 // firstRunHarness is a harness whose model is the login provider's, with no
 // credential, so Start runs that provider's login.
 func firstRunHarness(t *testing.T, cfg Config) *loginHarness {

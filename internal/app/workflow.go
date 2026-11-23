@@ -223,8 +223,9 @@ func (r *workflowRun) call(ctx context.Context, raw json.RawMessage) (result jso
 		status := rec.AgentStatus
 		if run != nil {
 			status = c.agentStatus(status, run.sess)
+			used := run.sess.UsageByModel()
 			c.closeChild(run)
-			c.charge(r.parent, status.Cost)
+			c.charge(r.parent, used)
 		}
 		c.mu.Lock()
 		rec.AgentStatus, rec.sess = status, nil

@@ -190,6 +190,21 @@ func (s *Session) ContextUsage() (tokens, window int, ok bool) {
 	return *u.Tokens, u.ContextWindow, true
 }
 
+// CompactAt reports the context size above which the session compacts: PiG
+// compacts once the context exceeds the model's window less its reserve.
+// ok is false when the model declares no window.
+func (s *Session) CompactAt() (tokens int, ok bool) {
+	u := s.inner.ContextUsage()
+	if u == nil {
+		return 0, false
+	}
+	reserve, err := s.inner.SettingsManager().GetCompactionReserveTokens(s.inner.Model())
+	if err != nil {
+		return 0, false
+	}
+	return u.ContextWindow - reserve, true
+}
+
 // Effort reports the reasoning level the session runs at, in the names
 // ParseEffort takes. It is "" when the model does not reason.
 func (s *Session) Effort() string {

@@ -231,6 +231,29 @@ func TestLimitsForceBypassesTheThrottle(t *testing.T) {
 	})
 }
 
+func TestLimitsForceDoesNothingUntilARefresh(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newFakeLimits()
+		l := newLimits(f.read, func() string { return "codex" }, func(event.Event) {})
+		t.Cleanup(l.close)
+
+		l.force()
+		synctest.Wait()
+		require.Empty(t, f.started)
+
+		l.refresh()
+		synctest.Wait()
+		require.Equal(t, "codex", <-f.started)
+		f.release <- limitsResult{}
+		synctest.Wait()
+
+		l.force()
+		synctest.Wait()
+		assert.Equal(t, "codex", <-f.started, "forced past the throttle")
+		f.release <- limitsResult{}
+	})
+}
+
 func TestLimitsForceDuringAReadReadsAgainForTheNewProvider(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newFakeLimits()
@@ -384,6 +407,7 @@ func TestLimitsWarnOncePerRunOfFailures(t *testing.T) {
 		f := newFakeLimits()
 		l, _ := newTestLimits(f)
 		t.Cleanup(l.close)
+		l.asked = true
 
 		for _, res := range []limitsResult{{err: errors.New("a")}, {err: errors.New("b")}, {windows: weekly}, {err: errors.New("c")}} {
 			l.force()

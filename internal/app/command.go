@@ -50,6 +50,9 @@ func commandTable() []command {
 		{Command: Command{Name: "tasks", Summary: "list and stop background tasks"}, run: func(*Controller, context.Context, string) error {
 			return ErrShowTasks
 		}},
+		{Command: Command{Name: "usage", Summary: "show context, plan limits and cost"}, run: func(*Controller, context.Context, string) error {
+			return ErrShowUsage
+		}},
 		{Command: Command{Name: "quit", Summary: "exit kopi"}, run: func(*Controller, context.Context, string) error {
 			return ErrQuit
 		}},
