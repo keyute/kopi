@@ -260,13 +260,15 @@ func TestLimitsForceDuringAnEmptyProviderResolutionOwesNoRead(t *testing.T) {
 		f := newFakeLimits()
 		resolving, resolved := make(chan struct{}, 4), make(chan struct{})
 		var calls atomic.Int32
+		var provider atomic.Value
+		provider.Store("")
 		l := newLimits(f.read, func() string {
 			// Only the first resolution waits, so an extra one is counted, not stuck.
 			if calls.Add(1) == 1 {
 				resolving <- struct{}{}
 				<-resolved
 			}
-			return ""
+			return provider.Load().(string)
 		}, func(event.Event) {})
 		t.Cleanup(l.close)
 
@@ -278,6 +280,13 @@ func TestLimitsForceDuringAnEmptyProviderResolutionOwesNoRead(t *testing.T) {
 
 		assert.Equal(t, int32(1), calls.Load(), "no provider, so no read is owed and no second resolution")
 		assert.Empty(t, f.started)
+
+		provider.Store("codex")
+		l.observe(event.TurnEnd{})
+		assert.Equal(t, "codex", <-f.started)
+		f.release <- limitsResult{}
+		synctest.Wait()
+		assert.Empty(t, f.started, "the read is not followed by one owed from the force without a provider")
 	})
 }
 

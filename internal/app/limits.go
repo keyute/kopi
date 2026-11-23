@@ -64,7 +64,7 @@ func (l *limits) refresh() {
 		provider := l.provider()
 		if provider == "" {
 			l.mu.Lock()
-			l.running = false
+			l.running, l.owed = false, false
 			l.attempted = time.Time{}
 			l.mu.Unlock()
 			return
