@@ -211,6 +211,15 @@ func TestOptionalArgumentMenu(t *testing.T) {
 		press(m, enter)
 		assert.Equal(t, []string{"/plan open"}, c.submitted)
 
+		m, c = run(t, "/plan ")
+		press(m, down)
+		settle(m, keys(m, "o"))
+		settle(m, press(m, backspace))
+		assert.Equal(t, "/plan ", m.composer.value())
+		assert.Equal(t, []string{"  open        edit the plan file"}, menuText(m), "an edit unlights the row")
+		press(m, enter)
+		assert.Equal(t, []string{"/plan "}, c.submitted)
+
 		m, c = run(t, "/plan open")
 		assert.Equal(t, []string{"  open        edit the plan file"}, menuText(m), "typed in full")
 		press(m, tab)
@@ -230,6 +239,27 @@ func TestEnterSendsAFullArgumentWithTheCursorBeforeIt(t *testing.T) {
 
 		press(m, enter)
 		assert.Equal(t, []string{"/resume def456"}, c.submitted)
+	})
+}
+
+func TestUpAndDownLightAnUnlitMenu(t *testing.T) {
+	unlit := func(t *testing.T) *model {
+		m, _ := newMenuModel(t, 60, 30)
+		settle(m, keys(m, "/resume def456"))
+		for range len("def456") {
+			press(m, left)
+		}
+		require.Equal(t, []string{"  2h ago      fix the bug", "  1d ago      add tests"}, menuText(m))
+		return m
+	}
+	synctest.Test(t, func(t *testing.T) {
+		m := unlit(t)
+		press(m, down)
+		assert.Equal(t, []string{"❭ 2h ago      fix the bug", "  1d ago      add tests"}, menuText(m))
+
+		m = unlit(t)
+		press(m, up)
+		assert.Equal(t, []string{"  2h ago      fix the bug", "❭ 1d ago      add tests"}, menuText(m))
 	})
 }
 

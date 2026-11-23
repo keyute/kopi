@@ -218,17 +218,11 @@ func (m *model) menuKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 	km, mn := &m.keys, &m.menu
 	switch {
 	case key.Matches(k, km.menuUp):
-		if mn.lit() {
-			mn.sel = (mn.sel - 1 + len(mn.shown)) % len(mn.shown)
-		} else {
-			mn.sel = len(mn.shown) - 1
-		}
+		mn.sel = (mn.sel - 1 + len(mn.shown)) % len(mn.shown)
 		mn.picked = true
 	case key.Matches(k, km.menuDown):
 		if mn.lit() {
 			mn.sel = (mn.sel + 1) % len(mn.shown)
-		} else {
-			mn.sel = 0
 		}
 		mn.picked = true
 	case key.Matches(k, km.complete):
