@@ -1,6 +1,7 @@
 package pigruntime
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -215,7 +216,8 @@ func (s *Session) SetEffort(e Effort) error {
 // setModel switches the model, then asks again for the level the session was
 // given, which the old model may have clamped. A failure that leaves the
 // session on model, PiG's persisting of the change, wraps ErrModelNotSaved; it
-// returns before PiG applies the level, so asked is applied here.
+// returns before PiG applies a level, so asked, or the default when nothing was
+// asked, is applied here.
 func (s *Session) setModel(model *ai.Model) error {
 	s.effortMu.Lock()
 	defer s.effortMu.Unlock()
@@ -226,6 +228,10 @@ func (s *Session) setModel(model *ai.Model) error {
 			return err
 		}
 		err = fmt.Errorf("%w: %w", ErrModelNotSaved, err)
+		if lerr := s.inner.SetThinkingLevel(cmp.Or(s.asked, ai.ThinkingMedium)); lerr != nil {
+			slog.Warn("failed to restore the effort after the model change", "error", lerr)
+		}
+		return err
 	}
 	if s.asked != "" {
 		if lerr := s.inner.SetThinkingLevel(s.asked); lerr != nil {

@@ -29,9 +29,9 @@ type limits struct {
 	last      quota.Limits
 	attempted time.Time
 	// running is set while a read is in flight; failing while the reads since
-	// the last good one have failed. A zero attempted during a read means a
-	// forced read is owed when it ends.
-	running, failing, closed bool
+	// the last good one have failed; owed when a forced read was asked for
+	// during a read.
+	running, failing, owed, closed bool
 }
 
 func newLimits(read func(context.Context, string) ([]quota.Window, error), provider func() string, publish func(event.Event)) *limits {
@@ -80,7 +80,11 @@ func (l *limits) force() {
 		return
 	}
 	l.mu.Lock()
-	l.attempted = time.Time{}
+	if l.running {
+		l.owed = true
+	} else {
+		l.attempted = time.Time{}
+	}
 	l.mu.Unlock()
 	l.refresh()
 }
@@ -88,7 +92,9 @@ func (l *limits) force() {
 func (l *limits) finish(provider string, windows []quota.Window, err error) {
 	l.mu.Lock()
 	l.running = false
-	if l.attempted.IsZero() {
+	if l.owed {
+		l.owed = false
+		l.attempted = time.Time{}
 		defer l.refresh()
 	}
 	if l.ctx.Err() != nil {

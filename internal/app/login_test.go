@@ -223,6 +223,8 @@ func TestLoginRefusals(t *testing.T) {
 	assert.ErrorIs(t, err, ErrLoggingIn)
 	_, err = h.c.Submit(t.Context(), Main, "/resume some-id")
 	assert.ErrorIs(t, err, ErrLoggingIn)
+	_, err = h.c.Submit(t.Context(), Main, "/model "+fauxProvider+"/faux-1")
+	assert.ErrorIs(t, err, ErrLoggingIn)
 
 	h.c.Interrupt(Main)
 	wait(t, run.done)

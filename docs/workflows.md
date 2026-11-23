@@ -36,7 +36,7 @@ A workflow is a JavaScript script the main agent writes to start agents and comb
 
 | Key | Meaning |
 | --- | --- |
-| `workflows.model` | `provider/id` of the model of workflow agents without a definition `model`; default: the session's model. Checked at start only in the fullscreen interface with no rule denying `Workflow` |
+| `workflows.model` | `provider/id` of the model of workflow agents without a definition `model`; default: the session's model. A value that is not `provider/id` fails at start in every mode; its model and credential are checked only in the fullscreen interface with no rule denying `Workflow` |
 | `workflows.maxWorkflows` | How many workflows run at once, default 4, at least 1; a further `Workflow` call is refused with an error naming the limit |
 | `workflows.maxAgents` | How many agents of one workflow run at once, default 16, at least 1; the rest wait |
 

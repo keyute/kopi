@@ -133,7 +133,10 @@ func (c *Controller) modelProvider() string {
 // withLoginHint is err, a missing credential of the session model's provider
 // or, with no model yet, of every provider, pointing at /login.
 func (c *Controller) withLoginHint(err error) error {
-	provider := cmp.Or(c.modelProvider(), "<provider>")
+	return loginHint(err, cmp.Or(c.modelProvider(), "<provider>"))
+}
+
+func loginHint(err error, provider string) error {
 	return fmt.Errorf("%w: run /login %s", err, provider)
 }
 

@@ -28,7 +28,8 @@ import (
 // telemetry off is what stops PiG attributing requests to itself. The default
 // thinking level is PiG's own at open; set, it is also what PiG's
 // thinkingLevelForModelSwitch picks, which otherwise carries over the level
-// the old model clamped (PiG v0.7.0; recheck on a bump).
+// the old model clamped (PiG v0.7.0; recheck on a bump). Session.setModel
+// applies the same default when PiG returned before setting a level.
 const pigSettings = `{"retry":{"enabled":true},"compaction":{"enabled":true},"cacheWarming":"off","defaultThinkingLevel":"medium","steeringMode":"all","enableInstallTelemetry":false}`
 
 type Options struct {
@@ -344,7 +345,7 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	}
 	s := &Session{inner: sess}
 	// On resume asked is PiG's restored level, already clamped to the model the
-	// transcript last ran on, so a more capable model later keeps that level.
+	// session is reopened on, so a more capable model later keeps that level.
 	switch {
 	case o.Effort != DefaultEffort:
 		s.asked = o.Effort.thinkingLevel()

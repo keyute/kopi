@@ -728,7 +728,7 @@ func TestBusyRefusalKeepsDraftAndFlashes(t *testing.T) {
 
 	assert.NotNil(t, cmd, "the flash expires")
 	assert.Equal(t, "more", m.composer.value())
-	assert.Contains(t, statusText(m), "busy opening a session")
+	assert.Contains(t, statusText(m), "busy switching the session or model")
 	assert.Empty(t, body(m))
 }
 

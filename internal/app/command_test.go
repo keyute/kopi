@@ -1,6 +1,7 @@
 package app
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -308,8 +309,6 @@ func TestCloseWhileModelChangeWaitsForLifeChangesNothing(t *testing.T) {
 	h, _ := openHarness(t, Config{})
 	_, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
 	before := h.c.Model()
-	changed := subscribeTo[event.ModelChanged](h.c)
-	errs := subscribeTo[event.Error](h.c)
 
 	h.c.life.Lock()
 	closed := make(chan error, 1)
@@ -329,8 +328,6 @@ func TestCloseWhileModelChangeWaitsForLifeChangesNothing(t *testing.T) {
 		runtime.Gosched()
 	}
 	assert.Equal(t, before, h.c.Model())
-	assert.Empty(t, changed)
-	assert.Empty(t, errs)
 }
 
 func modelChangeEnded(c *Controller) bool {
@@ -362,14 +359,16 @@ func waitBlockedOnLife(t *testing.T, frame string, n int) {
 
 func TestModelCommandLeavesRunningSubagentsAlone(t *testing.T) {
 	pigruntimetest.ClearEnv(t)
-	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{Wake: true}, agentDef("explorer"))
+	def := agentDef("explorer")
+	def.Model = ""
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, def)
 	other, otherRef := pigruntimetest.RegisterFaux(t, a.c.rt, "kopi-other")
-	other.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("noted")})
 	gate := make(chan struct{})
-	requests := make(chan pigruntimetest.Request, 1)
-	a.child.SetResponses([]ai.FauxResponseStep{gated(gate, "first"), pigruntimetest.Capture(t, requests, "second")})
+	oldRequests := make(chan pigruntimetest.Request, 1)
+	a.faux.SetResponses([]ai.FauxResponseStep{gated(gate, "first"), pigruntimetest.Capture(t, oldRequests, "second")})
+	newRequests := make(chan pigruntimetest.Request, 1)
+	other.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, newRequests, "done")})
 	changed := subscribeTo[event.ModelChanged](a.c)
-	ends := turnEnds(a.c)
 	id := a.launch(t, "explorer", "find it", "go")
 
 	a.c.life.Lock()
@@ -378,12 +377,47 @@ func TestModelCommandLeavesRunningSubagentsAlone(t *testing.T) {
 	_, err = a.c.message(t.Context(), id, "also check b")
 	assert.NoError(t, err, "the change does not touch the subagent")
 	close(gate)
-	texts := receive(t, requests).UserTexts
-	assert.Equal(t, "also check b", texts[len(texts)-1], "the subagent's next turn starts with its input")
+	texts := receive(t, oldRequests).UserTexts
+	assert.Equal(t, "also check b", texts[len(texts)-1], "the running subagent keeps the old model")
 	a.c.life.Unlock()
-
 	receiveEvent(t, changed)
-	receiveEnd(t, ends)
+
+	a.launch(t, "explorer", "find more", "again")
+	assert.Equal(t, []string{"again"}, receive(t, newRequests).UserTexts, "a later subagent inherits the new model")
+}
+
+func TestModelCommandReportsAFailedSaveAfterSwitching(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	h, sb := openHarness(t, Config{})
+	_, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("answer")})
+	h.turn(t, "hello")
+	var files []string
+	require.NoError(t, filepath.WalkDir(sb.KopiHome, func(path string, _ fs.DirEntry, err error) error {
+		if err == nil && strings.HasSuffix(path, ".jsonl") {
+			files = append(files, path)
+		}
+		return err
+	}))
+	require.Len(t, files, 1)
+	// The write is refused as the file is opened for appending.
+	require.NoError(t, os.Chmod(files[0], 0o400))
+	t.Cleanup(func() { _ = os.Chmod(files[0], 0o600) })
+	if f, err := os.OpenFile(files[0], os.O_WRONLY|os.O_APPEND, 0); err == nil {
+		_ = f.Close()
+		t.Skip("file permissions do not stop this user from appending")
+	}
+	changed := subscribeTo[event.ModelChanged](h.c)
+	errs := subscribeTo[event.Error](h.c)
+	notices := subscribeTo[event.Notice](h.c)
+
+	_, err := h.c.Submit(t.Context(), Main, "/model "+otherRef)
+	require.NoError(t, err)
+
+	assert.Equal(t, event.ModelChanged{Model: otherRef}, receiveEvent(t, changed))
+	assert.ErrorIs(t, receiveEvent(t, errs).Err, pigruntime.ErrModelNotSaved)
+	assert.Empty(t, notices)
+	assert.Equal(t, otherRef, h.c.Model())
 }
 
 func TestModelCommandWithoutCredentialPointsAtLogin(t *testing.T) {

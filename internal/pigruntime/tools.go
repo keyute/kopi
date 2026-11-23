@@ -55,20 +55,17 @@ func (s *Session) SetCallable(name string, on bool) {
 }
 
 func (s *Session) setCallable(name string, on bool) bool {
+	if on {
+		return s.addTools([]string{name})
+	}
 	s.toolsMu.Lock()
 	defer s.toolsMu.Unlock()
 	active := s.inner.ActiveToolNames()
-	if slices.Contains(active, name) == on {
+	if !slices.Contains(active, name) {
 		return false
 	}
-	if on {
-		active = append(active, name)
-	} else {
-		active = slices.DeleteFunc(slices.Clone(active), func(n string) bool { return n == name })
-	}
-	// PiG's SetActiveToolsByName ignores names the session does not have.
-	s.inner.SetActiveToolsByName(active)
-	return slices.Contains(s.inner.ActiveToolNames(), name) == on
+	s.inner.SetActiveToolsByName(slices.DeleteFunc(slices.Clone(active), func(n string) bool { return n == name }))
+	return !slices.Contains(s.inner.ActiveToolNames(), name)
 }
 
 // Callable reports whether the named tool is callable from the session's next

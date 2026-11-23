@@ -203,7 +203,7 @@ func (c *Controller) changeModel(ctx context.Context, sess *pigruntime.Session, 
 	saveErr := c.rt.SetModel(ctx, sess, ref)
 	if saveErr != nil && !errors.Is(saveErr, pigruntime.ErrModelNotSaved) {
 		if errors.Is(saveErr, pigruntime.ErrNoCredential) {
-			return fmt.Errorf("%w: run /login %s", saveErr, provider)
+			return loginHint(saveErr, provider)
 		}
 		return saveErr
 	}
