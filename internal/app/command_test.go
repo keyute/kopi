@@ -215,6 +215,10 @@ func TestModelCommandFailures(t *testing.T) {
 	_, err := h.c.Submit(t.Context(), Main, "/model")
 	assert.ErrorIs(t, err, ErrMissingArgument)
 
+	_, err = h.c.Submit(t.Context(), Main, "/model sonnet")
+	assert.ErrorIs(t, err, ErrUnknownArgument)
+	assert.Equal(t, before, h.c.Model())
+
 	_, err = h.c.Submit(t.Context(), Main, "/model "+fauxProvider+"/missing")
 	assert.ErrorIs(t, err, pigruntime.ErrUnknownModel)
 	assert.Equal(t, before, h.c.Model())
@@ -229,6 +233,19 @@ func TestModelCommandFailures(t *testing.T) {
 	assert.Equal(t, before, h.c.Model())
 	close(release)
 	wait(t, w.Done())
+}
+
+func TestModelCommandWithoutCredentialPointsAtLogin(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	h, _ := openHarness(t, Config{})
+	pigruntimetest.RegisterLoginProvider(t, h.c.rt, "kopi-login")
+	before := h.c.Model()
+
+	_, err := h.c.Submit(t.Context(), Main, "/model kopi-login/login-1")
+
+	assert.ErrorIs(t, err, pigruntime.ErrNoCredential)
+	assert.EqualError(t, err, `failed to change model to "kopi-login/login-1": provider "kopi-login": no credential: run /login kopi-login`)
+	assert.Equal(t, before, h.c.Model())
 }
 
 func TestArgumentsListsAvailableModelsForModel(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/pigruntime"
 )
@@ -172,16 +173,39 @@ func (c *Controller) modelCommand(ctx context.Context, ref string) error {
 	if ref == "" {
 		return fmt.Errorf("%w: /model needs a provider/id", ErrMissingArgument)
 	}
+	provider, _, err := config.ParseModelRef(ref)
+	if err != nil {
+		return fmt.Errorf("%w: /model: %w", ErrUnknownArgument, err)
+	}
+	// Checked before life, which a switch holds while it joins old work: the TUI
+	// submits on its event loop.
+	c.mu.Lock()
+	switch {
+	case c.closed:
+		c.mu.Unlock()
+		return ErrNoSession
+	case c.switching != nil:
+		c.mu.Unlock()
+		return ErrBusy
+	}
+	c.mu.Unlock()
+	// Held so that it cannot touch the runtime after Close.
+	c.life.Lock()
+	defer c.life.Unlock()
 	sess, err := c.mainForModel()
 	if err != nil {
 		return err
 	}
 	if err := c.rt.SetModel(ctx, sess, ref); err != nil {
+		if errors.Is(err, pigruntime.ErrNoCredential) {
+			return fmt.Errorf("%w: run /login %s", err, provider)
+		}
 		return err
 	}
 	c.mu.Lock()
 	c.model = ref
 	c.mu.Unlock()
+	c.offerSearch(sess)
 	c.limits.force()
 	c.relay.emit(event.ModelChanged{Model: ref})
 	c.relay.emit(event.Notice{Text: fmt.Sprintf("Using %s until kopi exits. Set \"model\" in %s to keep it.", ref, c.cfg.ConfigFile)})

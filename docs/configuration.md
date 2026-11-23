@@ -58,7 +58,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 ## `smallModel`
 
 - `provider/id` of the model that answers `WebFetch` and `WebSearch` calls and writes the session title shown in the terminal tab, see [terminal](usage.md#terminal).
-- Unset, `WebFetch`, `WebSearch` and session titles all use the session model and follow [`/model`](usage.md#commands), so set it to a cheaper model. Whether `WebSearch` is offered is decided by the model Kopi started with; after `/model` to a model without hosted search its calls fail.
+- Unset, `WebFetch`, `WebSearch` and session titles all use the session model and follow [`/model`](usage.md#commands), so set it to a cheaper model. `WebSearch` is offered while that model has hosted search, decided when a session opens and on `/model`; a running subagent or workflow agent keeps what it opened with.
 - A wrong value, an unknown model or one whose provider has no credential fails at start.
 - In the fullscreen interface, a `smallModel` that shares the provider of a configured `model` without a credential gets the first-run login instead when that provider offers a sign-in or an API key and the id is one Kopi knows; an unknown id fails at start with the login hint.
 

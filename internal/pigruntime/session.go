@@ -33,6 +33,10 @@ type Session struct {
 	nextID      int
 	// toolsMu serializes LoadTools' read-modify-write of the active tools.
 	toolsMu sync.Mutex
+	// askedMu guards asked, the level last asked for, before PiG clamped it to
+	// the model; empty when none was. A model switch applies it again.
+	askedMu sync.Mutex
+	asked   ai.ModelThinkingLevel
 }
 
 type listener struct {
@@ -179,6 +183,27 @@ func (s *Session) Effort() string {
 func (s *Session) SetEffort(e Effort) error {
 	if err := s.inner.SetThinkingLevel(e.thinkingLevel()); err != nil {
 		return fmt.Errorf("failed to set effort: %w", err)
+	}
+	s.askedMu.Lock()
+	s.asked = e.thinkingLevel()
+	s.askedMu.Unlock()
+	return nil
+}
+
+// setModel switches the model, then asks again for the level the session was
+// given, which the old model may have clamped.
+func (s *Session) setModel(model *ai.Model) error {
+	if err := s.inner.SetModel(model); err != nil {
+		return err
+	}
+	s.askedMu.Lock()
+	asked := s.asked
+	s.askedMu.Unlock()
+	if asked == "" {
+		return nil
+	}
+	if err := s.inner.SetThinkingLevel(asked); err != nil {
+		slog.Warn("failed to restore the effort after the model change", "error", err)
 	}
 	return nil
 }

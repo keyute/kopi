@@ -539,7 +539,7 @@ func TestRootRejectsInvalidAgentDefinition(t *testing.T) {
 }
 
 func TestRootAgentModelFailsAtStart(t *testing.T) {
-	for _, model := range []string{"nosuch/model-1", "malformed"} {
+	for _, model := range []string{"nosuch/model-1", "malformed", "openai/"} {
 		t.Run(model, func(t *testing.T) {
 			e := newTestEnv(t)
 			server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
@@ -552,7 +552,8 @@ func TestRootAgentModelFailsAtStart(t *testing.T) {
 			if model == "nosuch/model-1" {
 				assert.EqualError(t, err, fmt.Sprintf("failed to use the model in %s: unknown model %q: declare the model in %s", path, model, filepath.Join(e.agentDir, "models.json")))
 			} else {
-				assert.Contains(t, err.Error(), fmt.Sprintf("failed to use the model in %s", path))
+				assert.ErrorIs(t, err, config.ErrInvalidModel)
+				assert.EqualError(t, err, fmt.Sprintf("failed to use the model in %s: invalid model: want provider/id: %q", path, model))
 			}
 			assert.Empty(t, server.requests)
 		})

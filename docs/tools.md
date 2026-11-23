@@ -163,7 +163,7 @@
 - Has `smallModel`, else the session model, search the web with its provider's built-in search and answer the call's query.
 - The main model gets the answer followed by a `Sources:` list of up to 20 `- [title](url)` lines (`- url` when the page has no title), or `Sources: none`.
 - The list is the pages the answer cites, or the pages the provider consulted when it cited none, not the pages themselves.
-- The tool exists only when the model used, as resolved at start, has an API protocol with hosted search: OpenAI Responses (also Azure and Codex), Anthropic Messages and Google Generative AI.
+- The tool is offered only while the model used has an API protocol with hosted search (OpenAI Responses, also Azure and Codex, Anthropic Messages and Google Generative AI), decided when a session opens and, for the main session, on `/model`; a running subagent or workflow agent keeps what it opened with.
 - Asks by default, in both modes: see [precedence](permissions.md#precedence).
 
 ## Limitations

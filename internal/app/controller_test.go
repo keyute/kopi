@@ -1987,9 +1987,27 @@ func TestWebSearchFollowsModelCommandWhenSmallModelIsUnset(t *testing.T) {
 	}
 }
 
-func TestWebSearchIsAbsentForANonSearchingModel(t *testing.T) {
+func TestWebSearchIsNotCallableForANonSearchingModel(t *testing.T) {
 	h := newHarness(t, searchSandbox(t), Config{})
-	assert.Equal(t, []string{"AskUserQuestion", "Workflow"}, toolNames(h.c.tools))
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	assert.False(t, h.c.main.sess.Callable("WebSearch"))
+}
+
+func TestWebSearchCallableFollowsModelCommand(t *testing.T) {
+	h := newHarness(t, searchSandbox(t), Config{Model: "kopi-search/search-1"})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	require.True(t, h.c.main.sess.Callable("WebSearch"))
+	before := len(ofType[event.ToolsChanged](h.rec.all()))
+
+	for i, tc := range []struct {
+		model string
+		want  bool
+	}{{"kopi-faux/faux-1", false}, {"kopi-search/search-1", true}} {
+		_, err := h.c.Submit(t.Context(), Main, "/model "+tc.model)
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, h.c.main.sess.Callable("WebSearch"), tc.model)
+		assert.Len(t, ofType[event.ToolsChanged](h.rec.all()), before+i+1, tc.model)
+	}
 }
 
 func TestWebSearchIsAbsentWhenRulesRemoveIt(t *testing.T) {
@@ -2391,7 +2409,7 @@ func TestBareDenyRemovesServerTool(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read", "AskUserQuestion", "ToolSearch"}, req.ToolNames)
-	assert.Equal(t, []string{"Read", "AskUserQuestion", "ToolSearch", kept.Name, "Workflow"}, toolNames(h.c.tools))
+	assert.Equal(t, []string{"Read", "AskUserQuestion", "WebSearch", "ToolSearch", kept.Name, "Workflow"}, toolNames(h.c.tools))
 	assert.NotContains(t, req.SystemPrompt, denied.Name)
 }
 
@@ -2467,8 +2485,8 @@ func TestOpenDefersServerTools(t *testing.T) {
 		Servers: servers(pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{a, b}}),
 	})
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
-	require.Equal(t, []string{"Read", "AskUserQuestion", "ToolSearch", a.Name, b.Name, "Workflow"}, toolNames(h.c.tools))
-	for i, deferred := range []bool{false, false, false, true, true} {
+	require.Equal(t, []string{"Read", "AskUserQuestion", "WebSearch", "ToolSearch", a.Name, b.Name, "Workflow"}, toolNames(h.c.tools))
+	for i, deferred := range []bool{false, false, true, false, true, true} {
 		assert.Equal(t, deferred, h.c.tools[i].Deferred, h.c.tools[i].Name)
 	}
 	requests := make(chan pigruntimetest.Request, 1)
@@ -2490,7 +2508,7 @@ func TestNoToolSearchWithoutServerTools(t *testing.T) {
 	read := readTool(t, sb)
 	h := newHarness(t, sb, Config{Tools: []tool.Tool{read}})
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
-	assert.Equal(t, []string{"Read", "AskUserQuestion", "Workflow"}, toolNames(h.c.tools))
+	assert.Equal(t, []string{"Read", "AskUserQuestion", "WebSearch", "Workflow"}, toolNames(h.c.tools))
 	assert.Contains(t, joinPrompt(h.c.prompt), "\nTools available: Read, AskUserQuestion.\n")
 	assert.NotContains(t, joinPrompt(h.c.prompt), "deferred")
 
@@ -2504,7 +2522,7 @@ func TestNoToolSearchWithoutServerTools(t *testing.T) {
 		Servers: servers(pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{denied}}),
 	})
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
-	assert.Equal(t, []string{"Read", "AskUserQuestion", "Workflow"}, toolNames(h.c.tools))
+	assert.Equal(t, []string{"Read", "AskUserQuestion", "WebSearch", "Workflow"}, toolNames(h.c.tools))
 	assert.Contains(t, joinPrompt(h.c.prompt), "\nTools available: Read, AskUserQuestion.\n")
 	assert.NotContains(t, joinPrompt(h.c.prompt), "deferred")
 	assert.NotContains(t, joinPrompt(h.c.prompt), "MCP server s tools")

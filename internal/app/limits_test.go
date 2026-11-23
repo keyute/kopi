@@ -231,6 +231,30 @@ func TestLimitsForceBypassesTheThrottle(t *testing.T) {
 	})
 }
 
+func TestLimitsForceDuringAReadReadsAgainForTheNewProvider(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newFakeLimits()
+		var provider atomic.Value
+		provider.Store("codex")
+		l := newLimits(f.read, func() string { return provider.Load().(string) }, func(event.Event) {})
+		t.Cleanup(l.close)
+
+		l.observe(event.TurnEnd{})
+		synctest.Wait()
+		require.Equal(t, "codex", <-f.started)
+
+		provider.Store("xai")
+		l.force()
+		synctest.Wait()
+		assert.Empty(t, f.started, "one read in flight")
+
+		f.release <- limitsResult{}
+		synctest.Wait()
+		assert.Equal(t, "xai", <-f.started)
+		f.release <- limitsResult{}
+	})
+}
+
 func TestLimitsFailureOfAnotherProviderDropsTheLastReading(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newFakeLimits()

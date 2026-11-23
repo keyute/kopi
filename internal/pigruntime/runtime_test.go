@@ -1219,6 +1219,72 @@ func TestSetModelSwitchesSessionAndRejectsUnknown(t *testing.T) {
 	assert.Equal(t, otherModel, s.inner.Model().ProviderMeta.ProviderID+"/"+s.inner.Model().ID)
 }
 
+// openOn opens a session on model, resuming resumeID when set.
+func openOn(t *testing.T, r *Runtime, model string, effort Effort, resumeID string) *Session {
+	t.Helper()
+	s, err := r.Open(t.Context(), OpenOptions{Model: model, Effort: effort, ResumeID: resumeID, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, s.Close(context.Background())) })
+	return s
+}
+
+func registerThinker(t *testing.T, r *Runtime) (*ai.FauxProviderHandle, string) {
+	t.Helper()
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "faux-thinker", Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, r.RegisterProvider(thinker.Provider()))
+	return thinker, "faux-thinker/thinker"
+}
+
+func TestSetModelKeepsTheEffortAskedFor(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	_, thinker := registerThinker(t, r)
+	for name, s := range map[string]*Session{
+		"at open":   openOn(t, r, thinker, HighEffort, ""),
+		"SetEffort": openOn(t, r, thinker, LowEffort, ""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if name == "SetEffort" {
+				require.NoError(t, s.SetEffort(HighEffort))
+			}
+			require.NoError(t, r.SetModel(t.Context(), s, fauxModel))
+			assert.Empty(t, s.Effort())
+
+			require.NoError(t, r.SetModel(t.Context(), s, thinker))
+			assert.Equal(t, "high", s.Effort())
+		})
+	}
+}
+
+func TestSetModelGivesAnUnaskedSessionTheNewModelsDefault(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	_, thinker := registerThinker(t, r)
+	s := openOn(t, r, fauxModel, DefaultEffort, "")
+
+	require.NoError(t, r.SetModel(t.Context(), s, thinker))
+
+	assert.Equal(t, "medium", s.Effort())
+	assert.Equal(t, openOn(t, r, thinker, DefaultEffort, "").Effort(), s.Effort())
+}
+
+func TestSetModelKeepsAResumedSessionsEffort(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	provider, thinker := registerThinker(t, r)
+	saved := openOn(t, r, thinker, LowEffort, "")
+	require.NoError(t, saved.SetEffort(HighEffort))
+	provider.SetResponses([]ai.FauxResponseStep{reply("noted")})
+	_, err := saved.Send(t.Context(), Prompt{Text: "hello"}, nil, nil)
+	require.NoError(t, err)
+
+	resumed := openOn(t, r, thinker, DefaultEffort, saved.ID())
+	require.NoError(t, r.SetModel(t.Context(), resumed, fauxModel))
+	require.NoError(t, r.SetModel(t.Context(), resumed, thinker))
+	assert.Equal(t, "high", resumed.Effort())
+
+	onPlain := openOn(t, r, fauxModel, DefaultEffort, saved.ID())
+	require.NoError(t, r.SetModel(t.Context(), onPlain, thinker))
+	assert.Equal(t, "medium", onPlain.Effort())
+}
+
 func TestModelsListsCredentialedProvidersSorted(t *testing.T) {
 	clearEnv(t)
 	sb := newSandbox(t)

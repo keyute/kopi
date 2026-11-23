@@ -31,16 +31,18 @@ Commands in the fullscreen interface:
 | `/plan` | Switch to plan mode |
 | `/plan open` | Open the session's [plan file](tools.md#exitplanmode) in `$VISUAL`, else `$EDITOR` |
 | `/execute` | Switch to execute mode |
-| `/effort <level>` | Set the main agent's reasoning effort for this session; never saved to `config.json`. A resumed session keeps the level it was set to |
+| `/effort <level>` | Set the main agent's reasoning effort for this session; never saved to `config.json`. A resumed session keeps the level it was set to, and `/model` keeps the level |
 | `/new` | Start a new session |
 | `/resume <id>` | Resume a session |
-| `/model <provider/id>` | Switch the model until Kopi exits; `config.json` is untouched and `/new` and `/resume` keep the choice, and running subagents keep their model. A running workflow's later `agent()` calls, and the `WebFetch`, `WebSearch` and classifier calls of running agents, use the new model when no key pins one. Refused while a turn runs |
+| `/model <provider/id>` | Switch the model until Kopi exits; `config.json` is untouched and `/new` and `/resume` keep the choice, and running subagents keep their model. A running workflow's later `agent()` calls, and the `WebFetch`, `WebSearch` and classifier calls of running agents, use the new model when no key pins one. The effort set with `/effort` carries over, clamped to the new model's levels, `medium` when none was set; `WebSearch` is offered or withdrawn with the new model's hosted search when `smallModel` is unset. Refused while a turn runs, and for a provider without a credential, with a pointer to `/login` |
 | `/login <provider>` | Log in to a provider |
 | `/logout <provider>` | Remove a provider's stored credential |
 | `/tasks` | List background tasks, [subagents](subagents.md) and [workflows](workflows.md), show one's output, open a subagent's view or a workflow's [progress dialog](workflows.md#progress-dialog) and stop them |
 | `/skill:<name>` | Load a skill with the prompt ([skills](skills.md)) |
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
+
+- A session whose transcript was last run on a model that does not reason, resumed on one that does, comes back at effort `off`; `/model` keeps that level like one set with `/effort`, and `/effort <level>` sets it again.
 
 ## Keys
 

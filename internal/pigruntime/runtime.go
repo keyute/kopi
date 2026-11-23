@@ -25,8 +25,11 @@ import (
 
 // pigSettings is unmarshalled rather than built because the nested settings
 // types live in a PiG internal package and cannot be named here. Install
-// telemetry off is what stops PiG attributing requests to itself.
-const pigSettings = `{"retry":{"enabled":true},"compaction":{"enabled":true},"cacheWarming":"off","steeringMode":"all","enableInstallTelemetry":false}`
+// telemetry off is what stops PiG attributing requests to itself. The default
+// thinking level is PiG's own at open; set, it is also what PiG's
+// thinkingLevelForModelSwitch picks, which otherwise carries over the level
+// the old model clamped (PiG v0.7.0; recheck on a bump).
+const pigSettings = `{"retry":{"enabled":true},"compaction":{"enabled":true},"cacheWarming":"off","defaultThinkingLevel":"medium","steeringMode":"all","enableInstallTelemetry":false}`
 
 type Options struct {
 	// Home is Kopi's home; PiG's own home is pinned beneath it.
@@ -53,6 +56,10 @@ type Runtime struct {
 	used        map[string]struct{}
 	stopRefresh context.CancelFunc
 	refreshDone chan struct{}
+	// refreshCtx lives until stopRefresh; refreshLateLocked derives from it.
+	// lateRefreshes counts the refreshes of providers first used after start.
+	refreshCtx    context.Context
+	lateRefreshes sync.WaitGroup
 	// openURL opens a sign-in URL in the user's browser.
 	openURL func(string) error
 	// limitsClient sends the plan-limit requests.
@@ -152,7 +159,7 @@ type OpenOptions struct {
 	ResumeID string
 	// Continue resumes the most recent session of the workspace.
 	Continue bool
-	// Effort is how much the model reasons; DefaultEffort keeps the model's default.
+	// Effort is how much the model reasons; DefaultEffort is medium, clamped to the model.
 	Effort Effort
 	// Parent is the session this one works for; the transcript is saved beside the parent's, where Sessions does not list it.
 	Parent       *Session
@@ -336,7 +343,14 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 			return slices.Concat(messages[:at], repair, messages[at:]), nil
 		})
 	}
-	return &Session{inner: sess}, nil
+	s := &Session{inner: sess}
+	switch {
+	case o.Effort != DefaultEffort:
+		s.asked = o.Effort.thinkingLevel()
+	case (o.ResumeID != "" || o.Continue) && reasons(sess.AvailableThinkingLevels()):
+		s.asked = sess.ThinkingLevel()
+	}
+	return s, nil
 }
 
 // DefaultModel returns the "provider/id" a session uses when none is
@@ -408,7 +422,7 @@ func (r *Runtime) SetModel(ctx context.Context, s *Session, ref string) error {
 	if err != nil {
 		return fmt.Errorf("failed to change model to %q: %w", ref, err)
 	}
-	if err := s.inner.SetModel(model); err != nil {
+	if err := s.setModel(model); err != nil {
 		return fmt.Errorf("failed to change model to %q: %w", ref, reword(err))
 	}
 	return nil
@@ -463,7 +477,11 @@ func (r *Runtime) usableModel(ctx context.Context, ref string) (*ai.Model, error
 		return nil, fmt.Errorf("provider %q: %w", provider, ErrNoCredential)
 	}
 	r.refreshMu.Lock()
+	_, was := r.used[provider]
 	r.used[provider] = struct{}{}
+	if !was && model != nil {
+		r.refreshLateLocked(provider)
+	}
 	r.refreshMu.Unlock()
 	if model != nil {
 		return model, nil
@@ -503,11 +521,14 @@ func (r *Runtime) Close() {
 	// close then joins any store write it left (PiG v0.7.0; recheck on a bump).
 	r.refreshMu.Lock()
 	stop, done := r.stopRefresh, r.refreshDone
-	r.refreshMu.Unlock()
 	if stop != nil {
 		stop()
+	}
+	r.refreshMu.Unlock()
+	if stop != nil {
 		<-done
 	}
+	r.lateRefreshes.Wait()
 	if err := r.rt.Close(); err != nil {
 		slog.Warn("failed to close pig runtime", "error", err)
 	}

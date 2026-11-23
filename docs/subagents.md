@@ -26,7 +26,7 @@ Report file paths and line numbers.
 | `name` | Required, one line |
 | `description` | Required, one line; the main agent reads it to choose a subagent |
 | `model` | `provider/id`; default: the session's model |
-| `effort` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`; default: the model's own |
+| `effort` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`; default `medium`, or the nearest level the model has |
 | `tools` | List of tool names; default: every tool a subagent can have. MCP tools go by their full `mcp__…` name |
 | `mode` | `plan` keeps the subagent in plan mode whatever mode the session is in; omitted, it follows the session's mode |
 | `instructions` | `false` leaves the instruction files out of the subagent's prompt; default `true` |

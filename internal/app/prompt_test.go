@@ -207,3 +207,20 @@ func TestWorkflowAgentPreambleReplacesTheSubagentSentence(t *testing.T) {
 	assert.NotContains(t, typed[0].Text, "subagent")
 	assert.Contains(t, typed[0].Text, "\nYou stay in plan mode, whatever mode the user is in.\n")
 }
+
+func TestPromptLeavesOutADeferredToolWithoutToolSearch(t *testing.T) {
+	deferred := tool.Tool{Name: "Probe", Capability: policy.Read, Deferred: true}
+
+	only := joinPrompt(buildPrompt("/w", []tool.Tool{deferred}, nil, nil, false, nil, false))
+	assert.NotContains(t, only, "Probe")
+	assert.NotContains(t, only, "deferred")
+	assert.NotContains(t, only, "No tools are available.")
+	assert.NotContains(t, only, "Tools available")
+
+	with := joinPrompt(buildPrompt("/w", []tool.Tool{{Name: "Read", Capability: policy.Read}, deferred}, nil, nil, false, nil, false))
+	assert.Contains(t, with, "Tools available: Read.")
+	assert.NotContains(t, with, "Probe")
+	assert.NotContains(t, with, "deferred")
+
+	assert.Contains(t, joinPrompt(buildPrompt("/w", nil, nil, nil, false, nil, false)), "No tools are available.")
+}

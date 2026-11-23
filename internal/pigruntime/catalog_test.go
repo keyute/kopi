@@ -507,3 +507,70 @@ func TestCloseStopsHeldRefresh(t *testing.T) {
 		t.Fatal("refresh still running after Close")
 	}
 }
+
+func TestProviderFirstUsedAfterStartIsRefreshed(t *testing.T) {
+	_, s, r := catalogSetup(t, http.StatusOK, "catalog-new-1")
+	r.StartModelListRefresh()
+	<-r.refreshDone
+	require.Empty(t, s.requests)
+
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}))
+	r.lateRefreshes.Wait()
+
+	assert.Len(t, s.requests, 1)
+}
+
+func TestForcedFetchDuringLateRefreshResolves(t *testing.T) {
+	_, s, r := catalogSetup(t, http.StatusOK, "catalog-new-1")
+	r.StartModelListRefresh()
+	<-r.refreshDone
+	release := s.gateRequests()
+	defer release()
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}))
+	<-s.requests
+	r.refreshMu.Lock()
+	assert.Contains(t, r.fetching, catalogProvider)
+	r.refreshMu.Unlock()
+	result := make(chan error, 1)
+	go func() { result <- r.Check(t.Context(), OpenOptions{Model: catalogModel}) }()
+	release()
+
+	require.NoError(t, <-result)
+	<-s.requests
+	r.lateRefreshes.Wait()
+	assert.Empty(t, s.requests)
+}
+
+func TestLateRefreshIsSkippedAfterForcedFetch(t *testing.T) {
+	_, s, r := catalogSetup(t, http.StatusOK, "catalog-new-1")
+	r.StartModelListRefresh()
+	<-r.refreshDone
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogModel}))
+	require.Len(t, s.requests, 1)
+	drainRequests(s)
+
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}))
+	r.lateRefreshes.Wait()
+
+	assert.Empty(t, s.requests)
+}
+
+func TestCloseStopsHeldLateRefresh(t *testing.T) {
+	sb := newSandbox(t)
+	withMistralKey(t, sb)
+	probe := newCatalogRuntime(t, sb, "http://127.0.0.1:1")
+	s := newCatalogServer(t, bundledMistral(t, probe), http.StatusOK, "catalog-new-1")
+	s.holdRequests(true)
+	r, err := New(t.Context(), Options{Home: sb.kopiHome, AgentDir: sb.agentDir, CWD: sb.ws, catalogURL: s.URL})
+	require.NoError(t, err)
+	r.StartModelListRefresh()
+	<-r.refreshDone
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}))
+	<-s.requests
+
+	r.Close()
+
+	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
+	assert.Empty(t, r.fetching)
+}

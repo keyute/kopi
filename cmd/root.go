@@ -461,6 +461,9 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		if def.Model == "" {
 			continue
 		}
+		if _, _, err := config.ParseModelRef(def.Model); err != nil {
+			return fmt.Errorf("failed to use the model in %s: %w", def.Path, err)
+		}
 		if err := checkModel(def.Model, ""); err != nil {
 			return fmt.Errorf("failed to use the model in %s: %w", def.Path, err)
 		}

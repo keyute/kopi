@@ -53,9 +53,17 @@
 - A behaviour users reasonably set differently is a `config.json` key with its default in `config.Defaults()`. A flag that overrides a key is a config layer over the file, never a separate code path.
 - Add a key only for a setting someone needs to change, never to move mechanics out of the binary.
 - A number in the binary bounds what one call does or returns, or stops a runaway, and is a constant. The exception is a number sized to something outside Kopi (a model's context, a slow server): it becomes a key when someone hits it, not before.
-- An unset `model` is PiG's default model for a provider with a credential, chosen at each start and never saved.
-- A model key (`smallModel`, `classifier.model`, `workflows.model`, a definition's `model`) only picks a model; unset, it falls back at the moment of use, ending at the session model, so it follows `/model`. It never switches a feature on or off: a feature key does. A model's capability may still limit a tool. A session already running keeps its model; one started later (a subagent, a workflow's `agent()` call, a side call) uses the current one.
 - When it is unclear which side something is on, check what peer agents build in and follow the majority.
+
+## Models
+
+- The session model is `model`, else PiG's default model for a provider with a credential, chosen at each start and never saved; `/model` replaces it until Kopi exits. Code reads it at the moment of use and never keeps the value it had at start.
+- A model key (`smallModel`, `classifier.model`, `workflows.model`, a definition's `model`) only picks a model; unset, it falls back at the moment of use, ending at the session model, so it follows `/model`. It never switches a feature on or off: a feature key does.
+- A feature that calls a model takes it from a model key or the session model and resolves it per call, or once for a session it opens.
+- What a model can do (reason and at which levels, search the web, read images) is read from the model resolved for that use, never from the one Kopi started with. A level the model lacks is clamped and an image it cannot read is left out; a call it cannot serve at all fails naming the model. A tool that exists only for a capable model is offered or withdrawn where the model is resolved: when a session opens and when `/model` switches it.
+- Only `/model` changes the model of an open session, and only the main one's. What was asked of the session (its effort) is kept and applied to the new model, clamped to what it has; within a run a limit of the old model is never carried over. A subagent or workflow agent keeps the model and tools it opened with; one started later resolves again.
+- A set model key is checked at start: its format always, its model and credential when its feature can run. `/model` checks its argument the same way.
+- What Kopi reads per provider is not fixed at start: plan limits are read for the session model's provider and follow `/model`, and a provider's model list is refreshed once a model of it is first used.
 
 ## Model-facing text
 

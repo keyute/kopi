@@ -28,9 +28,10 @@ type limits struct {
 	mu        sync.Mutex
 	last      quota.Limits
 	attempted time.Time
-	// running is set while a read is in flight; failing while the reads since
-	// the last good one have failed.
-	running, failing, closed bool
+	// running is set while a read is in flight; again while a forced read is
+	// owed when it ends; failing while the reads since the last good one have
+	// failed.
+	running, again, failing, closed bool
 }
 
 func newLimits(read func(context.Context, string) ([]quota.Window, error), provider func() string, publish func(event.Event)) *limits {
@@ -45,7 +46,8 @@ func (l *limits) observe(ev event.Event) {
 }
 
 // refresh starts a read unless one is in flight or the last attempt was under
-// limitsEvery ago; such a trigger is dropped, not queued.
+// limitsEvery ago; such a trigger is dropped, not queued. A forced one is made
+// once the read in flight ends.
 func (l *limits) refresh() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -63,6 +65,7 @@ func (l *limits) refresh() {
 		if provider == "" {
 			l.mu.Lock()
 			l.running = false
+			l.again = false
 			l.attempted = time.Time{}
 			l.mu.Unlock()
 			return
@@ -79,6 +82,7 @@ func (l *limits) force() {
 	}
 	l.mu.Lock()
 	l.attempted = time.Time{}
+	l.again = l.again || l.running
 	l.mu.Unlock()
 	l.refresh()
 }
@@ -86,6 +90,11 @@ func (l *limits) force() {
 func (l *limits) finish(provider string, windows []quota.Window, err error) {
 	l.mu.Lock()
 	l.running = false
+	again := l.again
+	l.again = false
+	if again {
+		defer l.refresh()
+	}
 	if l.ctx.Err() != nil {
 		l.mu.Unlock()
 		return

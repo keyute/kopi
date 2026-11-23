@@ -286,7 +286,7 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 		tools = append(tools, exit)
 	}
 	var search []tool.Tool
-	if small := c.SmallModel(); small != "" && c.rt.CanSearch(small) && !c.cfg.Rules.Removes("WebSearch") {
+	if !c.cfg.Rules.Removes("WebSearch") {
 		search = append(search, tool.NewWebSearch(func(ctx context.Context, system, query string) (tool.SearchResult, error) {
 			return c.sideSearch(ctx, c.SmallModel(), system, query)
 		}))
@@ -312,14 +312,14 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 		}
 	}
 	tools = append(tools, serverTools...)
+	// Workflow never reaches a subagent's tools, which buildAgents builds from
+	// search and serverTools.
+	if c.workflowOffered() {
+		tools = append(tools, tool.NewWorkflow(c.cfg.Agents, workflowLauncher{c}, c.cfg.MaxWorkflows, c.cfg.MaxAgents))
+	}
 	c.tools = tools
 	c.prompt = buildPrompt(c.cfg.Workspace, c.tools, c.cfg.Instructions, servers, c.cfg.Classifier != nil, nil, false)
 	c.agents, c.workflowSpecs = c.buildAgents(search, serverTools, servers)
-	// Workflow is deferred, so it comes after the prompt, which would otherwise
-	// describe ToolSearch for it; it never reaches a subagent's tools.
-	if c.workflowOffered() {
-		c.tools = append(c.tools, tool.NewWorkflow(c.cfg.Agents, workflowLauncher{c}, c.cfg.MaxWorkflows, c.cfg.MaxAgents))
-	}
 	return events
 }
 
@@ -1073,8 +1073,6 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 			return err
 		}
 		c.startup = append(c.startup, notices...)
-		// The tools were built without a model, so WebSearch was not offered.
-		c.setup(nil)
 	}
 
 	later := c.attempted
@@ -1100,6 +1098,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	if err != nil {
 		return err
 	}
+	c.offerSearch(sess)
 
 	if w != nil {
 		c.releaseSwitch(w, oldEmit, true)

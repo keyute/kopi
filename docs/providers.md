@@ -35,7 +35,7 @@
 - The list is saved in `agent/models-store.json`. Every start reads the saved list first, and its entries replace the built-in ones of that provider, base URL included, while it is newer than the list built into Kopi. `PIG_OFFLINE` set to `1`, `true` or `yes`, or `PI_OFFLINE` set to any value, stops both the background refresh and the fetch; the saved list is still read.
 - A refreshed list applies to the running session (context window, prices, base URL); the status line shows a new context window after the next tool call or turn.
 - A model known only from a saved list, and any `openrouter` model, is unknown once a refreshed list leaves it out: at the next start, or in the fullscreen interface when the session opens after the refresh.
-- A provider signed in to during the session is refreshed at the next start.
+- A provider first used later in a run (after `/model`, a first login or a subagent) has its list refreshed then, under the same rules as at start.
 - A model still unknown after the fetch stops the start, naming `agent/models.json`; if the fetch failed, the message says the list could not be refreshed. The outcome of a fetch is kept for the process, so a later check in the same process does not repeat it; a fetch cut short by cancelling the start is not kept.
 - Declare a model yourself in `agent/models.json`. Under a built-in provider whose models carry an API and base URL, the entry takes both from them and uses the provider's credential:
 
