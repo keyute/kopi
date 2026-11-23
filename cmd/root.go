@@ -462,7 +462,8 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 			continue
 		}
 		_, _, err := config.ParseModelRef(def.Model)
-		if err == nil {
+		// A definition's model serves the Agent tool and workflow agents.
+		if err == nil && (!rules.Removes("Agent") || fullscreen && !rules.Removes("Workflow")) {
 			err = checkModel(def.Model, "")
 		}
 		if err != nil {

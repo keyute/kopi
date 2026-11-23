@@ -420,9 +420,9 @@ func (r *Runtime) Models(ctx context.Context) ([]Model, error) {
 // SetModel switches s to the model ref names, keeping its history. ref is
 // checked as Open checks it. On ErrModelNotSaved the model changed and the
 // effort was applied; any other error leaves the model. PiG sets the agent's
-// model before it appends the change to the session file, and returns on a
-// failed append before it sets the level (PiG v0.7.0 coding/session.go
-// beginModelChangeState; recheck on a bump).
+// model before it appends the model change and then the thinking level to the
+// session file, and returns on a failed append of either (PiG v0.7.0
+// coding/session.go beginModelChangeState; recheck on a bump).
 func (r *Runtime) SetModel(ctx context.Context, s *Session, ref string) error {
 	model, err := r.usableModel(ctx, ref)
 	if err != nil {

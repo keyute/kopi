@@ -304,23 +304,24 @@ func TestModelCommandHoldsTurnsAndSwitchesUntilTheChangeEnds(t *testing.T) {
 	assertSwitchDone(t, h)
 }
 
-func TestCloseWhileModelChangeWaitsForLifeChangesNothing(t *testing.T) {
+func TestModelChangeThatAcquiresLifeAfterCloseChangesNothing(t *testing.T) {
 	pigruntimetest.ClearEnv(t)
 	h, _ := openHarness(t, Config{})
 	_, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
 	before := h.c.Model()
+	changed := subscribeTo[event.ModelChanged](h.c)
 
+	// The change's goroutine waits for life. Close sets closed under mu before
+	// it releases life, so the goroutine can only run after it; setting it here
+	// fixes that order without relying on which waiter the mutex wakes first.
 	h.c.life.Lock()
-	closed := make(chan error, 1)
-	go func() { closed <- h.c.Close(t.Context()) }()
-	// Close is queued on life first, so it runs before the change does.
-	waitBlockedOnLife(t, "(*Controller).Close(", 1)
 	_, err := h.c.Submit(t.Context(), Main, "/model "+otherRef)
 	require.NoError(t, err)
-	waitBlockedOnLife(t, "(*Controller).modelCommand.func", 1)
+	h.c.mu.Lock()
+	h.c.closed = true
+	h.c.mu.Unlock()
 	h.c.life.Unlock()
 
-	require.NoError(t, <-closed)
 	// The change's goroutine ends with endModelChange, which takes mu.
 	deadline := time.Now().Add(waitLimit)
 	for !modelChangeEnded(h.c) {
@@ -328,33 +329,13 @@ func TestCloseWhileModelChangeWaitsForLifeChangesNothing(t *testing.T) {
 		runtime.Gosched()
 	}
 	assert.Equal(t, before, h.c.Model())
+	assert.Empty(t, changed)
 }
 
 func modelChangeEnded(c *Controller) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return !c.changingModel
-}
-
-// waitBlockedOnLife returns once n goroutines whose stack holds frame are
-// blocked locking a mutex.
-func waitBlockedOnLife(t *testing.T, frame string, n int) {
-	t.Helper()
-	deadline := time.Now().Add(waitLimit)
-	buf := make([]byte, 1<<20)
-	for time.Now().Before(deadline) {
-		found := 0
-		for _, g := range strings.Split(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
-			if strings.Contains(g, "[sync.Mutex.Lock") && strings.Contains(g, frame) {
-				found++
-			}
-		}
-		if found >= n {
-			return
-		}
-		runtime.Gosched()
-	}
-	t.Fatalf("no goroutine blocked on life in %s", frame)
 }
 
 func TestModelCommandLeavesRunningSubagentsAlone(t *testing.T) {
@@ -371,16 +352,15 @@ func TestModelCommandLeavesRunningSubagentsAlone(t *testing.T) {
 	changed := subscribeTo[event.ModelChanged](a.c)
 	id := a.launch(t, "explorer", "find it", "go")
 
-	a.c.life.Lock()
 	_, err := a.c.Submit(t.Context(), Main, "/model "+otherRef)
 	require.NoError(t, err)
+	receiveEvent(t, changed)
 	_, err = a.c.message(t.Context(), id, "also check b")
 	assert.NoError(t, err, "the change does not touch the subagent")
 	close(gate)
 	texts := receive(t, oldRequests).UserTexts
 	assert.Equal(t, "also check b", texts[len(texts)-1], "the running subagent keeps the old model")
-	a.c.life.Unlock()
-	receiveEvent(t, changed)
+	assert.Zero(t, other.CallCount(), "the running subagent did not move to the new model")
 
 	a.launch(t, "explorer", "find more", "again")
 	assert.Equal(t, []string{"again"}, receive(t, newRequests).UserTexts, "a later subagent inherits the new model")

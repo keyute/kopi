@@ -49,7 +49,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `provider/id` of the session model; `--model` overrides it, and [`/model`](usage.md#commands) switches it until Kopi exits. An id Kopi does not know is fetched or declared as described in [models](providers.md#models).
 - Unset, each start uses the default model of a provider with a credential, environment credentials included. Nothing is saved, and a notice names the model and the config file to set it in.
 - With credentials for several providers, the default depends on the order the runtime prefers; set `model` to pin it.
-- With no credential at all, the fullscreen interface asks which provider to log in to, then opens the session; print mode fails with a hint to run `kopi login`. Start fails first, naming the provider, when `smallModel`, an enabled `classifier.model`, `workflows.model` (checked only in the fullscreen interface and when no rule denies `Workflow`) or a [subagent](subagents.md) definition's `model` names a provider with no credential.
+- With no credential at all, the fullscreen interface asks which provider to log in to, then opens the session; print mode fails with a hint to run `kopi login`. Start fails first, naming the provider, when `smallModel`, an enabled `classifier.model`, `workflows.model` (checked only in the fullscreen interface and when no rule denies `Workflow`) or a [subagent](subagents.md) definition's `model` (checked only where something can use it: when no rule denies `Agent`, or in the fullscreen interface when no rule denies `Workflow`) names a provider with no credential.
 
 ## `mode`
 

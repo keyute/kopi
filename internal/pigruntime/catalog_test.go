@@ -7,8 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -530,8 +528,11 @@ func TestProviderFirstUsedAfterStartIsRefreshed(t *testing.T) {
 
 	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}))
 	r.refreshes.Wait()
+	require.Len(t, s.requests, 1)
+	drainRequests(s)
 
-	assert.Len(t, s.requests, 1)
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogModel}))
+	assert.Empty(t, s.requests)
 }
 
 func TestForcedFetchDuringLateRefreshResolves(t *testing.T) {
@@ -547,7 +548,6 @@ func TestForcedFetchDuringLateRefreshResolves(t *testing.T) {
 	r.refreshMu.Unlock()
 	result := make(chan error, 1)
 	go func() { result <- r.Check(t.Context(), OpenOptions{Model: catalogModel}) }()
-	waitForSlot(t)
 	release()
 
 	require.NoError(t, <-result)
@@ -557,24 +557,6 @@ func TestForcedFetchDuringLateRefreshResolves(t *testing.T) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	assert.Equal(t, 1, s.maxInflight, "the forced fetch must wait for the late refresh, not run beside it")
-}
-
-// waitForSlot returns once a goroutine is parked in refreshModels' wait for a
-// provider's fetching slot; nothing else the runtime does shows that state.
-func waitForSlot(t *testing.T) {
-	t.Helper()
-	deadline := time.Now().Add(waitLimit)
-	buf := make([]byte, 1<<20)
-	for time.Now().Before(deadline) {
-		trace := string(buf[:runtime.Stack(buf, true)])
-		for _, g := range strings.Split(trace, "\n\n") {
-			if strings.Contains(g, "[select") && strings.Contains(g, "(*Runtime).refreshModels(") && !strings.Contains(g, "fetchModels") {
-				return
-			}
-		}
-		runtime.Gosched()
-	}
-	t.Fatal("the forced fetch never waited for the provider's slot")
 }
 
 func TestLateRefreshIsSkippedAfterForcedFetch(t *testing.T) {

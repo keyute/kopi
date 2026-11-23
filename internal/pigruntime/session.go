@@ -214,31 +214,31 @@ func (s *Session) SetEffort(e Effort) error {
 }
 
 // setModel switches the model, then asks again for the level the session was
-// given, which the old model may have clamped. A failure that leaves the
-// session on model, PiG's persisting of the change, wraps ErrModelNotSaved; it
-// returns before PiG applies a level, so asked, or the default when nothing was
-// asked, is applied here.
+// given, which the old model may have clamped; with nothing asked the level is
+// the default PiG applies on a switch. PiG sets the agent's model before it
+// appends the change and then the level to the session file, so a failed append
+// of either leaves the session on model: that error wraps ErrModelNotSaved. A
+// failure that left the model as it was is returned as it is.
 func (s *Session) setModel(model *ai.Model) error {
 	s.effortMu.Lock()
 	defer s.effortMu.Unlock()
+	was := s.inner.Model()
 	err := s.inner.SetModel(model)
 	if err != nil {
 		now := s.inner.Model()
-		if now.ProviderMeta.ProviderID != model.ProviderMeta.ProviderID || now.ID != model.ID {
+		if sameModel(was, model) || !sameModel(now, model) {
 			return err
 		}
 		err = fmt.Errorf("%w: %w", ErrModelNotSaved, err)
-		if lerr := s.inner.SetThinkingLevel(cmp.Or(s.asked, ai.ThinkingMedium)); lerr != nil {
-			slog.Warn("failed to restore the effort after the model change", "error", lerr)
-		}
-		return err
 	}
-	if s.asked != "" {
-		if lerr := s.inner.SetThinkingLevel(s.asked); lerr != nil {
-			slog.Warn("failed to restore the effort after the model change", "error", lerr)
-		}
+	if lerr := s.inner.SetThinkingLevel(cmp.Or(s.asked, ai.ThinkingMedium)); lerr != nil {
+		slog.Warn("failed to restore the effort after the model change", "error", lerr)
 	}
 	return err
+}
+
+func sameModel(a, b *ai.Model) bool {
+	return a.ProviderMeta.ProviderID == b.ProviderMeta.ProviderID && a.ID == b.ID
 }
 
 // raise lifts the level to e for the rest of the Send, remembering the level

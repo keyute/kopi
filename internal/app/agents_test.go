@@ -283,8 +283,14 @@ func TestSubagentsAreOfferedWebSearchForASearchingSmallModel(t *testing.T) {
 	named.Tools = []string{"Read"}
 	a := newAgentHarness(t, searchSandbox(t), Config{SmallModel: "kopi-search/search-1"}, plain, named)
 
-	assert.Equal(t, []string{"WebSearch"}, toolNames(a.c.agents[0].tools))
-	assert.Empty(t, a.c.agents[1].tools)
+	requests := make(chan childRequest, 2)
+	a.child.SetResponses([]ai.FauxResponseStep{captureChild(requests, nil, "final"), captureChild(requests, nil, "final")})
+	a.rootAcks(2)
+
+	a.launch(t, "plain", "find it", "go")
+	assert.Contains(t, receiveChild(t, requests).tools, "WebSearch")
+	a.launch(t, "named", "find it", "go")
+	assert.NotContains(t, receiveChild(t, requests).tools, "WebSearch")
 }
 
 func TestSubagentWebSearchIsCallableOnlyForASearchingSmallModel(t *testing.T) {

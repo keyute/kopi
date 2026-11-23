@@ -1283,6 +1283,29 @@ func TestSetModelReportsAFailedSaveAfterSwitching(t *testing.T) {
 	assert.Equal(t, "high", s.Effort())
 }
 
+func TestSetModelToTheCurrentModelReportsAFailureAsIs(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	_, thinkerRef := registerThinker(t, r)
+	s := openOn(t, r, thinkerRef, HighEffort, "")
+	_, err := s.Send(t.Context(), Prompt{Text: "question"}, nil, nil)
+	require.NoError(t, err)
+	files := sessionFiles(t, sb.kopiHome)
+	require.Len(t, files, 1)
+	// The write is refused as the file is opened for appending.
+	require.NoError(t, os.Chmod(files[0], 0o400))
+	t.Cleanup(func() { _ = os.Chmod(files[0], 0o600) })
+	if f, err := os.OpenFile(files[0], os.O_WRONLY|os.O_APPEND, 0); err == nil {
+		_ = f.Close()
+		t.Skip("file permissions do not stop this user from appending")
+	}
+
+	err = r.SetModel(t.Context(), s, thinkerRef)
+
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrModelNotSaved)
+}
+
 func TestSetModelClampsAnUnaskedLevelAfterAFailedSave(t *testing.T) {
 	sb := newSandbox(t)
 	r, _ := newTestRuntime(t, sb)

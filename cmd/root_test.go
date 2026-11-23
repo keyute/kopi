@@ -560,6 +560,29 @@ func TestRootAgentModelFailsAtStart(t *testing.T) {
 	}
 }
 
+func TestRootAgentModelUnusedIsNotChecked(t *testing.T) {
+	t.Run("without credential", func(t *testing.T) {
+		e := newTestEnv(t)
+		server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+		e.writeMockModels(t, server.URL)
+		e.writeAgent(t, "model: "+builtinModel(t, "openai-codex")+"\n")
+
+		_, _, err := execute(t, "", "--model", mockModel, "--disallowed-tools", "Agent", "-p", "hi")
+
+		require.NoError(t, err)
+	})
+	t.Run("malformed still fails", func(t *testing.T) {
+		e := newTestEnv(t)
+		server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
+		e.writeMockModels(t, server.URL)
+		e.writeAgent(t, "model: malformed\n")
+
+		_, _, err := execute(t, "", "--model", mockModel, "--disallowed-tools", "Agent", "-p", "hi")
+
+		require.ErrorIs(t, err, config.ErrInvalidModel)
+	})
+}
+
 func TestRootAgentModelWithoutCredentialFailsAtStart(t *testing.T) {
 	e := newTestEnv(t)
 	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })

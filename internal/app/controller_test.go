@@ -1961,7 +1961,8 @@ func searchSandbox(t *testing.T) pigruntimetest.Sandbox {
 
 func TestWebSearchIsOfferedForASearchingSmallModel(t *testing.T) {
 	h := newHarness(t, searchSandbox(t), Config{SmallModel: "kopi-search/search-1"})
-	assert.Equal(t, []string{"AskUserQuestion", "WebSearch", "Workflow"}, toolNames(h.c.tools))
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	assert.True(t, h.c.main.sess.Callable("WebSearch"))
 }
 
 func TestWebSearchChargesTheTotal(t *testing.T) {

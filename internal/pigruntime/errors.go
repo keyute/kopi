@@ -23,8 +23,9 @@ var (
 	ErrNotSaved        = errors.New("session has no saved transcript")
 
 	// ErrModelNotSaved accompanies a model change that took effect but whose
-	// record could not be written to the session file.
-	ErrModelNotSaved = errors.New("model changed but not saved to the session file")
+	// records, the model or the thinking level that follows it, could not all
+	// be written to the session file.
+	ErrModelNotSaved = errors.New("model changed but the change was not fully saved to the session file")
 
 	// ErrModelListUnavailable accompanies ErrUnknownModel when refreshing the
 	// provider's model list failed.
