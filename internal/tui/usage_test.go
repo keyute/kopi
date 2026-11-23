@@ -196,16 +196,29 @@ func TestUsageWindowOmitsAnUnknownReset(t *testing.T) {
 	})
 }
 
-func TestPercentBarWarnsFromTheThreshold(t *testing.T) {
+func TestPercentBarWarnsWhenAsked(t *testing.T) {
 	th := mocha()
 	cells := func(n int) string { return strings.Repeat("▰", n) }
 
-	assert.True(t, strings.HasPrefix(percentBar(89.4, 90, th), fg(th.text).Render(cells(14))), "89% is not a warning")
-	assert.True(t, strings.HasPrefix(percentBar(89.5, 90, th), fg(th.warning).Render(cells(14))), "rounds to 90%")
-	assert.Contains(t, percentBar(95, 90, th), fg(th.warning).Render(" 95%"))
-	assert.Contains(t, percentBar(80, 90, th), fg(th.text).Render(" 80%"))
-	assert.Equal(t, fg(th.warning).Render(cells(barCells))+fg(th.dim).Render("")+" "+fg(th.warning).Render("150%"), percentBar(150, 90, th), "over 100 fills the bar")
-	assert.Equal(t, fg(th.text).Render("")+fg(th.dim).Render(strings.Repeat("▱", barCells))+" "+fg(th.text).Render("  0%"), percentBar(0, 90, th))
+	assert.True(t, strings.HasPrefix(percentBar(89.5, false, th), fg(th.text).Render(cells(14))))
+	assert.True(t, strings.HasPrefix(percentBar(89.5, true, th), fg(th.warning).Render(cells(14))))
+	assert.Contains(t, percentBar(95, true, th), fg(th.warning).Render(" 95%"))
+	assert.Contains(t, percentBar(80, false, th), fg(th.text).Render(" 80%"))
+	assert.Equal(t, fg(th.warning).Render(cells(barCells))+fg(th.dim).Render("")+" "+fg(th.warning).Render("150%"), percentBar(150, true, th), "over 100 fills the bar")
+	assert.Equal(t, fg(th.text).Render("")+fg(th.dim).Render(strings.Repeat("▱", barCells))+" "+fg(th.text).Render("  0%"), percentBar(0, false, th))
+}
+
+func TestUsageBarsWarnAsTheFooterDoes(t *testing.T) {
+	u := usageFixture()
+	u.ContextTokens, u.ContextWindow = 896, 1000
+	u.Limits.Windows[0].UsedPercent = 89.4
+	u.Limits.Windows[1].UsedPercent = 89.5
+
+	bars := usageBars(u)
+	require.Len(t, bars, 3)
+	assert.False(t, bars[0].warn, "context warns on the exact share, as contextText does")
+	assert.False(t, bars[1].warn, "89.4% rounds to 89%")
+	assert.True(t, bars[2].warn, "89.5% rounds to 90%, as limitSegment does")
 }
 
 func TestUsageDrawsAWarningWindowInTheWarningColour(t *testing.T) {

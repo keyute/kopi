@@ -72,6 +72,14 @@ func TestUsageAddMergesRowsAndSumsTokens(t *testing.T) {
 	assert.Empty(t, Usage{}.Add(Usage{Models: []ModelUsage{{Model: "p/failed"}}}).Models, "a failed request adds no row")
 }
 
+func TestUsageOfKeysAnUnnamedReplyAsTheModelAsked(t *testing.T) {
+	asked := &ai.Model{ID: "m1", ProviderMeta: ai.ProviderMetadata{ProviderID: "p1"}}
+
+	got := usageOf(&ai.AssistantMessage{Usage: ai.Usage{Input: 1, Cost: ai.UsageCost{Total: 0.5}}}, asked)
+
+	assert.Equal(t, []ModelUsage{{Model: "p1/m1", Tokens: 1, Cost: 0.5}}, got.Models)
+}
+
 func TestCacheEqualsTheSessionAccounting(t *testing.T) {
 	sb := newSandbox(t)
 	r, _ := newTestRuntime(t, sb)

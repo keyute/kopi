@@ -272,6 +272,8 @@ func TestWorkflowAgentModelRowSurvivesItsEnd(t *testing.T) {
 	require.Len(t, got.Models, 1)
 	assert.Equal(t, priced, got.Models[0].Model)
 	assert.Equal(t, pigruntimetest.PricedModelCost, got.Models[0].Cost)
+	assert.Positive(t, got.Tokens.Input, "the agent's tokens survive its end")
+	assert.Equal(t, a.c.Status().TotalCost, got.Models[0].Cost)
 }
 
 func TestWorkflowSchemaReturnsTheRecordedObject(t *testing.T) {

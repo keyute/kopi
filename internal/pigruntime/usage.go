@@ -15,7 +15,7 @@ type Tokens struct{ Input, Output, CacheRead, CacheWrite int }
 
 // ModelUsage is what one model's requests cost. Model is "provider/id", the id
 // the provider answered with when it names one; "" for the summaries a session
-// writes when it compacts.
+// writes when it compacts and any usage a tool result reports.
 type ModelUsage struct {
 	Model  string
 	Tokens int
@@ -65,17 +65,8 @@ func (u Usage) Cost() float64 {
 }
 
 // summariesKey is the key PiG's session accounting files the requests of
-// compactions and branch summaries under.
+// compactions and branch summaries under, and the usage of any tool result.
 const summariesKey = "Tools/summaries"
-
-// modelKey is the key PiG's session accounting files an assistant message
-// under: the provider and the model the reply names, else the one asked.
-func modelKey(provider, asked, responded string) string {
-	if responded != "" {
-		return provider + "/" + responded
-	}
-	return provider + "/" + asked
-}
 
 // UsageByModel returns what the session's requests used and cost, by model.
 // It reads PiG's session accounting, which PiG keeps per model and rebuilds
@@ -145,19 +136,12 @@ func (s *Session) cacheExpires() time.Time {
 	if model == nil {
 		return time.Time{}
 	}
-	env, err := ai.CredentialStoreProviderEnv(context.Background(), s.inner.Services().Credentials(), model.ProviderMeta.ProviderID)
-	if err != nil {
-		return time.Time{}
-	}
-	tier := "short"
-	if ai.GetProviderEnvValue("PI_CACHE_RETENTION", env) == "long" {
-		tier = "long"
-	}
 	messages, err := branchMessages(s.inner.SessionManager().GetBranch())
 	if err != nil {
 		return time.Time{}
 	}
 	var last *agent.AssistantMessage
+	var tier string
 	for i := len(messages) - 1; i >= 0; i-- {
 		m := messages[i].Assistant
 		if m == nil || m.Usage == nil || m.Usage.Input+m.Usage.CacheRead+m.Usage.CacheWrite == 0 {
@@ -181,6 +165,16 @@ func (s *Session) cacheExpires() time.Time {
 	if last == nil || last.Provider != model.ProviderMeta.ProviderID || last.ModelID != model.ID || last.Timestamp <= 0 {
 		return time.Time{}
 	}
+	if tier == "" {
+		env, err := ai.CredentialStoreProviderEnv(context.Background(), s.inner.Services().Credentials(), model.ProviderMeta.ProviderID)
+		if err != nil {
+			return time.Time{}
+		}
+		tier = "short"
+		if ai.GetProviderEnvValue("PI_CACHE_RETENTION", env) == "long" {
+			tier = "long"
+		}
+	}
 	seconds, ok := model.PromptCache[tier]
 	if !ok {
 		return time.Time{}
@@ -189,13 +183,14 @@ func (s *Session) cacheExpires() time.Time {
 }
 
 // usageOf is the one request msg made, as a row keyed the way PiG's session
-// accounting keys it, so it merges with a session's rows.
+// accounting keys an assistant message (the provider and the model the reply
+// names, else the one asked), so it merges with a session's rows.
 func usageOf(msg *ai.AssistantMessage, asked *ai.Model) Usage {
 	u := msg.Usage
 	return Usage{
 		Tokens: Tokens{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite},
 		Models: []ModelUsage{{
-			Model:  modelKey(cmp.Or(msg.Provider, asked.ProviderMeta.ProviderID), cmp.Or(msg.Model, asked.ID), msg.ResponseModel),
+			Model:  cmp.Or(msg.Provider, asked.ProviderMeta.ProviderID) + "/" + cmp.Or(msg.ResponseModel, msg.Model, asked.ID),
 			Tokens: u.Input + u.Output + u.CacheRead + u.CacheWrite,
 			Cost:   u.Cost.Total,
 		}},

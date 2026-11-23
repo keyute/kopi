@@ -67,14 +67,23 @@ func (c *Controller) Usage() Usage {
 			u.ContextTokens, u.ContextWindow = tokens, window
 		}
 		u.Cache = sess.Cache()
-		used = used.Add(sess.UsageByModel())
 	}
-	for _, r := range children {
-		used = used.Add(r.sess.UsageByModel())
-	}
+	used = totalUsage(used, sess, children)
 	u.Tokens, u.Models = used.Tokens, slices.Clone(used.Models)
 	slices.SortFunc(u.Models, func(a, b ModelUsage) int {
 		return cmp.Or(cmp.Compare(b.Cost, a.Cost), cmp.Compare(a.Model, b.Model))
 	})
 	return u
+}
+
+// totalUsage is side with what the root session sess, if any, and the open
+// children have used: the sum Status.TotalCost and Usage both report.
+func totalUsage(side pigruntime.Usage, sess *pigruntime.Session, children map[string]*runner) pigruntime.Usage {
+	if sess != nil {
+		side = side.Add(sess.UsageByModel())
+	}
+	for _, r := range children {
+		side = side.Add(r.sess.UsageByModel())
+	}
+	return side
 }

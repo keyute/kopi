@@ -102,7 +102,7 @@ func usageBody(u app.Usage, width int, th theme, now time.Time) []string {
 
 	var bar, fact []string
 	for _, b := range bars {
-		row := label(b.label) + percentBar(b.pct, b.warnAt, th)
+		row := label(b.label) + percentBar(b.pct, b.warn, th)
 		if b.tail != "" {
 			row += "  " + b.tail
 		}
@@ -130,9 +130,9 @@ func usageBody(u app.Usage, width int, th theme, now time.Time) []string {
 type usageBar struct {
 	label string
 	pct   float64
-	// warnAt is the percent from which the bar warns.
-	warnAt int
-	tail   string
+	// warn is judged as the footer judges the same figure.
+	warn bool
+	tail string
 }
 
 // usageBars is the context and, when the plan limits are the session model's
@@ -140,14 +140,15 @@ type usageBar struct {
 func usageBars(u app.Usage) []usageBar {
 	var bars []usageBar
 	if u.ContextWindow > 0 {
+		pct := float64(u.ContextTokens) * 100 / float64(u.ContextWindow)
 		bars = append(bars, usageBar{
-			label: "Context", pct: float64(u.ContextTokens) * 100 / float64(u.ContextWindow), warnAt: contextWarnPercent,
+			label: "Context", pct: pct, warn: pct >= contextWarnPercent,
 			tail: compactCount(u.ContextTokens) + " / " + compactCount(u.ContextWindow),
 		})
 	}
 	if l := u.Limits; l.Provider == modelProvider(u.Model) {
 		for _, w := range l.Windows {
-			b := usageBar{label: w.Label, pct: w.UsedPercent, warnAt: limitWarnPercent}
+			b := usageBar{label: w.Label, pct: w.UsedPercent, warn: math.Round(w.UsedPercent) >= limitWarnPercent}
 			if text := resetText(w.ResetsAt, l.At); text != "" {
 				b.tail = "resets " + text
 			}
@@ -158,10 +159,10 @@ func usageBars(u app.Usage) []usageBar {
 }
 
 // percentBar is pct as a bar of barCells cells and the rounded percent in four
-// cells, both in the warning colour from warnAt percent; over 100 fills the bar.
-func percentBar(pct float64, warnAt int, th theme) string {
+// cells, both in the warning colour when warn; over 100 fills the bar.
+func percentBar(pct float64, warn bool, th theme) string {
 	c := th.text
-	if math.Round(pct) >= float64(warnAt) {
+	if warn {
 		c = th.warning
 	}
 	filled := min(barCells, max(0, int(math.Round(pct*barCells/100))))
