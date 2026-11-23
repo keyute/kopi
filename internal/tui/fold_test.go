@@ -313,4 +313,5 @@ func TestTaskWithoutAResultHasNoFold(t *testing.T) {
 	f := newFolds()
 	f.all = true
 	assert.Equal(t, blockFolds{}, f.of(transcript.Task{}))
+	assert.Equal(t, blockFolds{}, f.of(transcript.Task{Result: " \n"}))
 }

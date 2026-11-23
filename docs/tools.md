@@ -46,12 +46,12 @@
 - Runs a command with `bash -c` (`/bin/sh` when `bash` is not on `PATH`) in the start directory, with Kopi's environment.
 - Every call is a fresh shell with no input; `cd` and variables do not carry over.
 - `timeout` is in milliseconds, default 120000, at most 600000.
-- A command still running at its timeout keeps running as a [background task](#background-tasks), as does one started with `run_in_background` or moved with the `background` key. The result names the task, and the row reads `↳ task t1` for a command started in the background and `↳ moved to background · task t1` for one moved there.
+- A command still running at its timeout keeps running as a [background task](#background-tasks), as does one started with `run_in_background` or moved with the `background` key. The result names the task. The row reads `Started <command> in background` for a command started there, with nothing under it, and `Moved <command> to background` for one moved there (`↳ timed out` when its timeout moved it). Both rows end `· unsandboxed` when the call set `unsandboxed`.
 - On interrupt a foreground command's whole process group is killed (on Windows, only the shell).
 - The row's title is the command's first line, at most 80 characters, ending ` …` when the command is longer or has more lines.
 - Returns stdout and stderr combined, keeping the first and last 15,000 bytes; when more was printed, the rest is [saved to a file](#saved-output).
 - A non-zero exit is an error reporting the exit code; its row reads `↳ exit code 1 · 84 lines`, with the output under it.
-- Its row reads `Ran <command>` once it succeeded, `Started <command> in background` for `run_in_background`, and ends `· unsandboxed` when the call set `unsandboxed`.
+- Its row reads `Ran <command>` once it succeeded, and ends `· unsandboxed` when the call set `unsandboxed`.
 - Runs in the [sandbox](sandbox.md), unless the call sets `unsandboxed` (offered only when sandboxed and `sandbox.allowUnsandboxed` is true), which asks like `Bash` without the sandbox, see [outside the sandbox](sandbox.md#outside-the-sandbox). With `sandbox.allowDomains` the output ends with the hosts the proxy refused, see [network](sandbox.md#network).
 
 ## Saved output
@@ -67,18 +67,19 @@
 - Tasks are background commands, [subagents](subagents.md) and [workflows](workflows.md), numbered `t1`, `t2`, … per run in one sequence.
 - They have no time limit. A command keeps the sandbox profile of the mode it started in; a subagent follows the session's mode unless its definition pins plan mode.
 - `/tasks` shows an open task's output from its end and follows new output; PgUp/PgDn or the mouse wheel over the dialog scroll it when it does not fit, and scrolling back to the end follows again. Otherwise those keys scroll the transcript.
-- `TaskOutput` returns a task's status and its output so far, kept and [saved](#saved-output) like `Bash` output; for a subagent, its activity so far, and for a workflow, a line for each agent's start and end (the `/tasks` entry opens the progress dialog instead).
-- `TaskStop` kills a command task's process group (on Windows, only the shell), whichever mode it started in, and stops a subagent or a workflow.
+- `TaskOutput` returns a task's status, a line naming it (`Agent: <name> › <description>`, `Workflow: <description>`, or `Command: <first line of the command>`, cut at 80 characters and ending ` …` like the row title) and its output so far, kept and [saved](#saved-output) like `Bash` output; for a subagent, its activity so far, and for a workflow, a line for each agent's start and end (the `/tasks` entry opens the progress dialog instead).
+- `TaskStop` kills a command task's process group (on Windows, only the shell), whichever mode it started in, and stops a subagent or a workflow. Its result has the same name line. For a task that was already over it says so (`Task t1 already completed (exit code 0).`, `already failed (exit code 1)` or `already stopped`, the last when you or an earlier `TaskStop` had stopped it) and stops nothing.
+- Rows for `TaskOutput`, `TaskStop` and `SendMessage` name the agent, shell or workflow from that line, not the task id: `Checked on researcher › survey peers`, `Stopped shell npm run dev`, `Checked on workflow › review`. A `TaskStop` on a task that was already over reads `TaskStop <name>` with `↳ already completed (exit code 0)`, `↳ already failed (exit code 1)` or `↳ already stopped`. While such a row runs, waits for approval, fails or is denied it shows the id (`TaskOutput t3`), and a session saved before the name line existed shows each as its tool does: `Checked task t3`, `Stopped task t3`, `TaskStop t3` for a task that was already over, or `Messaged t3`. See [Transcript](usage.md#transcript).
 - When a task completes or fails, the model is told, for a command, its status and its last 20 non-empty output lines, for a subagent its final message, and for a workflow the value it returned or its error, at the next boundary of the running turn, or in a new turn when none runs. After an interrupt such notices wait for the next prompt; they never return to the input.
 - A task stopped from `/tasks` is reported to the model along with the next prompt or the next task notice, without starting a turn. One the model stops is not reported again.
-- A task that completes, fails or is stopped from `/tasks` adds a `• task t1 finished · <command> · 12s` row to the transcript (`failed` or `stopped` in place of `finished`), restored on resume.
+- A task that completes, fails or is stopped from `/tasks` adds a `• shell finished · <command> · 12s` row to the transcript (`failed` or `stopped` in place of `finished`), restored on resume. A failed shell's row shows its reason under it (`exit code 1`), and the row opens to the last output lines the model was sent.
 - Tasks are stopped on exit, when `/new` or `/resume` opens another session, and at the end of `kopi -p`.
 - `kopi -p` never starts a turn for a command's end, so a command still running at the final reply is killed. It waits for running [subagents](subagents.md#what-you-see).
 
 ## Agent and SendMessage
 
-- `Agent` starts a [subagent](subagents.md) on a prompt and returns its task id at once; the subagent runs in the background.
-- `SendMessage` sends a further message to a subagent by task id. A running subagent reads it when its current step ends; one that has ended, or whose run is being stopped, starts again with its earlier context, and the call does not wait for the stopping run to end.
+- `Agent` starts a [subagent](subagents.md) on a prompt and returns its task id at once; the subagent runs in the background. Its row reads `explorer › <description>` and opens to the prompt.
+- `SendMessage` sends a further message to a subagent by task id. Its result has the name line `Agent: <name> › <description>`; its row reads `Messaged <name> › <description>` with `↳ queued`, and opens to the message. A running subagent reads it when its current step ends; one that has ended, or whose run is being stopped, starts again with its earlier context, and the call does not wait for the stopping run to end.
 - The notice the agent receives when a subagent's run completes or fails, or when you stop it, lists the messages queued for it that it never read as undelivered. When the agent stops a subagent with `TaskStop` it receives no notice, and those messages are dropped.
 - Both exist only when a subagent is defined.
 

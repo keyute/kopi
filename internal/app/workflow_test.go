@@ -344,7 +344,7 @@ func TestWorkflowStopEndsTheRunAndItsAgentsAndLeavesNothingRunning(t *testing.T)
 		stop   func(*testing.T, *agentHarness, string)
 		notice string
 	}{
-		{"TaskStop", func(t *testing.T, a *agentHarness, id string) { _, err := a.tasks.Stop(id); require.NoError(t, err) }, ""},
+		{"TaskStop", func(t *testing.T, a *agentHarness, id string) { _, _, err := a.tasks.Stop(id); require.NoError(t, err) }, ""},
 		{"StopTask", func(t *testing.T, a *agentHarness, id string) { require.NoError(t, a.c.StopTask(id)) }, "Workflow %s stopped by the user: audit"},
 		{"switch", func(t *testing.T, a *agentHarness, _ string) { require.NoError(t, a.c.NewSession(t.Context())) }, ""},
 		{"Close", func(t *testing.T, a *agentHarness, _ string) { require.NoError(t, a.c.Close(context.Background())) }, ""},
@@ -390,7 +390,7 @@ func TestWorkflowStopMakesItsPendingApprovalStale(t *testing.T) {
 	id := a.startWorkflow(t, "audit", `return await agent("go")`)
 	req := receiveEvent(t, approvals)
 
-	_, err := a.tasks.Stop(id)
+	_, _, err := a.tasks.Stop(id)
 	require.NoError(t, err)
 
 	assert.Equal(t, req.Token, receiveEvent(t, ended).Token)
@@ -449,7 +449,7 @@ func TestWorkflowLimitRefusesAnotherRunUntilOneEnds(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrTooManyWorkflows)
 	assert.Contains(t, err.Error(), "1 workflows are already running")
-	_, err = a.tasks.Stop(first)
+	_, _, err = a.tasks.Stop(first)
 	require.NoError(t, err)
 	second := a.startWorkflow(t, "second", `return 1`)
 	a.untilStatus(t, second, tool.TaskCompleted)
@@ -707,7 +707,7 @@ func TestRunningWorkflowIsNotASubagentAndRefusesLogin(t *testing.T) {
 	_, err := a.c.Submit(t.Context(), Main, "/login "+loginProvider)
 	assert.ErrorIs(t, err, ErrWorkStillRunning)
 
-	_, err = a.tasks.Stop(id)
+	_, _, err = a.tasks.Stop(id)
 	require.NoError(t, err)
 	a.untilStatus(t, id, tool.TaskStopped)
 	assert.Zero(t, a.c.Status().Workflows)
@@ -1149,7 +1149,7 @@ func TestWorkflowHistoryRefusesARunningAgent(t *testing.T) {
 	_, err := a.c.WorkflowHistory(id, 1)
 
 	assert.ErrorIs(t, err, ErrAgentRunning)
-	_, err = a.tasks.Stop(id)
+	_, _, err = a.tasks.Stop(id)
 	require.NoError(t, err)
 }
 
@@ -1170,7 +1170,7 @@ func TestWorkflowHistoryRefusesAQueuedAgent(t *testing.T) {
 	_, err := a.c.WorkflowHistory(id, queued.N)
 
 	assert.ErrorIs(t, err, ErrAgentRunning)
-	_, err = a.tasks.Stop(id)
+	_, _, err = a.tasks.Stop(id)
 	require.NoError(t, err)
 }
 
@@ -1189,6 +1189,6 @@ func TestControlsRefuseAWorkflowAgentsSession(t *testing.T) {
 	assert.False(t, a.c.Interrupt(sessionID))
 	assert.Len(t, a.c.Agents(), 1, "only the main session")
 
-	_, err = a.tasks.Stop(id)
+	_, _, err = a.tasks.Stop(id)
 	require.NoError(t, err)
 }

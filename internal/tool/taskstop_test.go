@@ -38,14 +38,14 @@ func TestTaskStopStopsRunningTask(t *testing.T) {
 
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 	require.NoError(t, err)
-	assert.Equal(t, "Task t1 stopped.", out.Text)
+	assert.Equal(t, "Task t1 stopped. [named task]\nCommand: sleep 600", out.Text)
 	ended := nextEvent(t, events)
 	assert.Equal(t, "t1", ended.ID)
 	assert.Equal(t, TaskStopped, ended.Status)
 
 	out, err = tool.Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 	require.NoError(t, err)
-	assert.Equal(t, "Task t1 stopped.", out.Text)
+	assert.Equal(t, "Task t1 already stopped. [named task]\nCommand: sleep 600", out.Text)
 }
 
 func TestTaskStopReportsEndedTask(t *testing.T) {
@@ -58,7 +58,7 @@ func TestTaskStopReportsEndedTask(t *testing.T) {
 	out, err := NewTaskStop(tasks).Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 
 	require.NoError(t, err)
-	assert.Equal(t, "Task t1 already completed (exit code 0).", out.Text)
+	assert.Equal(t, "Task t1 already completed (exit code 0). [named task]\nCommand: true", out.Text)
 }
 
 func TestTaskStopStopsAgentTask(t *testing.T) {
@@ -69,18 +69,18 @@ func TestTaskStopStopsAgentTask(t *testing.T) {
 
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 	require.NoError(t, err)
-	assert.Equal(t, "Task t1 stopped.", out.Text)
+	assert.Equal(t, "Task t1 stopped. [named task]\nAgent: explore › find it", out.Text)
 
 	out, err = tool.Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 	require.NoError(t, err)
-	assert.Equal(t, "Task t1 stopped.", out.Text)
+	assert.Equal(t, "Task t1 already stopped. [named task]\nAgent: explore › find it", out.Text)
 
 	done := startAgent(tasks, "again")
 	_, ok := done.End(TaskFailed, "boom", "")
 	require.True(t, ok)
 	out, err = tool.Run(t.Context(), json.RawMessage(`{"task_id":"t2"}`), allowTarget)
 	require.NoError(t, err)
-	assert.Equal(t, "Task t2 already failed (boom).", out.Text)
+	assert.Equal(t, "Task t2 already failed (boom). [named task]\nAgent: explore › again", out.Text)
 }
 
 func TestTaskStopRefusesUnknownTask(t *testing.T) {
@@ -125,6 +125,30 @@ func TestTaskStopDisplay(t *testing.T) {
 	assert.Equal(t, "TaskStop", tool.Display.Title(json.RawMessage(`{}`)))
 	assert.Equal(t, "Stopped task t1", tool.Display.Done(json.RawMessage(`{"task_id":"t1"}`)))
 	assert.Empty(t, tool.Display.Body("Task t1 stopped."))
-	assert.Equal(t, "stopped", tool.Display.Summary("Task t1 stopped."))
+	assert.Empty(t, tool.Display.Summary("Task t1 stopped."))
 	assert.Equal(t, "already completed (exit code 0)", tool.Display.Summary("Task t1 already completed (exit code 0)."))
+}
+
+func TestTaskStopOutcome(t *testing.T) {
+	tool := NewTaskStop(NewTasks())
+	args := json.RawMessage(`{"task_id":"t1"}`)
+	for _, tc := range []struct {
+		name, output, done string
+		action             Action
+	}{
+		{"stopped agent", "Task t1 stopped. [named task]\nAgent: explore › look", "Stopped explore › look", Action{Verb: "Stopped", One: "agent", Many: "agents"}},
+		{"stopped shell", "Task t1 stopped. [named task]\nCommand: make", "Stopped shell make", Action{Verb: "Stopped", One: "shell", Many: "shells"}},
+		{"stopped workflow", "Task t1 stopped. [named task]\nWorkflow: audit", "Stopped workflow › audit", Action{Verb: "Stopped", One: "workflow", Many: "workflows"}},
+		{"stopped without name", "Task t1 stopped.", "", Action{}},
+		{"over agent", "Task t1 already failed (boom). [named task]\nAgent: explore › look", "TaskStop explore › look", Action{Verb: "Checked on", One: "agent", Many: "agents"}},
+		{"over shell", "Task t1 already completed (exit code 0). [named task]\nCommand: make", "TaskStop shell make", Action{Verb: "Checked on", One: "shell", Many: "shells"}},
+		{"over workflow", "Task t1 already completed. [named task]\nWorkflow: audit", "TaskStop workflow › audit", Action{Verb: "Checked on", One: "workflow", Many: "workflows"}},
+		{"over without name", "Task t1 already completed.", "TaskStop t1", Action{Verb: "Checked", One: "task", Many: "tasks"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			done, action := tool.Display.Outcome(args, tc.output)
+			assert.Equal(t, tc.done, done)
+			assert.Equal(t, tc.action, action)
+		})
+	}
 }

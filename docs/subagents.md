@@ -50,7 +50,7 @@ Report file paths and line numbers.
 - When a subagent ends, the agent is told with its final message and continues.
 - `SendMessage` sends a further message to a subagent by task id. A running subagent reads it when its current step ends; one that has ended, or whose run is being stopped, starts again with its earlier context and reports again. The call does not wait for the stopping run to end.
 - The notice the agent receives when a subagent's run completes or fails, or when you stop it, lists the messages queued for it that it never read as undelivered. When the agent stops a subagent with `TaskStop` it receives no notice, and those messages are dropped.
-- `TaskOutput` shows a subagent's activity so far and `TaskStop` stops it. `/tasks` lists subagents next to background commands, opens a subagent's view with Enter and stops the selected running subagent with `x` (`stop-agent`) from the list.
+- `TaskOutput` shows a subagent's activity so far and `TaskStop` stops it; their rows read `Checked on explorer › <description>` and `Stopped explorer › <description>`, and `SendMessage`'s reads `Messaged explorer › <description>` and opens to the message. `/tasks` lists subagents next to background commands, opens a subagent's view with Enter and stops the selected running subagent with `x` (`stop-agent`) from the list.
 
 ## What a subagent gets
 
@@ -68,7 +68,7 @@ Report file paths and line numbers.
 
 ## What you see
 
-- In the transcript a call shows as `• explorer › <description>` with `↳ launched` (the row does not open), and its end as `• explorer finished · <description> · 2m 14s` (`failed` or `stopped` in the error colour).
+- In the transcript a call shows as `• explorer › <description>` with `↳ launched`, which opens to the prompt the agent gave it, and its end as `• explorer finished · <description> · 2m 14s` (`failed` or `stopped` in the error colour). The end row opens to the subagent's final reply; a failed one shows its reason under it.
 - While the main agent is idle and work is running, the row above the input reads `2 agents, 1 shell still running`. The status line's [`agents`, `workflows` and `shells`](configuration.md#segments) segments show the same counts.
 - `/new`, `/resume` and exit stop them.
 - `kopi -p` waits for running subagents and prints the reply that follows their results.

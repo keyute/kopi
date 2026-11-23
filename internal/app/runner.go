@@ -273,9 +273,14 @@ func (r *runner) start(w *Work, parts []pigruntime.Prompt) {
 // deregistration; the switch resolves it before advancing the relay epoch.
 func (r *runner) runTurn(ctx context.Context, sess *pigruntime.Session, emit func(event.Event), w *Work, parts []pigruntime.Prompt, notices []pigruntime.Notice) {
 	c := r.c
+	// carry keeps a send-now's raise subject to the session's effort revision;
+	// a turn that follows a completed send starts at its own level.
+	var carry *pigruntime.EffortContinuation
 	for {
 		start := time.Now()
-		res, err := sess.Send(ctx, joined(parts), notices, r.pull(ctx, emit))
+		p := joined(parts)
+		p.Continuation = carry
+		res, err := sess.Send(ctx, p, notices, r.pull(ctx, emit))
 		elapsed := time.Since(start)
 		if err != nil {
 			res.Outcome = event.Outcome{Status: event.Failed, Message: err.Error()}
@@ -301,6 +306,10 @@ func (r *runner) runTurn(ctx context.Context, sess *pigruntime.Session, emit fun
 		// A failed or unsent send never continues for notices alone, so a
 		// failing provider cannot be woken in a loop.
 		wake := !w.stopped && (cancelled || res.Outcome.Status == event.Completed && res.Sent) && r.waking()
+		carry = nil
+		if cancelled {
+			carry = res.Continuation
+		}
 		if len(next) > 0 || wake {
 			ctx, w.cancel = context.WithCancel(w.base)
 			w.sendCtx = ctx
@@ -466,8 +475,12 @@ func joined(ps []pigruntime.Prompt) pigruntime.Prompt {
 	var images []pigruntime.Image
 	var skills, tools []string
 	var mode string
+	var effort pigruntime.Effort
 	for _, p := range ps {
 		texts = append(texts, p.Text)
+		if p.Effort != pigruntime.DefaultEffort {
+			effort = p.Effort
+		}
 		if p.Mode != "" {
 			mode = p.Mode
 		}
@@ -483,7 +496,7 @@ func joined(ps []pigruntime.Prompt) pigruntime.Prompt {
 			}
 		}
 	}
-	return pigruntime.Prompt{Text: strings.Join(texts, "\n\n"), Images: images, Skills: skills, Tools: tools, Mode: mode}
+	return pigruntime.Prompt{Text: strings.Join(texts, "\n\n"), Images: images, Skills: skills, Tools: tools, Mode: mode, Effort: effort}
 }
 
 func inputs(ps []pigruntime.Prompt) []event.Input {

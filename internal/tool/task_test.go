@@ -189,7 +189,7 @@ func TestTasksRejectUnknownTask(t *testing.T) {
 
 	_, err := m.Output("t1")
 	require.ErrorIs(t, err, ErrUnknownTask)
-	_, err = m.Stop("t1")
+	_, _, err = m.Stop("t1")
 	require.ErrorIs(t, err, ErrUnknownTask)
 }
 
@@ -343,13 +343,14 @@ func TestTasksAgentStopWaitsForEnd(t *testing.T) {
 		agent.End(TaskCompleted, "", "finished anyway")
 	})
 	type stopped struct {
-		info TaskInfo
-		err  error
+		info    TaskInfo
+		stopped bool
+		err     error
 	}
 	result := make(chan stopped, 1)
 	go func() {
-		info, err := m.Stop("t1")
-		result <- stopped{info, err}
+		info, did, err := m.Stop("t1")
+		result <- stopped{info, did, err}
 	}()
 	select {
 	case <-stopping:
@@ -367,14 +368,16 @@ func TestTasksAgentStopWaitsForEnd(t *testing.T) {
 	select {
 	case r := <-result:
 		require.NoError(t, r.err)
+		assert.True(t, r.stopped)
 		assert.Equal(t, TaskStopped, r.info.Status)
 		assert.Empty(t, r.info.Result)
 		assert.False(t, r.info.Ended.IsZero())
 	case <-time.After(testTimeout):
 		t.Fatal("timed out waiting for Stop")
 	}
-	again, err := m.Stop("t1")
+	again, didAgain, err := m.Stop("t1")
 	require.NoError(t, err)
+	assert.False(t, didAgain)
 	assert.Equal(t, TaskStopped, again.Status)
 }
 
@@ -385,9 +388,10 @@ func TestTasksStopOfEndedAgentOnlyReturnsIt(t *testing.T) {
 	_, ok := agent.End(TaskCompleted, "", "done")
 	require.True(t, ok)
 
-	info, err := m.Stop("t1")
+	info, did, err := m.Stop("t1")
 
 	require.NoError(t, err)
+	assert.False(t, did)
 	assert.Equal(t, TaskCompleted, info.Status)
 	assert.Equal(t, "done", info.Result)
 	assert.Zero(t, calls)
@@ -448,7 +452,7 @@ func TestTasksStopRetainsSelectedRunAcrossRestart(t *testing.T) {
 	})
 	result := make(chan TaskInfo, 1)
 	go func() {
-		info, err := m.Stop(a.ID())
+		info, _, err := m.Stop(a.ID())
 		assert.NoError(t, err)
 		result <- info
 	}()

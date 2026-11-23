@@ -59,29 +59,29 @@ func TestTranslate(t *testing.T) {
 		{
 			name: "auto retry",
 			in:   agent.AutoRetryStartEvent{Attempt: 2, MaxAttempts: 3, DelayMs: 1500, ErrorMessage: "overloaded"},
-			want: event.Notice{Text: "retrying (attempt 2/3) in 1.5s: overloaded"},
+			want: event.Notice{Text: "Retrying (attempt 2/3) in 1.5s: overloaded"},
 		},
 		{
 			name: "auto retry names kopi",
 			in:   agent.AutoRetryStartEvent{Attempt: 1, MaxAttempts: 3, DelayMs: 1000, ErrorMessage: "not logged in (run `pig login github-copilot`)"},
-			want: event.Notice{Text: "retrying (attempt 1/3) in 1s: not logged in (run `kopi login github-copilot`)"},
+			want: event.Notice{Text: "Retrying (attempt 1/3) in 1s: not logged in (run `kopi login github-copilot`)"},
 		},
 		{
-			name: "compaction start",
+			name: "Compaction start",
 			in:   agent.CompactionStartEvent{Reason: "threshold"},
-			want: event.Notice{Text: "compacting context (threshold)"},
+			want: event.Notice{Text: "Compacting context (threshold)"},
 		},
-		{name: "compaction done", in: agent.CompactionEndEvent{}, want: event.Notice{Text: "compaction done"}},
-		{name: "compaction aborted", in: agent.CompactionEndEvent{Aborted: true}, want: event.Notice{Text: "compaction aborted"}},
+		{name: "Compaction done", in: agent.CompactionEndEvent{}, want: event.Notice{Text: "Compaction done"}},
+		{name: "Compaction aborted", in: agent.CompactionEndEvent{Aborted: true}, want: event.Notice{Text: "Compaction aborted"}},
 		{
-			name: "compaction failed",
+			name: "Compaction failed",
 			in:   agent.CompactionEndEvent{ErrorMessage: "too big"},
-			want: event.Notice{Text: "compaction failed: too big"},
+			want: event.Notice{Text: "Compaction failed: too big"},
 		},
 		{
-			name: "compaction failed names kopi",
+			name: "Compaction failed names kopi",
 			in:   agent.CompactionEndEvent{ErrorMessage: "not logged in (run `pig login github-copilot`)"},
-			want: event.Notice{Text: "compaction failed: not logged in (run `kopi login github-copilot`)"},
+			want: event.Notice{Text: "Compaction failed: not logged in (run `kopi login github-copilot`)"},
 		},
 		{name: "queue update dropped", in: agent.QueueUpdateEvent{Steering: []string{"a", "b"}, FollowUp: []string{"c"}}},
 		{name: "user message start dropped", in: agent.MessageStartEvent{Message: agent.AgentMessage{User: &agent.UserMessage{Content: ai.UserContentBlocks{ai.TextContent{Text: "steer"}}}}}},
@@ -131,7 +131,7 @@ func TestTextJoinerSeparatesAdjacentTextBlocks(t *testing.T) {
 		{
 			name: "notice between",
 			in:   []agent.AgentEvent{textStart, text("one"), agent.AutoRetryStartEvent{Attempt: 1, MaxAttempts: 2}, textStart, text("two")},
-			want: []event.Event{event.TextDelta{Text: "one"}, event.Notice{Text: "retrying (attempt 1/2) in 0s: "}, event.TextDelta{Text: "two"}},
+			want: []event.Event{event.TextDelta{Text: "one"}, event.Notice{Text: "Retrying (attempt 1/2) in 0s: "}, event.TextDelta{Text: "two"}},
 		},
 		{
 			name: "kopi notice between",
@@ -177,4 +177,25 @@ func TestTextJoinerDropsUserMessageAsSeparator(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: "two"}}, got)
+}
+
+func TestTextJoinerGivesToolEndItsStartArgs(t *testing.T) {
+	start := func(id string) agent.AgentEvent {
+		return agent.ToolExecutionStartEvent{ToolCallID: id, ToolName: "Read", Args: json.RawMessage(`{ "file_path": "a.go" }`)}
+	}
+	end := func(id string) agent.AgentEvent { return agent.ToolExecutionEndEvent{ToolCallID: id, ToolName: "Read"} }
+	var j textJoiner
+	var got []event.Event
+	for _, ev := range []agent.AgentEvent{start("c1"), start("c2"), end("c2"), end("c1"), end("c3")} {
+		if e, ok := j.translate(ev); ok {
+			got = append(got, e)
+		}
+	}
+	assert.Equal(t, []event.Event{
+		event.ToolStart{CallID: "c1", Name: "Read", Args: `{"file_path":"a.go"}`},
+		event.ToolStart{CallID: "c2", Name: "Read", Args: `{"file_path":"a.go"}`},
+		event.ToolEnd{CallID: "c2", Name: "Read", Args: `{"file_path":"a.go"}`},
+		event.ToolEnd{CallID: "c1", Name: "Read", Args: `{"file_path":"a.go"}`},
+		event.ToolEnd{CallID: "c3", Name: "Read"},
+	}, got)
 }

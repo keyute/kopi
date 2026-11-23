@@ -50,26 +50,38 @@ func NewSendMessage(agents Agents) Tool {
 			if _, err := admit(policy.Target{}); err != nil {
 				return Result{}, err
 			}
-			resumed, err := agents.Message(ctx, args.To, args.Message)
+			to, resumed, err := agents.Message(ctx, args.To, args.Message)
 			if err != nil {
 				return Result{}, err
 			}
+			text := fmt.Sprintf("Message queued for %s.", args.To)
 			if resumed {
-				return Result{Text: fmt.Sprintf("Agent %s continued.", args.To)}, nil
+				text = fmt.Sprintf("Agent %s continued.", args.To)
 			}
-			return Result{Text: fmt.Sprintf("Message queued for %s.", args.To)}, nil
+			if to.ID != "" {
+				text += namedTaskResult + "\n" + taskName(to)
+			}
+			return Result{Text: text}, nil
 		},
 		Display: Display{
 			Title: sendMessageTitle("SendMessage"),
 			Done:  sendMessageTitle("Messaged"),
-			Body:  func(string) string { return "" },
 			Summary: func(output string) string {
-				if strings.HasSuffix(output, " continued.") {
+				first, _, _ := strings.Cut(output, "\n")
+				if strings.HasSuffix(strings.TrimSuffix(first, namedTaskResult), " continued.") {
 					return "continued"
 				}
 				return "queued"
 			},
-			Action: Action{Verb: "Sent", One: "message", Many: "messages"},
+			Change: func(raw json.RawMessage) (string, []PreviewLine) {
+				var args sendMessageArgs
+				_ = json.Unmarshal(raw, &args)
+				return "", previewLines(Context, args.Message)
+			},
+			Action: Action{Verb: "Messaged", One: "agent", Many: "agents"},
+			Outcome: func(_ json.RawMessage, output string) (string, Action) {
+				return taskOutcome("Messaged", output)
+			},
 		},
 	}
 }

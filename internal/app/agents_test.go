@@ -462,6 +462,40 @@ func TestMessageToFinishedChildContinuesItsContextUnderTheSameID(t *testing.T) {
 	assert.Contains(t, a.info(t, id).Output, "› go\nfirst\n› again\nsecond")
 }
 
+func TestSendMessageResultNamesTheAgent(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first"), pigruntimetest.Text("second")})
+	a.rootAcks(2)
+	id := a.launch(t, "explorer", "find it", "go")
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	admit := func(policy.Target) (policy.Mode, error) { return policy.Execute, nil }
+	raw := json.RawMessage(fmt.Sprintf(`{"to":%q,"message":"again"}`, id))
+	result, err := tool.NewSendMessage(agentLauncher{a.c}).Run(t.Context(), raw, admit)
+	require.NoError(t, err)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	assert.Equal(t, fmt.Sprintf("Agent %s continued. [named task]\nAgent: explorer › find it", id), result.Text)
+}
+
+func TestSendMessageResultNamesARunningAgentAsQueued(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{releaseTool(started, release)}}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "c1")), pigruntimetest.Text("first"), pigruntimetest.Text("second")})
+	a.rootAcks(2)
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, started)
+
+	admit := func(policy.Target) (policy.Mode, error) { return policy.Execute, nil }
+	raw := json.RawMessage(fmt.Sprintf(`{"to":%q,"message":"again"}`, id))
+	result, err := tool.NewSendMessage(agentLauncher{a.c}).Run(t.Context(), raw, admit)
+	close(release)
+	require.NoError(t, err)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	assert.Equal(t, fmt.Sprintf("Message queued for %s. [named task]\nAgent: explorer › find it", id), result.Text)
+}
+
 func TestMessageToOtherTasksIsUnknown(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	a := newAgentHarness(t, sb, Config{}, agentDef("explorer"))
@@ -481,7 +515,7 @@ func TestRegistryStopQueuesNoNoticeButStopTaskQueuesANonWakingOne(t *testing.T) 
 
 	byModel := a.launch(t, "explorer", "first", "go")
 	wait(t, started)
-	_, err := a.tasks.Stop(byModel)
+	_, _, err := a.tasks.Stop(byModel)
 	require.NoError(t, err)
 	a.until(t, func() bool { return a.live() == 0 })
 	assert.Empty(t, a.queuedNotices(), "the model's own tool result covers it")
@@ -512,7 +546,7 @@ func TestHumanStopOfAStoppingChildReportsAMessageTheModelSent(t *testing.T) {
 	a.c.queue.Unlock()
 	stopped := make(chan error, 1)
 	go func() {
-		_, err := a.tasks.Stop(id)
+		_, _, err := a.tasks.Stop(id)
 		stopped <- err
 	}()
 	wait(t, sendDone)
@@ -831,7 +865,7 @@ func TestLoginIsRefusedWhileAChildRunsAndSubagentsCannotStartDuringOne(t *testin
 	_, err := a.c.Submit(t.Context(), Main, "/login "+loginProvider)
 	require.ErrorIs(t, err, ErrWorkStillRunning)
 
-	_, err = a.tasks.Stop(id)
+	_, _, err = a.tasks.Stop(id)
 	require.NoError(t, err)
 	a.until(t, func() bool { return a.live() == 0 })
 	_, err = a.c.Submit(t.Context(), Main, "/login "+loginProvider)

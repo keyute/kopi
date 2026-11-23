@@ -133,7 +133,6 @@ func (r *workflowRun) taskEnded(info tool.TaskInfo) event.TaskEnded {
 	if info.Status == tool.TaskStopped {
 		shown.Failed += n.Running + n.Queued
 	}
-	shown.Reason, shown.Result = info.Reason, info.Result
 	return shown
 }
 

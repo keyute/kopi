@@ -91,6 +91,11 @@ func TestJoinedPromptsMergeToolsWithoutDuplicates(t *testing.T) {
 	assert.Equal(t, pigruntime.Prompt{Text: "one\n\ntwo\n\nthree", Tools: []string{"Workflow", "Other"}}, got)
 }
 
+func TestJoinedPromptsCarryTheRaisedEffort(t *testing.T) {
+	got := joined([]pigruntime.Prompt{{Text: "one"}, {Text: "two", Effort: pigruntime.MaxEffort}, {Text: "three"}})
+	assert.Equal(t, pigruntime.Prompt{Text: "one\n\ntwo\n\nthree", Effort: pigruntime.MaxEffort}, got)
+}
+
 func TestEndSplitsUnsentInputBySender(t *testing.T) {
 	started := make(chan struct{})
 	h, _ := openHarness(t, Config{Tools: []tool.Tool{blockTool(started)}})

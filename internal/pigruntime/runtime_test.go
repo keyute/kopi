@@ -257,7 +257,7 @@ func TestSeamOpenStreamsFauxTurnWithZeroAmbient(t *testing.T) {
 
 	assert.Equal(t, "all done", deltas.String())
 	assert.Equal(t, []event.ToolStart{{CallID: "call-1", Name: "Probe", Args: "{}"}}, toolStarts)
-	assert.Equal(t, []event.ToolEnd{{CallID: "call-1", Name: "Probe", Output: toolOutput}}, toolEnds)
+	assert.Equal(t, []event.ToolEnd{{CallID: "call-1", Name: "Probe", Args: "{}", Output: toolOutput}}, toolEnds)
 
 	assert.Equal(t, []string{"Probe"}, sess.inner.CallableToolNames())
 	assert.Equal(t, []string{"Probe"}, sess.inner.ActiveToolNames())

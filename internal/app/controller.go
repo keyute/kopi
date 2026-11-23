@@ -537,7 +537,20 @@ func (c *Controller) SendNow(ctx context.Context, session, text string, images .
 // command, for input that must never change mode. It records no history. Like
 // Submit, it returns a nil Work when the input is queued behind a running turn.
 func (c *Controller) Prompt(ctx context.Context, text string) (*Work, error) {
-	return c.main.submit(ctx, pigruntime.Prompt{Text: text, Skills: c.skillTexts(text)}, false)
+	p := pigruntime.Prompt{Text: text, Skills: c.skillTexts(text)}
+	if len(keywordSpans(text, c.skills, ultrathinkWord)) > 0 {
+		p.Effort = pigruntime.MaxEffort
+	}
+	return c.main.submit(ctx, p, false)
+}
+
+// ultrathinks reports whether the main session's model reasons, so the
+// ultrathink keyword takes effect.
+func (c *Controller) ultrathinks() bool {
+	c.mu.Lock()
+	sess := c.main.sess
+	c.mu.Unlock()
+	return sess != nil && sess.Effort() != ""
 }
 
 // skillTexts returns the texts of the skills text names, in first-seen order.
@@ -594,8 +607,11 @@ func (c *Controller) input(ctx context.Context, session, text string, paths []st
 		return nil, err
 	}
 	p := pigruntime.Prompt{Text: prompt, Images: images, Skills: skills}
-	if target == c.main && c.workflowOffered() && len(keywordSpans(text, c.skills)) > 0 {
+	if target == c.main && c.workflowOffered() && len(keywordSpans(text, c.skills, ultracodeWord)) > 0 {
 		p.Tools = []string{"Workflow"}
+	}
+	if target == c.main && len(keywordSpans(text, c.skills, ultrathinkWord)) > 0 {
+		p.Effort = pigruntime.MaxEffort
 	}
 	return target.submitLocked(ctx, p, now)
 }
@@ -687,12 +703,12 @@ func (c *Controller) Commands() []Command {
 // PromptSpans returns the highlighted runs of a prompt as sent to session; a
 // sent prompt is never a command.
 func (c *Controller) PromptSpans(session, text string) []Span {
-	return promptSpans(text, c.skills, session == Main && c.workflowOffered())
+	return promptSpans(text, c.skills, session == Main && c.workflowOffered(), session == Main && c.ultrathinks())
 }
 
 // Spans returns the input's highlighted runs when it is typed to session.
 func (c *Controller) Spans(session, text string) []Span {
-	return Spans(text, c.skills, session == Main && c.workflowOffered())
+	return Spans(text, c.skills, session == Main && c.workflowOffered(), session == Main && c.ultrathinks())
 }
 
 // signalLocked must be called with queue held.

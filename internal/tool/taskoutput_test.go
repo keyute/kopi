@@ -40,7 +40,7 @@ func TestTaskOutputReportsRunningTask(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(out.Text, "Task t1 running for "), out.Text)
-	assert.True(t, strings.HasSuffix(out.Text, "\n(no output)"), out.Text)
+	assert.True(t, strings.HasSuffix(out.Text, "\nCommand: sleep 600\n(no output)"), out.Text)
 }
 
 func TestTaskOutputReportsEndedTask(t *testing.T) {
@@ -53,7 +53,7 @@ func TestTaskOutputReportsEndedTask(t *testing.T) {
 	out, err := NewTaskOutput(tasks).Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 
 	require.NoError(t, err)
-	assert.Equal(t, "Task t1 failed (exit code 3).\nhi\n", out.Text)
+	assert.Equal(t, "Task t1 failed (exit code 3). [named task]\nCommand: echo hi; exit 3\nhi\n", out.Text)
 }
 
 func TestTaskOutputReportsAgentTask(t *testing.T) {
@@ -66,13 +66,13 @@ func TestTaskOutputReportsAgentTask(t *testing.T) {
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(out.Text, "Task t1 running for "), out.Text)
-	assert.True(t, strings.HasSuffix(out.Text, ".\nlooking\n"), out.Text)
+	assert.True(t, strings.HasSuffix(out.Text, ". [named task]\nAgent: explore › find it\nlooking\n"), out.Text)
 
 	_, ok := agent.End(TaskCompleted, "", "done")
 	require.True(t, ok)
 	out, err = tool.Run(t.Context(), json.RawMessage(`{"task_id":"t1"}`), allowTarget)
 	require.NoError(t, err)
-	assert.Equal(t, "Task t1 completed.\nlooking\n", out.Text)
+	assert.Equal(t, "Task t1 completed. [named task]\nAgent: explore › find it\nlooking\n", out.Text)
 	assert.Equal(t, "completed", tool.Display.Summary(out.Text))
 	assert.Empty(t, events)
 }
@@ -132,4 +132,81 @@ func TestTaskOutputNamesTheSavedFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, dir, filepath.Dir(end.OutputFile))
 	assert.Contains(t, out.Text, "full output: "+end.OutputFile)
+}
+
+func TestTaskNameLine(t *testing.T) {
+	long := strings.Repeat("a", maxBashTitleRunes+5)
+	for _, tc := range []struct {
+		name       string
+		info       TaskInfo
+		line, kind string
+		read       string
+	}{
+		{"agent", TaskInfo{Agent: "explore", Command: "look"}, "Agent: explore › look", "Agent", "explore › look"},
+		{"shell", TaskInfo{Command: "make test"}, "Command: make test", "Command", "make test"},
+		{"multi-line shell", TaskInfo{Command: "cd a\nls"}, "Command: cd a …", "Command", "cd a …"},
+		{"long shell", TaskInfo{Command: long}, "Command: " + long[:maxBashTitleRunes] + " …", "Command", long[:maxBashTitleRunes] + " …"},
+		{"workflow", TaskInfo{Agent: WorkflowAgent, Command: "audit\nmore"}, "Workflow: audit", "Workflow", "audit"},
+		{"multi-line agent", TaskInfo{Agent: "explore", Command: "look\nmore"}, "Agent: explore › look", "Agent", "explore › look"},
+		{"agent with leading newline", TaskInfo{Agent: "explore", Command: "\nsurvey"}, "Agent: explore › survey", "Agent", "explore › survey"},
+		{"long agent", TaskInfo{Agent: "explore", Command: long}, "Agent: explore › " + long, "Agent", "explore › " + long},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.line, taskName(tc.info))
+
+			kind, name, ok := readTaskName("Task t1 completed. [named task]\n" + tc.line + "\nout")
+			assert.True(t, ok)
+			assert.Equal(t, tc.kind, kind)
+			assert.Equal(t, tc.read, name)
+		})
+	}
+	_, _, ok := readTaskName("Task t1 completed.\nhi\n")
+	assert.False(t, ok)
+	_, _, ok = readTaskName("Task t1 completed.")
+	assert.False(t, ok)
+}
+
+func TestTaskOutputOutcome(t *testing.T) {
+	tool := NewTaskOutput(NewTasks())
+	args := json.RawMessage(`{"task_id":"t1"}`)
+	for _, tc := range []struct {
+		name, output, done string
+		action             Action
+	}{
+		{"agent", "Task t1 completed. [named task]\nAgent: explore › look\nx", "Checked on explore › look", Action{Verb: "Checked on", One: "agent", Many: "agents"}},
+		{"shell", "Task t1 completed. [named task]\nCommand: make\nx", "Checked on shell make", Action{Verb: "Checked on", One: "shell", Many: "shells"}},
+		{"workflow", "Task t1 completed. [named task]\nWorkflow: audit\nx", "Checked on workflow › audit", Action{Verb: "Checked on", One: "workflow", Many: "workflows"}},
+		{"no name line", "Task t1 completed.\nx", "", Action{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			done, action := tool.Display.Outcome(args, tc.output)
+			assert.Equal(t, tc.done, done)
+			assert.Equal(t, tc.action, action)
+		})
+	}
+}
+
+func TestTaskOutputBodyDropsTheHeaderLines(t *testing.T) {
+	tool := NewTaskOutput(NewTasks())
+
+	assert.Equal(t, "a\nb\n", tool.Display.Body("Task t1 completed. [named task]\nCommand: make\na\nb\n"))
+	assert.Empty(t, tool.Display.Body("Task t1 completed. [named task]\nCommand: make\n"))
+	assert.Equal(t, "a\n", tool.Display.Body("Task t1 completed.\na\n"))
+	assert.Equal(t, "Command: x\n", tool.Display.Body("Task t1 completed. [named task]\nAgent: explore › look\nCommand: x\n"))
+}
+
+func TestTaskOutputPreservesLegacyOutput(t *testing.T) {
+	tool := NewTaskOutput(NewTasks())
+	for _, body := range []string{"Command: make\na\nb\n", "Agent: explore › look\nCommand: x\n", "Workflow: audit\nx\n", "ordinary output\n\nmore\n"} {
+		t.Run(body, func(t *testing.T) {
+			output := "Task t1 completed.\n" + body
+			assert.Equal(t, body, tool.Display.Body(output))
+			assert.Equal(t, "completed", tool.Display.Summary(output))
+			_, _, ok := readTaskName(output)
+			assert.False(t, ok)
+			done, action := tool.Display.Outcome(json.RawMessage(`{"task_id":"t1"}`), output)
+			assert.Empty(t, done)
+			assert.Zero(t, action)
+		})
+	}
 }

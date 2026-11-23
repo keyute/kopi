@@ -18,7 +18,7 @@ A workflow is a JavaScript script the main agent writes to start agents and comb
   - `phase(title)`, which sets the heading the [progress dialog](#progress-dialog) shows the agents that `agent()` starts after it under.
   - `parallel(thunks)`, which calls the functions together and returns a promise of their results in order, `null` for one that threw.
   - `pipeline(items, ...stages)`, which passes every item through the stages in order, each called as `stage(previous, item, index)`, the items together; it returns a promise of the last stage's results in order, `null` for an item whose stage threw.
-- `schema` is a JSON Schema with `"type": "object"`. The agent gets one more tool, `StructuredOutput`, whose parameters are the schema; the arguments of its last call are the result of `agent()`. An agent that ends without calling it, a schema of another type, or a `deny` rule for `StructuredOutput`, makes `agent()` reject.
+- `schema` is a JSON Schema with `"type": "object"`. The agent gets one more tool, `StructuredOutput`, whose parameters are the schema; the arguments of its last call are the result of `agent()`. In the agent's view that call's row reads `Returned result` and opens to the value. An agent that ends without calling it, a schema of another type, or a `deny` rule for `StructuredOutput`, makes `agent()` reject.
 - `label` names the agent in approval dialogs, in the task's output and in the progress dialog. `phase` sets the heading for that one agent, over the one set by `phase()`.
 - The script has no files, network, timers or imports; it reaches Kopi only through `agent()`.
 - A script's memory is limited to 128 MiB, and its `agent()` calls to 1000: the 1001st fails the workflow, even when the script catches the rejection.
@@ -52,7 +52,7 @@ The 1000 calls and the memory limit are fixed.
 
 ## What you see
 
-- The call shows as `• Workflow › <description>` with `↳ launched`, and returns a task id such as `t3`. Opening the row shows the script.
+- The call shows as `• Workflow › <description>` with `↳ launched`, and returns a task id such as `t3`. Opening the row shows the script. `TaskOutput` and `TaskStop` rows on it read `Checked on workflow › <description>` and `Stopped workflow › <description>`.
 - While the main agent is idle and a workflow runs, the row above the input reads `1 workflow still running`; the status line's `workflows` segment shows the count.
 - The end shows as `• workflow finished · <description> · 6m 3s` (`failed` or `stopped` in the error colour), followed by `↳ 9 agents · 1 failed` (the failed part only when non-zero). A failed workflow's row is followed by its reason in full. Opening a finished row shows the value the script returned.
 - `/tasks` lists the workflow next to other tasks as `workflow › <description>`, and stops it with `x` (`stop-agent`). Enter opens its progress dialog; dismissing it returns to the task list.

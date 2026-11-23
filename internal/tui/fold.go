@@ -39,7 +39,7 @@ func (f *folds) of(b transcript.Block) blockFolds {
 			return blockFolds{expanded: []bool{f.all || f.expanded[b.Call.ID]}}
 		}
 	case transcript.Task:
-		if b.Result != "" {
+		if bodyText(b.Result) != "" {
 			return blockFolds{expanded: []bool{f.all || f.expanded[b.Key()]}}
 		}
 	case transcript.Turn:

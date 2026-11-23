@@ -219,6 +219,9 @@ func TestWebFetchReturnsCrossHostRedirect(t *testing.T) {
 	assert.Empty(t, *calls)
 	assert.Equal(t, "redirected", tool.Display.Summary(out.Text))
 	assert.Equal(t, "Fetched example.com", tool.Display.Done(json.RawMessage(`{"url":"http://example.com/a","prompt":"p"}`)))
+	done, action := tool.Display.Outcome(json.RawMessage(`{"url":"http://example.com/a","prompt":"p"}`), out.Text)
+	assert.Equal(t, "WebFetch example.com", done)
+	assert.Equal(t, Action{Verb: "Hit", One: "redirect", Many: "redirects"}, action)
 	assert.Equal(t, "Fetched not a url", tool.Display.Done(json.RawMessage(`{"url":"not a url","prompt":"p"}`)))
 }
 
@@ -269,4 +272,7 @@ func TestWebFetchDisplay(t *testing.T) {
 		{Kind: Context, Text: "Offset: 500"},
 	}, d.Preview(json.RawMessage(`{"url":"https://go.dev/","prompt":"p","offset":500}`)))
 	assert.Equal(t, "3 lines", d.Summary("Line one.\n\nSource: https://go.dev/"))
+	done, action := d.Outcome(json.RawMessage(`{"url":"https://go.dev/","prompt":"p"}`), "Line one.\n\nSource: https://go.dev/")
+	assert.Empty(t, done)
+	assert.Equal(t, Action{}, action)
 }

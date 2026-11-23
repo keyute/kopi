@@ -502,7 +502,7 @@ func (m *model) editQueue() {
 // can change it, and starts the spinner when the working row appears.
 func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 	wasShown := m.tickWanted()
-	refresh, redraw := false, false
+	refresh, redraw, respan := false, false, false
 	pureThinking := len(evs) > 0
 	for _, ev := range evs {
 		_, inner := unwrap(ev)
@@ -513,6 +513,10 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 		case event.SessionChanged, event.ModeChanged, event.ModelChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged, event.LimitsChanged, event.ToolsChanged, event.EffortChanged:
 			refresh = true
 		}
+		switch inner.(type) {
+		case event.SessionChanged, event.EffortChanged, event.ModelChanged:
+			respan = true
+		}
 		if m.commands != nil {
 			m.commands.Observe(ev)
 		}
@@ -522,6 +526,9 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 	}
 	if refresh {
 		m.status, m.agents, m.workflows = m.c.Status(), m.c.Agents(), m.c.Workflows()
+	}
+	if respan {
+		m.composer.spans = m.c.Spans(m.shown, m.composer.value())
 	}
 	if redraw && !pureThinking {
 		m.relayout()

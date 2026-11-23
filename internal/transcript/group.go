@@ -26,14 +26,20 @@ func (g Group) Sentence() string {
 	}
 	clauses := make([]string, len(order))
 	for i, a := range order {
-		verb, noun := a.Verb, a.Many
+		verb := a.Verb
 		if i > 0 {
 			verb = lowerFirst(verb)
 		}
-		if counts[a] == 1 {
-			noun = a.One
+		switch {
+		case a.Many == "" && counts[a] == 1:
+			clauses[i] = verb + " " + a.One
+		case a.Many == "":
+			clauses[i] = verb + " " + a.One + " " + strconv.Itoa(counts[a]) + " times"
+		case counts[a] == 1:
+			clauses[i] = verb + " 1 " + a.One
+		default:
+			clauses[i] = verb + " " + strconv.Itoa(counts[a]) + " " + a.Many
 		}
-		clauses[i] = verb + " " + strconv.Itoa(counts[a]) + " " + noun
 		if n := unsandboxed[a]; n > 0 {
 			clauses[i] += " (" + strconv.Itoa(n) + " unsandboxed)"
 		}

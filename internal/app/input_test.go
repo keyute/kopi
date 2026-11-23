@@ -76,7 +76,7 @@ func TestSpans(t *testing.T) {
 		{text: "a @ b"},
 	} {
 		t.Run(tc.text, func(t *testing.T) {
-			assert.Equal(t, tc.want, Spans(tc.text, nil, false))
+			assert.Equal(t, tc.want, Spans(tc.text, nil, false, false))
 		})
 	}
 }
@@ -99,7 +99,7 @@ func TestSpansWithSkills(t *testing.T) {
 		{text: "/skill:c"},
 	} {
 		t.Run(tc.text, func(t *testing.T) {
-			assert.Equal(t, tc.want, Spans(tc.text, testSkills(), false))
+			assert.Equal(t, tc.want, Spans(tc.text, testSkills(), false, false))
 		})
 	}
 }
@@ -126,13 +126,40 @@ func TestSpansWithKeyword(t *testing.T) {
 		{text: "//plan ultracode", want: []Span{cmd(0, 7, 16)}},
 	} {
 		t.Run(tc.text, func(t *testing.T) {
-			assert.Equal(t, tc.want, Spans(tc.text, nil, true))
+			assert.Equal(t, tc.want, Spans(tc.text, nil, true, false))
 		})
 	}
-	assert.Nil(t, Spans("ultracode", nil, false), "not offered")
+	assert.Nil(t, Spans("ultracode", nil, false, false), "not offered")
 
 	set, _ := skill.NewSet("skill", []skill.Skill{{Name: "ultracode-review"}}, nil)
-	assert.Equal(t, []Span{cmd(0, 0, 23)}, Spans("/skill:ultracode-review now", set, true), "keyword inside a skill command")
+	assert.Equal(t, []Span{cmd(0, 0, 23)}, Spans("/skill:ultracode-review now", set, true, false), "keyword inside a skill command")
+}
+
+func TestSpansWithUltrathink(t *testing.T) {
+	cmd := func(line, start, end int) Span { return Span{Line: line, Start: start, End: end, Kind: KindCommand} }
+	for _, tc := range []struct {
+		text string
+		want []Span
+	}{
+		{text: "ultrathink", want: []Span{cmd(0, 0, 10)}},
+		{text: "Ultrathink.", want: []Span{cmd(0, 0, 10)}},
+		{text: "x ULTRATHINK y\nultrathink", want: []Span{cmd(0, 2, 12), cmd(1, 0, 10)}},
+		{text: "ultrathinker"},
+		{text: "myultrathink"},
+		{text: "see @ultrathink", want: []Span{{Start: 4, End: 15, Kind: KindReference}}},
+		{text: "/plan ultrathink", want: []Span{cmd(0, 0, 5)}},
+		{text: "/nope ultrathink"},
+		{text: "ultracode ultrathink", want: []Span{cmd(0, 10, 20)}},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			assert.Equal(t, tc.want, Spans(tc.text, nil, false, true))
+		})
+	}
+	assert.Nil(t, Spans("ultrathink", nil, false, false), "not in effect")
+	assert.Equal(t, []Span{cmd(0, 0, 9), cmd(0, 10, 20)}, Spans("ultracode ultrathink", nil, true, true))
+
+	set, _ := skill.NewSet("skill", []skill.Skill{{Name: "ultrathink-review"}}, nil)
+	assert.Equal(t, []Span{cmd(0, 0, 24)}, Spans("/skill:ultrathink-review now", set, false, true), "keyword inside a skill command")
 }
 
 func TestSpansManyReferences(t *testing.T) {
@@ -144,7 +171,7 @@ func TestSpansManyReferences(t *testing.T) {
 			want = append(want, Span{Line: line, Start: start, End: start + 2, Kind: KindReference})
 		}
 	}
-	assert.Equal(t, want, Spans(text, nil, false))
+	assert.Equal(t, want, Spans(text, nil, false, false))
 }
 
 func TestMatch(t *testing.T) {
@@ -187,7 +214,7 @@ func TestPromptSpans(t *testing.T) {
 		{text: "x\ny /skill:a @r ultracode", want: []Span{cmd(1, 2, 10), {Line: 1, Start: 11, End: 13, Kind: KindReference}, cmd(1, 14, 23)}},
 	} {
 		t.Run(tc.text, func(t *testing.T) {
-			assert.Equal(t, tc.want, promptSpans(tc.text, testSkills(), true))
+			assert.Equal(t, tc.want, promptSpans(tc.text, testSkills(), true, false))
 		})
 	}
 }

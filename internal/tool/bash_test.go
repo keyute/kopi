@@ -209,13 +209,9 @@ func TestBashDisplaySummary(t *testing.T) {
 	assert.Equal(t, "no output", tool.Display.Summary(noOutputNotice))
 	assert.Equal(t, "1 line", tool.Display.Summary("hi\n"))
 	assert.Equal(t, "3 lines", tool.Display.Summary("a\nb\nc"))
-	assert.Equal(t, "task t1", tool.Display.Summary("Background task t1 started."))
-	for _, out := range []string{
-		"Background task t1: the user moved this command to the background, where it keeps running.",
-		"Background task t1: this command did not finish within its 2m0s timeout and keeps running in the background.",
-	} {
-		assert.Equal(t, "moved to background · task t1", tool.Display.Summary(out))
-	}
+	assert.Empty(t, tool.Display.Summary("Background task t1 started."))
+	assert.Empty(t, tool.Display.Summary("Background task t1: the user moved this command to the background, where it keeps running."))
+	assert.Equal(t, "timed out", tool.Display.Summary("Background task t1: this command did not finish within its 2m0s timeout and keeps running in the background."))
 	assert.Equal(t, "1 line", tool.Display.Summary("Background task t1x"))
 }
 
@@ -225,11 +221,11 @@ func TestBashDisplayBackgroundNotifications(t *testing.T) {
 	for _, tc := range []struct {
 		name, output, summary string
 	}{
-		{"started", "Background task t1 started.", "task t1"},
-		{"user moved", "Background task t12: the user moved this command to the background, where it keeps running.", "moved to background · task t12"},
-		{"timeout moved", "Background task t123: this command did not finish within its 2m0s timeout and keeps running in the background.", "moved to background · task t123"},
-		{"millisecond timeout", "Background task t1: this command did not finish within its 1ms timeout and keeps running in the background.", "moved to background · task t1"},
-		{"fractional timeout", "Background task t1: this command did not finish within its 1.001s timeout and keeps running in the background.", "moved to background · task t1"},
+		{"started", "Background task t1 started.", ""},
+		{"user moved", "Background task t12: the user moved this command to the background, where it keeps running.", ""},
+		{"timeout moved", "Background task t123: this command did not finish within its 2m0s timeout and keeps running in the background.", "timed out"},
+		{"millisecond timeout", "Background task t1: this command did not finish within its 1ms timeout and keeps running in the background.", "timed out"},
+		{"fractional timeout", "Background task t1: this command did not finish within its 1.001s timeout and keeps running in the background.", "timed out"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.summary, tool.Display.Summary(tc.output))
@@ -266,6 +262,33 @@ func TestBashDisplayDone(t *testing.T) {
 	assert.Equal(t, "Ran cd a …", tool.Display.Done(json.RawMessage(`{"command":"cd a\nls"}`)))
 	assert.Equal(t, "Started sleep 5 in background", tool.Display.Done(json.RawMessage(`{"command":"sleep 5","run_in_background":true}`)))
 	assert.Equal(t, "Ran git config -l", tool.Display.Done(json.RawMessage(`{"command":"git config -l","unsandboxed":true}`)))
+}
+
+func TestBashDisplayOutcome(t *testing.T) {
+	tool, _ := newBashTool(t)
+	started := Action{Verb: "Started", One: "shell", Many: "shells"}
+	moved := "Background task t1: the user moved this command to the background, where it keeps running."
+	timeout := "Background task t1: this command did not finish within its 2m0s timeout and keeps running in the background."
+
+	done, action := tool.Display.Outcome(json.RawMessage(`{"command":"sleep 5","run_in_background":true}`), "Background task t1 started.")
+	assert.Empty(t, done)
+	assert.Equal(t, started, action)
+
+	for _, out := range []string{moved, timeout} {
+		done, action = tool.Display.Outcome(json.RawMessage(`{"command":"sleep 5\nls"}`), out)
+		assert.Equal(t, "Moved sleep 5 … to background", done)
+		assert.Equal(t, started, action)
+	}
+
+	sandboxed := NewBash(NewShell(t.TempDir(), &sandbox.Sandbox{}), NewShell(t.TempDir(), nil), NewTasks(), true)
+	done, _ = sandboxed.Display.Outcome(json.RawMessage(`{"command":"sleep 5","unsandboxed":true}`), moved)
+	assert.Equal(t, "Moved sleep 5 to background · unsandboxed", done)
+	done, _ = tool.Display.Outcome(json.RawMessage(`{"command":"sleep 5","unsandboxed":true}`), moved)
+	assert.Equal(t, "Moved sleep 5 to background", done)
+
+	done, action = tool.Display.Outcome(json.RawMessage(`{"command":"ls"}`), "a\n")
+	assert.Empty(t, done)
+	assert.Equal(t, Action{}, action)
 }
 
 func TestBashDisplayBody(t *testing.T) {

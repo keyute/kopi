@@ -250,7 +250,7 @@ func TestFoldClickHitsTranscriptWhilePendingShown(t *testing.T) {
 func TestPendingRowsStyleSkillTokens(t *testing.T) {
 	km, th := newKeyMap(testOptions().Keys), mocha()
 	set, _ := skill.NewSet("skill", []skill.Skill{{Name: "a"}}, nil)
-	spans := func(text string) []app.Span { return app.Spans(text, set, false) }
+	spans := func(text string) []app.Span { return app.Spans(text, set, false, false) }
 
 	rows := pendingRows([]string{"run /skill:a"}, "", spans, &km, 40, 8, 20, th)
 

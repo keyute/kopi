@@ -461,6 +461,7 @@ func TestSendRejectedCallPreservesOwner(t *testing.T) {
 	assert.False(t, res.Sent)
 	assert.Empty(t, res.Undelivered)
 	assert.Equal(t, rejected, res.UndeliveredNotices)
+	assert.Nil(t, res.Continuation)
 
 	res, err = sess.Send(ctx, Prompt{Text: "already cancelled"}, nil, nil)
 	assert.NoError(t, err)
@@ -1049,4 +1050,180 @@ func TestSetNameSurvivesResume(t *testing.T) {
 	require.NoError(t, sess.Close(t.Context()))
 
 	assert.Equal(t, "Fix the build", resume(t, r, sess.ID()).Name())
+}
+
+// openThinker opens a session on a reasoning model at low effort.
+func openThinker(t *testing.T, r *Runtime, tools ...tool.Tool) (*Session, *ai.FauxProviderHandle, OpenOptions) {
+	t.Helper()
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "faux-thinker", Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, r.RegisterProvider(thinker.Provider()))
+	opts := OpenOptions{Model: "faux-thinker/thinker", Effort: LowEffort, SystemPrompt: kopiPrompt, Tools: tools, Authority: policy.NewAuthority()}
+	sess, err := r.Open(t.Context(), opts)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+	return sess, thinker, opts
+}
+
+func TestSendRaisesEffortForTheRunAndRestoresIt(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	sess, thinker, opts := openThinker(t, r)
+	levels := make(chan ai.ThinkingLevel, 1)
+	thinker.SetResponses([]ai.FauxResponseStep{
+		ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+			levels <- o.Thinking
+			return ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{}), nil
+		}),
+	})
+	var changes int
+	sess.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.EffortChanged); ok {
+			changes++
+		}
+	})
+	_, err := sess.Send(t.Context(), Prompt{Text: "think", Effort: MaxEffort}, nil, nil)
+	require.NoError(t, err)
+
+	got := <-levels
+	assert.Equal(t, ai.ThinkingLevelHigh, got, "PiG clamps max to the model's highest level")
+	assert.Equal(t, "low", sess.Effort())
+	assert.Equal(t, 2, changes, "raise and restore")
+
+	opts.Effort, opts.ResumeID = DefaultEffort, sess.ID()
+	resumed, err := r.Open(t.Context(), opts)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, resumed.Close(context.Background())) })
+	assert.Equal(t, "low", resumed.Effort())
+}
+
+func TestSendRaisesEffortForAHandedOverPrompt(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	sess, thinker, _ := openThinker(t, r, probeTool(okProbe))
+	levels := make(chan ai.ThinkingLevel, 2)
+	final := ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+		levels <- o.Thinking
+		return ai.FauxAssistantMessage(ai.FauxContentString("done"), ai.FauxAssistantMessageOptions{}), nil
+	})
+	call := ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+		levels <- o.Thinking
+		return ai.FauxAssistantMessage(
+			ai.FauxContentBlocks{ai.FauxToolCall("Probe", map[string]any{}, &ai.FauxToolCallOptions{ID: "call-1"})},
+			ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)},
+		), nil
+	})
+	thinker.SetResponses([]ai.FauxResponseStep{call, final})
+	more, _ := moreOnce(Prompt{Text: "think hard", Effort: MaxEffort})
+	_, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, more)
+	require.NoError(t, err)
+
+	assert.Equal(t, ai.ThinkingLevelLow, <-levels, "the request before the hand-over")
+	assert.Equal(t, ai.ThinkingLevelHigh, <-levels, "the request carrying the handed-over prompt")
+	assert.Equal(t, "low", sess.Effort())
+}
+
+func TestSetEffortDuringARaisedRunKeepsTheUsersLevel(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	sess, thinker, _ := openThinker(t, r)
+	thinker.SetResponses([]ai.FauxResponseStep{
+		ai.FauxFactoryStep(func(_ ai.TranscriptContext, _ ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+			assert.NoError(t, sess.SetEffort(MediumEffort))
+			return ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{}), nil
+		}),
+	})
+	res, err := sess.Send(t.Context(), Prompt{Text: "think", Effort: MaxEffort}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "medium", sess.Effort())
+	assert.Nil(t, res.Continuation)
+}
+
+func TestSendKeepsTheFirstRaiseWhenAHandedOverPromptRaisesAgain(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	sess, thinker, _ := openThinker(t, r, probeTool(okProbe))
+	thinker.SetResponses([]ai.FauxResponseStep{
+		ai.FauxAssistantMessage(
+			ai.FauxContentBlocks{ai.FauxToolCall("Probe", map[string]any{}, &ai.FauxToolCallOptions{ID: "call-1"})},
+			ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)},
+		),
+		ai.FauxAssistantMessage(ai.FauxContentString("done"), ai.FauxAssistantMessageOptions{}),
+	})
+	var changes int
+	sess.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.EffortChanged); ok {
+			changes++
+		}
+	})
+	more, _ := moreOnce(Prompt{Text: "again", Effort: MaxEffort})
+	_, err := sess.Send(t.Context(), Prompt{Text: "go", Effort: MaxEffort}, nil, more)
+	require.NoError(t, err)
+	assert.Equal(t, "low", sess.Effort())
+	assert.Equal(t, 2, changes, "one raise and one restore")
+}
+
+func TestSendLeavesEffortAloneWhenTheModelDoesNotReason(t *testing.T) {
+	r, faux := newTestRuntime(t, newSandbox(t))
+	sess := openTestSession(t, r)
+	faux.SetResponses([]ai.FauxResponseStep{reply("ok")})
+	var changes int
+	sess.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.EffortChanged); ok {
+			changes++
+		}
+	})
+	res, err := sess.Send(t.Context(), Prompt{Text: "think", Effort: MaxEffort}, nil, nil)
+	require.NoError(t, err)
+	assert.Nil(t, res.Continuation)
+	assert.Zero(t, changes)
+	assert.Empty(t, sess.Effort())
+}
+
+func TestSendEffortContinuation(t *testing.T) {
+	for _, tc := range []struct {
+		name                              string
+		preCancelled, setEffort, explicit bool
+		want                              ai.ThinkingLevel
+	}{
+		{name: "valid", want: ai.ThinkingLevelHigh},
+		{name: "invalidated", setEffort: true, want: ai.ThinkingLevelLow},
+		{name: "pre-cancelled", preCancelled: true, want: ai.ThinkingLevelHigh},
+		{name: "pre-cancelled then invalidated", preCancelled: true, setEffort: true, want: ai.ThinkingLevelLow},
+		{name: "explicit raise after invalidation", setEffort: true, explicit: true, want: ai.ThinkingLevelHigh},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _ := newTestRuntime(t, newSandbox(t))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			sess, thinker, _ := openThinker(t, r, probeTool(func(context.Context, json.RawMessage) (string, error) {
+				cancel()
+				return toolOutput, nil
+			}))
+			levels := make(chan ai.ThinkingLevel, 1)
+			thinker.SetResponses([]ai.FauxResponseStep{callProbe(), ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+				levels <- o.Thinking
+				return ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{}), nil
+			})})
+			res, err := sess.Send(ctx, Prompt{Text: "think", Effort: MaxEffort}, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, event.Interrupted, res.Outcome.Status)
+			require.NotNil(t, res.Continuation)
+			assert.Equal(t, "low", sess.Effort())
+			if tc.preCancelled {
+				res, err = sess.Send(ctx, Prompt{Text: "instead", Continuation: res.Continuation}, nil, nil)
+				require.NoError(t, err)
+				require.False(t, res.Sent)
+				require.NotNil(t, res.Continuation)
+				assert.Equal(t, 1, thinker.CallCount())
+			}
+			if tc.setEffort {
+				require.NoError(t, sess.SetEffort(LowEffort))
+			}
+			p := Prompt{Text: "continue", Continuation: res.Continuation}
+			if tc.explicit {
+				p.Effort = MaxEffort
+			}
+			res, err = sess.Send(t.Context(), p, nil, nil)
+			require.NoError(t, err)
+			assert.True(t, res.Sent)
+			assert.Equal(t, tc.want, <-levels)
+			assert.Equal(t, "low", sess.Effort())
+		})
+	}
 }

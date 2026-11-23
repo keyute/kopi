@@ -37,7 +37,7 @@ func TestToolSearchDescribesItself(t *testing.T) {
 	assert.Nil(t, tool.Target)
 	assert.False(t, tool.Sandboxed)
 	assert.False(t, tool.PlanSandboxed)
-	assert.Equal(t, Action{Verb: "Ran", One: "tool search", Many: "tool searches"}, tool.Display.Action)
+	assert.Equal(t, Action{Verb: "Searched", One: "tools"}, tool.Display.Action)
 }
 
 func TestToolSearchAdmitsBeforeLoading(t *testing.T) {
