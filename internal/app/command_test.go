@@ -306,10 +306,16 @@ func TestUsageReadsTheLimitsOnceWithoutALimitSegment(t *testing.T) {
 
 	h.c.Usage()
 	receiveEvent(t, limits)
-	require.Equal(t, fauxProvider, h.c.Usage().Limits.Provider)
-	require.NoError(t, h.c.Close(t.Context()))
+	h.c.limits.mu.Lock()
+	attempted := h.c.limits.attempted
+	h.c.limits.mu.Unlock()
 
-	assert.Len(t, ofType[event.LimitsChanged](h.rec.all()), 1, "the second call is inside the minute")
+	require.Equal(t, fauxProvider, h.c.Usage().Limits.Provider)
+
+	h.c.limits.mu.Lock()
+	defer h.c.limits.mu.Unlock()
+	assert.Equal(t, attempted, h.c.limits.attempted, "the second call is inside the minute")
+	assert.False(t, h.c.limits.running)
 }
 
 func TestModelCommandReadsNoLimitsBeforeUsageIsAsked(t *testing.T) {

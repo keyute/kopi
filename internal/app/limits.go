@@ -17,7 +17,6 @@ const limitsEvery = time.Minute
 // limits holds the last reading of the main model's provider's plan limits,
 // refreshed on activity. Its mutex is a leaf: nothing is called with it held.
 // A nil *limits holds nothing: force, get and close are safe on it.
-// A forced read does nothing until refresh has wanted a reading.
 type limits struct {
 	read     func(ctx context.Context, provider string) ([]quota.Window, error)
 	provider func() string

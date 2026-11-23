@@ -112,7 +112,7 @@ func usageBody(u app.Usage, width int, th theme, now time.Time) []string {
 		fact = append(fact, label(f.label)+f.value)
 	}
 	body := []string{""}
-	for _, group := range [][]string{bar, usageContext(u, th), usageModels(u, width), fact} {
+	for _, group := range [][]string{bar, usageContext(u, width, th), usageModels(u, width), fact} {
 		if len(group) == 0 {
 			continue
 		}
@@ -172,14 +172,12 @@ func percentBar(pct float64, warn bool, th theme) string {
 
 // usageContext is a row for each category that holds some of the context, with
 // its tokens and its share of the context.
-func usageContext(u app.Usage, th theme) []string {
+func usageContext(u app.Usage, width int, th theme) []string {
 	if u.ContextTokens <= 0 {
 		return nil
 	}
 	c := u.Context
-	type row struct{ name, tokens, share string }
-	var rows []row
-	var name, tokens, share int
+	var rows [][3]string
 	for _, part := range []struct {
 		name   string
 		tokens int
@@ -195,26 +193,17 @@ func usageContext(u app.Usage, th theme) []string {
 		if part.tokens <= 0 {
 			continue
 		}
-		r := row{part.name, compactCount(part.tokens), fmt.Sprintf("%.0f%%", float64(part.tokens)*100/float64(u.ContextTokens))}
-		name, tokens, share = max(name, len(r.name)), max(tokens, len(r.tokens)), max(share, len(r.share))
-		rows = append(rows, r)
+		rows = append(rows, [3]string{part.name, compactCount(part.tokens), fmt.Sprintf("%.0f%%", float64(part.tokens)*100/float64(u.ContextTokens))})
 	}
-	out := make([]string, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, fg(th.muted).Render(r.name)+strings.Repeat(" ", name-len(r.name))+"   "+
-			fmt.Sprintf("%*s", tokens, r.tokens)+"   "+fmt.Sprintf("%*s", share, r.share))
-	}
-	return out
+	return usageColumns(rows, width, func(s string) string { return fg(th.muted).Render(s) })
 }
 
-// usageModels is a row for each model and the total, with the names cut to
-// leave the numbers whole within width.
+// usageModels is a row for each model and the total.
 func usageModels(u app.Usage, width int) []string {
 	if len(u.Models) == 0 {
 		return nil
 	}
-	type row struct{ name, tokens, cost string }
-	var rows []row
+	var rows [][3]string
 	total, totalCost := 0, 0.0
 	for _, m := range u.Models {
 		name := m.Model
@@ -223,19 +212,25 @@ func usageModels(u app.Usage, width int) []string {
 		}
 		total += m.Tokens
 		totalCost += m.Cost
-		rows = append(rows, row{name, compactCount(m.Tokens), fmt.Sprintf("$%.2f", m.Cost)})
+		rows = append(rows, [3]string{name, compactCount(m.Tokens), fmt.Sprintf("$%.2f", m.Cost)})
 	}
-	rows = append(rows, row{"Total (estimate)", compactCount(total), fmt.Sprintf("$%.2f", totalCost)})
-	var name, tokens, cost int
+	rows = append(rows, [3]string{"Total (estimate)", compactCount(total), fmt.Sprintf("$%.2f", totalCost)})
+	return usageColumns(rows, width, func(s string) string { return s })
+}
+
+// usageColumns aligns rows of a name and two right-aligned figures, cutting the
+// names to leave the figures whole within width; style renders a name.
+func usageColumns(rows [][3]string, width int, style func(string) string) []string {
+	var name, a, b int
 	for _, r := range rows {
-		name, tokens, cost = max(name, lipgloss.Width(r.name)), max(tokens, len(r.tokens)), max(cost, len(r.cost))
+		name, a, b = max(name, lipgloss.Width(r[0])), max(a, len(r[1])), max(b, len(r[2]))
 	}
-	name = min(name, max(1, width-tokens-cost-6))
+	name = min(name, max(1, width-a-b-6))
 	out := make([]string, 0, len(rows))
 	for _, r := range rows {
-		n := cut(r.name, name)
-		out = append(out, n+strings.Repeat(" ", name-lipgloss.Width(n))+"   "+
-			fmt.Sprintf("%*s", tokens, r.tokens)+"   "+fmt.Sprintf("%*s", cost, r.cost))
+		n := cut(r[0], name)
+		out = append(out, style(n)+strings.Repeat(" ", name-lipgloss.Width(n))+"   "+
+			fmt.Sprintf("%*s", a, r[1])+"   "+fmt.Sprintf("%*s", b, r[2]))
 	}
 	return out
 }

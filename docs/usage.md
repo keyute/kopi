@@ -84,7 +84,7 @@ The whole word `ultrathink`, in any case, in a prompt to the main agent raises i
 ```
 
 - Esc closes it. It stays open while turns run and shows the new figures when a tool call or turn ends; a change of session closes it. PgUp/PgDn scroll it when it is taller than a third of the screen.
-- `Context` is the main session's context; it is absent until the model's window is known. `5h`, `wk` and the other plan windows are the share of the plan used, in the warning colour from 90%, with when each resets (as in [Plan limits](providers.md#plan-limits)). They show only for a provider Kopi reads plan limits from, and only when it is the main session's model's provider.
+- `Context` is the main session's context; it is absent while the context's size or the model's window is unknown, as before the first request and right after a compaction. `5h`, `wk` and the other plan windows are the share of the plan used, in the warning colour from 90%, with when each resets (as in [Plan limits](providers.md#plan-limits)). They show only for a provider Kopi reads plan limits from, and only when it is the main session's model's provider.
 - The rows under the bars are the main session's context by what holds it, each with its share of the context:
   - `System prompt` is Kopi's own text, `Instructions` the [instruction files](trust.md), the home's and a trusted folder's.
   - `Tools` is the definitions of the tools the model can call, apart from the `Skill` tool's, which carries the skill list and is `Skills`, and the `Agent` tool's, which carries the subagent list and is `Agents`.

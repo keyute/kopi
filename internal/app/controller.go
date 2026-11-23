@@ -816,10 +816,8 @@ func (c *Controller) Status() Status {
 	c.queue.Unlock()
 
 	mode, _ := c.authority.Snapshot()
-	s := Status{SessionID: sessID, Mode: mode, Model: c.Model(), Busy: busy, Branch: gitBranch(c.cfg.Workspace), Workspace: c.cfg.Workspace, TotalCost: side.Cost()}
+	s := Status{SessionID: sessID, Mode: mode, Model: c.Model(), Busy: busy, Branch: gitBranch(c.cfg.Workspace), Workspace: c.cfg.Workspace, TotalCost: totalUsage(side, sess, children).Cost()}
 	if sess != nil {
-		_, cost := sess.Usage()
-		s.TotalCost += cost
 		s.MessageCount = sess.MessageCount()
 		s.Ultracode = sess.Callable("Workflow")
 		if tokens, window, ok := sess.ContextUsage(); ok {
@@ -850,10 +848,6 @@ func (c *Controller) Status() Status {
 		}
 	}
 	c.queue.Unlock()
-	for _, r := range children {
-		_, cost := r.sess.Usage()
-		s.TotalCost += cost
-	}
 	s.Foreground = c.cfg.Tasks.Foreground()
 	s.Limits = c.limits.get()
 	return s

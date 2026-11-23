@@ -176,7 +176,7 @@ func (s *Session) Record() Record {
 			Message usageMessage `json:"message"`
 		}
 		if err := json.Unmarshal(entry.Raw(), &record); err != nil {
-			return rec
+			continue
 		}
 		m := record.Message
 		if cacheable && m.Role == "assistant" && !omitted[entry.Base().ID] {
@@ -194,7 +194,7 @@ func (s *Session) Record() Record {
 	}
 	rec.ModelTime, rec.ToolTime = time.Duration(model)*time.Millisecond, time.Duration(tools)*time.Millisecond
 	if cacheable {
-		rec.Cache.Expires = s.cacheExpires(messages)
+		rec.Cache.Expires = s.cacheExpires(current, messages)
 	}
 	return rec
 }
@@ -205,11 +205,7 @@ func (s *Session) Record() Record {
 // unless a cache write reports its tier. OpenAI Responses never reports
 // CacheWrite1h. messages is the full branch history, which keeps that evidence
 // when compaction drops active messages.
-func (s *Session) cacheExpires(messages []usageMessage) time.Time {
-	model := s.inner.Model()
-	if model == nil || len(model.PromptCache) == 0 {
-		return time.Time{}
-	}
+func (s *Session) cacheExpires(model *ai.Model, messages []usageMessage) time.Time {
 	var last *usageMessage
 	var tier string
 	for i := len(messages) - 1; i >= 0; i-- {
