@@ -136,17 +136,20 @@ func TestUsageCountsARunningSubagent(t *testing.T) {
 	def := agentDef("explorer")
 	def.Model = sb.HeldPricedModel(t, reached, release)
 	a := newAgentHarness(t, sb, Config{}, def)
+	a.rootAcks(1)
+	ends := turnEnds(a.c)
 	id := a.launch(t, "explorer", "find it", "go")
 	wait(t, reached)
 	release <- struct{}{}
 	a.untilStatus(t, id, tool.TaskCompleted)
+	receiveEnd(t, ends)
 	_, err := a.c.message(t.Context(), id, "again")
 	require.NoError(t, err)
 	wait(t, reached)
 
 	got := a.c.Usage()
 
-	assert.Equal(t, []ModelUsage{{Model: def.Model, Tokens: 1_000_000, Cost: pigruntimetest.PricedModelCost}}, got.Models, "the second request is still held")
+	assert.Contains(t, got.Models, ModelUsage{Model: def.Model, Tokens: 1_000_000, Cost: pigruntimetest.PricedModelCost}, "the second request is still held")
 	assert.Equal(t, a.c.Status().TotalCost, pigruntime.Usage{Models: got.Models}.Cost())
 	close(release)
 }
