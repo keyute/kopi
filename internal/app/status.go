@@ -53,13 +53,25 @@ type Usage struct {
 	Model               string
 	// ContextTokens and ContextWindow are the main session's; zero while unknown.
 	ContextTokens, ContextWindow int
-	Limits                       quota.Limits
-	Tokens                       Tokens
+	// Context is ContextTokens by category; zero while that is unknown.
+	Context Context
+	// CompactAt is the context size above which the main session compacts, zero
+	// while its window is unknown; Compactions is how many its log holds.
+	CompactAt, Compactions int
+	Limits                 quota.Limits
+	Tokens                 Tokens
 	// Models are by cost descending, then model; their costs sum to
 	// Status.TotalCost.
 	Models []ModelUsage
 	Cache  Cache // the main session's
+	// ModelTime and ToolTime are what the main session's requests and tool runs
+	// took, over its whole log.
+	ModelTime, ToolTime time.Duration
 }
+
+// Context is a session's context by category, in tokens. Messages is what the
+// others leave of the reported total; the others are estimates.
+type Context struct{ SystemPrompt, Tools, Instructions, Skills, Agents, MCP, Messages int }
 
 // AgentStatus describes one session for a frontend: the main session or a subagent's.
 type AgentStatus struct {

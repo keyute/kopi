@@ -85,8 +85,8 @@ func (u *usageDialog) dialog(width int, th theme) *dialog {
 	return u.d
 }
 
-// usageBody is the dialog's rows for width: the bars, the models and the facts,
-// a group with no rows left out.
+// usageBody is the dialog's rows for width: the bars, the context's categories,
+// the models and the facts, a group with no rows left out.
 func usageBody(u app.Usage, width int, th theme, now time.Time) []string {
 	bars := usageBars(u)
 	facts := usageFacts(u, th, now)
@@ -112,7 +112,7 @@ func usageBody(u app.Usage, width int, th theme, now time.Time) []string {
 		fact = append(fact, label(f.label)+f.value)
 	}
 	body := []string{""}
-	for _, group := range [][]string{bar, usageModels(u, width), fact} {
+	for _, group := range [][]string{bar, usageContext(u, th), usageModels(u, width), fact} {
 		if len(group) == 0 {
 			continue
 		}
@@ -170,6 +170,43 @@ func percentBar(pct float64, warn bool, th theme) string {
 		" " + fg(c).Render(fmt.Sprintf("%4s", fmt.Sprintf("%.0f%%", pct)))
 }
 
+// usageContext is a row for each category that holds some of the context, with
+// its tokens and its share of the context.
+func usageContext(u app.Usage, th theme) []string {
+	if u.ContextTokens <= 0 {
+		return nil
+	}
+	c := u.Context
+	type row struct{ name, tokens, share string }
+	var rows []row
+	var name, tokens, share int
+	for _, part := range []struct {
+		name   string
+		tokens int
+	}{
+		{"System prompt", c.SystemPrompt},
+		{"Tools", c.Tools},
+		{"Instructions", c.Instructions},
+		{"Skills", c.Skills},
+		{"Agents", c.Agents},
+		{"MCP", c.MCP},
+		{"Messages", c.Messages},
+	} {
+		if part.tokens <= 0 {
+			continue
+		}
+		r := row{part.name, compactCount(part.tokens), fmt.Sprintf("%.0f%%", float64(part.tokens)*100/float64(u.ContextTokens))}
+		name, tokens, share = max(name, len(r.name)), max(tokens, len(r.tokens)), max(share, len(r.share))
+		rows = append(rows, r)
+	}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, fg(th.muted).Render(r.name)+strings.Repeat(" ", name-len(r.name))+"   "+
+			fmt.Sprintf("%*s", tokens, r.tokens)+"   "+fmt.Sprintf("%*s", share, r.share))
+	}
+	return out
+}
+
 // usageModels is a row for each model and the total, with the names cut to
 // leave the numbers whole within width.
 func usageModels(u app.Usage, width int) []string {
@@ -205,7 +242,8 @@ func usageModels(u app.Usage, width int) []string {
 
 type usageFact struct{ label, value string }
 
-// usageFacts is the Tokens, Cache and Session rows that have something to say.
+// usageFacts is the Tokens, Cache, Compaction, Time and Session rows that have
+// something to say.
 func usageFacts(u app.Usage, th theme, now time.Time) []usageFact {
 	sep := fg(th.muted).Render(" · ")
 	var facts []usageFact
@@ -235,6 +273,26 @@ func usageFacts(u app.Usage, th theme, now time.Time) []usageFact {
 	}
 	if len(cache) > 0 {
 		facts = append(facts, usageFact{"Cache", strings.Join(cache, sep)})
+	}
+	var compaction []string
+	if u.Compactions > 0 {
+		compaction = append(compaction, fmt.Sprintf("%d done", u.Compactions))
+	}
+	if u.CompactAt > 0 {
+		compaction = append(compaction, "next at "+compactCount(u.CompactAt))
+	}
+	if len(compaction) > 0 {
+		facts = append(facts, usageFact{"Compaction", strings.Join(compaction, sep)})
+	}
+	var spent []string
+	if u.ModelTime >= time.Second {
+		spent = append(spent, formatDuration(u.ModelTime)+" model")
+	}
+	if u.ToolTime >= time.Second {
+		spent = append(spent, formatDuration(u.ToolTime)+" tools")
+	}
+	if len(spent) > 0 {
+		facts = append(facts, usageFact{"Time", strings.Join(spent, sep)})
 	}
 	var session []string
 	if u.SessionID != "" {

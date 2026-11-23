@@ -25,6 +25,8 @@ func usageFixture() app.Usage {
 	return app.Usage{
 		SessionID: "0195c2d4", Messages: 42, ToolCalls: 128, Model: "openai-codex/gpt-5-codex",
 		ContextTokens: 84_200, ContextWindow: 1_000_000,
+		Context:   app.Context{SystemPrompt: 1_900, Tools: 8_100, Instructions: 6_200, Skills: 1_800, Agents: 1_300, MCP: 3_000, Messages: 61_900},
+		CompactAt: 983_616, Compactions: 2, ModelTime: 12*time.Minute + 40*time.Second, ToolTime: 3*time.Minute + 5*time.Second,
 		Limits: quota.Limits{Provider: "openai-codex", At: now, Windows: []quota.Window{
 			{Label: "5h", UsedPercent: 23, ResetsAt: now.Add(3*time.Hour + 40*time.Minute)},
 			{Label: "wk", UsedPercent: 52, ResetsAt: now.Add(4*24*time.Hour + 21*time.Hour)},
@@ -52,10 +54,13 @@ func usageBubble(t *testing.T, f func(t *testing.T)) {
 	})
 }
 
+// usageRows is a screen tall enough to show the whole fixture unscrolled.
+const usageRows = 90
+
 // usageModel has /usage ready to open on u, or on usageFixture when u is nil.
 func usageModel(t *testing.T, width int, u *app.Usage) (*model, *fakeController) {
 	t.Helper()
-	m, c := newTestModel(t, width, 60)
+	m, c := newTestModel(t, width, usageRows)
 	c.usage = usageFixture()
 	if u != nil {
 		c.usage = *u
@@ -88,35 +93,45 @@ func usageOpen(t *testing.T, m *model) *usageDialog {
 
 func TestUsageShowsEveryRow(t *testing.T) {
 	usageBubble(t, func(t *testing.T) {
-		m, c := usageModel(t, 60, nil)
+		m, c := usageModel(t, 70, nil)
 		resets, warm := clock(3*time.Hour+40*time.Minute, "15:04"), clock(3*time.Hour+42*time.Minute, "15:04")
 		week := clock(4*24*time.Hour+21*time.Hour, "Mon 15:04")
 		typeText(m, "/usage")
 		assert.NotNil(t, press(m, enter), "the cache's wake")
 
-		rule := strings.Repeat("─", 60)
+		rule := strings.Repeat("─", 70)
 		assert.Equal(t, []string{
 			rule,
 			"  Usage",
 			"",
-			"  Context  ▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱   8%  84.2k / 1.0m",
-			"  5h       ▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱  23%  resets " + resets,
-			"  wk       ▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱  52%  resets " + week,
+			"  Context     ▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱   8%  84.2k / 1.0m",
+			"  5h          ▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱  23%  resets " + resets,
+			"  wk          ▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱  52%  resets " + week,
+			"",
+			"  System prompt    1.9k    2%",
+			"  Tools            8.1k   10%",
+			"  Instructions     6.2k    7%",
+			"  Skills           1.8k    2%",
+			"  Agents           1.3k    2%",
+			"  MCP              3.0k    4%",
+			"  Messages        61.9k   74%",
 			"",
 			"  openai-codex/gpt-5-codex     1.2m   $3.90",
 			"  openai-codex/gpt-5-mini    310.0k   $0.41",
 			"  Total (estimate)             1.5m   $4.31",
 			"",
-			"  Tokens   502.0k in · 58.0k out · 940.0k read · 12.0k write",
-			"  Cache    91% hit · warm until " + warm + " · 2 misses $0.42",
-			"  Session  0195c2d4 · 42 messages · 128 tool calls",
+			"  Tokens      502.0k in · 58.0k out · 940.0k read · 12.0k write",
+			"  Cache       91% hit · warm until " + warm + " · 2 misses $0.42",
+			"  Compaction  2 done · next at 983.6k",
+			"  Time        12m 40s model · 3m 5s tools",
+			"  Session     0195c2d4 · 42 messages · 128 tool calls",
 			"",
 			rule,
 		}, dialogRows(t, m))
 		assert.Empty(t, m.composer.value(), "the draft is accepted")
 		assert.Equal(t, 1, c.usageReads)
 		s := screen(m)
-		assert.Len(t, s, 60)
+		assert.Len(t, s, usageRows)
 		assert.Contains(t, s[len(s)-1], "plan", "the status line stays last")
 	})
 }
@@ -132,6 +147,12 @@ func TestUsageLeavesOutWhatItHasNothingFor(t *testing.T) {
 		"no tokens":                  {func(u *app.Usage) { u.Tokens = app.Tokens{} }, []string{"Tokens"}},
 		"no cache parts":             {func(u *app.Usage) { u.Cache = app.Cache{} }, []string{"Cache"}},
 		"zero counts":                {func(u *app.Usage) { u.Messages, u.ToolCalls = 0, 0 }, []string{"messages", "tool calls"}},
+		"no context tokens":          {func(u *app.Usage) { u.ContextTokens, u.Context = 0, app.Context{} }, []string{"System prompt", "Messages"}},
+		"an empty category":          {func(u *app.Usage) { u.Context.MCP = 0 }, []string{"MCP"}},
+		"no compaction parts":        {func(u *app.Usage) { u.CompactAt, u.Compactions = 0, 0 }, []string{"Compaction"}},
+		"no compaction yet":          {func(u *app.Usage) { u.Compactions = 0 }, []string{"done"}},
+		"no time":                    {func(u *app.Usage) { u.ModelTime, u.ToolTime = 0, 0 }, []string{"Time"}},
+		"no tool time":               {func(u *app.Usage) { u.ToolTime = 999 * time.Millisecond }, []string{" tools"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			usageBubble(t, func(t *testing.T) {
@@ -159,11 +180,12 @@ func TestUsageWithNothingUsedShowsTheSession(t *testing.T) {
 	})
 }
 
-func TestUsageWithoutLimitsOrCacheLifetimeIsTwoGroups(t *testing.T) {
+func TestUsageWithoutLimitsOrCacheLifetime(t *testing.T) {
 	usageBubble(t, func(t *testing.T) {
 		u := usageFixture()
 		u.Model, u.Limits, u.Cache.Expires = "mock/model-1", quota.Limits{}, time.Time{}
 		u.Models = []app.ModelUsage{{Model: "mock/model-1", Tokens: 1_500, Cost: 0.0049}, {Model: "", Tokens: 20, Cost: 0}}
+		u.Context, u.CompactAt, u.Compactions, u.ModelTime, u.ToolTime = app.Context{Messages: 84_200}, 0, 0, 0, 0
 		m, _ := usageModel(t, 60, &u)
 
 		rule := strings.Repeat("─", 60)
@@ -172,6 +194,8 @@ func TestUsageWithoutLimitsOrCacheLifetimeIsTwoGroups(t *testing.T) {
 			"  Usage",
 			"",
 			"  Context  ▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱   8%  84.2k / 1.0m",
+			"",
+			"  Messages   84.2k   100%",
 			"",
 			"  mock/model-1       1.5k   $0.00",
 			"  summaries            20   $0.00",
@@ -192,7 +216,7 @@ func TestUsageWindowOmitsAnUnknownReset(t *testing.T) {
 		u.Limits.Windows[0].ResetsAt = time.Time{}
 		m, _ := usageModel(t, 60, &u)
 
-		assert.Equal(t, "  5h       ▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱  23%", openUsage(t, m)[4])
+		assert.Equal(t, "  5h          ▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱  23%", openUsage(t, m)[4])
 	})
 }
 
@@ -330,7 +354,7 @@ func TestUsageCutsTheModelNameAndKeepsTheNumbers(t *testing.T) {
 			"  openai-codex/gpt-5-c…     1.2m   $3.90",
 			"  openai-codex/gpt-5-m…   310.0k   $0.41",
 			"  Total (estimate)          1.5m   $4.31",
-		}, rows[7:10])
+		}, rows[15:18])
 	})
 }
 
@@ -350,7 +374,7 @@ func TestUsageReadsAgainOnWhatChangesIt(t *testing.T) {
 			assert.Equal(t, i+2, c.usageReads)
 			assert.Contains(t, strings.Join(dialogRows(t, m), "\n"), compactCount(1_000*(i+1))+" in")
 		}
-		assert.Contains(t, strings.Join(dialogRows(t, m), "\n"), "  5h       ▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱  23%  resets 15:40")
+		assert.Contains(t, strings.Join(dialogRows(t, m), "\n"), "  5h          ▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱  23%  resets 15:40")
 	})
 }
 

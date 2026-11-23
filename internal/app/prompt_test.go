@@ -224,3 +224,29 @@ func TestPromptLeavesOutADeferredToolWithoutToolSearch(t *testing.T) {
 
 	assert.Contains(t, joinPrompt(buildPrompt("/w", nil, nil, nil, false, nil, false)), "No tools are available.")
 }
+
+func TestContextOfSortsPartsAndToolsIntoCategories(t *testing.T) {
+	parts := []pigruntime.Size{
+		{Name: "preamble", Tokens: 100},
+		{Name: "instructions global /home", Tokens: 30},
+		{Name: "instructions project /repo", Tokens: 20},
+		{Name: "mcp-servers", Tokens: 5},
+	}
+	tools := []pigruntime.Size{
+		{Name: "Read", Tokens: 40},
+		{Name: "Bash", Tokens: 60},
+		{Name: "Skill", Tokens: 7},
+		{Name: "Agent", Tokens: 9},
+		{Name: tool.MCPName("github", "search"), Tokens: 11},
+	}
+
+	got := contextOf(1000, parts, tools)
+
+	assert.Equal(t, Context{SystemPrompt: 100, Tools: 100, Instructions: 50, Skills: 7, Agents: 9, MCP: 16, Messages: 718}, got)
+}
+
+func TestContextOfScalesEstimatesAboveTheTotal(t *testing.T) {
+	got := contextOf(100, []pigruntime.Size{{Name: "preamble", Tokens: 150}}, []pigruntime.Size{{Name: "Read", Tokens: 50}})
+
+	assert.Equal(t, Context{SystemPrompt: 75, Tools: 25}, got)
+}

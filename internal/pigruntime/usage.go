@@ -108,36 +108,63 @@ type Cache struct {
 	Expires time.Time
 }
 
-// Cache returns what the session's requests report about the prompt cache.
-// Hit and the misses are PiG's accounting; Expires is estimated by time alone,
-// so a compaction still leaves it warm.
-func (s *Session) Cache() Cache {
-	accounting := s.inner.SessionManager().Accounting()
-	tokens := accounting.Tokens
-	c := Cache{
-		Misses:     accounting.CacheWaste.MissCount,
-		MissedCost: accounting.CacheWaste.MissedCost,
-	}
-	// The footer rule of PiG: a share is shown once the session has cache tokens.
-	if rate := accounting.LatestCacheHitRate; rate != nil && (tokens.CacheRead > 0 || tokens.CacheWrite > 0) {
-		c.Reported, c.Hit = true, *rate
-	}
-	c.Expires = s.cacheExpires()
-	return c
+// Record is what the session's whole log says beyond PiG's accounting.
+type Record struct {
+	Cache Cache
+	// ModelTime and ToolTime are the summed durations of the session's model
+	// requests and of its tool runs; a message logged without one adds nothing.
+	ModelTime, ToolTime time.Duration
+	Compactions         int
 }
 
-// cacheExpires dates the last request that sent a prompt, when the session's
-// model made it. PiG's GetPromptCacheTtlMs is internal; Kopi sets no explicit
-// retention, so its tier comes from the provider/process environment unless a
-// cache write reports its tier. OpenAI Responses never reports CacheWrite1h.
-// Full branch history keeps that evidence when compaction drops active messages.
-func (s *Session) cacheExpires() time.Time {
-	model := s.inner.Model()
-	if model == nil {
-		return time.Time{}
+// Record reads the session's whole log once. The cache's Hit and misses are
+// PiG's accounting; its Expires is estimated by time alone, so a compaction
+// still leaves it warm.
+func (s *Session) Record() Record {
+	manager := s.inner.SessionManager()
+	accounting := manager.Accounting()
+	tokens := accounting.Tokens
+	rec := Record{Cache: Cache{
+		Misses:     accounting.CacheWaste.MissCount,
+		MissedCost: accounting.CacheWaste.MissedCost,
+	}}
+	// The footer rule of PiG: a share is shown once the session has cache tokens.
+	if rate := accounting.LatestCacheHitRate; rate != nil && (tokens.CacheRead > 0 || tokens.CacheWrite > 0) {
+		rec.Cache.Reported, rec.Cache.Hit = true, *rate
 	}
-	messages, err := branchMessages(s.inner.SessionManager().GetBranch())
+	entries := manager.GetBranch()
+	for _, entry := range entries {
+		if entry.Base().Type == "compaction" {
+			rec.Compactions++
+		}
+	}
+	messages, err := branchMessages(entries)
 	if err != nil {
+		return rec
+	}
+	var model, tools int64
+	for _, m := range messages {
+		if m.Assistant != nil && m.Assistant.DurationMs != nil {
+			model += *m.Assistant.DurationMs
+		}
+		if m.ToolResult != nil && m.ToolResult.DurationMs != nil {
+			tools += *m.ToolResult.DurationMs
+		}
+	}
+	rec.ModelTime, rec.ToolTime = time.Duration(model)*time.Millisecond, time.Duration(tools)*time.Millisecond
+	rec.Cache.Expires = s.cacheExpires(messages)
+	return rec
+}
+
+// cacheExpires dates the last request in messages that sent a prompt, when the
+// session's model made it. PiG's GetPromptCacheTtlMs is internal; Kopi sets no
+// explicit retention, so its tier comes from the provider/process environment
+// unless a cache write reports its tier. OpenAI Responses never reports
+// CacheWrite1h. messages is the full branch history, which keeps that evidence
+// when compaction drops active messages.
+func (s *Session) cacheExpires(messages []agent.AgentMessage) time.Time {
+	model := s.inner.Model()
+	if model == nil || len(model.PromptCache) == 0 {
 		return time.Time{}
 	}
 	var last *agent.AssistantMessage
@@ -180,6 +207,29 @@ func (s *Session) cacheExpires() time.Time {
 		return time.Time{}
 	}
 	return time.UnixMilli(last.Timestamp).Add(time.Duration(seconds * float64(time.Second)))
+}
+
+// Size is the estimated tokens of one named prompt part or tool definition.
+type Size struct {
+	Name   string
+	Tokens int
+}
+
+// ContextSizes estimates what the prompt parts and the loaded tool definitions
+// hold of the session's context, in the order PiG sends them. The figures are
+// PiG's character estimate, not the provider's count ContextUsage starts from.
+func (s *Session) ContextSizes() (parts, tools []Size) {
+	current := ai.GetCurrentSystemMessage(s.inner.Messages())
+	if current == nil {
+		return nil, nil
+	}
+	for _, section := range current.Sections {
+		parts = append(parts, Size{Name: section.Name, Tokens: ai.EstimateTextTokens(*section.Value)})
+	}
+	for _, schema := range current.ToolsAdded {
+		tools = append(tools, Size{Name: schema.Name, Tokens: ai.EstimateMessageTokens(ai.SystemMessage{ToolsAdded: []ai.ToolSchema{schema}})})
+	}
+	return parts, tools
 }
 
 // usageOf is the one request msg made, as a row keyed the way PiG's session

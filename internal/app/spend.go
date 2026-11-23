@@ -65,8 +65,12 @@ func (c *Controller) Usage() Usage {
 		u.Messages = sess.LoggedMessages()
 		if tokens, window, ok := sess.ContextUsage(); ok {
 			u.ContextTokens, u.ContextWindow = tokens, window
+			parts, tools := sess.ContextSizes()
+			u.Context = contextOf(tokens, parts, tools)
 		}
-		u.Cache = sess.Cache()
+		u.CompactAt, _ = sess.CompactAt()
+		rec := sess.Record()
+		u.Cache, u.Compactions, u.ModelTime, u.ToolTime = rec.Cache, rec.Compactions, rec.ModelTime, rec.ToolTime
 	}
 	used = totalUsage(used, sess, children)
 	u.Tokens, u.Models = used.Tokens, slices.Clone(used.Models)

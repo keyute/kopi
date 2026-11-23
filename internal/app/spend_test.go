@@ -114,7 +114,20 @@ func TestUsageReadsTheMainSession(t *testing.T) {
 	assert.Equal(t, tokens, got.ContextTokens)
 	assert.Equal(t, window, got.ContextWindow)
 	assert.True(t, got.Cache.Reported, "the second request read what the first cached")
-	assert.Equal(t, h.c.main.sess.Cache(), got.Cache)
+	rec := h.c.main.sess.Record()
+	assert.Equal(t, rec.Cache, got.Cache)
+	assert.Equal(t, rec.ModelTime, got.ModelTime)
+	assert.Equal(t, rec.ToolTime, got.ToolTime)
+	assert.Zero(t, got.Compactions)
+	at, ok := h.c.main.sess.CompactAt()
+	require.True(t, ok)
+	assert.Equal(t, at, got.CompactAt)
+	c := got.Context
+	assert.Positive(t, c.SystemPrompt)
+	assert.Positive(t, c.Tools)
+	sum := c.SystemPrompt + c.Tools + c.Instructions + c.Skills + c.Agents + c.MCP + c.Messages
+	assert.LessOrEqual(t, sum, tokens)
+	assert.Less(t, tokens-sum, 6, "the categories are the whole context, each short by under a token where scaled")
 }
 
 func TestUsageCountsARunningSubagent(t *testing.T) {

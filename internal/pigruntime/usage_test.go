@@ -2,6 +2,8 @@ package pigruntime
 
 import (
 	"fmt"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -85,7 +87,7 @@ func TestCacheEqualsTheSessionAccounting(t *testing.T) {
 	r, _ := newTestRuntime(t, sb)
 	sess := openTestSession(t, r)
 	manager := sess.inner.SessionManager()
-	assert.Equal(t, Cache{}, sess.Cache(), "nothing is reported before a request")
+	assert.Equal(t, Cache{}, sess.Record().Cache, "nothing is reported before a request")
 
 	appendHistoryMessage(t, manager, `{"role":"user","content":"hi","timestamp":1}`)
 	appendHistoryMessage(t, manager, assistantRecord("p1", "m1", "", 2, usageJSON(100, 10, 0, 50000, 0.5, "")))
@@ -94,7 +96,7 @@ func TestCacheEqualsTheSessionAccounting(t *testing.T) {
 	accounting := manager.Accounting()
 	require.NotNil(t, accounting.LatestCacheHitRate)
 	require.Equal(t, 1, accounting.CacheWaste.MissCount, "the second request paid again for what the first made cacheable")
-	got := sess.Cache()
+	got := sess.Record().Cache
 	assert.True(t, got.Reported)
 	assert.Equal(t, *accounting.LatestCacheHitRate, got.Hit)
 	assert.Equal(t, accounting.CacheWaste.MissCount, got.Misses)
@@ -108,7 +110,7 @@ func TestCacheIsNotReportedWithoutCacheTokens(t *testing.T) {
 	sess := openTestSession(t, r)
 	appendHistoryMessage(t, sess.inner.SessionManager(), assistantRecord("p1", "m1", "", 2, usageJSON(100, 10, 0, 0, 0.5, "")))
 
-	assert.False(t, sess.Cache().Reported)
+	assert.False(t, sess.Record().Cache.Reported)
 }
 
 func TestCacheExpiresAfterTheModelsLifetime(t *testing.T) {
@@ -141,18 +143,18 @@ func TestCacheExpiresAfterTheModelsLifetime(t *testing.T) {
 	}
 	user := `{"role":"user","content":"hi","timestamp":1}`
 
-	assert.True(t, open(t, "kopi-cache/cached-1").Cache().Expires.IsZero(), "no request yet")
+	assert.True(t, open(t, "kopi-cache/cached-1").Record().Cache.Expires.IsZero(), "no request yet")
 
 	short := open(t, "kopi-cache/cached-1", user, assistantRecord("kopi-cache", "cached-1", "", started, usageJSON(10, 1, 100, 0, 0, "")))
-	assert.Equal(t, time.UnixMilli(started).Add(5*time.Minute), short.Cache().Expires)
+	assert.Equal(t, time.UnixMilli(started).Add(5*time.Minute), short.Record().Cache.Expires)
 
 	long := open(t, "kopi-cache/cached-1", user, assistantRecord("kopi-cache", "cached-1", "", started, usageJSON(10, 1, 0, 100, 0, `,"cacheWrite1h":100`)))
-	assert.Equal(t, time.UnixMilli(started).Add(time.Hour), long.Cache().Expires)
+	assert.Equal(t, time.UnixMilli(started).Add(time.Hour), long.Record().Cache.Expires)
 
 	last := open(t, "kopi-cache/cached-1", user,
 		assistantRecord("kopi-cache", "cached-1", "", started, usageJSON(10, 1, 0, 100, 0, `,"cacheWrite1h":100`)),
 		assistantRecord("kopi-cache", "cached-1", "", started+60_000, usageJSON(10, 1, 100, 0, 0, "")))
-	assert.Equal(t, time.UnixMilli(started+60_000).Add(time.Hour), last.Cache().Expires, "a read keeps the tier of the latest write")
+	assert.Equal(t, time.UnixMilli(started+60_000).Add(time.Hour), last.Record().Cache.Expires, "a read keeps the tier of the latest write")
 
 	t.Run("compaction and resume", func(t *testing.T) {
 		manager := last.inner.SessionManager()
@@ -160,7 +162,7 @@ func TestCacheExpiresAfterTheModelsLifetime(t *testing.T) {
 		_, err := manager.AppendCompaction("summary", kept, 1000, nil, false, nil)
 		require.NoError(t, err)
 		want := time.UnixMilli(started + 120_000).Add(time.Hour)
-		assert.Equal(t, want, last.Cache().Expires)
+		assert.Equal(t, want, last.Record().Cache.Expires)
 		require.NoError(t, last.Close(t.Context()))
 		resumed, err := r.Open(t.Context(), OpenOptions{Model: "kopi-cache/cached-1", ResumeID: last.ID(), SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
 		require.NoError(t, err)
@@ -170,28 +172,28 @@ func TestCacheExpiresAfterTheModelsLifetime(t *testing.T) {
 				assert.Zero(t, m.Usage.CacheWrite, "the write is no longer in active context")
 			}
 		}
-		assert.Equal(t, want, resumed.Cache().Expires, "full branch history keeps the hourly tier")
+		assert.Equal(t, want, resumed.Record().Cache.Expires, "full branch history keeps the hourly tier")
 	})
 
 	rewritten := open(t, "kopi-cache/cached-1", user,
 		assistantRecord("kopi-cache", "cached-1", "", started, usageJSON(10, 1, 0, 100, 0, `,"cacheWrite1h":100`)),
 		assistantRecord("kopi-cache", "cached-1", "", started+60_000, usageJSON(10, 1, 0, 100, 0, "")))
-	assert.Equal(t, time.UnixMilli(started+60_000).Add(5*time.Minute), rewritten.Cache().Expires, "the latest write decides the tier")
+	assert.Equal(t, time.UnixMilli(started+60_000).Add(5*time.Minute), rewritten.Record().Cache.Expires, "the latest write decides the tier")
 
 	switched := open(t, "kopi-cache/cached-1", user, assistantRecord("kopi-cache", "plain-1", "", started, usageJSON(10, 1, 100, 0, 0, "")))
 	require.Equal(t, "cached-1", switched.inner.Model().ID)
-	assert.True(t, switched.Cache().Expires.IsZero(), "another model made the last request")
+	assert.True(t, switched.Record().Cache.Expires.IsZero(), "another model made the last request")
 
 	switchedAway := open(t, "kopi-cache/plain-1", user, assistantRecord("kopi-cache", "cached-1", "", started, usageJSON(10, 1, 100, 0, 0, "")))
-	assert.True(t, switchedAway.Cache().Expires.IsZero(), "the session's model is not the one whose cache was left")
+	assert.True(t, switchedAway.Record().Cache.Expires.IsZero(), "the session's model is not the one whose cache was left")
 
 	failed := open(t, "kopi-cache/cached-1", user,
 		assistantRecord("kopi-cache", "cached-1", "", started, usageJSON(10, 1, 100, 0, 0, "")),
 		assistantRecord("kopi-cache", "cached-1", "", started+600_000, usageJSON(0, 0, 0, 0, 0, "")))
-	assert.Equal(t, time.UnixMilli(started).Add(5*time.Minute), failed.Cache().Expires, "a later message that sent no prompt is skipped")
+	assert.Equal(t, time.UnixMilli(started).Add(5*time.Minute), failed.Record().Cache.Expires, "a later message that sent no prompt is skipped")
 
 	plain := open(t, "kopi-cache/plain-1", user, assistantRecord("kopi-cache", "plain-1", "", started, usageJSON(10, 1, 100, 0, 0, "")))
-	assert.True(t, plain.Cache().Expires.IsZero(), "the model declares no cache lifetime")
+	assert.True(t, plain.Record().Cache.Expires.IsZero(), "the model declares no cache lifetime")
 
 	for _, tc := range []struct {
 		name, process, provider string
@@ -209,7 +211,89 @@ func TestCacheExpiresAfterTheModelsLifetime(t *testing.T) {
 			})
 			require.NoError(t, err)
 			sess := open(t, "kopi-cache/cached-1", user, assistantRecord("kopi-cache", "cached-1", "", started, usageJSON(10, 1, 100, 0, 0, "")))
-			assert.Equal(t, time.UnixMilli(started).Add(tc.lifetime), sess.Cache().Expires, "Responses usage has no hourly cache-write split")
+			assert.Equal(t, time.UnixMilli(started).Add(tc.lifetime), sess.Record().Cache.Expires, "Responses usage has no hourly cache-write split")
 		})
 	}
+}
+
+func TestRecordSumsDurationsAndCountsCompactions(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	sess := openTestSession(t, r)
+	manager := sess.inner.SessionManager()
+	assert.Equal(t, Record{}, sess.Record(), "an empty log says nothing")
+
+	timed := func(record string, ms int) string {
+		return strings.Replace(record, `"timestamp"`, fmt.Sprintf(`"durationMs":%d,"timestamp"`, ms), 1)
+	}
+	appendHistoryMessage(t, manager, `{"role":"user","content":"hi","timestamp":1}`)
+	kept := appendHistoryMessage(t, manager, timed(assistantRecord("p1", "m1", "", 2, usageJSON(100, 10, 0, 0, 0.5, "")), 1500))
+	appendHistoryMessage(t, manager, timed(`{"role":"toolResult","toolCallId":"call-1","toolName":"Probe","content":[{"type":"text","text":"out"}],"isError":false,"timestamp":3}`, 250))
+	appendHistoryMessage(t, manager, `{"role":"toolResult","toolCallId":"call-2","toolName":"Probe","content":[{"type":"text","text":"never ran"}],"isError":true,"timestamp":4}`)
+	appendHistoryMessage(t, manager, timed(assistantRecord("p1", "m1", "", 5, usageJSON(200, 20, 0, 0, 0.5, "")), 2000))
+	_, err := manager.AppendCompaction("summary", kept, 1000, nil, false, nil)
+	require.NoError(t, err)
+
+	check := func(t *testing.T, sess *Session) {
+		t.Helper()
+		got := sess.Record()
+		assert.Equal(t, 3500*time.Millisecond, got.ModelTime)
+		assert.Equal(t, 250*time.Millisecond, got.ToolTime, "a call that did not run adds nothing")
+		assert.Equal(t, 1, got.Compactions)
+	}
+	check(t, sess)
+
+	require.NoError(t, sess.Close(t.Context()))
+	check(t, resume(t, r, sess.ID()))
+}
+
+func TestContextSizesNameThePartsAndTheLoadedTools(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	var ran atomic.Bool
+	sess := openTestSession(t, r, loaderTool(), deferredTool(&ran))
+	names := func(sizes []Size) []string {
+		out := make([]string, 0, len(sizes))
+		for _, size := range sizes {
+			assert.Positive(t, size.Tokens, size.Name)
+			out = append(out, size.Name)
+		}
+		return out
+	}
+
+	parts, tools := sess.ContextSizes()
+	assert.Empty(t, parts, "PiG writes the prompt into the context with the first request")
+	assert.Empty(t, tools)
+
+	faux.SetResponses([]ai.FauxResponseStep{reply("ok")})
+	_, err := sess.Send(t.Context(), Prompt{Text: "hello"}, nil, nil)
+	require.NoError(t, err)
+	parts, tools = sess.ContextSizes()
+	assert.Equal(t, []Size{{Name: kopiPrompt[0].Name, Tokens: ai.EstimateTextTokens(kopiPrompt[0].Text)}}, parts)
+	assert.Equal(t, []string{"Load"}, names(tools), "a deferred tool is not in the context")
+
+	faux.SetResponses([]ai.FauxResponseStep{
+		ai.FauxAssistantMessage(
+			ai.FauxContentBlocks{ai.FauxToolCall("Load", map[string]any{}, &ai.FauxToolCallOptions{ID: "call-1"})},
+			ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonToolUse)},
+		),
+		reply("done"),
+	})
+	_, err = sess.Send(t.Context(), Prompt{Text: "load it"}, nil, nil)
+	require.NoError(t, err)
+	_, tools = sess.ContextSizes()
+	assert.Equal(t, []string{"Load", "Deferred"}, names(tools))
+}
+
+func TestCompactAtIsTheWindowLessTheReserve(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	sess := openTestSession(t, r)
+	_, window, ok := sess.ContextUsage()
+	require.True(t, ok)
+
+	at, ok := sess.CompactAt()
+
+	require.True(t, ok)
+	assert.Equal(t, window-16384, at, "PiG's default reserve")
 }
