@@ -5,9 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 
-	"github.com/MichaelKinsy/PiG/agent"
 	"github.com/MichaelKinsy/PiG/ai"
 )
 
@@ -118,6 +118,16 @@ type Record struct {
 	Compactions         int
 }
 
+// usageMessage keeps accounting metadata without decoding message content.
+type usageMessage struct {
+	Role       string    `json:"role"`
+	DurationMs *int64    `json:"durationMs"`
+	Provider   string    `json:"provider"`
+	ModelID    string    `json:"model"`
+	Timestamp  int64     `json:"timestamp"`
+	Usage      *ai.Usage `json:"usage"`
+}
+
 // Record reads the session's whole log once. The cache's Hit and misses are
 // PiG's accounting; its Expires is estimated by time alone, so a compaction
 // still leaves it warm.
@@ -134,11 +144,27 @@ func (s *Session) Record() Record {
 		rec.Cache.Reported, rec.Cache.Hit = true, *rate
 	}
 	entries := manager.GetBranch()
+	current := s.inner.Model()
+	cacheable := current != nil && len(current.PromptCache) > 0
+	omitted := make(map[string]bool)
 	for _, entry := range entries {
 		if entry.Base().Type == "compaction" {
 			rec.Compactions++
 		}
+		if cacheable && entry.Base().Type == "context_edit" {
+			var edit struct {
+				TargetID    string          `json:"targetId"`
+				Replacement json.RawMessage `json:"replacement"`
+			}
+			if err := json.Unmarshal(entry.Raw(), &edit); err != nil || edit.TargetID == "" || len(edit.Replacement) == 0 {
+				cacheable = false
+				continue
+			}
+			// Non-null replacements change context, not the logged request.
+			omitted[edit.TargetID] = strings.TrimSpace(string(edit.Replacement)) == "null"
+		}
 	}
+	var messages []usageMessage
 	var model, tools int64
 	// PiG recovery omits failed attempts with context edits; their time still
 	// belongs to the session even though history no longer displays them.
@@ -147,15 +173,15 @@ func (s *Session) Record() Record {
 			continue
 		}
 		var record struct {
-			Message struct {
-				Role       string `json:"role"`
-				DurationMs *int64 `json:"durationMs"`
-			} `json:"message"`
+			Message usageMessage `json:"message"`
 		}
 		if err := json.Unmarshal(entry.Raw(), &record); err != nil {
 			return rec
 		}
 		m := record.Message
+		if cacheable && m.Role == "assistant" && !omitted[entry.Base().ID] {
+			messages = append(messages, m)
+		}
 		if m.DurationMs == nil {
 			continue
 		}
@@ -167,11 +193,9 @@ func (s *Session) Record() Record {
 		}
 	}
 	rec.ModelTime, rec.ToolTime = time.Duration(model)*time.Millisecond, time.Duration(tools)*time.Millisecond
-	messages, err := branchMessages(entries)
-	if err != nil {
-		return rec
+	if cacheable {
+		rec.Cache.Expires = s.cacheExpires(messages)
 	}
-	rec.Cache.Expires = s.cacheExpires(messages)
 	return rec
 }
 
@@ -181,16 +205,16 @@ func (s *Session) Record() Record {
 // unless a cache write reports its tier. OpenAI Responses never reports
 // CacheWrite1h. messages is the full branch history, which keeps that evidence
 // when compaction drops active messages.
-func (s *Session) cacheExpires(messages []agent.AgentMessage) time.Time {
+func (s *Session) cacheExpires(messages []usageMessage) time.Time {
 	model := s.inner.Model()
 	if model == nil || len(model.PromptCache) == 0 {
 		return time.Time{}
 	}
-	var last *agent.AssistantMessage
+	var last *usageMessage
 	var tier string
 	for i := len(messages) - 1; i >= 0; i-- {
-		m := messages[i].Assistant
-		if m == nil || m.Usage == nil || m.Usage.Input+m.Usage.CacheRead+m.Usage.CacheWrite == 0 {
+		m := &messages[i]
+		if m.Usage == nil || m.Usage.Input+m.Usage.CacheRead+m.Usage.CacheWrite == 0 {
 			continue
 		}
 		if last == nil {

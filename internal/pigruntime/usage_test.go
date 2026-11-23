@@ -1,6 +1,7 @@
 package pigruntime
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MichaelKinsy/PiG/ai"
+	"github.com/MichaelKinsy/PiG/coding/extension"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -214,6 +216,45 @@ func TestCacheExpiresAfterTheModelsLifetime(t *testing.T) {
 			assert.Equal(t, time.UnixMilli(started).Add(tc.lifetime), sess.Record().Cache.Expires, "Responses usage has no hourly cache-write split")
 		})
 	}
+}
+
+func TestUsageMessageReadsOnlyMetadata(t *testing.T) {
+	var record struct {
+		Message usageMessage `json:"message"`
+	}
+	body := strings.Repeat("tool output ", 10000)
+	err := json.Unmarshal([]byte(fmt.Sprintf(`{"message":{"role":"toolResult","durationMs":250,"content":[{"type":"text","text":%q}]}}`, body)), &record)
+	require.NoError(t, err)
+	assert.Equal(t, "toolResult", record.Message.Role)
+	require.NotNil(t, record.Message.DurationMs)
+	assert.EqualValues(t, 250, *record.Message.DurationMs)
+	assert.Nil(t, record.Message.Usage)
+}
+
+func TestCacheExpiryHonorsContextEdits(t *testing.T) {
+	t.Setenv("PI_CACHE_RETENTION", "short")
+	sb := newSandbox(t)
+	writeAgentFile(t, sb, "models.json", `{"providers":{"kopi-cache":{"baseUrl":"http://127.0.0.1:1","api":"openai-responses","apiKey":"synthetic-key","models":[{"id":"cached-1","promptCache":{"short":300,"long":3600}}]}}}`)
+	r, _ := newTestRuntime(t, sb)
+	sess, err := r.Open(t.Context(), OpenOptions{Model: "kopi-cache/cached-1", SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(t.Context())) })
+	manager := sess.inner.SessionManager()
+	const started = int64(1_700_000_000_000)
+	first := appendHistoryMessage(t, manager, assistantRecord("kopi-cache", "cached-1", "", started, usageJSON(10, 1, 0, 100, 0, `,"cacheWrite1h":100`)))
+	latest := appendHistoryMessage(t, manager, assistantRecord("kopi-cache", "cached-1", "", started+60_000, usageJSON(10, 1, 100, 0, 0, "")))
+
+	_, err = manager.AppendContextEdit(first, nil)
+	require.NoError(t, err)
+	assert.Equal(t, time.UnixMilli(started+60_000).Add(5*time.Minute), sess.Record().Cache.Expires, "an omitted write cannot select the hourly tier")
+
+	_, err = manager.AppendContextEdit(latest, nil)
+	require.NoError(t, err)
+	assert.True(t, sess.Record().Cache.Expires.IsZero(), "no visible request remains")
+
+	_, err = manager.AppendContextEdit(first, &extension.ContextEditReplacement{Content: json.RawMessage(`[{"type":"text","text":"replacement"}]`)})
+	require.NoError(t, err)
+	assert.Equal(t, time.UnixMilli(started).Add(time.Hour), sess.Record().Cache.Expires, "a non-null replacement restores the original logged request's metadata")
 }
 
 func TestRecordSumsDurationsAndCountsCompactions(t *testing.T) {
