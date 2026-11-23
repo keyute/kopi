@@ -118,6 +118,12 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 		}
 	}
 	planSandboxed := plan.Sandboxed()
+	unsandboxed := func(args bashArgs) string {
+		if unsandboxedHook != nil && args.Unsandboxed {
+			return " · unsandboxed"
+		}
+		return ""
+	}
 	return Tool{
 		Name:        "Bash",
 		Label:       "Bash",
@@ -199,10 +205,7 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 				if args.RunInBackground {
 					done = "Started " + titleLine(args.Command) + " in background"
 				}
-				if unsandboxedHook != nil && args.Unsandboxed {
-					done += " · unsandboxed"
-				}
-				return done
+				return done + unsandboxed(args)
 			},
 			Outcome: func(raw json.RawMessage, output string) (string, Action) {
 				started, ok := backgroundTask(output)
@@ -215,21 +218,17 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 				if started {
 					return "", action
 				}
-				done := "Moved " + titleLine(args.Command) + " to background"
-				if unsandboxedHook != nil && args.Unsandboxed {
-					done += " · unsandboxed"
-				}
-				return done, action
+				return "Moved " + titleLine(args.Command) + " to background" + unsandboxed(args), action
 			},
 			Summary: func(output string) string {
-				_, ok := backgroundTask(output)
-				switch {
+				if timeoutResult.MatchString(output) {
+					return "timed out"
+				}
+				switch _, ok := backgroundTask(output); {
 				case !ok && output == noOutputNotice:
 					return "no output"
 				case !ok:
 					return lineCount(countLines(output))
-				case timeoutResult.MatchString(output):
-					return "timed out"
 				}
 				return ""
 			},

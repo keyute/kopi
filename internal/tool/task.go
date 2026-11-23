@@ -92,7 +92,7 @@ type task struct {
 // job is what the registry needs from a running command or agent run.
 type job interface {
 	finished() <-chan struct{}
-	stop(reason error)
+	stop(reason error) bool
 	text() string
 	outcome() jobOutcome
 }
@@ -320,7 +320,7 @@ func (m *Tasks) Stop(id string) (info TaskInfo, stopped bool, err error) {
 		return info, stop != nil, nil
 	}
 	done := t.p.finished()
-	first := t.p.stopFirst(ErrStopped)
+	first := t.p.stop(ErrStopped)
 	<-done
 	// A stop that reaches a command after it exited leaves no reason.
 	return t.report(), first && t.p.reason != nil, nil
@@ -471,12 +471,14 @@ func (j *agentJob) finished() <-chan struct{} {
 	return j.done
 }
 
-// stop asks the owner to stop a running run, once per run.
-func (j *agentJob) stop(error) {
+// stop asks the owner to stop a running run, once per run, and reports whether
+// this call was the one to ask.
+func (j *agentJob) stop(error) bool {
 	_, f := j.selectStop()
 	if f != nil {
 		f()
 	}
+	return f != nil
 }
 
 func (j *agentJob) selectStop() (*agentRun, func()) {

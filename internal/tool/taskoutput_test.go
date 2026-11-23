@@ -148,6 +148,7 @@ func TestTaskNameLine(t *testing.T) {
 		{"long shell", TaskInfo{Command: long}, "Command: " + long[:maxBashTitleRunes] + " …", "Command", long[:maxBashTitleRunes] + " …"},
 		{"workflow", TaskInfo{Agent: WorkflowAgent, Command: "audit\nmore"}, "Workflow: audit", "Workflow", "audit"},
 		{"multi-line agent", TaskInfo{Agent: "explore", Command: "look\nmore"}, "Agent: explore › look", "Agent", "explore › look"},
+		{"agent with leading newline", TaskInfo{Agent: "explore", Command: "\nsurvey"}, "Agent: explore › survey", "Agent", "explore › survey"},
 		{"long agent", TaskInfo{Agent: "explore", Command: long}, "Agent: explore › " + long, "Agent", "explore › " + long},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

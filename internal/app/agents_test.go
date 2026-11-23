@@ -457,6 +457,24 @@ func TestSendMessageResultNamesTheAgent(t *testing.T) {
 	assert.Equal(t, fmt.Sprintf("Agent %s continued. [named task]\nAgent: explorer › find it", id), result.Text)
 }
 
+func TestSendMessageResultNamesARunningAgentAsQueued(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{releaseTool(started, release)}}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "c1")), pigruntimetest.Text("first"), pigruntimetest.Text("second")})
+	a.rootAcks(2)
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, started)
+
+	admit := func(policy.Target) (policy.Mode, error) { return policy.Execute, nil }
+	raw := json.RawMessage(fmt.Sprintf(`{"to":%q,"message":"again"}`, id))
+	result, err := tool.NewSendMessage(agentLauncher{a.c}).Run(t.Context(), raw, admit)
+	close(release)
+	require.NoError(t, err)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	assert.Equal(t, fmt.Sprintf("Message queued for %s. [named task]\nAgent: explorer › find it", id), result.Text)
+}
+
 func TestMessageToOtherTasksIsUnknown(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	a := newAgentHarness(t, sb, Config{}, agentDef("explorer"))

@@ -116,12 +116,12 @@ const (
 
 // taskName is the line that names a task by what it is: "Agent: explore › look",
 // "Command: make test" or "Workflow: audit", each on one line. Only a command is
-// cut like a Bash title; a description is kept whole, as its launch row shows it.
+// cut like a Bash title; a description keeps its first line.
 func taskName(info TaskInfo) string {
 	if info.Agent == "" {
 		return nameCommand + ": " + titleLine(info.Command)
 	}
-	description, _, _ := strings.Cut(strings.TrimRight(info.Command, "\n"), "\n")
+	description, _, _ := strings.Cut(strings.TrimSpace(info.Command), "\n")
 	if info.Agent == WorkflowAgent {
 		return nameWorkflow + ": " + description
 	}

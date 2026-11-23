@@ -88,7 +88,7 @@ Each tool call is a row. It names the call by the tool while it runs, while it w
 - A run of successful calls folds into a group, `Read 3 files, ran 2 commands`; click it or press Ctrl+O to list its calls. A call that did not succeed, and the question and plan-approval rows below, are never in a group.
 - A group clause uses its rows' verb and a noun that covers every row in it: a `Read` of the plan and of a saved output file count as `read the plan` and `read 1 output file`, apart from `read 3 files`; a `Skill` call that reads a file of a skill (`Read skill <name> <file>`) counts as `read 1 skill file`.
 - Some clauses are not counted: `searched the web`, `searched tools`, `read the plan`, `wrote the plan`, `edited the plan`. Repeats read `searched the web 3 times`, `edited the plan 3 times`.
-- A background command counts as `started 1 shell`, a message to an agent as `messaged 1 agent`, a `TaskOutput` or `TaskStop` on an agent, shell or workflow as `checked on 2 agents`, `stopped 1 shell`, and a `WebFetch` that only got a redirect as `hit 1 redirect`.
+- A background command counts as `started 1 shell`, a message to an agent as `messaged 1 agent`, a `TaskOutput` or `TaskStop` on an agent, shell or workflow as `checked on 2 agents`, `stopped 1 shell` (a `TaskStop` on a task that was already over counts as `checked on 1 agent`), and a `WebFetch` that only got a redirect as `hit 1 redirect`.
 - A group counts the commands that ran outside the [sandbox](sandbox.md#outside-the-sandbox): `ran 9 commands (1 unsandboxed)`. A succeeded command's own row ends `· unsandboxed`.
 - A question you answered (`Asked about …`) and a plan decision (`Plan approval`) stay visible, with your answer or decision on the line under them.
 
