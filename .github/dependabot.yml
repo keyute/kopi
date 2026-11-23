@@ -42,9 +42,14 @@ updates:
       auto:
         patterns:
           - "*"
-        # lint.yml skips Dependabot PRs, so CI never exercises a MegaLinter bump (auto and security)
+        # lint.yml skips Dependabot PRs, so CI never exercises a MegaLinter bump (auto and security).
+        # The same holds for the actions only release.yml uses: it is not part of ci, and actions/attest never runs on a PR.
         exclude-patterns:
           - "oxsecurity/megalinter*"
+          - "actions/attest"
+          - "actions/upload-artifact"
+          - "actions/download-artifact"
+          - "Homebrew/actions*"
         update-types:
           - minor
           - patch
@@ -57,3 +62,7 @@ updates:
           - "*"
         exclude-patterns:
           - "oxsecurity/megalinter*"
+          - "actions/attest"
+          - "actions/upload-artifact"
+          - "actions/download-artifact"
+          - "Homebrew/actions*"

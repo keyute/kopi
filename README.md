@@ -5,6 +5,14 @@ It is early: tools to read, search, write and edit files and to run commands, to
 
 ## Install
 
+With [Homebrew](https://brew.sh/) on macOS or Linux:
+
+```sh
+brew install keyute/tap/kopi
+```
+
+To build from source instead:
+
 - Needs Go (version in `go.mod`) and [Task](https://taskfile.dev/) to build; the built binary needs nothing else at runtime.
 - Builds for macOS, Linux and Windows only.
 
@@ -15,8 +23,8 @@ task build    # writes bin/kopi
 ## Quick start
 
 ```sh
-bin/kopi login                     # list providers
-bin/kopi login <provider>
+kopi login                 # list providers
+kopi login <provider>
 ```
 
 Setting a model is optional. Without `model`, Kopi uses the default model of a provider with a credential, and with none the fullscreen interface asks which provider to log in to (see [configuration](docs/configuration.md#model)). To pick one, set it in `~/.kopi/config.json` (`$KOPI_HOME` overrides the home):
@@ -26,9 +34,9 @@ Setting a model is optional. Without `model`, Kopi uses the default model of a p
 ```
 
 ```sh
-bin/kopi                           # fullscreen interface, starts in plan mode
-bin/kopi -p "explain main.go"      # print mode
-git diff | bin/kopi -p "review this"
+kopi                       # fullscreen interface, starts in plan mode
+kopi -p "explain main.go"  # print mode
+git diff | kopi -p "review this"
 ```
 
 Shift+Tab or `/execute` switches from plan to execute mode.

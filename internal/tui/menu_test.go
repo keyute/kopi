@@ -19,7 +19,7 @@ func newMenuModel(t *testing.T, width, height int) (*model, *fakeController) {
 	t.Helper()
 	m, c := newTestModel(t, width, height)
 	c.commands = []app.Command{
-		{Name: "plan", Summary: "switch to plan mode"},
+		{Name: "plan", Summary: "switch to plan mode", Argument: true, Optional: true},
 		{Name: "execute", Summary: "switch to execute mode"},
 		{Name: "status", Summary: "show status"},
 		{Name: "new", Summary: "start a new session"},
@@ -27,7 +27,7 @@ func newMenuModel(t *testing.T, width, height int) (*model, *fakeController) {
 		{Name: "help", Summary: "list commands"},
 		{Name: "quit", Summary: "exit kopi"},
 	}
-	c.args = map[string][]app.Candidate{"resume": {
+	c.args = map[string][]app.Candidate{"plan": {{Value: "open", Description: "edit the plan file"}}, "resume": {
 		{Value: "abc123", Label: "2h ago", Description: "fix the bug"},
 		{Value: "def456", Label: "1d ago", Description: "add tests"},
 	}}
@@ -171,7 +171,7 @@ func TestEnterOnCommandWithArgumentFillsItIn(t *testing.T) {
 }
 
 func TestNoMenuWhereNothingCompletes(t *testing.T) {
-	for _, text := range []string{"/plan ", "//x", "hi\n/pl", "a@b", "hi"} {
+	for _, text := range []string{"/execute ", "//x", "hi\n/pl", "a@b", "hi"} {
 		t.Run(text, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				m, c := newMenuModel(t, 60, 30)
@@ -184,6 +184,108 @@ func TestNoMenuWhereNothingCompletes(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestOptionalArgumentMenu(t *testing.T) {
+	run := func(t *testing.T, draft string) (*model, *fakeController) {
+		m, c := newMenuModel(t, 60, 30)
+		settle(m, keys(m, draft))
+		return m, c
+	}
+	synctest.Test(t, func(t *testing.T) {
+		m, c := run(t, "/pl")
+		settle(m, press(m, tab))
+		assert.Equal(t, "/plan ", m.composer.value())
+		assert.Equal(t, []string{"  open        edit the plan file"}, menuText(m), "unlit")
+		press(m, enter)
+		assert.Equal(t, []string{"/plan "}, c.submitted, "enter sends the draft as typed")
+
+		m, c = run(t, "/plan ")
+		press(m, down)
+		assert.Equal(t, []string{"❭ open        edit the plan file"}, menuText(m))
+		press(m, enter)
+		assert.Equal(t, []string{"/plan open"}, c.submitted)
+
+		m, c = run(t, "/plan o")
+		assert.Equal(t, []string{"❭ open        edit the plan file"}, menuText(m))
+		press(m, enter)
+		assert.Equal(t, []string{"/plan open"}, c.submitted)
+
+		m, c = run(t, "/plan ")
+		press(m, down)
+		settle(m, keys(m, "o"))
+		settle(m, press(m, backspace))
+		assert.Equal(t, "/plan ", m.composer.value())
+		assert.Equal(t, []string{"  open        edit the plan file"}, menuText(m), "an edit unlights the row")
+		press(m, enter)
+		assert.Equal(t, []string{"/plan "}, c.submitted)
+
+		m, c = run(t, "/plan open")
+		assert.Equal(t, []string{"  open        edit the plan file"}, menuText(m), "typed in full")
+		press(m, tab)
+		assert.Equal(t, []string{"❭ open        edit the plan file"}, menuText(m), "tab lights the row")
+		assert.Equal(t, "/plan open", m.composer.value())
+		assert.Empty(t, c.submitted)
+	})
+}
+
+func TestEnterSendsAFullArgumentWithTheCursorBeforeIt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newMenuModel(t, 60, 30)
+		settle(m, keys(m, "/resume def456"))
+		for range len("def456") {
+			press(m, left)
+		}
+		assert.Equal(t, []string{"  2h ago      fix the bug", "  1d ago      add tests"}, menuText(m), "unlit")
+
+		press(m, enter)
+		assert.Equal(t, []string{"/resume def456"}, c.submitted)
+	})
+}
+
+func TestForwardDeleteToAFullArgumentUnlightsTheMenu(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newMenuModel(t, 60, 30)
+		settle(m, keys(m, "/resume ddef456"))
+		for range len("ddef456") {
+			press(m, left)
+		}
+		press(m, down)
+		require.Equal(t, []string{"  2h ago      fix the bug", "❭ 1d ago      add tests"}, menuText(m))
+
+		settle(m, press(m, del))
+		assert.Equal(t, []string{"  2h ago      fix the bug", "  1d ago      add tests"}, menuText(m), "unlit")
+		press(m, enter)
+		assert.Equal(t, []string{"/resume def456"}, c.submitted)
+	})
+}
+
+func TestUpDownAndTabLightAnUnlitMenu(t *testing.T) {
+	unlit := func(t *testing.T) *model {
+		m, _ := newMenuModel(t, 60, 30)
+		settle(m, keys(m, "/resume def456"))
+		for range len("def456") {
+			press(m, left)
+		}
+		require.Equal(t, []string{"  2h ago      fix the bug", "  1d ago      add tests"}, menuText(m))
+		return m
+	}
+	synctest.Test(t, func(t *testing.T) {
+		m := unlit(t)
+		press(m, down)
+		assert.Equal(t, []string{"❭ 2h ago      fix the bug", "  1d ago      add tests"}, menuText(m))
+
+		m = unlit(t)
+		press(m, up)
+		assert.Equal(t, []string{"  2h ago      fix the bug", "❭ 1d ago      add tests"}, menuText(m))
+
+		m = unlit(t)
+		press(m, tab)
+		assert.Equal(t, []string{"❭ 2h ago      fix the bug", "  1d ago      add tests"}, menuText(m))
+		assert.Equal(t, "/resume def456", m.composer.value(), "tab fills in only a lit row")
+		press(m, tab)
+		assert.Equal(t, "/resume abc123", m.composer.value())
+	})
 }
 
 func TestReferenceMenu(t *testing.T) {

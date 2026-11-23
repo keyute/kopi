@@ -27,6 +27,13 @@ type menu struct {
 	items []app.Candidate
 	shown []app.Candidate
 	sel   int
+	// optional reports that q's command also runs without an argument.
+	optional bool
+	// arg is q's whole argument, trimmed: q.Text stops at the cursor, but Enter
+	// sends or replaces all of it.
+	arg string
+	// picked reports that Up, Down or Tab chose the row since the token's text changed.
+	picked bool
 	// seq numbers the latest load; an older candidatesMsg is dropped.
 	seq int
 	// dismissed is the token, Text cleared, that the menu was closed on; it
@@ -44,7 +51,8 @@ type candidatesMsg struct {
 // followMenu opens, refilters or closes the menu for the token at the cursor.
 func (m *model) followMenu() tea.Cmd {
 	mn := &m.menu
-	q, ok := app.QueryAt(m.composer.value(), m.composer.ta.Line(), m.composer.ta.Column())
+	v := m.composer.value()
+	q, ok := app.QueryAt(v, m.composer.ta.Line(), m.composer.ta.Column())
 	if !ok || m.composer.browsing() {
 		*mn = menu{seq: mn.seq}
 		return nil
@@ -56,11 +64,15 @@ func (m *model) followMenu() tea.Cmd {
 		return nil
 	}
 	mn.dismissed = app.Query{}
-	prev := mn.q
-	mn.q = q
+	prev, prevArg := mn.q, mn.arg
+	mn.q, mn.arg = q, ""
+	if q.Kind == app.KindArgument {
+		l := []rune(strings.Split(v, "\n")[q.Line])
+		mn.arg = strings.TrimSpace(string(l[q.Start:q.End]))
+	}
 	var cmd tea.Cmd
 	if !mn.open || q.Kind != prev.Kind || q.Command != prev.Command {
-		mn.items, mn.sel = nil, 0
+		mn.items, mn.sel, mn.picked, mn.optional = nil, 0, false, false
 		mn.seq++
 		seq, c := mn.seq, m.c
 		switch q.Kind {
@@ -69,6 +81,7 @@ func (m *model) followMenu() tea.Cmd {
 				mn.items = append(mn.items, app.Candidate{Value: cm.Name, Description: cm.Summary})
 			}
 		case app.KindArgument:
+			mn.optional = slices.ContainsFunc(c.Commands(), func(cm app.Command) bool { return cm.Name == q.Command && cm.Optional })
 			cmd = func() tea.Msg {
 				cs, err := c.Arguments(q.Command)
 				return candidatesMsg{seq, cs, err}
@@ -79,8 +92,8 @@ func (m *model) followMenu() tea.Cmd {
 				return candidatesMsg{seq, cs, err}
 			}
 		}
-	} else if q.Text != prev.Text {
-		mn.sel = 0
+	} else if q.Text != prev.Text || mn.arg != prevArg {
+		mn.sel, mn.picked = 0, false
 	}
 	mn.open = true
 	m.rematch()
@@ -118,6 +131,19 @@ func (mn *menu) want() int {
 		h++
 	}
 	return h
+}
+
+// lit reports whether the selected row is the one Enter takes. It is not when
+// the draft already runs as typed: an optional argument left out, or an
+// argument typed in full. Up, Down or Tab lights it.
+func (mn *menu) lit() bool {
+	if mn.picked || mn.q.Kind != app.KindArgument {
+		return true
+	}
+	if mn.arg == "" {
+		return !mn.optional
+	}
+	return !slices.ContainsFunc(mn.items, func(cd app.Candidate) bool { return cd.Value == mn.arg })
 }
 
 func (m *model) menuHeight() int { return m.geo.menu }
@@ -171,7 +197,7 @@ func (m *model) menuRows() []string {
 			desc = ansi.Truncate(oneLine(cd.Description), width-col, "…")
 		}
 		marker, ls, ds := "  ", fg(th.text), fg(th.muted)
-		if start+i == mn.sel {
+		if start+i == mn.sel && mn.lit() {
 			marker, ls, ds = cursorMark, fg(th.accent), fg(th.accent)
 			marker = ls.Render(marker)
 		}
@@ -194,11 +220,22 @@ func (m *model) menuKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 	switch {
 	case key.Matches(k, km.menuUp):
 		mn.sel = (mn.sel - 1 + len(mn.shown)) % len(mn.shown)
+		mn.picked = true
 	case key.Matches(k, km.menuDown):
-		mn.sel = (mn.sel + 1) % len(mn.shown)
+		if mn.lit() {
+			mn.sel = (mn.sel + 1) % len(mn.shown)
+		}
+		mn.picked = true
 	case key.Matches(k, km.complete):
+		if !mn.lit() {
+			mn.picked = true
+			return nil, true
+		}
 		return m.accept(false), true
 	case key.Matches(k, km.submit):
+		if !mn.lit() {
+			return nil, false
+		}
 		return m.accept(true), true
 	case key.Matches(k, km.menuClose):
 		mn.dismissed = mn.q
@@ -211,14 +248,14 @@ func (m *model) menuKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 }
 
 // accept puts the selected candidate in place of the token; with run it then
-// submits, except for a file reference or a command that takes an argument
+// submits, except for a file reference or a command that needs an argument
 // or a skill, which are only ever filled in.
 func (m *model) accept(run bool) tea.Cmd {
 	q, cd := m.menu.q, m.menu.shown[m.menu.sel]
 	var ins string
 	switch q.Kind {
 	case app.KindCommand:
-		if slices.ContainsFunc(m.c.Commands(), func(c app.Command) bool { return c.Name == cd.Value && (c.Argument || c.Skill) }) {
+		if slices.ContainsFunc(m.c.Commands(), func(c app.Command) bool { return c.Name == cd.Value && ((c.Argument && !c.Optional) || c.Skill) }) {
 			run = false
 		}
 		ins = "/" + cd.Value
