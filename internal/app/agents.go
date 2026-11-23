@@ -249,8 +249,15 @@ func (c *Controller) openChild(ctx context.Context, spec agentSpec, tools []tool
 	if err != nil {
 		return err
 	}
+	c.offerSearch(sess)
 	run.sess = sess
 	return nil
+}
+
+// offerSearch makes WebSearch callable in sess while the model that would
+// answer has hosted search.
+func (c *Controller) offerSearch(sess *pigruntime.Session) {
+	sess.SetCallable("WebSearch", c.rt.CanSearch(c.SmallModel()))
 }
 
 // launch starts a run of the subagent agent in the background and returns its

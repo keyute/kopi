@@ -10,7 +10,7 @@ import (
 var (
 	ErrQuit             = errors.New("quit requested")
 	ErrShowTasks        = errors.New("task list requested")
-	ErrBusy             = errors.New("a session switch is under way")
+	ErrBusy             = errors.New("a session switch or model change is under way")
 	ErrBadImage         = errors.New("not a supported image")
 	ErrUnknownCommand   = errors.New("unknown command")
 	ErrNoSession        = errors.New("no open session")

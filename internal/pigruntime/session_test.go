@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1133,6 +1134,30 @@ func TestSetEffortDuringARaisedRunKeepsTheUsersLevel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "medium", sess.Effort())
 	assert.Nil(t, res.Continuation)
+}
+
+func TestSetEffortFailedSaveStillCountsAsAskedForALaterModelSwitch(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	sess, thinker, _ := openThinker(t, r)
+	thinker.SetResponses([]ai.FauxResponseStep{ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{})})
+	_, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
+	require.NoError(t, err)
+	files := sessionFiles(t, sb.kopiHome)
+	require.Len(t, files, 1)
+	// The write is refused as the file is opened for appending.
+	require.NoError(t, os.Chmod(files[0], 0o400))
+	t.Cleanup(func() { _ = os.Chmod(files[0], 0o600) })
+	if f, err := os.OpenFile(files[0], os.O_WRONLY|os.O_APPEND, 0); err == nil {
+		_ = f.Close()
+		t.Skip("file permissions do not stop this user from appending")
+	}
+
+	require.Error(t, sess.SetEffort(HighEffort))
+	require.ErrorIs(t, r.SetModel(t.Context(), sess, fauxModel), ErrModelNotSaved)
+	require.ErrorIs(t, r.SetModel(t.Context(), sess, "faux-thinker/thinker"), ErrModelNotSaved)
+
+	assert.Equal(t, "high", sess.Effort())
 }
 
 func TestSendKeepsTheFirstRaiseWhenAHandedOverPromptRaisesAgain(t *testing.T) {

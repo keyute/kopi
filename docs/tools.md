@@ -151,7 +151,7 @@
 
 ## WebFetch
 
-- Fetches one http or https page on a public host and has [`smallModel`](configuration.md#smallmodel) answer the call's prompt from it.
+- Fetches one http or https page on a public host and has [`smallModel`](configuration.md#smallmodel), else the session model, answer the call's prompt from it.
 - The main model gets the answer and the page's final URL, not the page.
 - HTML is converted to markdown from its main content; text, JSON and XML pass through; other content types are refused.
 - Pages are up to 5 MiB, fetched within 30 seconds and without JavaScript. The small model reads 100,000 characters per call, starting at the optional `offset` (characters to skip, default 0). When more of the page remains, the result carries `[Read characters 0 to 100000 of 250000; use offset=100000 to continue.]` before the source line. Each call fetches the page again; nothing is cached.
@@ -161,10 +161,10 @@
 
 ## WebSearch
 
-- Has `smallModel` search the web with its provider's built-in search and answer the call's query.
+- Has `smallModel`, else the session model, search the web with its provider's built-in search and answer the call's query.
 - The main model gets the answer followed by a `Sources:` list of up to 20 `- [title](url)` lines (`- url` when the page has no title), or `Sources: none`.
 - The list is the pages the answer cites, or the pages the provider consulted when it cited none, not the pages themselves.
-- The tool exists only when `smallModel`'s API protocol has hosted search: OpenAI Responses (also Azure and Codex), Anthropic Messages and Google Generative AI.
+- The tool is offered only while the model used has an API protocol with hosted search (OpenAI Responses, also Azure and Codex, Anthropic Messages and Google Generative AI), decided when a session opens and, for the main session, on `/model`; a running subagent or workflow agent keeps what it opened with.
 - Asks by default, in both modes: see [precedence](permissions.md#precedence).
 
 ## Limitations
@@ -187,9 +187,9 @@
 - A saved output file with a NUL in its first 8 KiB is refused as binary.
 - A saved output file holds the raw bytes, while the text returned inline has invalid UTF-8 replaced.
 - `WebFetch` connects directly and ignores `HTTP_PROXY` and `HTTPS_PROXY`; `sandbox.network` and `sandbox.allowDomains` do not govern it.
-- An approved `WebFetch` URL is requested from its host, and the call's prompt and up to 100,000 characters of the page (from `offset`) go to `smallModel`'s provider.
+- An approved `WebFetch` URL is requested from its host, and the call's prompt and up to 100,000 characters of the page (from `offset`) go to the provider of `smallModel`, else of the session model.
 - `WebFetch` runs no JavaScript, and only the `Content-Type` header decides a page's charset; without one, the type is sniffed from the body and it is read as UTF-8 unless it starts with a UTF-16 byte-order mark.
-- `WebSearch`'s query goes to `smallModel`'s provider, which runs the search.
+- `WebSearch`'s query goes to the provider of `smallModel`, else of the session model, which runs the search.
   - Hosted search is offered by protocol, so an endpoint that speaks one of those protocols but lacks the hosted tool fails at call time with the provider's error.
   - Chat-completions providers, Bedrock, Vertex and Mistral get no `WebSearch`.
   - Google returns redirect links, not the pages' own URLs.

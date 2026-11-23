@@ -25,7 +25,8 @@ type Tool struct {
 	// with no such opt-out.
 	Unsandboxed func(args json.RawMessage) bool
 	// Deferred keeps the tool out of the model's tool list until something
-	// loads it: ToolSearch for an MCP tool, a human prompt for Workflow.
+	// loads it: ToolSearch for an MCP tool, a human prompt for Workflow, the
+	// controller for WebSearch when the model has hosted search.
 	Deferred bool
 	// Exclusive runs each call alone: no other call of the same response runs alongside it.
 	Exclusive bool

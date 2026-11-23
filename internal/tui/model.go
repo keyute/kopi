@@ -481,7 +481,7 @@ func (m *model) submitted(err error) tea.Cmd {
 	case err == nil:
 		m.composer.reset()
 	case errors.Is(err, app.ErrBusy):
-		return m.flash("busy opening a session")
+		return m.flash("busy switching the session or model")
 	case errors.Is(err, app.ErrLoggingIn):
 		return m.flash("a login is under way")
 	default:
@@ -510,11 +510,11 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 			pureThinking = false
 		}
 		switch inner.(type) {
-		case event.SessionChanged, event.ModeChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged, event.LimitsChanged, event.ToolsChanged, event.EffortChanged:
+		case event.SessionChanged, event.ModeChanged, event.ModelChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged, event.LimitsChanged, event.ToolsChanged, event.EffortChanged:
 			refresh = true
 		}
 		switch inner.(type) {
-		case event.SessionChanged, event.EffortChanged:
+		case event.SessionChanged, event.EffortChanged, event.ModelChanged:
 			respan = true
 		}
 		if m.commands != nil {
@@ -607,7 +607,7 @@ func (m *model) apply(ev event.Event) *view {
 			}
 		}
 		return nil
-	case event.TasksChanged, event.LimitsChanged, event.ToolsChanged, event.EffortChanged:
+	case event.TasksChanged, event.LimitsChanged, event.ToolsChanged, event.EffortChanged, event.ModelChanged:
 		return nil
 	case event.ModeChanged:
 		return nil

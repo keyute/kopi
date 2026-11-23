@@ -286,3 +286,43 @@ func TestCallableAndToolsChangedFollowLoadedTools(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, changed, "a repeat load adds nothing")
 }
+
+func TestSetCallableTurnsAToolOnAndOffAndReportsToolsChanged(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "done")})
+
+	var ran atomic.Bool
+	sess := openTestSession(t, r, deferredTool(&ran), readTool("Plain", func(context.Context) (string, error) { return "", nil }))
+	changed := 0
+	t.Cleanup(sess.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.ToolsChanged); ok {
+			changed++
+		}
+	}))
+	require.False(t, sess.Callable("Deferred"))
+
+	sess.SetCallable("Deferred", true)
+	assert.True(t, sess.Callable("Deferred"))
+	assert.Equal(t, 1, changed)
+
+	sess.SetCallable("Deferred", true)
+	assert.Equal(t, 1, changed, "turning on a callable tool reports nothing")
+
+	sess.SetCallable("Deferred", false)
+	assert.False(t, sess.Callable("Deferred"))
+	assert.True(t, sess.Callable("Plain"))
+	assert.Equal(t, 2, changed)
+
+	sess.SetCallable("Missing", true)
+	sess.SetCallable("Missing", false)
+	assert.False(t, sess.Callable("Missing"))
+	assert.Equal(t, 2, changed, "a name the session lacks changes nothing")
+
+	sess.SetCallable("Deferred", true)
+	assert.Equal(t, 3, changed)
+	_, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Plain", "Deferred"}, declared(<-requests))
+}

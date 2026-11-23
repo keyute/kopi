@@ -192,6 +192,9 @@ type ToolsChanged struct{}
 
 type ModeChanged struct{ Mode policy.Mode }
 
+// ModelChanged reports that the model new work uses is now Model.
+type ModelChanged struct{ Model string }
+
 type SessionChanged struct {
 	SessionID    string
 	Resumed      bool
@@ -253,6 +256,7 @@ func (LimitsChanged) isEvent()       {}
 func (EffortChanged) isEvent()       {}
 func (ToolsChanged) isEvent()        {}
 func (ModeChanged) isEvent()         {}
+func (ModelChanged) isEvent()        {}
 func (SessionChanged) isEvent()      {}
 func (SessionNamed) isEvent()        {}
 func (StatusCommandResult) isEvent() {}

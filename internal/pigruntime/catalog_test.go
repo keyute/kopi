@@ -37,6 +37,8 @@ type catalogServer struct {
 	// gate, when set, makes a request wait until it is closed or its client
 	// gives up, then answer normally.
 	gate chan struct{}
+	// inflight counts requests being served; maxInflight is its high mark.
+	inflight, maxInflight int
 }
 
 // serve switches the list to a copy of the bundled model under each of ids.
@@ -84,8 +86,15 @@ func newCatalogServer(t *testing.T, bundled *ai.Model, status int, ids ...string
 		s.requests <- struct{}{}
 		s.mu.Lock()
 		s.validators = append(s.validators, r.Header.Get("If-None-Match"))
+		s.inflight++
+		s.maxInflight = max(s.maxInflight, s.inflight)
 		body, hold, gate := s.body, s.hold, s.gate
 		s.mu.Unlock()
+		defer func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			s.inflight--
+		}()
 		if gate != nil {
 			select {
 			case <-gate:
@@ -290,7 +299,7 @@ func refreshUsed(t *testing.T, r *Runtime) {
 	t.Helper()
 	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}))
 	r.StartModelListRefresh()
-	<-r.refreshDone
+	r.refreshes.Wait()
 }
 
 func drainRequests(s *catalogServer) {
@@ -400,10 +409,10 @@ func TestRefreshNeedsOnlineAndCredentialAndUse(t *testing.T) {
 				// A provider without a credential must not count as used.
 				require.ErrorIs(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}), ErrNoCredential)
 				r.StartModelListRefresh()
-				<-r.refreshDone
+				r.refreshes.Wait()
 			default:
 				r.StartModelListRefresh()
-				<-r.refreshDone
+				r.refreshes.Wait()
 			}
 			assert.Empty(t, s.requests)
 			if !tt.key {
@@ -460,7 +469,7 @@ func TestForcedFetchDuringBackgroundRequestResolves(t *testing.T) {
 	release()
 
 	require.NoError(t, <-result)
-	<-r.refreshDone
+	r.refreshes.Wait()
 }
 
 func TestForcedFetchAfterBackgroundRefreshIgnoresFreshList(t *testing.T) {
@@ -481,7 +490,7 @@ func TestRefreshAfterForcedFetchMakesNoRequest(t *testing.T) {
 	drainRequests(s)
 
 	r.StartModelListRefresh()
-	<-r.refreshDone
+	r.refreshes.Wait()
 
 	assert.Empty(t, s.requests)
 }
@@ -499,11 +508,96 @@ func TestCloseStopsHeldRefresh(t *testing.T) {
 	r.StartModelListRefresh()
 	<-s.requests
 
-	r.Close()
-
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		r.Close()
+	}()
 	select {
-	case <-r.refreshDone:
-	default:
-		t.Fatal("refresh still running after Close")
+	case <-closed:
+	case <-time.After(waitLimit):
+		t.Fatal("Close did not return")
 	}
+}
+
+func TestProviderFirstUsedAfterStartIsRefreshed(t *testing.T) {
+	_, s, r := catalogSetup(t, http.StatusOK, "catalog-new-1")
+	r.StartModelListRefresh()
+	r.refreshes.Wait()
+	require.Empty(t, s.requests)
+
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}))
+	r.refreshes.Wait()
+	require.Len(t, s.requests, 1)
+	drainRequests(s)
+
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogModel}))
+	assert.Empty(t, s.requests)
+}
+
+func TestForcedFetchDuringLateRefreshResolves(t *testing.T) {
+	_, s, r := catalogSetup(t, http.StatusOK, "catalog-new-1")
+	r.StartModelListRefresh()
+	r.refreshes.Wait()
+	release := s.gateRequests()
+	defer release()
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}))
+	<-s.requests
+	r.refreshMu.Lock()
+	assert.Contains(t, r.fetching, catalogProvider)
+	r.refreshMu.Unlock()
+	result := make(chan error, 1)
+	go func() { result <- r.Check(t.Context(), OpenOptions{Model: catalogModel}) }()
+	release()
+
+	require.NoError(t, <-result)
+	<-s.requests
+	r.refreshes.Wait()
+	assert.Empty(t, s.requests)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	assert.Equal(t, 1, s.maxInflight, "the forced fetch must wait for the late refresh, not run beside it")
+}
+
+func TestLateRefreshIsSkippedAfterForcedFetch(t *testing.T) {
+	_, s, r := catalogSetup(t, http.StatusOK, "catalog-new-1")
+	r.StartModelListRefresh()
+	r.refreshes.Wait()
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogModel}))
+	require.Len(t, s.requests, 1)
+	drainRequests(s)
+
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}))
+	r.refreshes.Wait()
+
+	assert.Empty(t, s.requests)
+}
+
+func TestCloseStopsHeldLateRefresh(t *testing.T) {
+	sb := newSandbox(t)
+	withMistralKey(t, sb)
+	probe := newCatalogRuntime(t, sb, "http://127.0.0.1:1")
+	s := newCatalogServer(t, bundledMistral(t, probe), http.StatusOK, "catalog-new-1")
+	s.holdRequests(true)
+	r, err := New(t.Context(), Options{Home: sb.kopiHome, AgentDir: sb.agentDir, CWD: sb.ws, catalogURL: s.URL})
+	require.NoError(t, err)
+	r.StartModelListRefresh()
+	r.refreshes.Wait()
+	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}))
+	<-s.requests
+
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		r.Close()
+	}()
+	select {
+	case <-closed:
+	case <-time.After(waitLimit):
+		t.Fatal("Close did not return")
+	}
+
+	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
+	assert.Empty(t, r.fetching)
 }

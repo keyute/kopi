@@ -57,6 +57,26 @@ func TestFirstPromptNamesSessionOnce(t *testing.T) {
 	assert.Empty(t, named)
 }
 
+func TestTitleUsesTheSessionModelWhenSmallModelIsUnset(t *testing.T) {
+	h, _ := unopenedTitleHarness(t, Config{Title: true})
+	h.c.cfg.SmallModel = ""
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	other, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
+	other.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("Session titled"), pigruntimetest.Text("Session titled")})
+	changed := subscribeTo[event.ModelChanged](h.c)
+	named := subscribeTo[event.SessionNamed](h.c)
+
+	_, err := h.c.Submit(t.Context(), Main, "/model "+otherRef)
+	require.NoError(t, err)
+	receiveEvent(t, changed)
+	assertModelChangeDone(t, h)
+	h.turn(t, "fix the build")
+
+	assert.Equal(t, event.SessionNamed{Name: "Session titled"}, receiveEvent(t, named))
+	assert.Equal(t, 2, other.CallCount(), "the turn and the title ran on the model /model chose")
+	assert.Zero(t, h.faux.CallCount())
+}
+
 func TestSuccessfulTitleChargesTheTotal(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	priced := sb.PricedModel(t)

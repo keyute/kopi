@@ -22,6 +22,11 @@ var (
 	ErrScript          = errors.New("script failed")
 	ErrNotSaved        = errors.New("session has no saved transcript")
 
+	// ErrModelNotSaved accompanies a model change that took effect but whose
+	// records, the model or the thinking level that follows it, could not all
+	// be written to the session file.
+	ErrModelNotSaved = errors.New("model changed but the change was not fully saved to the session file")
+
 	// ErrModelListUnavailable accompanies ErrUnknownModel when refreshing the
 	// provider's model list failed.
 	ErrModelListUnavailable = errors.New("the model list could not be refreshed")

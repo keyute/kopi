@@ -285,6 +285,8 @@ func TestRootFullscreenStartupSubmitExit(t *testing.T) {
 		}
 	})
 	e.writeMockModels(t, server.URL)
+	// A title request would race the turn's request; TestRootFullscreenTitleRequest covers titles.
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"terminal":{"title":false}}`)
 	master, slave := openTestTerminal(t)
 	ready, answered, resumed := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	drained := make(chan struct{})
@@ -683,6 +685,8 @@ func TestRootFullscreenTrustPromptStartsTheProjectServers(t *testing.T) {
 	defer cancel()
 	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "trusted-response") })
 	e.writeMockModels(t, server.URL)
+	// A title request would race the turn's request; TestRootFullscreenTitleRequest covers titles.
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"terminal":{"title":false}}`)
 	e.writeServers(t, filepath.Join(e.workspace, ".mcp.json"), map[string]any{"fake": map[string]any{
 		"command": os.Args[0],
 		"args":    []string{"-test.run=^TestMCPStdioHelper$"},
@@ -801,7 +805,8 @@ func TestRootFullscreenTitleRequest(t *testing.T) {
 	}{
 		{"small model set", fmt.Sprintf(`{"smallModel":%q}`, mockModel), 2, 1},
 		{"title off", fmt.Sprintf(`{"smallModel":%q,"terminal":{"title":false}}`, mockModel), 1, 0},
-		{"no small model", `{}`, 1, 0},
+		{"no small model", `{}`, 2, 1},
+		{"no small model, title off", `{"terminal":{"title":false}}`, 1, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newTestEnv(t)

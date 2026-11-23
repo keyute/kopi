@@ -40,9 +40,12 @@ func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group
 			names = append(names, t.Name)
 		}
 	}
-	available := "No tools are available."
-	if len(names) > 0 {
+	var available string
+	switch {
+	case len(names) > 0:
 		available = "Tools available: " + strings.Join(names, ", ") + "."
+	case len(tools) == 0:
+		available = "No tools are available."
 	}
 	lines := []string{
 		fmt.Sprintf("You are Kopi, a coding agent working in %s.", workspace),
@@ -59,7 +62,10 @@ func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group
 		modes = "You stay in plan mode, whatever mode the user is in."
 		works = "Read-only tools work, the others do not"
 	}
-	lines = append(lines, available, modes)
+	if available != "" {
+		lines = append(lines, available)
+	}
+	lines = append(lines, modes)
 	if slices.ContainsFunc(tools, func(t tool.Tool) bool { return t.Capability != policy.Read }) {
 		line := works + ", and any tool call may need the user's approval."
 		if i := slices.IndexFunc(tools, func(t tool.Tool) bool { return t.PlanSandboxed }); i >= 0 {
@@ -74,7 +80,7 @@ func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group
 		}
 	}
 	lines = append(lines, "A tool call that is refused or that the user rejects returns an error saying so, with the user's feedback when they gave any.")
-	if slices.ContainsFunc(tools, func(t tool.Tool) bool { return t.Deferred }) {
+	if slices.ContainsFunc(tools, func(t tool.Tool) bool { return t.Name == "ToolSearch" }) {
 		lines = append(lines, "Tools of MCP servers are deferred: they are listed below by name and cannot be called until ToolSearch loads them. "+
 			"Call ToolSearch with keywords for what you need, or with exact tool names; the tools it loads can be called in your next response, not in the one that calls ToolSearch.")
 	}

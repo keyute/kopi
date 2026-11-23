@@ -25,8 +25,12 @@ import (
 
 // pigSettings is unmarshalled rather than built because the nested settings
 // types live in a PiG internal package and cannot be named here. Install
-// telemetry off is what stops PiG attributing requests to itself.
-const pigSettings = `{"retry":{"enabled":true},"compaction":{"enabled":true},"cacheWarming":"off","steeringMode":"all","enableInstallTelemetry":false}`
+// telemetry off is what stops PiG attributing requests to itself. The default
+// thinking level is PiG's own at open; set, it is also what PiG's
+// thinkingLevelForModelSwitch picks, which otherwise carries over the level
+// the old model clamped (PiG v0.7.0; recheck on a bump). Session.setModel
+// applies the same default when PiG returned before setting a level.
+const pigSettings = `{"retry":{"enabled":true},"compaction":{"enabled":true},"cacheWarming":"off","defaultThinkingLevel":"medium","steeringMode":"all","enableInstallTelemetry":false}`
 
 type Options struct {
 	// Home is Kopi's home; PiG's own home is pinned beneath it.
@@ -48,11 +52,14 @@ type Runtime struct {
 	refreshed map[string]error
 	fetching  map[string]chan struct{}
 	// used holds the providers whose models this process resolved. stopRefresh
-	// and refreshDone are set once StartModelListRefresh has run; refreshDone
-	// closes when its goroutine returns.
+	// is set once StartModelListRefresh has run.
 	used        map[string]struct{}
 	stopRefresh context.CancelFunc
-	refreshDone chan struct{}
+	// refreshCtx lives until stopRefresh; refreshLateLocked derives from it.
+	// refreshes counts the startup refresh and the refreshes of providers first
+	// used after start.
+	refreshCtx context.Context
+	refreshes  sync.WaitGroup
 	// openURL opens a sign-in URL in the user's browser.
 	openURL func(string) error
 	// limitsClient sends the plan-limit requests.
@@ -152,7 +159,7 @@ type OpenOptions struct {
 	ResumeID string
 	// Continue resumes the most recent session of the workspace.
 	Continue bool
-	// Effort is how much the model reasons; DefaultEffort keeps the model's default.
+	// Effort is how much the model reasons; DefaultEffort is medium, clamped to the model.
 	Effort Effort
 	// Parent is the session this one works for; the transcript is saved beside the parent's, where Sessions does not list it.
 	Parent       *Session
@@ -336,7 +343,16 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 			return slices.Concat(messages[:at], repair, messages[at:]), nil
 		})
 	}
-	return &Session{inner: sess}, nil
+	s := &Session{inner: sess}
+	// On resume asked is PiG's restored level, already clamped to the model the
+	// session is reopened on, so a more capable model later keeps that level.
+	switch {
+	case o.Effort != DefaultEffort:
+		s.asked = o.Effort.thinkingLevel()
+	case (o.ResumeID != "" || o.Continue) && reasons(sess.AvailableThinkingLevels()):
+		s.asked = sess.ThinkingLevel()
+	}
+	return s, nil
 }
 
 // DefaultModel returns the "provider/id" a session uses when none is
@@ -381,6 +397,38 @@ func (r *Runtime) DefaultModel(ctx context.Context) (string, error) {
 	}
 	model := res.Session.Model()
 	return model.ProviderMeta.ProviderID + "/" + model.ID, nil
+}
+
+// Model is an available model in Kopi's terms.
+type Model struct{ Ref, Name string }
+
+// Models lists the models of the providers that have a credential, sorted by
+// Ref.
+func (r *Runtime) Models(ctx context.Context) ([]Model, error) {
+	available, err := r.svcs.ModelRuntime().GetAvailable(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list models: %w", reword(err))
+	}
+	out := make([]Model, 0, len(available))
+	for _, m := range available {
+		out = append(out, Model{Ref: m.ProviderMeta.ProviderID + "/" + m.ID, Name: m.DisplayName})
+	}
+	slices.SortFunc(out, func(a, b Model) int { return strings.Compare(a.Ref, b.Ref) })
+	return out, nil
+}
+
+// SetModel switches s to the model ref names, keeping its history. ref is
+// checked as Open checks it. On ErrModelNotSaved the model changed and the
+// effort was applied; any other error leaves the model.
+func (r *Runtime) SetModel(ctx context.Context, s *Session, ref string) error {
+	model, err := r.usableModel(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("failed to change model to %q: %w", ref, err)
+	}
+	if err := s.setModel(model); err != nil {
+		return fmt.Errorf("failed to change model to %q: %w", ref, reword(err))
+	}
+	return nil
 }
 
 // newChild starts a new session that has an extension runner of its own.
@@ -432,7 +480,11 @@ func (r *Runtime) usableModel(ctx context.Context, ref string) (*ai.Model, error
 		return nil, fmt.Errorf("provider %q: %w", provider, ErrNoCredential)
 	}
 	r.refreshMu.Lock()
+	_, was := r.used[provider]
 	r.used[provider] = struct{}{}
+	if !was && model != nil {
+		r.refreshLateLocked(provider)
+	}
 	r.refreshMu.Unlock()
 	if model != nil {
 		return model, nil
@@ -471,12 +523,12 @@ func (r *Runtime) Close() {
 	// The refresh must have returned before the runtime it calls is closed; PiG's
 	// close then joins any store write it left (PiG v0.7.0; recheck on a bump).
 	r.refreshMu.Lock()
-	stop, done := r.stopRefresh, r.refreshDone
-	r.refreshMu.Unlock()
-	if stop != nil {
-		stop()
-		<-done
+	if r.stopRefresh != nil {
+		// Under refreshMu, so refreshLateLocked starts nothing after it.
+		r.stopRefresh()
 	}
+	r.refreshMu.Unlock()
+	r.refreshes.Wait()
 	if err := r.rt.Close(); err != nil {
 		slog.Warn("failed to close pig runtime", "error", err)
 	}

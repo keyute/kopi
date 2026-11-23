@@ -196,7 +196,7 @@ func TestExitPlanModeToolIsAttendedOnlyAndNeverForAgents(t *testing.T) {
 	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{Plans: plans, AgentTools: []tool.Tool{readTool(t, sb)}}, subagent.Definition{Name: "explorer", Description: "explorer", Model: childProvider + "/faux-1"})
 	assert.Contains(t, toolNames(a.c.tools), "ExitPlanMode")
 	require.Len(t, a.c.agents, 1)
-	assert.Equal(t, []string{"Read"}, toolNames(a.c.agents[0].tools))
+	assert.Equal(t, []string{"Read", "WebSearch"}, toolNames(a.c.agents[0].tools))
 }
 
 func TestPlanModeWritesOnlyThePlanFile(t *testing.T) {

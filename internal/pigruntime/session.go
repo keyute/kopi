@@ -1,8 +1,10 @@
 package pigruntime
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -33,9 +35,13 @@ type Session struct {
 	nextID      int
 	// toolsMu serializes LoadTools' read-modify-write of the active tools.
 	toolsMu sync.Mutex
-	// effortMu guards raised, restore and effortRevision.
+	// effortMu guards asked, raised, restore and effortRevision.
 	effortMu       sync.Mutex
 	effortRevision uint64
+	// asked is the level last asked for (SetEffort, or open), before PiG clamped
+	// it to the model; empty when none was. A model switch applies it again; a
+	// raise never changes it.
+	asked ai.ModelThinkingLevel
 	// raised is the Effort that lifted the level while a Send runs, and
 	// DefaultEffort when none did; restore is the level to put back when it ends.
 	raised  Effort
@@ -201,10 +207,40 @@ func (s *Session) SetEffort(e Effort) error {
 	defer s.effortMu.Unlock()
 	s.raised = DefaultEffort
 	s.effortRevision++
+	s.asked = e.thinkingLevel()
 	if err := s.inner.SetThinkingLevel(e.thinkingLevel()); err != nil {
 		return fmt.Errorf("failed to set effort: %w", err)
 	}
 	return nil
+}
+
+// setModel switches the model, then asks again for the level the session was
+// given, which the old model may have clamped; with nothing asked the level is
+// the default PiG applies on a switch. PiG sets the agent's model before it
+// appends the change and then the level to the session file (PiG v0.7.0
+// coding/session.go beginModelChangeState; recheck on a bump), so a failed
+// append of either leaves the session on model: that error wraps ErrModelNotSaved. A
+// failure that left the model as it was is returned as it is.
+func (s *Session) setModel(model *ai.Model) error {
+	s.effortMu.Lock()
+	defer s.effortMu.Unlock()
+	was := s.inner.Model()
+	err := s.inner.SetModel(model)
+	if err != nil {
+		now := s.inner.Model()
+		if sameModel(was, model) || !sameModel(now, model) {
+			return err
+		}
+		err = fmt.Errorf("%w: %w", ErrModelNotSaved, err)
+	}
+	if lerr := s.inner.SetThinkingLevel(cmp.Or(s.asked, MediumEffort.thinkingLevel())); lerr != nil {
+		err = errors.Join(err, fmt.Errorf("failed to restore the effort after the model change: %w: %w", ErrModelNotSaved, lerr))
+	}
+	return err
+}
+
+func sameModel(a, b *ai.Model) bool {
+	return a.ProviderMeta.ProviderID == b.ProviderMeta.ProviderID && a.ID == b.ID
 }
 
 // raise lifts the level to e for the rest of the Send, remembering the level

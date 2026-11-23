@@ -50,6 +50,7 @@ func NewWebSearch(search func(ctx context.Context, system, query string) (Search
 			"additionalProperties": false,
 		},
 		Capability: policy.Read,
+		Deferred:   true,
 		Ask:        true,
 		Run: func(ctx context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (Result, error) {
 			args, err := decodeArgs[webSearchArgs](raw)

@@ -190,6 +190,10 @@ type Controller struct {
 	// switching refuses prompts while a session transition is under way, so
 	// no work can start on a session that is about to be replaced.
 	switching *sessionSwitch
+	// changingModel is set from the checks of a /model until its model has
+	// changed. Main starts no turn, takes no prompt and begins no switch or
+	// login meanwhile; subagents and workflow agents are untouched.
+	changingModel bool
 	// closed is set by Close; afterwards the Controller refuses all input,
 	// leaves the mode alone and delivers no events.
 	closed bool
@@ -286,9 +290,9 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 		tools = append(tools, exit)
 	}
 	var search []tool.Tool
-	if small := c.SmallModel(); small != "" && c.rt.CanSearch(small) && !c.cfg.Rules.Removes("WebSearch") {
+	if !c.cfg.Rules.Removes("WebSearch") {
 		search = append(search, tool.NewWebSearch(func(ctx context.Context, system, query string) (tool.SearchResult, error) {
-			return c.sideSearch(ctx, small, system, query)
+			return c.sideSearch(ctx, c.SmallModel(), system, query)
 		}))
 		tools = append(tools, search...)
 	}
@@ -312,14 +316,14 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 		}
 	}
 	tools = append(tools, serverTools...)
+	// Workflow never reaches a subagent's tools, which buildAgents builds from
+	// search and serverTools.
+	if c.workflowOffered() {
+		tools = append(tools, tool.NewWorkflow(c.cfg.Agents, workflowLauncher{c}, c.cfg.MaxWorkflows, c.cfg.MaxAgents))
+	}
 	c.tools = tools
 	c.prompt = buildPrompt(c.cfg.Workspace, c.tools, c.cfg.Instructions, servers, c.cfg.Classifier != nil, nil, false)
 	c.agents, c.workflowSpecs = c.buildAgents(search, serverTools, servers)
-	// Workflow is deferred, so it comes after the prompt, which would otherwise
-	// describe ToolSearch for it; it never reaches a subagent's tools.
-	if c.workflowOffered() {
-		c.tools = append(c.tools, tool.NewWorkflow(c.cfg.Agents, workflowLauncher{c}, c.cfg.MaxWorkflows, c.cfg.MaxAgents))
-	}
 	return events
 }
 
@@ -513,8 +517,8 @@ func (c *Controller) Sessions() ([]pigruntime.SessionInfo, error) {
 // session, Main or a subagent's task id; an unknown one fails with an error
 // wrapping tool.ErrUnknownTask. A control command always runs on the main
 // session, whatever session is, and is executed and returns (nil, nil), ErrQuit for /quit,
-// ErrShowTasks for /tasks, ErrMissingArgument for /resume, /login or /logout
-// without an argument, or ErrUnknownCommand. /new, /resume with an id and
+// ErrShowTasks for /tasks, ErrMissingArgument for /resume, /model, /login or /logout
+// without an argument, or ErrUnknownCommand. /new, /resume with an id, /model and
 // /login with a provider return at once and report their result through
 // events; while a login runs, /new and /resume return ErrLoggingIn.
 // Anything else is a prompt: it starts a turn of session or, while one runs, is
@@ -1021,7 +1025,7 @@ func (c *Controller) beginSwitch(cancelWait context.CancelFunc) (*sessionSwitch,
 		c.mu.Unlock()
 		return nil, ErrLoggingIn
 	}
-	if c.switching != nil {
+	if c.busyLocked() {
 		c.mu.Unlock()
 		return nil, ErrBusy
 	}
@@ -1089,8 +1093,6 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 			return err
 		}
 		c.startup = append(c.startup, notices...)
-		// The tools were built without a model, so WebSearch was not offered.
-		c.setup(nil)
 	}
 
 	later := c.attempted
@@ -1116,6 +1118,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	if err != nil {
 		return err
 	}
+	c.offerSearch(sess)
 
 	if w != nil {
 		c.releaseSwitch(w, oldEmit, true)

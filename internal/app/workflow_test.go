@@ -97,6 +97,29 @@ func TestWorkflowRunsTheDefaultAgentAndReturnsItsReply(t *testing.T) {
 	assert.Contains(t, a.info(t, id).Output, "#1 agent: started\n#1 agent: completed · ")
 }
 
+func TestWorkflowAgentWebSearchIsCallableOnlyForASearchingSmallModel(t *testing.T) {
+	for _, tc := range []struct {
+		name, small string
+		want        []string
+	}{
+		{"searching", "kopi-search/search-1", []string{"WebSearch"}},
+		{"not searching", "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newWorkflowHarness(t, searchSandbox(t), Config{SmallModel: tc.small})
+			requests := make(chan childRequest, 1)
+			a.child.SetResponses([]ai.FauxResponseStep{captureChild(requests, nil, "found it")})
+			a.rootAcks(1)
+
+			id := a.startWorkflow(t, "audit", `return await agent("look around")`)
+			got := receiveChild(t, requests).tools
+			a.untilStatus(t, id, tool.TaskCompleted)
+
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestWorkflowNamedTypeGetsItsPromptToolsEffortAndModel(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	def := agentDef("explorer")
@@ -167,6 +190,38 @@ func TestWorkflowModelOrder(t *testing.T) {
 		assert.Equal(t, `"session"`, a.info(t, id).Result)
 		assert.Zero(t, a.child.CallCount())
 	})
+}
+
+func TestWorkflowAgentStartedAfterModelCommandRunsOnTheNewModel(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{})
+	other, otherRef := pigruntimetest.RegisterFaux(t, a.c.rt, "kopi-other")
+	started, gate := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+	})
+	a.faux.SetResponses([]ai.FauxResponseStep{ai.FauxFactoryStep(func(ai.TranscriptContext, ai.StreamOptions, *ai.FauxProviderState, *ai.Model) (ai.AssistantMessage, error) {
+		close(started)
+		<-gate
+		return ai.FauxAssistantMessage(ai.FauxContentString("first"), ai.FauxAssistantMessageOptions{}), nil
+	})})
+	requests := make(chan pigruntimetest.Request, 1)
+	other.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "second"), pigruntimetest.Text("ack")})
+	changed := subscribeTo[event.ModelChanged](a.c)
+
+	id := a.startWorkflow(t, "audit", `await agent("first"); return await agent("second")`)
+	wait(t, started)
+	_, err := a.c.Submit(t.Context(), Main, "/model "+otherRef)
+	require.NoError(t, err)
+	receiveEvent(t, changed)
+	close(gate)
+
+	assert.Equal(t, []string{"second"}, receive(t, requests).UserTexts)
+	a.untilStatus(t, id, tool.TaskCompleted)
+	assert.Equal(t, 1, a.faux.CallCount(), "the first agent ran on the old model")
 }
 
 func TestWorkflowAgentsAreInTheTotalAsEachEnds(t *testing.T) {

@@ -43,7 +43,7 @@ func (c *Controller) beginLogin(ctx context.Context, provider string) (*loginRun
 		return nil, nil, ErrNoSession
 	case c.login != nil:
 		return nil, nil, ErrLoggingIn
-	case c.switching != nil:
+	case c.busyLocked():
 		return nil, nil, ErrBusy
 	case c.main.work != nil || c.live > 0 || c.runningWorkflowsLocked() > 0:
 		return nil, nil, fmt.Errorf("failed to log in to %q: %w", provider, ErrWorkStillRunning)
@@ -133,7 +133,10 @@ func (c *Controller) modelProvider() string {
 // withLoginHint is err, a missing credential of the session model's provider
 // or, with no model yet, of every provider, pointing at /login.
 func (c *Controller) withLoginHint(err error) error {
-	provider := cmp.Or(c.modelProvider(), "<provider>")
+	return loginHint(err, cmp.Or(c.modelProvider(), "<provider>"))
+}
+
+func loginHint(err error, provider string) error {
 	return fmt.Errorf("%w: run /login %s", err, provider)
 }
 
@@ -261,6 +264,10 @@ func (c *Controller) endLogin() {
 	c.main.wakeLocked()
 }
 
+// busyLocked reports a session switch or model change under way; the caller
+// holds mu.
+func (c *Controller) busyLocked() bool { return c.switching != nil || c.changingModel }
+
 func (c *Controller) isClosed() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -281,7 +288,7 @@ func (c *Controller) logoutCommand(ctx context.Context, provider string) error {
 	case c.login != nil:
 		c.mu.Unlock()
 		return ErrLoggingIn
-	case c.switching != nil:
+	case c.busyLocked():
 		c.mu.Unlock()
 		return ErrBusy
 	}

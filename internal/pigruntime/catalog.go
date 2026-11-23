@@ -80,7 +80,8 @@ func (r *Runtime) fetchModels(ctx context.Context, provider string) error {
 // providers whose models this process has resolved, so a known model's window,
 // prices and base URL follow the catalog. Failures are only logged. It runs
 // after the start checks and never while a forced fetch can be in flight;
-// Close cancels it and waits.
+// Close cancels it and waits. A provider first resolved after it has run is
+// refreshed once by refreshLateLocked.
 //
 // It relies on PiG v0.7.0: a nil Providers selects every provider,
 // hence the return on no used provider; a later refresh of a provider cancels
@@ -88,21 +89,45 @@ func (r *Runtime) fetchModels(ctx context.Context, provider string) error {
 // during a forced fetch would make that fetch return no list; an unset Force
 // skips the request while the stored list was checked under four hours ago;
 // and an unset AllowNetwork leaves PiG's offline gate in force. Recheck on a
-// bump.
+// bump. The late refresh holds the provider's fetching slot, so a forced fetch
+// for it waits for the refresh instead of cancelling it.
 func (r *Runtime) StartModelListRefresh() {
 	r.refreshMu.Lock()
 	defer r.refreshMu.Unlock()
 	providers := slices.Sorted(maps.Keys(r.used))
-	ctx, cancel := context.WithTimeout(context.Background(), modelListRefreshTimeout)
-	done := make(chan struct{})
-	r.stopRefresh, r.refreshDone = cancel, done
+	r.refreshCtx, r.stopRefresh = context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(r.refreshCtx, modelListRefreshTimeout)
+	r.refreshes.Add(1)
 	go func() {
-		defer close(done)
+		defer r.refreshes.Done()
 		defer cancel()
 		if len(providers) == 0 {
 			return
 		}
 		r.refreshModelList(ctx, providers)
+	}()
+}
+
+// refreshLateLocked refreshes in the background the model list of a provider
+// first used after StartModelListRefresh. The caller holds refreshMu, in the section that added the
+// provider to used, so no forced fetch can slip in before the slot is taken.
+// It leaves refreshed unset: a forced fetch waiting on the slot then fetches.
+func (r *Runtime) refreshLateLocked(provider string) {
+	if r.refreshCtx == nil || r.refreshCtx.Err() != nil {
+		return
+	}
+	done := make(chan struct{})
+	r.fetching[provider] = done
+	r.refreshes.Add(1)
+	go func() {
+		defer r.refreshes.Done()
+		ctx, cancel := context.WithTimeout(r.refreshCtx, modelListRefreshTimeout)
+		defer cancel()
+		r.refreshModelList(ctx, []string{provider})
+		r.refreshMu.Lock()
+		delete(r.fetching, provider)
+		r.refreshMu.Unlock()
+		close(done)
 	}()
 }
 

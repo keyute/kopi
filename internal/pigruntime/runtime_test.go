@@ -1204,3 +1204,184 @@ func TestModelsFileEntryInheritsProviderAndCredential(t *testing.T) {
 	assert.Equal(t, bundled.ProviderMeta.BaseURL, declared.ProviderMeta.BaseURL)
 	assert.NotEmpty(t, declared.ProviderMeta.BaseURL)
 }
+
+func TestSetModelSwitchesSessionAndRejectsUnknown(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	otherModel := registerSecondFaux(t, r, "kopi-other")
+	s := openTestSession(t, r)
+
+	require.NoError(t, r.SetModel(t.Context(), s, otherModel))
+	assert.Equal(t, otherModel, s.inner.Model().ProviderMeta.ProviderID+"/"+s.inner.Model().ID)
+
+	err := r.SetModel(t.Context(), s, fauxProvider+"/missing")
+	require.ErrorIs(t, err, ErrUnknownModel)
+	assert.Equal(t, otherModel, s.inner.Model().ProviderMeta.ProviderID+"/"+s.inner.Model().ID)
+}
+
+// openOn opens a session on model, resuming resumeID when set.
+func openOn(t *testing.T, r *Runtime, model string, effort Effort, resumeID string) *Session {
+	t.Helper()
+	s, err := r.Open(t.Context(), OpenOptions{Model: model, Effort: effort, ResumeID: resumeID, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, s.Close(context.Background())) })
+	return s
+}
+
+func registerThinker(t *testing.T, r *Runtime) (*ai.FauxProviderHandle, string) {
+	t.Helper()
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "faux-thinker", Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, r.RegisterProvider(thinker.Provider()))
+	return thinker, "faux-thinker/thinker"
+}
+
+func TestSetModelKeepsTheEffortAskedFor(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	_, thinker := registerThinker(t, r)
+	for name, s := range map[string]*Session{
+		"at open":   openOn(t, r, thinker, HighEffort, ""),
+		"SetEffort": openOn(t, r, thinker, LowEffort, ""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if name == "SetEffort" {
+				require.NoError(t, s.SetEffort(HighEffort))
+			}
+			require.NoError(t, r.SetModel(t.Context(), s, fauxModel))
+			assert.Empty(t, s.Effort())
+
+			require.NoError(t, r.SetModel(t.Context(), s, thinker))
+			assert.Equal(t, "high", s.Effort())
+		})
+	}
+}
+
+func TestSetModelReportsAFailedSaveAfterSwitching(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	thinker, thinkerRef := registerThinker(t, r)
+	thinker.SetResponses([]ai.FauxResponseStep{reply("answer")})
+	s := openOn(t, r, thinkerRef, HighEffort, "")
+	_, err := s.Send(t.Context(), Prompt{Text: "question"}, nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, r.SetModel(t.Context(), s, fauxModel))
+	require.Empty(t, s.Effort())
+	files := sessionFiles(t, sb.kopiHome)
+	require.Len(t, files, 1)
+	// The write is refused as the file is opened for appending.
+	require.NoError(t, os.Chmod(files[0], 0o400))
+	t.Cleanup(func() { _ = os.Chmod(files[0], 0o600) })
+	if f, err := os.OpenFile(files[0], os.O_WRONLY|os.O_APPEND, 0); err == nil {
+		_ = f.Close()
+		t.Skip("file permissions do not stop this user from appending")
+	}
+
+	err = r.SetModel(t.Context(), s, thinkerRef)
+
+	require.ErrorIs(t, err, ErrModelNotSaved)
+	assert.Contains(t, err.Error(), thinkerRef)
+	assert.Equal(t, thinkerRef, s.inner.Model().ProviderMeta.ProviderID+"/"+s.inner.Model().ID)
+	assert.Equal(t, "high", s.Effort())
+}
+
+func TestSetModelToTheCurrentModelReportsAFailureAsIs(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	_, thinkerRef := registerThinker(t, r)
+	s := openOn(t, r, thinkerRef, HighEffort, "")
+	_, err := s.Send(t.Context(), Prompt{Text: "question"}, nil, nil)
+	require.NoError(t, err)
+	files := sessionFiles(t, sb.kopiHome)
+	require.Len(t, files, 1)
+	// The write is refused as the file is opened for appending.
+	require.NoError(t, os.Chmod(files[0], 0o400))
+	t.Cleanup(func() { _ = os.Chmod(files[0], 0o600) })
+	if f, err := os.OpenFile(files[0], os.O_WRONLY|os.O_APPEND, 0); err == nil {
+		_ = f.Close()
+		t.Skip("file permissions do not stop this user from appending")
+	}
+
+	err = r.SetModel(t.Context(), s, thinkerRef)
+
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrModelNotSaved)
+}
+
+func TestSetModelClampsAnUnaskedLevelAfterAFailedSave(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	_, thinkerRef := registerThinker(t, r)
+	s := openOn(t, r, fauxModel, DefaultEffort, "")
+	_, err := s.Send(t.Context(), Prompt{Text: "question"}, nil, nil)
+	require.NoError(t, err)
+	files := sessionFiles(t, sb.kopiHome)
+	require.Len(t, files, 1)
+	// The write is refused as the file is opened for appending.
+	require.NoError(t, os.Chmod(files[0], 0o400))
+	t.Cleanup(func() { _ = os.Chmod(files[0], 0o600) })
+	if f, err := os.OpenFile(files[0], os.O_WRONLY|os.O_APPEND, 0); err == nil {
+		_ = f.Close()
+		t.Skip("file permissions do not stop this user from appending")
+	}
+
+	err = r.SetModel(t.Context(), s, thinkerRef)
+
+	require.ErrorIs(t, err, ErrModelNotSaved)
+	assert.Equal(t, thinkerRef, s.inner.Model().ProviderMeta.ProviderID+"/"+s.inner.Model().ID)
+	assert.Equal(t, "medium", s.Effort())
+}
+
+func TestSetModelGivesAnUnaskedSessionTheNewModelsDefault(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	_, thinker := registerThinker(t, r)
+	s := openOn(t, r, fauxModel, DefaultEffort, "")
+
+	require.NoError(t, r.SetModel(t.Context(), s, thinker))
+
+	assert.Equal(t, "medium", s.Effort())
+	assert.Equal(t, openOn(t, r, thinker, DefaultEffort, "").Effort(), s.Effort())
+}
+
+func TestSetModelKeepsAResumedSessionsEffort(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	provider, thinker := registerThinker(t, r)
+	saved := openOn(t, r, thinker, LowEffort, "")
+	require.NoError(t, saved.SetEffort(HighEffort))
+	provider.SetResponses([]ai.FauxResponseStep{reply("noted")})
+	_, err := saved.Send(t.Context(), Prompt{Text: "hello"}, nil, nil)
+	require.NoError(t, err)
+
+	resumed := openOn(t, r, thinker, DefaultEffort, saved.ID())
+	require.NoError(t, r.SetModel(t.Context(), resumed, fauxModel))
+	require.NoError(t, r.SetModel(t.Context(), resumed, thinker))
+	assert.Equal(t, "high", resumed.Effort())
+
+	continued, err := r.Open(t.Context(), OpenOptions{Model: thinker, Continue: true, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, continued.Close(context.Background())) })
+	require.NoError(t, r.SetModel(t.Context(), continued, fauxModel))
+	require.NoError(t, r.SetModel(t.Context(), continued, thinker))
+	assert.Equal(t, "high", continued.Effort())
+
+	onPlain := openOn(t, r, fauxModel, DefaultEffort, saved.ID())
+	require.NoError(t, r.SetModel(t.Context(), onPlain, thinker))
+	assert.Equal(t, "medium", onPlain.Effort())
+}
+
+func TestModelsListsCredentialedProvidersSorted(t *testing.T) {
+	clearEnv(t)
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	registerSecondFaux(t, r, "aaa-faux")
+
+	models, err := r.Models(t.Context())
+
+	require.NoError(t, err)
+	assert.Equal(t, []Model{{Ref: "aaa-faux/faux-1", Name: "Faux Model"}, {Ref: fauxModel, Name: "Faux Model"}}, models)
+}
+
+func registerSecondFaux(t *testing.T, r *Runtime, id string) string {
+	t.Helper()
+	faux := ai.NewFauxProvider(ai.FauxConfig{ProviderID: id, Model: "faux-1"})
+	require.NoError(t, r.RegisterProvider(faux.Provider()))
+	return id + "/faux-1"
+}

@@ -46,6 +46,28 @@ func (s *Session) addTools(names []string) bool {
 	return len(s.inner.ActiveToolNames()) > before
 }
 
+// SetCallable makes the named tool callable from the session's next model
+// request, or not callable. A name the session does not have is ignored.
+func (s *Session) SetCallable(name string, on bool) {
+	if s.setCallable(name, on) {
+		s.notify(event.ToolsChanged{})
+	}
+}
+
+func (s *Session) setCallable(name string, on bool) bool {
+	if on {
+		return s.addTools([]string{name})
+	}
+	s.toolsMu.Lock()
+	defer s.toolsMu.Unlock()
+	active := s.inner.ActiveToolNames()
+	if !slices.Contains(active, name) {
+		return false
+	}
+	s.inner.SetActiveToolsByName(slices.DeleteFunc(slices.Clone(active), func(n string) bool { return n == name }))
+	return true
+}
+
 // Callable reports whether the named tool is callable from the session's next
 // model request.
 func (s *Session) Callable(name string) bool {

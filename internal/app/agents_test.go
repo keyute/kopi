@@ -175,9 +175,9 @@ func TestDefinitionsAddAgentAndSendMessageUnlessRuleRemovesThem(t *testing.T) {
 		deny string
 		want []string
 	}{
-		{"no rule", "", []string{"AskUserQuestion", "Agent", "SendMessage", "Workflow"}},
-		{"agent", "Agent", []string{"AskUserQuestion", "Workflow"}},
-		{"send message", "SendMessage", []string{"AskUserQuestion", "Agent", "Workflow"}},
+		{"no rule", "", []string{"AskUserQuestion", "WebSearch", "Agent", "SendMessage", "Workflow"}},
+		{"agent", "Agent", []string{"AskUserQuestion", "WebSearch", "Workflow"}},
+		{"send message", "SendMessage", []string{"AskUserQuestion", "WebSearch", "Agent", "Workflow"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sb := pigruntimetest.NewSandbox(t)
@@ -216,7 +216,7 @@ func TestAgentToolsAreResolvedPerDefinition(t *testing.T) {
 		a := newAgentHarness(t, sb, Config{Tools: []tool.Tool{read}, AgentTools: agentTools, Rules: rules, Servers: statuses}, all, named, plain)
 
 		require.Len(t, a.c.agents, 3)
-		assert.Equal(t, []string{"Read", "Exec", "ToolSearch", "mcp__s__a", "mcp__s__b", "mcp__t__c"}, toolNames(a.c.agents[0].tools))
+		assert.Equal(t, []string{"Read", "Exec", "WebSearch", "ToolSearch", "mcp__s__a", "mcp__s__b", "mcp__t__c"}, toolNames(a.c.agents[0].tools))
 		assert.Equal(t, []string{"Read", "ToolSearch", "mcp__s__a"}, toolNames(a.c.agents[1].tools))
 		assert.Equal(t, []string{"Read"}, toolNames(a.c.agents[2].tools))
 
@@ -232,7 +232,7 @@ func TestAgentToolsAreResolvedPerDefinition(t *testing.T) {
 		require.NoError(t, err)
 		a := newAgentHarness(t, sb, Config{Tools: []tool.Tool{read}, AgentTools: agentTools, Rules: rules, Servers: statuses}, all)
 
-		assert.Equal(t, []string{"Read", "Exec", "Gone"}, toolNames(a.c.agents[0].tools), "the deferred tools cannot be loaded, so the child has none")
+		assert.Equal(t, []string{"Read", "Exec", "Gone", "WebSearch"}, toolNames(a.c.agents[0].tools), "the deferred tools cannot be loaded, so the child has none")
 		assert.Equal(t, []string{"preamble"}, partNames(a.c.agents[0].prompt))
 	})
 }
@@ -283,8 +283,65 @@ func TestSubagentsAreOfferedWebSearchForASearchingSmallModel(t *testing.T) {
 	named.Tools = []string{"Read"}
 	a := newAgentHarness(t, searchSandbox(t), Config{SmallModel: "kopi-search/search-1"}, plain, named)
 
-	assert.Equal(t, []string{"WebSearch"}, toolNames(a.c.agents[0].tools))
-	assert.Empty(t, a.c.agents[1].tools)
+	requests := make(chan childRequest, 2)
+	a.child.SetResponses([]ai.FauxResponseStep{captureChild(requests, nil, "final"), captureChild(requests, nil, "final")})
+	a.rootAcks(2)
+
+	a.launch(t, "plain", "find it", "go")
+	assert.Contains(t, receiveChild(t, requests).tools, "WebSearch")
+	a.launch(t, "named", "find it", "go")
+	assert.NotContains(t, receiveChild(t, requests).tools, "WebSearch")
+}
+
+func TestSubagentWebSearchIsCallableOnlyForASearchingSmallModel(t *testing.T) {
+	for _, tc := range []struct {
+		name, small string
+		want        []string
+	}{
+		{"searching", "kopi-search/search-1", []string{"WebSearch"}},
+		{"not searching", "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newAgentHarness(t, searchSandbox(t), Config{SmallModel: tc.small}, agentDef("explorer"))
+			requests := make(chan childRequest, 1)
+			a.child.SetResponses([]ai.FauxResponseStep{captureChild(requests, nil, "final")})
+			a.rootAcks(1)
+
+			a.launch(t, "explorer", "find it", "go")
+
+			assert.Equal(t, tc.want, receiveChild(t, requests).tools)
+		})
+	}
+}
+
+func TestSubagentLaunchedAfterModelCommandFollowsTheNewModelsSearch(t *testing.T) {
+	a := newAgentHarness(t, searchSandbox(t), Config{Model: "kopi-search/search-1"}, agentDef("explorer"))
+	requests := make(chan childRequest, 1)
+	a.child.SetResponses([]ai.FauxResponseStep{captureChild(requests, nil, "final")})
+	a.rootAcks(1)
+	changed := subscribeTo[event.ModelChanged](a.c)
+
+	_, err := a.c.Submit(t.Context(), Main, "/model "+fauxProvider+"/faux-1")
+	require.NoError(t, err)
+	receiveEvent(t, changed)
+	a.launch(t, "explorer", "find it", "go")
+
+	assert.Empty(t, receiveChild(t, requests).tools)
+}
+
+func TestSubagentLaunchedAfterModelCommandOffersTheNewModelsSearch(t *testing.T) {
+	a := newAgentHarness(t, searchSandbox(t), Config{Model: fauxProvider + "/faux-1"}, agentDef("explorer"))
+	requests := make(chan childRequest, 1)
+	a.child.SetResponses([]ai.FauxResponseStep{captureChild(requests, nil, "final")})
+	a.rootAcks(1)
+	changed := subscribeTo[event.ModelChanged](a.c)
+
+	_, err := a.c.Submit(t.Context(), Main, "/model kopi-search/search-1")
+	require.NoError(t, err)
+	receiveEvent(t, changed)
+	a.launch(t, "explorer", "find it", "go")
+
+	assert.Equal(t, []string{"WebSearch"}, receiveChild(t, requests).tools)
 }
 
 func TestStatusTotalCostKeepsAnEndedSubagent(t *testing.T) {

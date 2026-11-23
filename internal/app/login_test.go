@@ -223,6 +223,8 @@ func TestLoginRefusals(t *testing.T) {
 	assert.ErrorIs(t, err, ErrLoggingIn)
 	_, err = h.c.Submit(t.Context(), Main, "/resume some-id")
 	assert.ErrorIs(t, err, ErrLoggingIn)
+	_, err = h.c.Submit(t.Context(), Main, "/model "+fauxProvider+"/faux-1")
+	assert.ErrorIs(t, err, ErrLoggingIn)
 
 	h.c.Interrupt(Main)
 	wait(t, run.done)
@@ -586,7 +588,7 @@ func TestUnsetModelNewAfterCancelledPickOffersWebSearch(t *testing.T) {
 	lh.request(t)
 	assert.True(t, lh.c.Interrupt(Main))
 	wait(t, run.done)
-	require.Equal(t, []string{"AskUserQuestion", "Workflow"}, toolNames(lh.c.tools))
+	require.Equal(t, []string{"AskUserQuestion", "WebSearch", "Workflow"}, toolNames(lh.c.tools))
 
 	t.Setenv("OPENAI_API_KEY", "synthetic-key")
 	require.NoError(t, lh.c.NewSession(t.Context()))
@@ -595,5 +597,5 @@ func TestUnsetModelNewAfterCancelledPickOffersWebSearch(t *testing.T) {
 		n, ok := ev.(event.Notice)
 		return ok && strings.HasPrefix(n.Text, "Using openai/")
 	})
-	assert.Equal(t, []string{"AskUserQuestion", "WebSearch", "Workflow"}, toolNames(lh.c.tools))
+	assert.True(t, lh.c.main.sess.Callable("WebSearch"))
 }
