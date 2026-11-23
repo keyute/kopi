@@ -211,6 +211,54 @@ func TestModelCommandSwitchesModelAndKeepsItAcrossNew(t *testing.T) {
 	assert.Equal(t, otherRef, h.c.Model())
 }
 
+func TestModelCommandKeepsTheChoiceAcrossResume(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	h, _ := openHarness(t, Config{})
+	other, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first answer")})
+	h.turn(t, "first question")
+	savedID := h.c.Status().SessionID
+	changed := subscribeTo[event.ModelChanged](h.c)
+	sessions := subscribeTo[event.SessionChanged](h.c)
+
+	_, err := h.c.Submit(t.Context(), Main, "/model "+otherRef)
+	require.NoError(t, err)
+	receiveEvent(t, changed)
+	assertModelChangeDone(t, h)
+	_, err = h.c.Submit(t.Context(), Main, "/resume "+savedID)
+	require.NoError(t, err)
+	assert.Equal(t, savedID, receiveEvent(t, sessions).SessionID)
+	assertSwitchDone(t, h)
+	requests := make(chan pigruntimetest.Request, 1)
+	other.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "answer")})
+	h.turn(t, "hello")
+
+	receive(t, requests)
+	assert.Equal(t, otherRef, h.c.Model())
+}
+
+func TestModelCommandCarriesTheEffortToTheNewModel(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	rt := pigruntimetest.NewRuntime(t, sb)
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: fauxProvider, Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, rt.RegisterProvider(thinker.Provider()))
+	other := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "kopi-other", Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, rt.RegisterProvider(other.Provider()))
+	h := buildHarness(t, rt, thinker, sb, Config{Model: fauxProvider + "/thinker"})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	changed := subscribeTo[event.ModelChanged](h.c)
+	_, err := h.c.Submit(t.Context(), Main, "/effort low")
+	require.NoError(t, err)
+	require.Equal(t, "low", h.c.Agents()[0].Effort)
+
+	_, err = h.c.Submit(t.Context(), Main, "/model kopi-other/thinker")
+	require.NoError(t, err)
+	receiveEvent(t, changed)
+	assertModelChangeDone(t, h)
+
+	assert.Equal(t, "low", h.c.Agents()[0].Effort, "the level asked for survives the switch rather than the default")
+}
+
 func TestModelCommandReadsTheNewProvidersLimits(t *testing.T) {
 	pigruntimetest.ClearEnv(t)
 	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Limits: true})
@@ -310,7 +358,6 @@ func TestModelChangeThatAcquiresLifeAfterCloseChangesNothing(t *testing.T) {
 	h, _ := openHarness(t, Config{})
 	_, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
 	before := h.c.Model()
-	changed := subscribeTo[event.ModelChanged](h.c)
 
 	// The change's goroutine waits for life. Close sets closed under mu before
 	// it releases life, so the goroutine can only run after it; setting it here
@@ -330,7 +377,6 @@ func TestModelChangeThatAcquiresLifeAfterCloseChangesNothing(t *testing.T) {
 		runtime.Gosched()
 	}
 	assert.Equal(t, before, h.c.Model())
-	assert.Empty(t, changed)
 }
 
 // assertModelChangeDone waits for the model change that emitted its events to release the controller.

@@ -521,6 +521,19 @@ func TestStatusRefreshesOnEffortChanged(t *testing.T) {
 	assert.Equal(t, "  high"+strings.Repeat(" ", 28)+"plan", last())
 }
 
+func TestStatusRefreshesOnModelChanged(t *testing.T) {
+	opts := testOptions()
+	opts.StatusLine = config.StatusLine{Left: []string{"$model"}, Right: []string{"$mode"}, Separator: " "}
+	m, c := newTestModelWith(t, 40, 20, opts)
+	last := func() string { return screen(m)[len(screen(m))-1] }
+	assert.Equal(t, "  model-1"+strings.Repeat(" ", 25)+"plan", last())
+
+	c.agents = []app.AgentStatus{{ID: app.Main, Model: "kopi-other/faux-1"}}
+	send(m, event.ModelChanged{Model: "kopi-other/faux-1"})
+
+	assert.Equal(t, "  faux-1"+strings.Repeat(" ", 26)+"plan", last())
+}
+
 func TestStatusLimitsFollowTheShownAgentsProvider(t *testing.T) {
 	opts := testOptions()
 	opts.StatusLine = config.StatusLine{Left: []string{"(wk $limit_wk)"}, Separator: " "}

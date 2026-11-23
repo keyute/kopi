@@ -192,6 +192,38 @@ func TestWorkflowModelOrder(t *testing.T) {
 	})
 }
 
+func TestWorkflowAgentStartedAfterModelCommandRunsOnTheNewModel(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{})
+	other, otherRef := pigruntimetest.RegisterFaux(t, a.c.rt, "kopi-other")
+	started, gate := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+	})
+	a.faux.SetResponses([]ai.FauxResponseStep{ai.FauxFactoryStep(func(ai.TranscriptContext, ai.StreamOptions, *ai.FauxProviderState, *ai.Model) (ai.AssistantMessage, error) {
+		close(started)
+		<-gate
+		return ai.FauxAssistantMessage(ai.FauxContentString("first"), ai.FauxAssistantMessageOptions{}), nil
+	})})
+	requests := make(chan pigruntimetest.Request, 1)
+	other.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "second"), pigruntimetest.Text("ack")})
+	changed := subscribeTo[event.ModelChanged](a.c)
+
+	id := a.startWorkflow(t, "audit", `await agent("first"); return await agent("second")`)
+	wait(t, started)
+	_, err := a.c.Submit(t.Context(), Main, "/model "+otherRef)
+	require.NoError(t, err)
+	receiveEvent(t, changed)
+	close(gate)
+
+	assert.Equal(t, []string{"second"}, receive(t, requests).UserTexts)
+	a.untilStatus(t, id, tool.TaskCompleted)
+	assert.Equal(t, 1, a.faux.CallCount(), "the first agent ran on the old model")
+}
+
 func TestWorkflowAgentsAreInTheTotalAsEachEnds(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	def := agentDef("explorer")

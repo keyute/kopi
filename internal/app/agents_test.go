@@ -329,6 +329,21 @@ func TestSubagentLaunchedAfterModelCommandFollowsTheNewModelsSearch(t *testing.T
 	assert.Empty(t, receiveChild(t, requests).tools)
 }
 
+func TestSubagentLaunchedAfterModelCommandOffersTheNewModelsSearch(t *testing.T) {
+	a := newAgentHarness(t, searchSandbox(t), Config{Model: fauxProvider + "/faux-1"}, agentDef("explorer"))
+	requests := make(chan childRequest, 1)
+	a.child.SetResponses([]ai.FauxResponseStep{captureChild(requests, nil, "final")})
+	a.rootAcks(1)
+	changed := subscribeTo[event.ModelChanged](a.c)
+
+	_, err := a.c.Submit(t.Context(), Main, "/model kopi-search/search-1")
+	require.NoError(t, err)
+	receiveEvent(t, changed)
+	a.launch(t, "explorer", "find it", "go")
+
+	assert.Equal(t, []string{"WebSearch"}, receiveChild(t, requests).tools)
+}
+
 func TestStatusTotalCostKeepsAnEndedSubagent(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	def := agentDef("explorer")

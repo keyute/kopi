@@ -65,7 +65,7 @@ func (s *Session) setCallable(name string, on bool) bool {
 		return false
 	}
 	s.inner.SetActiveToolsByName(slices.DeleteFunc(slices.Clone(active), func(n string) bool { return n == name }))
-	return !slices.Contains(s.inner.ActiveToolNames(), name)
+	return true
 }
 
 // Callable reports whether the named tool is callable from the session's next

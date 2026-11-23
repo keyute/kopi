@@ -207,18 +207,19 @@ func (s *Session) SetEffort(e Effort) error {
 	defer s.effortMu.Unlock()
 	s.raised = DefaultEffort
 	s.effortRevision++
+	s.asked = e.thinkingLevel()
 	if err := s.inner.SetThinkingLevel(e.thinkingLevel()); err != nil {
 		return fmt.Errorf("failed to set effort: %w", err)
 	}
-	s.asked = e.thinkingLevel()
 	return nil
 }
 
 // setModel switches the model, then asks again for the level the session was
 // given, which the old model may have clamped; with nothing asked the level is
 // the default PiG applies on a switch. PiG sets the agent's model before it
-// appends the change and then the level to the session file, so a failed append
-// of either leaves the session on model: that error wraps ErrModelNotSaved. A
+// appends the change and then the level to the session file (PiG v0.7.0
+// coding/session.go beginModelChangeState; recheck on a bump), so a failed
+// append of either leaves the session on model: that error wraps ErrModelNotSaved. A
 // failure that left the model as it was is returned as it is.
 func (s *Session) setModel(model *ai.Model) error {
 	s.effortMu.Lock()
@@ -232,7 +233,7 @@ func (s *Session) setModel(model *ai.Model) error {
 		}
 		err = fmt.Errorf("%w: %w", ErrModelNotSaved, err)
 	}
-	if lerr := s.inner.SetThinkingLevel(cmp.Or(s.asked, ai.ThinkingMedium)); lerr != nil {
+	if lerr := s.inner.SetThinkingLevel(cmp.Or(s.asked, MediumEffort.thinkingLevel())); lerr != nil {
 		err = errors.Join(err, fmt.Errorf("failed to restore the effort after the model change: %w: %w", ErrModelNotSaved, lerr))
 	}
 	return err
