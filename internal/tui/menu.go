@@ -134,7 +134,7 @@ func (mn *menu) want() int {
 
 // lit reports whether the selected row is the one Enter takes. It is not when
 // the draft already runs as typed: an optional argument left out, or an
-// argument typed in full. Up or Down lights it.
+// argument typed in full. Up, Down or Tab lights it.
 func (mn *menu) lit() bool {
 	if mn.picked || mn.q.Kind != app.KindArgument {
 		return true
@@ -226,6 +226,10 @@ func (m *model) menuKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 		}
 		mn.picked = true
 	case key.Matches(k, km.complete):
+		if !mn.lit() {
+			mn.picked = true
+			return nil, true
+		}
 		return m.accept(false), true
 	case key.Matches(k, km.submit):
 		if !mn.lit() {

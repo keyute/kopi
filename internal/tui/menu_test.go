@@ -223,6 +223,7 @@ func TestOptionalArgumentMenu(t *testing.T) {
 		m, c = run(t, "/plan open")
 		assert.Equal(t, []string{"  open        edit the plan file"}, menuText(m), "typed in full")
 		press(m, tab)
+		assert.Equal(t, []string{"❭ open        edit the plan file"}, menuText(m), "tab lights the row")
 		assert.Equal(t, "/plan open", m.composer.value())
 		assert.Empty(t, c.submitted)
 	})
@@ -242,7 +243,7 @@ func TestEnterSendsAFullArgumentWithTheCursorBeforeIt(t *testing.T) {
 	})
 }
 
-func TestUpAndDownLightAnUnlitMenu(t *testing.T) {
+func TestUpDownAndTabLightAnUnlitMenu(t *testing.T) {
 	unlit := func(t *testing.T) *model {
 		m, _ := newMenuModel(t, 60, 30)
 		settle(m, keys(m, "/resume def456"))
@@ -260,6 +261,13 @@ func TestUpAndDownLightAnUnlitMenu(t *testing.T) {
 		m = unlit(t)
 		press(m, up)
 		assert.Equal(t, []string{"  2h ago      fix the bug", "❭ 1d ago      add tests"}, menuText(m))
+
+		m = unlit(t)
+		press(m, tab)
+		assert.Equal(t, []string{"❭ 2h ago      fix the bug", "  1d ago      add tests"}, menuText(m))
+		assert.Equal(t, "/resume def456", m.composer.value(), "tab fills in only a lit row")
+		press(m, tab)
+		assert.Equal(t, "/resume abc123", m.composer.value())
 	})
 }
 
