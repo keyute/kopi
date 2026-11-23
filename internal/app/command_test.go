@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -406,7 +407,8 @@ func TestModelCommandLeavesRunningSubagentsAlone(t *testing.T) {
 	oldRequests := make(chan pigruntimetest.Request, 1)
 	a.faux.SetResponses([]ai.FauxResponseStep{gated(gate, "first"), pigruntimetest.Capture(t, oldRequests, "second")})
 	newRequests := make(chan pigruntimetest.Request, 1)
-	other.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, newRequests, "done")})
+	rootRequests := make(chan pigruntimetest.Request, 1)
+	other.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, rootRequests, "ack"), pigruntimetest.Capture(t, newRequests, "done")})
 	changed := subscribeTo[event.ModelChanged](a.c)
 	id := a.launch(t, "explorer", "find it", "go")
 
@@ -418,7 +420,8 @@ func TestModelCommandLeavesRunningSubagentsAlone(t *testing.T) {
 	close(gate)
 	texts := receive(t, oldRequests).UserTexts
 	assert.Equal(t, "also check b", texts[len(texts)-1], "the running subagent keeps the old model")
-	assert.Zero(t, other.CallCount(), "the running subagent did not move to the new model")
+	assert.Contains(t, receive(t, rootRequests).UserTexts, fmt.Sprintf("Agent %s (explorer) completed: find it\nsecond", id))
+	assert.Equal(t, 1, other.CallCount(), "only main's wake ran on the new model; the running subagent kept the old one")
 
 	a.launch(t, "explorer", "find more", "again")
 	assert.Equal(t, []string{"again"}, receive(t, newRequests).UserTexts, "a later subagent inherits the new model")
