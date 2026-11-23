@@ -82,7 +82,7 @@ func TestUsageShowsEveryRow(t *testing.T) {
 		resets, warm := clock(3*time.Hour+40*time.Minute, "15:04"), clock(3*time.Hour+42*time.Minute, "15:04")
 		week := clock(4*24*time.Hour+21*time.Hour, "Mon 15:04")
 		typeText(m, "/usage")
-		assert.Nil(t, press(m, enter))
+		assert.NotNil(t, press(m, enter), "the cache's wake")
 
 		rule := strings.Repeat("─", 60)
 		assert.Equal(t, []string{
@@ -258,12 +258,28 @@ func TestUsageCacheTurnsExpiredWithTheClock(t *testing.T) {
 		u := app.Usage{SessionID: "s", Cache: app.Cache{Expires: time.Now().Add(time.Minute)}}
 		m, c := usageModel(t, 60, &u)
 		assert.Contains(t, openUsage(t, m), "  Cache    warm until 12:01")
+		assert.Equal(t, u.Cache.Expires, m.usageWakeAt, "opening arms the wake")
+		assert.Nil(t, m.usageWake(), "one wake per expiry")
 
 		time.Sleep(2 * time.Minute)
-		m.place()
+		m.Update(usageWakeMsg{})
 
 		assert.Contains(t, dialogRows(t, m), "  Cache    expired 12:01")
 		assert.Equal(t, 1, c.usageReads, "the clock alone reads nothing")
+		assert.Nil(t, m.usageWake(), "an expired cache arms nothing")
+	})
+}
+
+func TestUsageWakeFollowsAnExpiryReadAfterOpening(t *testing.T) {
+	usageBubble(t, func(t *testing.T) {
+		m, c := usageModel(t, 60, &app.Usage{SessionID: "s"})
+		openUsage(t, m)
+		assert.True(t, m.usageWakeAt.IsZero(), "no cache lifetime: nothing to wake for")
+
+		c.usage.Cache.Expires = time.Now().Add(5 * time.Minute)
+		send(m, event.TurnEnd{})
+
+		assert.Equal(t, c.usage.Cache.Expires, m.usageWakeAt)
 	})
 }
 

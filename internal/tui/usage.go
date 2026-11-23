@@ -33,6 +33,29 @@ func (m *model) showUsage() tea.Cmd {
 	return nil
 }
 
+// usageWakeMsg arrives when the cache an open /usage dialog shows goes cold;
+// the redraw that follows any message is what flips its row.
+type usageWakeMsg struct{}
+
+// usageWake arms one usageWakeMsg for the cache expiry an open /usage dialog
+// shows, since nothing else redraws an idle screen. A tick armed for an earlier
+// reading only redraws.
+func (m *model) usageWake() tea.Cmd {
+	for _, h := range m.prompts {
+		u, ok := h.prompt.(*usageDialog)
+		if !ok {
+			continue
+		}
+		at := u.u.Cache.Expires
+		if at.Equal(m.usageWakeAt) || !time.Now().Before(at) {
+			return nil
+		}
+		m.usageWakeAt = at
+		return tea.Tick(time.Until(at), func(time.Time) tea.Msg { return usageWakeMsg{} })
+	}
+	return nil
+}
+
 // key closes on dismiss; every other key is swallowed.
 func (u *usageDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	return nil, !key.Matches(msg, m.keys.dismiss)
