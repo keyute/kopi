@@ -27,6 +27,7 @@ class Kopi < Formula
 
   def install
     bin.install "kopi"
+    prefix.install "third_party"
     generate_completions_from_executable(bin/"kopi", shell_parameter_format: :cobra)
   end
 

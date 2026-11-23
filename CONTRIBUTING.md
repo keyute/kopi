@@ -43,7 +43,7 @@ Background tasks:
 Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`: it builds the four archives (macOS and Linux, arm64 and amd64), tests the formula, creates the GitHub release and pushes the formula to `keyute/homebrew-tap`. Push one tag at a time.
 
 - The formula source is `.github/homebrew/kopi.rb`. The copy in the tap is overwritten on every release, so edit the template, not the tap.
-- A run uses the workflow and formula of its tag. Re-running an old tag's run republishes that version to the tap.
+- A run uses the workflow and formula of its tag. Re-running an old tag's run leaves a newer formula in the tap untouched.
 - `gh attestation verify <file> -R keyute/kopi` checks a downloaded archive.
 
 One-time setup:

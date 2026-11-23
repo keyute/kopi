@@ -34,6 +34,7 @@ jobs:
           # Everything the script writes stays outside the checkout: an untracked file in the tree stamps later builds +dirty.
           dist="$RUNNER_TEMP/dist"
           mkdir "$dist"
+          sed -e "s/@VERSION@/$version/g" .github/homebrew/kopi.rb > "$dist/kopi.rb"
           for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
             os="${target%/*}"
             arch="${target#*/}"
@@ -45,18 +46,14 @@ jobs:
             cp internal/sandbox/codex/LICENSE internal/sandbox/codex/NOTICE "$dir/third_party/codex/"
             cp internal/sandbox/srt/LICENSE "$dir/third_party/sandbox-runtime/"
             tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner -C "$dir" -cf - . | gzip -n > "$dist/kopi_${version}_${os}_${arch}.tar.gz"
+            sum="$(sha256sum "$dist/kopi_${version}_${os}_${arch}.tar.gz" | cut -d ' ' -f 1)"
+            sed -i "s/@SHA256_${os^^}_${arch^^}@/$sum/" "$dist/kopi.rb"
           done
           (cd "$dist" && sha256sum kopi_*.tar.gz > checksums.txt)
           # Catches a missing version stamp or a +dirty tree.
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             test "$("$RUNNER_TEMP/build/linux_amd64/kopi" version | head -n 1)" = "kopi $GITHUB_REF_NAME"
           fi
-          sed -e "s/@VERSION@/$version/g" .github/homebrew/kopi.rb > "$dist/kopi.rb"
-          for target in darwin_arm64 darwin_amd64 linux_arm64 linux_amd64; do
-            sum="$(awk -v name="kopi_${version}_${target}.tar.gz" '$2 == name { print $1 }' "$dist/checksums.txt")"
-            placeholder="@SHA256_$(echo "$target" | tr '[:lower:]' '[:upper:]')@"
-            sed -i "s/$placeholder/$sum/" "$dist/kopi.rb"
-          done
           if grep -n '@[A-Z0-9_]*@' "$dist/kopi.rb"; then
             exit 1
           fi
@@ -149,6 +146,9 @@ jobs:
     # The deploy key is this environment's secret, and the environment admits only v* tags,
     # so no other job, branch or pull request can read it.
     environment: homebrew-release
+    concurrency:
+      group: homebrew-tap
+      cancel-in-progress: false
     permissions: {}
     steps:
       - name: Download dist
@@ -167,6 +167,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p Formula
+          if [ -f Formula/kopi.rb ]; then
+            published="$(sed -n 's|.*/releases/download/v\([^/]*\)/.*|\1|p' Formula/kopi.rb | head -n 1)"
+            if [ "$(printf '%s\n%s\n' "$published" "${GITHUB_REF_NAME#v}" | sort -V | tail -n 1)" = "$published" ] && [ "$published" != "${GITHUB_REF_NAME#v}" ]; then
+              echo "::notice::The tap already has $published, newer than ${GITHUB_REF_NAME#v}; leaving it."
+              exit 0
+            fi
+          fi
           cp "$RUNNER_TEMP/dist/kopi.rb" Formula/kopi.rb
           git add Formula/kopi.rb
           if git diff --cached --quiet; then
