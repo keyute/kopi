@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -232,7 +233,7 @@ func (s *Session) setModel(model *ai.Model) error {
 		err = fmt.Errorf("%w: %w", ErrModelNotSaved, err)
 	}
 	if lerr := s.inner.SetThinkingLevel(cmp.Or(s.asked, ai.ThinkingMedium)); lerr != nil {
-		slog.Warn("failed to restore the effort after the model change", "error", lerr)
+		err = errors.Join(err, fmt.Errorf("failed to restore the effort after the model change: %w: %w", ErrModelNotSaved, lerr))
 	}
 	return err
 }
