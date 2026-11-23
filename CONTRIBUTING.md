@@ -49,5 +49,5 @@ Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`: it builds the four 
 One-time setup:
 
 1. Create the public repository `keyute/homebrew-tap` with an initial commit. If its ruleset requires the `ci` check, list deploy keys as a bypass actor: the release pushes straight to its `main`, and the required check would reject that push.
-2. Generate a key with `ssh-keygen -t ed25519 -N "" -C kopi-release -f tap-deploy-key`. Add `tap-deploy-key.pub` to the tap as a deploy key with write access, add the private half as the Actions secret `HOMEBREW_TAP_DEPLOY_KEY` in `keyute/kopi`, then delete both files.
+2. Generate a key with `ssh-keygen -t ed25519 -N "" -C kopi-release -f tap-deploy-key`. Add `tap-deploy-key.pub` to the tap as a deploy key with write access, create the environment `homebrew-release` in `keyute/kopi`, limit its deployment branches and tags to the tag pattern `v*`, add the private half as that environment's secret `HOMEBREW_TAP_DEPLOY_KEY`, then delete both files.
 3. Optionally, enable immutable releases in the settings of `keyute/kopi`.
