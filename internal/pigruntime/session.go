@@ -77,10 +77,9 @@ type Prompt struct {
 	Continuation *EffortContinuation
 }
 
-// EffortContinuation is opaque, session-bound state passed from a SendResult
-// to the prompt that continues its interrupted turn.
+// EffortContinuation is opaque state passed from a SendResult to the prompt
+// that continues its interrupted turn.
 type EffortContinuation struct {
-	session  *Session
 	revision uint64
 	effort   Effort
 }
@@ -216,13 +215,10 @@ func (s *Session) SetEffort(e Effort) error {
 func (s *Session) raise(e Effort, continuation *EffortContinuation) {
 	s.effortMu.Lock()
 	defer s.effortMu.Unlock()
-	if e == DefaultEffort && continuation != nil && continuation.session == s && continuation.revision == s.effortRevision {
+	if e == DefaultEffort && continuation != nil && continuation.revision == s.effortRevision {
 		e = continuation.effort
 	}
-	if e == DefaultEffort || !reasons(s.inner.AvailableThinkingLevels()) {
-		return
-	}
-	if s.raised != DefaultEffort {
+	if e == DefaultEffort || s.raised != DefaultEffort || !reasons(s.inner.AvailableThinkingLevels()) {
 		return
 	}
 	prev := s.inner.ThinkingLevel()
@@ -507,7 +503,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	res := SendResult{Sent: sent, Undelivered: handed, UndeliveredNotices: pending, ModeUndelivered: modeUndelivered}
 	s.effortMu.Lock()
 	if s.raised != DefaultEffort {
-		res.Continuation = &EffortContinuation{session: s, revision: s.effortRevision, effort: s.raised}
+		res.Continuation = &EffortContinuation{revision: s.effortRevision, effort: s.raised}
 	}
 	s.effortMu.Unlock()
 	if err != nil {

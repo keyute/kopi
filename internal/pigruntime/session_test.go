@@ -1168,8 +1168,9 @@ func TestSendLeavesEffortAloneWhenTheModelDoesNotReason(t *testing.T) {
 			changes++
 		}
 	})
-	_, err := sess.Send(t.Context(), Prompt{Text: "think", Effort: MaxEffort}, nil, nil)
+	res, err := sess.Send(t.Context(), Prompt{Text: "think", Effort: MaxEffort}, nil, nil)
 	require.NoError(t, err)
+	assert.Nil(t, res.Continuation)
 	assert.Zero(t, changes)
 	assert.Empty(t, sess.Effort())
 }
