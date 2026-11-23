@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -56,6 +55,33 @@ func TestDialogRows(t *testing.T) {
 	for _, r := range d.rows(20, 100, 1, th) {
 		assert.LessOrEqual(t, ansi.StringWidth(r), 20, r)
 	}
+}
+
+func TestDialogRowsDrawPlainTextInTheTextColour(t *testing.T) {
+	th := mocha()
+	d := dialog{title: "Pick", options: []option{{label: "Yes"}, {label: "No"}}}
+	rows := d.rows(20, 100, 1, th)
+	assert.Equal(t, "  "+fg(th.text).Bold(true).Render("Pick"), rows[1])
+	assert.Equal(t, fg(th.accent).Render("  ")+fg(th.text).Render("2. No"), rows[4])
+}
+
+func TestHintRowsDrawTheKeysMuted(t *testing.T) {
+	th := mocha()
+	dim, muted := fg(th.dim), fg(th.muted)
+
+	assert.Equal(t, []string{"  " + muted.Render("enter") + dim.Render(" to view · ") + muted.Render("esc") + dim.Render(" to close")},
+		hintRows("", "enter to view · esc to close", 40, th))
+	assert.Equal(t, []string{"  " + dim.Render("watching reviewer › pay.ts · ") + muted.Render("←/→") + dim.Render(" to switch questions")},
+		hintRows("", "watching reviewer › pay.ts · ←/→ to switch questions", 80, th), "a part that names no key is dim")
+	assert.Equal(t, []string{"  " + dim.Render("denied: push to main · ") + muted.Render("esc") + dim.Render(" to close")},
+		hintRows("denied: push to main", "esc to close", 40, th), "the text before the hints names no key")
+	assert.Equal(t, []string{"  " + muted.Render("pgup/pgdown") + dim.Render(" to"), "  " + dim.Render("scroll · ") + muted.Render("esc") + dim.Render(" to"), "  " + dim.Render("close")},
+		hintRows("", "pgup/pgdown to scroll · esc to close", 18, th), "a key stays muted where its row breaks")
+
+	d := dialog{title: "Pick", note: "push to main", keys: "ctrl+g to edit", foot: "esc to close", options: []option{{label: "Yes"}}}
+	rows := d.rows(40, 100, 1, th)
+	assert.Equal(t, "  "+dim.Render("push to main · ")+muted.Render("ctrl+g")+dim.Render(" to edit"), rows[2])
+	assert.Equal(t, "  "+muted.Render("esc")+dim.Render(" to close"), rows[len(rows)-2])
 }
 
 func TestDialogKey(t *testing.T) {
@@ -198,12 +224,13 @@ func TestDialogFieldDrawsNoCursorWhenBlurred(t *testing.T) {
 	d.paste("ab")
 	_, focused, ok := strings.Cut(optionRows(d, 30)[1], "No  ")
 	require.True(t, ok)
-	assert.NotEqual(t, ansi.Strip(focused), focused, "a focused field draws its cursor")
+	const reversed = "\x1b[7"
+	assert.Contains(t, focused, reversed, "a focused field draws its cursor")
 	d.move(0)
 	_, blurred, ok := strings.Cut(optionRows(d, 30)[1], "No  ")
 	require.True(t, ok)
-	assert.Equal(t, ansi.Strip(blurred), blurred, "a blurred field draws plain text")
-	assert.Equal(t, "ab", strings.TrimRight(blurred, " "))
+	assert.NotContains(t, blurred, reversed, "a blurred field draws none")
+	assert.Equal(t, "ab", strings.TrimRight(ansi.Strip(blurred), " "))
 }
 
 func TestDialogPaste(t *testing.T) {
@@ -258,7 +285,7 @@ func TestDialogChosenBoldsTheLabel(t *testing.T) {
 	assert.Equal(t, fg(th.accent).Render("❭ ")+fg(th.accent).Bold(true).Render("1. Yes"), rows[0])
 	d.move(1)
 	rows = optionRows(d, 30)
-	assert.Equal(t, fg(th.accent).Render("  ")+lipgloss.NewStyle().Bold(true).Render("1. Yes"), rows[0])
+	assert.Equal(t, fg(th.accent).Render("  ")+fg(th.text).Bold(true).Render("1. Yes"), rows[0])
 }
 
 func TestDialogChosenLabellessFieldEndsWithATickUnlessSelected(t *testing.T) {

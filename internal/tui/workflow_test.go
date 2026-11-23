@@ -188,7 +188,7 @@ func TestWorkflowDialogBulletsFollowTheState(t *testing.T) {
 		w := openFromRow(t, m)
 		th := m.th
 		for i, want := range []string{
-			fg(th.success).Render("•"), "•", fg(th.error).Render("•"), fg(th.dim).Render("•"),
+			fg(th.success).Render("•"), fg(th.text).Render("•"), fg(th.error).Render("•"), fg(th.dim).Render("•"),
 		} {
 			assert.Contains(t, w.d.options[i].drawn[len(w.d.options[i].drawn)-1], "    "+want+" ", "option %d", i)
 		}

@@ -64,13 +64,13 @@ The whole word `ultrathink`, in any case, in a prompt to the main agent raises i
   5h          ▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱  23%  resets 15:40
   wk          ▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱  52%  resets Thu 09:00
 
-  System prompt    1.9k    2%
-  Tools            8.1k   10%
-  Instructions     6.2k    7%
-  Skills           1.8k    2%
-  Agents           1.3k    2%
-  MCP              3.0k    4%
-  Messages        61.9k   74%
+  System prompt    1.9k    0.5%
+  Tools            8.1k    2.0%
+  Instructions     6.2k    1.6%
+  Skills           1.8k    0.5%
+  Agents           1.3k    0.3%
+  MCP              3.0k    0.8%
+  Messages        61.9k   15.5%
 
   openai-codex/gpt-5-codex     1.2m   $3.90
   openai-codex/gpt-5-mini    310.0k   $0.41
@@ -81,17 +81,19 @@ The whole word `ultrathink`, in any case, in a prompt to the main agent raises i
   Compaction  2 done · next at 383.6k
   Time        12m 40s model · 3m 5s tools
   Session     0195c2d4-7b1e-7c3a-9f2d-5e8a1b6c4d70 · 42 messages · 128 tool calls
+
+  esc to close
 ```
 
 - Esc closes it. It stays open while turns run and shows the new figures when a tool call or turn ends; a change of session closes it. PgUp/PgDn scroll it when it is taller than a third of the screen.
 - `Context` is the main session's context; it is absent while the context's size or the model's window is unknown, as before the first request and right after a compaction. `5h`, `wk` and the other plan windows are the share of the plan used, in the warning colour from 90%, with when each resets (as in [Plan limits](providers.md#plan-limits)). They show only for a provider Kopi reads plan limits from, and only when it is the main session's model's provider.
-- The rows under the bars are the main session's context by what holds it, each with its share of the context:
+- The rows under the bars are the main session's context by what holds it, each with its share of the model's window, so the shares add up to `Context`'s:
   - `System prompt` is Kopi's own text, `Instructions` the [instruction files](trust.md), the home's and a trusted folder's.
   - `Tools` is the definitions of the tools the model can call, apart from the `Skill` tool's, which carries the skill list and is `Skills`, and the `Agent` tool's, which carries the subagent list and is `Agents`.
   - `MCP` is what MCP servers report about themselves and the definitions of their tools that have been loaded.
   - `Messages` is the rest: prompts, replies and tool results.
   - Every row but `Messages` is an estimate from the text's length; `Messages` is what they leave of the context the provider reports, so the rows add up to `Context`. Where the estimates come to more than that, they are scaled down to it.
-  - They are absent whenever the context's size is unknown, as before the first request and right after a compaction.
+  - They are absent whenever `Context` is.
 - Each model row is the tokens and the cost of the requests the provider answered as that model. The cost is an estimate from the model's listed price; on a subscription sign-in it is not what you are billed. `summaries` is what compaction's own requests cost.
 - The total covers the main session, its subagents, the workflow agents that have ended, and the classifier, `WebFetch`, `WebSearch` and title requests. `Tokens` is the same sum by kind.
 - `Cache` is the main session's. `hit` is the share of the last request's prompt read from the provider's cache. A miss is prompt that had been cached and was paid for again; its dollar figure is what that cost over the cache-read price. `warm until` or `expired` appears only when the main session's model made the last request and declares a cache lifetime, so it is gone after switching model until the new model's first request. It is judged by time alone, so compacting can still rebuild a cache shown as warm.

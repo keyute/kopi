@@ -85,6 +85,8 @@
 - Which prompt is in front is decided only by `front()` in `internal/tui/prompt.go`: the open prompt of the earliest kind, the first to arrive among them. A covered prompt stays open. No other code tests a prompt's kind to decide what shows or takes input.
 - A prompt kind is one type implementing `prompt`, a `promptKind` and one `open` call. It fills a `dialog`'s slots and never cuts, windows or offsets rows: only `dialog.rows` decides height, scrolling and field areas.
 - A prompt keeps what it renders for a width and theme (a body, a preview); `dialog.rows` only slices it, so a frame's cost does not grow with the content.
+- A key hint is `<key> to <verb>`, from `binding` where a binding names the key, joined to the others with ` · ` in a dialog's `foot` or `keys`; only `hintRows` colours it, and a `note` is plain text. Every dialog names its way out.
+- Dialog text with no colour of its own is drawn in the theme's `text`.
 - A prompt for a request closes only on that request's own `…Ended` event, which `internal/app` sends once for every request. It never closes on `TurnEnd` or `SessionChanged`.
 
 ## Style
