@@ -69,6 +69,7 @@ func TestTitleUsesTheSessionModelWhenSmallModelIsUnset(t *testing.T) {
 	_, err := h.c.Submit(t.Context(), Main, "/model "+otherRef)
 	require.NoError(t, err)
 	receiveEvent(t, changed)
+	assertModelChangeDone(t, h)
 	h.turn(t, "fix the build")
 
 	assert.Equal(t, event.SessionNamed{Name: "Session titled"}, receiveEvent(t, named))

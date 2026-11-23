@@ -199,6 +199,7 @@ func TestModelCommandSwitchesModelAndKeepsItAcrossNew(t *testing.T) {
 	assert.Equal(t, event.ModelChanged{Model: otherRef}, receiveEvent(t, changed))
 	assert.Equal(t, otherRef, h.c.Model())
 	assert.Equal(t, event.Notice{Text: "Using " + otherRef + " until kopi exits. Set \"model\" in /kopi/config.json to keep it."}, receiveEvent(t, notices))
+	assertModelChangeDone(t, h)
 
 	_, err = h.c.Submit(t.Context(), Main, "/new")
 	require.NoError(t, err)
@@ -330,6 +331,16 @@ func TestModelChangeThatAcquiresLifeAfterCloseChangesNothing(t *testing.T) {
 	}
 	assert.Equal(t, before, h.c.Model())
 	assert.Empty(t, changed)
+}
+
+// assertModelChangeDone waits for the model change that emitted its events to release the controller.
+func assertModelChangeDone(t *testing.T, h *harness) {
+	t.Helper()
+	h.c.life.Lock()
+	defer h.c.life.Unlock()
+	h.c.mu.Lock()
+	defer h.c.mu.Unlock()
+	assert.False(t, h.c.changingModel)
 }
 
 func modelChangeEnded(c *Controller) bool {

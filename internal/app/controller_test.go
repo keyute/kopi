@@ -2037,6 +2037,7 @@ func TestWebSearchCallableFollowsModelCommand(t *testing.T) {
 		_, err := h.c.Submit(t.Context(), Main, "/model "+tc.model)
 		require.NoError(t, err)
 		receiveEvent(t, changed)
+		assertModelChangeDone(t, h)
 		assert.Equal(t, tc.want, h.c.main.sess.Callable("WebSearch"), tc.model)
 		assert.Len(t, ofType[event.ToolsChanged](h.rec.all()), before+i+1, tc.model)
 	}
