@@ -247,6 +247,22 @@ func TestRecordSumsDurationsAndCountsCompactions(t *testing.T) {
 	check(t, resume(t, r, sess.ID()))
 }
 
+func TestRecordIncludesRetryAttemptsOmittedFromHistory(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	sess := openTestSession(t, r)
+	manager := sess.inner.SessionManager()
+	appendHistoryMessage(t, manager, `{"role":"user","content":"hi","timestamp":1}`)
+	failed := appendHistoryMessage(t, manager, `{"role":"assistant","content":[],"stopReason":"error","errorMessage":"retry","durationMs":1500,"timestamp":2}`)
+	_, err := manager.AppendContextEdit(failed, nil)
+	require.NoError(t, err)
+	appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"ok"}],"stopReason":"stop","durationMs":2000,"timestamp":3}`)
+
+	assert.Equal(t, 3500*time.Millisecond, sess.Record().ModelTime)
+	require.NoError(t, sess.Close(t.Context()))
+	assert.Equal(t, 3500*time.Millisecond, resume(t, r, sess.ID()).Record().ModelTime)
+}
+
 func TestContextSizesNameThePartsAndTheLoadedTools(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)

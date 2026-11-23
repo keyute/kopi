@@ -81,7 +81,7 @@ func (c *Controller) Usage() Usage {
 }
 
 // totalUsage is side with what the root session sess, if any, and the open
-// children have used: the sum Status.TotalCost and Usage both report.
+// children have used.
 func totalUsage(side pigruntime.Usage, sess *pigruntime.Session, children map[string]*runner) pigruntime.Usage {
 	if sess != nil {
 		side = side.Add(sess.UsageByModel())

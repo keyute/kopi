@@ -3,6 +3,7 @@ package pigruntime
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"slices"
 	"time"
 
@@ -138,12 +139,20 @@ func (s *Session) Record() Record {
 			rec.Compactions++
 		}
 	}
-	messages, err := branchMessages(entries)
-	if err != nil {
-		return rec
-	}
 	var model, tools int64
-	for _, m := range messages {
+	// PiG recovery omits failed attempts with context edits; their time still
+	// belongs to the session even though history no longer displays them.
+	for _, entry := range entries {
+		if entry.Base().Type != "message" {
+			continue
+		}
+		var record struct {
+			Message agent.AgentMessage `json:"message"`
+		}
+		if err := json.Unmarshal(entry.Raw(), &record); err != nil {
+			return rec
+		}
+		m := record.Message
 		if m.Assistant != nil && m.Assistant.DurationMs != nil {
 			model += *m.Assistant.DurationMs
 		}
@@ -152,6 +161,10 @@ func (s *Session) Record() Record {
 		}
 	}
 	rec.ModelTime, rec.ToolTime = time.Duration(model)*time.Millisecond, time.Duration(tools)*time.Millisecond
+	messages, err := branchMessages(entries)
+	if err != nil {
+		return rec
+	}
 	rec.Cache.Expires = s.cacheExpires(messages)
 	return rec
 }
