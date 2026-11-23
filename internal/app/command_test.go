@@ -192,8 +192,8 @@ func TestModelCommandSwitchesModelAndKeepsItAcrossNew(t *testing.T) {
 	_, err := h.c.Submit(t.Context(), Main, "/model "+otherRef)
 	require.NoError(t, err)
 
-	assert.Equal(t, otherRef, h.c.Model())
 	assert.Equal(t, event.ModelChanged{Model: otherRef}, receiveEvent(t, changed))
+	assert.Equal(t, otherRef, h.c.Model())
 	assert.Equal(t, event.Notice{Text: "Using " + otherRef + " until kopi exits. Set \"model\" in /kopi/config.json to keep it."}, receiveEvent(t, notices))
 
 	_, err = h.c.Submit(t.Context(), Main, "/new")
@@ -204,6 +204,43 @@ func TestModelCommandSwitchesModelAndKeepsItAcrossNew(t *testing.T) {
 	h.turn(t, "hello")
 	receive(t, requests)
 	assert.Equal(t, otherRef, h.c.Model())
+}
+
+func TestModelCommandReadsTheNewProvidersLimits(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Limits: true})
+	_, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
+	limits := subscribeTo[event.LimitsChanged](h.c)
+	changed := subscribeTo[event.ModelChanged](h.c)
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	receiveEvent(t, limits)
+	require.Equal(t, fauxProvider, h.c.Status().Limits.Provider)
+
+	_, err := h.c.Submit(t.Context(), Main, "/model "+otherRef)
+	require.NoError(t, err)
+	receiveEvent(t, changed)
+
+	receiveEvent(t, limits)
+	assert.Equal(t, "kopi-other", h.c.Status().Limits.Provider, "the minute's throttle does not hold back the new provider")
+}
+
+func TestModelCommandRefusesDuringNew(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	h, _ := openHarness(t, Config{})
+	_, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
+	switched := subscribeTo[event.SessionChanged](h.c)
+
+	// A switch holds the old session until it finishes.
+	h.c.life.Lock()
+	_, err := h.c.Submit(t.Context(), Main, "/new")
+	require.NoError(t, err)
+	_, err = h.c.Submit(t.Context(), Main, "/model "+otherRef)
+	assert.ErrorIs(t, err, ErrBusy)
+	h.c.life.Unlock()
+
+	receiveEvent(t, switched)
+	assertSwitchDone(t, h)
+	assert.NotEqual(t, otherRef, h.c.Model())
 }
 
 func TestModelCommandFailures(t *testing.T) {
@@ -219,8 +256,10 @@ func TestModelCommandFailures(t *testing.T) {
 	assert.ErrorIs(t, err, ErrUnknownArgument)
 	assert.Equal(t, before, h.c.Model())
 
+	errs := subscribeTo[event.Error](h.c)
 	_, err = h.c.Submit(t.Context(), Main, "/model "+fauxProvider+"/missing")
-	assert.ErrorIs(t, err, pigruntime.ErrUnknownModel)
+	require.NoError(t, err)
+	assert.ErrorIs(t, receiveEvent(t, errs).Err, pigruntime.ErrUnknownModel)
 	assert.Equal(t, before, h.c.Model())
 
 	_, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
@@ -235,16 +274,71 @@ func TestModelCommandFailures(t *testing.T) {
 	wait(t, w.Done())
 }
 
+func TestModelCommandHoldsTurnsAndSwitchesUntilTheChangeEnds(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	h, _ := openHarness(t, Config{Wake: true})
+	other, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
+	changed := subscribeTo[event.ModelChanged](h.c)
+	ends := turnEnds(h.c)
+	other.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("noted")})
+
+	// The change's goroutine waits for life, as it would for the runtime.
+	h.c.life.Lock()
+	_, err := h.c.Submit(t.Context(), Main, "/model "+otherRef)
+	require.NoError(t, err)
+	h.tasks.end(endedTask("t1"))
+	for _, text := range []string{"/model " + otherRef, "/new", "/effort high", "hello"} {
+		_, err = h.c.Submit(t.Context(), Main, text)
+		assert.ErrorIs(t, err, ErrBusy, text)
+	}
+	assert.Zero(t, other.CallCount()+h.faux.CallCount(), "the notice does not wake main during the change")
+	h.c.life.Unlock()
+
+	receiveEvent(t, changed)
+	receiveEnd(t, ends)
+	assert.Equal(t, 1, other.CallCount(), "the woken turn runs on the new model")
+	assertSwitchDone(t, h)
+}
+
+func TestModelCommandLeavesRunningSubagentsAlone(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{Wake: true}, agentDef("explorer"))
+	other, otherRef := pigruntimetest.RegisterFaux(t, a.c.rt, "kopi-other")
+	other.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("noted")})
+	gate := make(chan struct{})
+	requests := make(chan pigruntimetest.Request, 1)
+	a.child.SetResponses([]ai.FauxResponseStep{gated(gate, "first"), pigruntimetest.Capture(t, requests, "second")})
+	changed := subscribeTo[event.ModelChanged](a.c)
+	ends := turnEnds(a.c)
+	id := a.launch(t, "explorer", "find it", "go")
+
+	a.c.life.Lock()
+	_, err := a.c.Submit(t.Context(), Main, "/model "+otherRef)
+	require.NoError(t, err)
+	_, err = a.c.message(t.Context(), id, "also check b")
+	assert.NoError(t, err, "the change does not touch the subagent")
+	close(gate)
+	texts := receive(t, requests).UserTexts
+	assert.Equal(t, "also check b", texts[len(texts)-1], "the subagent's next turn starts with its input")
+	a.c.life.Unlock()
+
+	receiveEvent(t, changed)
+	receiveEnd(t, ends)
+}
+
 func TestModelCommandWithoutCredentialPointsAtLogin(t *testing.T) {
 	pigruntimetest.ClearEnv(t)
 	h, _ := openHarness(t, Config{})
 	pigruntimetest.RegisterLoginProvider(t, h.c.rt, "kopi-login")
 	before := h.c.Model()
+	errs := subscribeTo[event.Error](h.c)
 
 	_, err := h.c.Submit(t.Context(), Main, "/model kopi-login/login-1")
+	require.NoError(t, err)
 
-	assert.ErrorIs(t, err, pigruntime.ErrNoCredential)
-	assert.EqualError(t, err, `failed to change model to "kopi-login/login-1": provider "kopi-login": no credential: run /login kopi-login`)
+	got := receiveEvent(t, errs).Err
+	assert.ErrorIs(t, got, pigruntime.ErrNoCredential)
+	assert.EqualError(t, got, `failed to change model to "kopi-login/login-1": provider "kopi-login": no credential: run /login kopi-login`)
 	assert.Equal(t, before, h.c.Model())
 }
 

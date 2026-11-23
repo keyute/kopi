@@ -1280,6 +1280,13 @@ func TestSetModelKeepsAResumedSessionsEffort(t *testing.T) {
 	require.NoError(t, r.SetModel(t.Context(), resumed, thinker))
 	assert.Equal(t, "high", resumed.Effort())
 
+	continued, err := r.Open(t.Context(), OpenOptions{Model: thinker, Continue: true, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, continued.Close(context.Background())) })
+	require.NoError(t, r.SetModel(t.Context(), continued, fauxModel))
+	require.NoError(t, r.SetModel(t.Context(), continued, thinker))
+	assert.Equal(t, "high", continued.Effort())
+
 	onPlain := openOn(t, r, fauxModel, DefaultEffort, saved.ID())
 	require.NoError(t, r.SetModel(t.Context(), onPlain, thinker))
 	assert.Equal(t, "medium", onPlain.Effort())

@@ -190,6 +190,10 @@ type Controller struct {
 	// switching refuses prompts while a session transition is under way, so
 	// no work can start on a session that is about to be replaced.
 	switching *sessionSwitch
+	// changingModel is set from the checks of a /model until its model has
+	// changed. Main starts no turn, takes no prompt and begins no switch or
+	// login meanwhile; subagents and workflow agents are untouched.
+	changingModel bool
 	// closed is set by Close; afterwards the Controller refuses all input,
 	// leaves the mode alone and delivers no events.
 	closed bool
@@ -514,7 +518,7 @@ func (c *Controller) Sessions() ([]pigruntime.SessionInfo, error) {
 // wrapping tool.ErrUnknownTask. A control command always runs on the main
 // session, whatever session is, and is executed and returns (nil, nil), ErrQuit for /quit,
 // ErrShowTasks for /tasks, ErrMissingArgument for /resume, /model, /login or /logout
-// without an argument, or ErrUnknownCommand. /new, /resume with an id and
+// without an argument, or ErrUnknownCommand. /new, /resume with an id, /model and
 // /login with a provider return at once and report their result through
 // events; while a login runs, /new and /resume return ErrLoggingIn.
 // Anything else is a prompt: it starts a turn of session or, while one runs, is
@@ -1021,7 +1025,7 @@ func (c *Controller) beginSwitch(cancelWait context.CancelFunc) (*sessionSwitch,
 		c.mu.Unlock()
 		return nil, ErrLoggingIn
 	}
-	if c.switching != nil {
+	if c.switching != nil || c.changingModel {
 		c.mu.Unlock()
 		return nil, ErrBusy
 	}

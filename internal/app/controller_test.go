@@ -2001,8 +2001,10 @@ func TestWebSearchFollowsModelCommandWhenSmallModelIsUnset(t *testing.T) {
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
 	i := slices.IndexFunc(h.c.tools, func(t tool.Tool) bool { return t.Name == "WebSearch" })
 	require.NotEqual(t, -1, i)
+	changed := subscribeTo[event.ModelChanged](h.c)
 	_, err := h.c.Submit(t.Context(), Main, "/model kopi-search-new/search-2")
 	require.NoError(t, err)
+	receiveEvent(t, changed)
 
 	_, _ = h.c.tools[i].Run(t.Context(), json.RawMessage(`{"query":"kopi"}`), func(policy.Target) (policy.Mode, error) { return policy.Execute, nil })
 
@@ -2025,6 +2027,7 @@ func TestWebSearchCallableFollowsModelCommand(t *testing.T) {
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
 	require.True(t, h.c.main.sess.Callable("WebSearch"))
 	before := len(ofType[event.ToolsChanged](h.rec.all()))
+	changed := subscribeTo[event.ModelChanged](h.c)
 
 	for i, tc := range []struct {
 		model string
@@ -2032,9 +2035,24 @@ func TestWebSearchCallableFollowsModelCommand(t *testing.T) {
 	}{{"kopi-faux/faux-1", false}, {"kopi-search/search-1", true}} {
 		_, err := h.c.Submit(t.Context(), Main, "/model "+tc.model)
 		require.NoError(t, err)
+		receiveEvent(t, changed)
 		assert.Equal(t, tc.want, h.c.main.sess.Callable("WebSearch"), tc.model)
 		assert.Len(t, ofType[event.ToolsChanged](h.rec.all()), before+i+1, tc.model)
 	}
+}
+
+func TestWebSearchWithASmallModelStaysCallableAcrossModelCommand(t *testing.T) {
+	h := newHarness(t, searchSandbox(t), Config{Model: "kopi-search/search-1", SmallModel: "kopi-search/search-1"})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	changed := subscribeTo[event.ModelChanged](h.c)
+	before := len(ofType[event.ToolsChanged](h.rec.all()))
+
+	_, err := h.c.Submit(t.Context(), Main, "/model kopi-faux/faux-1")
+	require.NoError(t, err)
+	receiveEvent(t, changed)
+
+	assert.True(t, h.c.main.sess.Callable("WebSearch"))
+	assert.Len(t, ofType[event.ToolsChanged](h.rec.all()), before)
 }
 
 func TestWebSearchIsAbsentWhenRulesRemoveIt(t *testing.T) {

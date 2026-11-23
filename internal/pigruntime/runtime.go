@@ -344,6 +344,8 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 		})
 	}
 	s := &Session{inner: sess}
+	// On resume asked is PiG's restored level, already clamped to the model the
+	// transcript last ran on, so a more capable model later keeps that level.
 	switch {
 	case o.Effort != DefaultEffort:
 		s.asked = o.Effort.thinkingLevel()
@@ -416,7 +418,10 @@ func (r *Runtime) Models(ctx context.Context) ([]Model, error) {
 }
 
 // SetModel switches s to the model ref names, keeping its history. ref is
-// checked as Open checks it; on failure the model stays.
+// checked as Open checks it. A failure before the switch leaves the model; one
+// from PiG's persisting of the change does not: it sets the agent's model before
+// it appends the change to the session file (PiG v0.7.0 coding/session.go
+// beginModelChangeState; recheck on a bump).
 func (r *Runtime) SetModel(ctx context.Context, s *Session, ref string) error {
 	model, err := r.usableModel(ctx, ref)
 	if err != nil {
@@ -522,6 +527,7 @@ func (r *Runtime) Close() {
 	r.refreshMu.Lock()
 	stop, done := r.stopRefresh, r.refreshDone
 	if stop != nil {
+		// Under refreshMu, so refreshLateLocked starts nothing after it.
 		stop()
 	}
 	r.refreshMu.Unlock()

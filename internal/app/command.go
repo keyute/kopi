@@ -117,7 +117,7 @@ func (c *Controller) effortCommand(_ context.Context, arg string) error {
 	case c.closed:
 		c.mu.Unlock()
 		return ErrNoSession
-	case c.switching != nil:
+	case c.switching != nil || c.changingModel:
 		c.mu.Unlock()
 		return ErrBusy
 	}
@@ -165,10 +165,13 @@ func (c *Controller) effortCandidates() ([]Candidate, error) {
 	return out, nil
 }
 
-// modelCommand switches the main session to ref. Later sessions and work that
+// modelCommand switches the main session to ref in the background; a failure
+// after the checks arrives as an Error event. Later sessions and work that
 // names no model follow it, among them a running workflow's later agent() calls
 // and the WebFetch, WebSearch and classifier calls of running agents; running
-// subagents keep their model.
+// subagents keep their model. It marks the change before returning, so no turn
+// starts, and no switch or login begins, until the model has changed. The
+// goroutine is not in wg, for the reason switchTo's is not.
 func (c *Controller) modelCommand(ctx context.Context, ref string) error {
 	if ref == "" {
 		return fmt.Errorf("%w: /model needs a provider/id", ErrMissingArgument)
@@ -177,25 +180,26 @@ func (c *Controller) modelCommand(ctx context.Context, ref string) error {
 	if err != nil {
 		return fmt.Errorf("%w: /model: %w", ErrUnknownArgument, err)
 	}
-	// Checked before life, which a switch holds while it joins old work: the TUI
-	// submits on its event loop.
-	c.mu.Lock()
-	switch {
-	case c.closed:
-		c.mu.Unlock()
-		return ErrNoSession
-	case c.switching != nil:
-		c.mu.Unlock()
-		return ErrBusy
-	}
-	c.mu.Unlock()
-	// Held so that it cannot touch the runtime after Close.
-	c.life.Lock()
-	defer c.life.Unlock()
-	sess, err := c.mainForModel()
+	sess, err := c.beginModelChange()
 	if err != nil {
 		return err
 	}
+	go func() {
+		// Held so that it cannot touch the runtime after Close.
+		c.life.Lock()
+		defer c.life.Unlock()
+		defer c.endModelChange()
+		if c.isClosed() {
+			return
+		}
+		if err := c.changeModel(ctx, sess, provider, ref); err != nil {
+			c.relay.emit(event.Error{Err: err})
+		}
+	}()
+	return nil
+}
+
+func (c *Controller) changeModel(ctx context.Context, sess *pigruntime.Session, provider, ref string) error {
 	if err := c.rt.SetModel(ctx, sess, ref); err != nil {
 		if errors.Is(err, pigruntime.ErrNoCredential) {
 			return fmt.Errorf("%w: run /login %s", err, provider)
@@ -212,9 +216,10 @@ func (c *Controller) modelCommand(ctx context.Context, ref string) error {
 	return nil
 }
 
-// mainForModel returns the main session once nothing prevents changing its
-// model.
-func (c *Controller) mainForModel() (*pigruntime.Session, error) {
+// beginModelChange returns the main session once nothing prevents changing its
+// model, and marks the change in the same section that checked for work, so a
+// wake cannot start a turn before endModelChange.
+func (c *Controller) beginModelChange() (*pigruntime.Session, error) {
 	c.queue.Lock()
 	defer c.queue.Unlock()
 	c.mu.Lock()
@@ -222,14 +227,25 @@ func (c *Controller) mainForModel() (*pigruntime.Session, error) {
 	switch {
 	case c.closed:
 		return nil, ErrNoSession
-	case c.switching != nil:
+	case c.switching != nil || c.changingModel:
 		return nil, ErrBusy
 	case c.main.work != nil:
 		return nil, fmt.Errorf("failed to change model: %w", ErrWorkStillRunning)
 	case c.main.sess == nil:
 		return nil, ErrNoSession
 	}
+	c.changingModel = true
 	return c.main.sess, nil
+}
+
+// endModelChange ends the mark and starts the turn a notice that arrived
+// meanwhile asks for.
+func (c *Controller) endModelChange() {
+	c.queue.Lock()
+	defer c.queue.Unlock()
+	c.mu.Lock()
+	c.changingModel = false
+	c.main.wakeLocked()
 }
 
 // Arguments returns the candidates for command name's argument; nil when it takes

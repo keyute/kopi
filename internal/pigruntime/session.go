@@ -215,16 +215,15 @@ func (s *Session) SetEffort(e Effort) error {
 // setModel switches the model, then asks again for the level the session was
 // given, which the old model may have clamped.
 func (s *Session) setModel(model *ai.Model) error {
+	s.effortMu.Lock()
+	defer s.effortMu.Unlock()
 	if err := s.inner.SetModel(model); err != nil {
 		return err
 	}
-	s.effortMu.Lock()
-	asked := s.asked
-	s.effortMu.Unlock()
-	if asked == "" {
+	if s.asked == "" {
 		return nil
 	}
-	if err := s.inner.SetThinkingLevel(asked); err != nil {
+	if err := s.inner.SetThinkingLevel(s.asked); err != nil {
 		slog.Warn("failed to restore the effort after the model change", "error", err)
 	}
 	return nil

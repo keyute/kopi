@@ -255,6 +255,48 @@ func TestLimitsForceDuringAReadReadsAgainForTheNewProvider(t *testing.T) {
 	})
 }
 
+func TestLimitsForceDuringAnEmptyProviderResolutionOwesNoRead(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newFakeLimits()
+		resolving, resolved := make(chan struct{}), make(chan struct{})
+		var provider atomic.Value
+		provider.Store("")
+		l := newLimits(f.read, func() string {
+			resolving <- struct{}{}
+			<-resolved
+			return provider.Load().(string)
+		}, func(event.Event) {})
+		t.Cleanup(l.close)
+
+		l.observe(event.TurnEnd{})
+		<-resolving
+		l.force()
+		resolved <- struct{}{}
+		synctest.Wait()
+		provider.Store("codex")
+
+		assert.Empty(t, f.started, "no provider, so no read is owed")
+	})
+}
+
+func TestLimitsForceDuringAReadThenCloseStartsNoRead(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newFakeLimits()
+		l, _ := newTestLimits(f)
+
+		l.observe(event.TurnEnd{})
+		synctest.Wait()
+		<-f.started
+		l.force()
+		var closed sync.WaitGroup
+		closed.Go(l.close)
+		closed.Wait()
+		synctest.Wait()
+
+		assert.Empty(t, f.started)
+	})
+}
+
 func TestLimitsFailureOfAnotherProviderDropsTheLastReading(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newFakeLimits()

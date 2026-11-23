@@ -568,7 +568,16 @@ func TestCloseStopsHeldLateRefresh(t *testing.T) {
 	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}))
 	<-s.requests
 
-	r.Close()
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		r.Close()
+	}()
+	select {
+	case <-closed:
+	case <-time.After(waitLimit):
+		t.Fatal("Close did not return")
+	}
 
 	r.refreshMu.Lock()
 	defer r.refreshMu.Unlock()

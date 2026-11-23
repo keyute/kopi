@@ -607,7 +607,7 @@ func (m *model) apply(ev event.Event) *view {
 			}
 		}
 		return nil
-	case event.TasksChanged, event.LimitsChanged, event.ToolsChanged, event.EffortChanged:
+	case event.TasksChanged, event.LimitsChanged, event.ToolsChanged, event.EffortChanged, event.ModelChanged:
 		return nil
 	case event.ModeChanged:
 		return nil

@@ -107,7 +107,7 @@ func (r *runner) submitLocked(ctx context.Context, p pigruntime.Prompt, now bool
 		c.mu.Unlock()
 		return nil, ErrNoSession
 	}
-	if c.switching != nil && !first {
+	if (c.switching != nil && !first) || (r == c.main && c.changingModel) {
 		c.mu.Unlock()
 		return nil, ErrBusy
 	}
@@ -412,7 +412,7 @@ func (r *runner) queueNoticeLocked(n pigruntime.Notice) {
 // must be called with queue and mu held, and releases mu.
 func (r *runner) wakeLocked() {
 	c := r.c
-	if c.closed || r.sess == nil || r.work != nil || c.switching != nil || c.login != nil || r.hold || !r.waking() {
+	if c.closed || r.sess == nil || r.work != nil || c.switching != nil || (r == c.main && c.changingModel) || c.login != nil || r.hold || !r.waking() {
 		c.mu.Unlock()
 		return
 	}

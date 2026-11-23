@@ -97,6 +97,29 @@ func TestWorkflowRunsTheDefaultAgentAndReturnsItsReply(t *testing.T) {
 	assert.Contains(t, a.info(t, id).Output, "#1 agent: started\n#1 agent: completed · ")
 }
 
+func TestWorkflowAgentWebSearchIsCallableOnlyForASearchingSmallModel(t *testing.T) {
+	for _, tc := range []struct {
+		name, small string
+		want        []string
+	}{
+		{"searching", "kopi-search/search-1", []string{"WebSearch"}},
+		{"not searching", "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newWorkflowHarness(t, searchSandbox(t), Config{SmallModel: tc.small})
+			requests := make(chan childRequest, 1)
+			a.child.SetResponses([]ai.FauxResponseStep{captureChild(requests, nil, "found it")})
+			a.rootAcks(1)
+
+			id := a.startWorkflow(t, "audit", `return await agent("look around")`)
+			got := receiveChild(t, requests).tools
+			a.untilStatus(t, id, tool.TaskCompleted)
+
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestWorkflowNamedTypeGetsItsPromptToolsEffortAndModel(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	def := agentDef("explorer")
