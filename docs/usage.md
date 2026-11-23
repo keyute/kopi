@@ -38,6 +38,7 @@ Commands in the fullscreen interface:
 | `/login <provider>` | Log in to a provider |
 | `/logout <provider>` | Remove a provider's stored credential |
 | `/tasks` | List background tasks, [subagents](subagents.md) and [workflows](workflows.md), show one's output, open a subagent's view or a workflow's [progress dialog](workflows.md#progress-dialog) and stop them |
+| `/usage` | Show the context, the [plan limits](providers.md#plan-limits), the tokens and estimated cost by model and the prompt cache, [as a dialog](#usage) |
 | `/skill:<name>` | Load a skill with the prompt ([skills](skills.md)) |
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
@@ -53,6 +54,31 @@ The whole word `ultrathink`, in any case, in a prompt to the main agent raises i
 - Ctrl+Enter keeps the raise, as it continues the turn. A turn that starts because a task ended or queued input followed a completed turn is not raised unless its own prompt says `ultrathink`.
 - No effect, and no highlight, on a model that does not reason.
 - A crash mid-turn leaves the raised level in the session.
+
+### /usage
+
+```text
+  Usage
+
+  Context  ▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱   8%  84.2k / 1.0m
+  5h       ▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱  23%  resets 15:40
+  wk       ▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱  52%  resets Thu 09:00
+
+  openai-codex/gpt-5-codex     1.2m   $3.90
+  openai-codex/gpt-5-mini    310.0k   $0.41
+  Total (estimate)             1.5m   $4.31
+
+  Tokens   502.0k in · 58.0k out · 940.0k read · 12.0k write
+  Cache    91% hit · warm until 15:42 · 2 misses $0.42
+  Session  0195c2d4 · 42 messages · 128 tool calls
+```
+
+- Esc closes it. It stays open while turns run and shows the new figures as they change; a change of session closes it. PgUp/PgDn scroll it when it is taller than a third of the screen.
+- `Context` is the main session's context; it is absent until the model's window is known. `5h`, `wk` and the other plan windows are the share of the plan used, in the warning colour from 90%, with when each resets (as in [Plan limits](providers.md#plan-limits)). They show only for a provider Kopi reads plan limits from, and only when it is the main session's model's provider.
+- Each model row is the tokens and the cost of the requests the provider answered as that model. The cost is an estimate from the model's listed price; on a subscription sign-in it is not what you are billed. `summaries` is what compaction's own requests cost.
+- The total covers the main session, its subagents, the workflow agents that have ended, and the classifier, `WebFetch`, `WebSearch` and title requests. `Tokens` is the same sum by kind.
+- `Cache` is the main session's. `hit` is the share of the last request's prompt read from the provider's cache. A miss is prompt that had been cached and was paid for again; its dollar figure is what that cost over the cache-read price. `warm until` or `expired` appears only for a model that declares a cache lifetime and is judged by time alone, so switching model or compacting can still rebuild a cache shown as warm.
+- `Session` is the session id and the messages and tool calls in the session's whole log. A row, or a group, with nothing to show is left out.
 
 ## Keys
 
@@ -212,6 +238,11 @@ Limits:
 
 ## Not implemented
 
+- `/usage` output in print mode, and a `kopi usage` subcommand.
+- A split of each model's tokens into input, output and cache, and a breakdown of the context by category.
+- Counting a running workflow agent in `/usage`: it is counted when it ends.
+- After a resume, `/usage` keeps only the main session's earlier usage, not what subagents, workflow agents and those requests used then.
+- Keeping the prompt cache warm.
 - A status record per workflow agent, or a state other than working on a subagent's or workflow's record.
 - A progress percentage.
 - Naming or renaming a session by hand.

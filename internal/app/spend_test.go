@@ -10,6 +10,11 @@ import (
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 )
 
+// spentCost is a request that cost dollars, to charge by hand.
+func spentCost(dollars float64) pigruntime.Usage {
+	return pigruntime.Usage{Models: []pigruntime.ModelUsage{{Model: "p/m", Cost: dollars}}}
+}
+
 func TestSideAnswerChargesTheTotal(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	priced := sb.PricedModel(t)
@@ -32,7 +37,7 @@ func TestSideChargeAfterASessionSwitchAddsNothing(t *testing.T) {
 	charge := h.c.chargeSide()
 
 	require.NoError(t, h.c.NewSession(t.Context()))
-	charge(5)
+	charge(spentCost(5))
 
 	assert.Zero(t, h.c.Status().TotalCost)
 }
@@ -70,4 +75,56 @@ func TestNewSessionZeroesTheTotal(t *testing.T) {
 	require.NoError(t, h.c.NewSession(t.Context()))
 
 	assert.Zero(t, h.c.Status().TotalCost)
+}
+
+func TestUsageRowsSumToTheTotal(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	priced := sb.PricedModel(t)
+	h := newHarness(t, sb, Config{Model: priced})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	h.turn(t, "price me")
+	_, err := h.c.SideAnswer(t.Context(), priced, pigruntime.DefaultEffort, "system", "prompt")
+	require.NoError(t, err)
+
+	got := h.c.Usage()
+
+	assert.Equal(t, h.c.Status().TotalCost, got.TotalCost)
+	assert.Equal(t, []ModelUsage{{Model: priced, Tokens: 2_000_000, Cost: 2 * pigruntimetest.PricedModelCost}}, got.Models, "the turn's and the side request's rows merge")
+	assert.Equal(t, Tokens{Input: 2_000_000}, got.Tokens)
+	assert.Equal(t, h.c.Status().SessionID, got.SessionID)
+	assert.Equal(t, priced, got.Model)
+	assert.Equal(t, 2, got.Messages)
+}
+
+func TestUsageSortsRowsByCostThenModel(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	root := h.c.main.sess
+	h.c.charge(root, pigruntime.Usage{Models: []pigruntime.ModelUsage{
+		{Model: "p/b", Cost: 1}, {Model: "p/c", Cost: 3}, {Model: "p/a", Cost: 1}, {Model: "", Cost: 2},
+	}})
+
+	got := h.c.Usage()
+
+	var order []string
+	for _, row := range got.Models {
+		order = append(order, row.Model)
+	}
+	assert.Equal(t, []string{"p/c", "", "p/a", "p/b"}, order)
+	assert.Equal(t, 7.0, got.TotalCost)
+}
+
+func TestNewSessionEmptiesTheUsage(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	priced := sb.PricedModel(t)
+	h := newHarness(t, sb, Config{Model: priced})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	_, err := h.c.SideAnswer(t.Context(), priced, pigruntime.DefaultEffort, "system", "prompt")
+	require.NoError(t, err)
+	require.NotEmpty(t, h.c.Usage().Models)
+
+	require.NoError(t, h.c.NewSession(t.Context()))
+
+	got := h.c.Usage()
+	assert.Empty(t, got.Models)
+	assert.Zero(t, got.TotalCost)
 }

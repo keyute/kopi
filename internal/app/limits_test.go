@@ -45,6 +45,7 @@ func (f *fakeLimits) read(ctx context.Context, provider string) ([]quota.Window,
 func newTestLimits(f *fakeLimits) (*limits, chan event.Event) {
 	published := make(chan event.Event, 8)
 	l := newLimits(f.read, func() string { return "codex" }, func(ev event.Event) { published <- ev })
+	l.ask()
 	return l, published
 }
 
@@ -231,6 +232,24 @@ func TestLimitsForceBypassesTheThrottle(t *testing.T) {
 	})
 }
 
+func TestLimitsForceDoesNothingUntilAReadingIsAskedFor(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newFakeLimits()
+		l := newLimits(f.read, func() string { return "codex" }, func(event.Event) {})
+		t.Cleanup(l.close)
+
+		l.force()
+		synctest.Wait()
+		require.Empty(t, f.started)
+
+		l.ask()
+		l.force()
+		synctest.Wait()
+		assert.Equal(t, "codex", <-f.started)
+		f.release <- limitsResult{}
+	})
+}
+
 func TestLimitsForceDuringAReadReadsAgainForTheNewProvider(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newFakeLimits()
@@ -238,6 +257,7 @@ func TestLimitsForceDuringAReadReadsAgainForTheNewProvider(t *testing.T) {
 		provider.Store("codex")
 		l := newLimits(f.read, func() string { return provider.Load().(string) }, func(event.Event) {})
 		t.Cleanup(l.close)
+		l.ask()
 
 		l.observe(event.TurnEnd{})
 		synctest.Wait()
@@ -271,6 +291,7 @@ func TestLimitsForceDuringAnEmptyProviderResolutionOwesNoRead(t *testing.T) {
 			return provider.Load().(string)
 		}, func(event.Event) {})
 		t.Cleanup(l.close)
+		l.ask()
 
 		l.observe(event.TurnEnd{})
 		<-resolving
@@ -315,6 +336,7 @@ func TestLimitsFailureOfAnotherProviderDropsTheLastReading(t *testing.T) {
 		provider.Store("codex")
 		l := newLimits(f.read, func() string { return provider.Load().(string) }, func(event.Event) {})
 		t.Cleanup(l.close)
+		l.ask()
 
 		l.observe(event.TurnEnd{})
 		synctest.Wait()
@@ -401,6 +423,7 @@ func TestNilLimitsDoNothing(t *testing.T) {
 	var l *limits
 
 	l.close()
+	l.refresh()
 	l.force()
 
 	assert.Equal(t, quota.Limits{}, l.get())

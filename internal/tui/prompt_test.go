@@ -60,6 +60,7 @@ func questionOf(m *model) *questionDialog { return promptOf[*questionDialog](m) 
 func planOf(m *model) *planDialog         { return promptOf[*planDialog](m) }
 func loginOf(m *model) *loginDialog       { return promptOf[*loginDialog](m) }
 func tasksOf(m *model) *taskDialog        { return promptOf[*taskDialog](m) }
+func usageOf(m *model) *usageDialog       { return promptOf[*usageDialog](m) }
 
 // queuedOf is the approvals behind the shown one.
 func queuedOf(m *model) []event.ApprovalRequested {

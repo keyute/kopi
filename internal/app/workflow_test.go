@@ -259,6 +259,21 @@ func TestWorkflowTotalSumsItsAgents(t *testing.T) {
 	assert.Equal(t, 2*pigruntimetest.PricedModelCost, a.c.Status().TotalCost)
 }
 
+func TestWorkflowAgentModelRowSurvivesItsEnd(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	priced := sb.PricedModel(t)
+	a := newAgentHarness(t, sb, Config{WorkflowModel: priced})
+	a.rootAcks(1)
+
+	id := a.startWorkflow(t, "audit", `return await agent("a")`)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	got := a.c.Usage()
+	require.Len(t, got.Models, 1)
+	assert.Equal(t, priced, got.Models[0].Model)
+	assert.Equal(t, pigruntimetest.PricedModelCost, got.TotalCost)
+}
+
 func TestWorkflowSchemaReturnsTheRecordedObject(t *testing.T) {
 	a := newWorkflowHarness(t, pigruntimetest.NewSandbox(t), Config{})
 	requests := make(chan childRequest, 1)

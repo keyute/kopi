@@ -3,6 +3,7 @@ package app
 import (
 	"time"
 
+	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/quota"
 	"github.com/keyute/kopi/internal/tool"
@@ -37,6 +38,27 @@ type Status struct {
 	Limits quota.Limits
 	// Ultracode reports that the main session's Workflow tool is callable.
 	Ultracode bool
+}
+
+type (
+	Tokens     = pigruntime.Tokens
+	ModelUsage = pigruntime.ModelUsage
+	Cache      = pigruntime.Cache
+)
+
+// Usage is what the /usage view shows of the current session.
+type Usage struct {
+	SessionID           string
+	Messages, ToolCalls int // the main session's, over its whole log
+	Model               string
+	// ContextTokens and ContextWindow are the main session's; zero while unknown.
+	ContextTokens, ContextWindow int
+	Limits                       quota.Limits
+	Tokens                       Tokens
+	Models                       []ModelUsage // by cost descending, then model
+	// TotalCost is the sum of Models, as Status.TotalCost.
+	TotalCost float64
+	Cache     Cache // the main session's
 }
 
 // AgentStatus describes one session for a frontend: the main session or a subagent's.

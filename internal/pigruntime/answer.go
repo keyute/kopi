@@ -61,51 +61,51 @@ func (e Effort) thinkingLevel() ai.ModelThinkingLevel {
 }
 
 // Answer has model ("provider/id") reply once to prompt under system,
-// outside any session. It also returns the request's cost in dollars,
+// outside any session. It also returns what the request used, with its cost
 // estimated from the model's price as Session.Usage estimates it.
-func (r *Runtime) Answer(ctx context.Context, model string, effort Effort, system, prompt string) (string, float64, error) {
+func (r *Runtime) Answer(ctx context.Context, model string, effort Effort, system, prompt string) (string, Usage, error) {
 	m, err := r.usableModel(ctx, model)
 	if err != nil {
-		return "", 0, fmt.Errorf("failed to answer with model %q: %w", model, err)
+		return "", Usage{}, fmt.Errorf("failed to answer with model %q: %w", model, err)
 	}
 	opts := ai.StreamOptions{Thinking: effort.thinkingLevel().ReasoningOption()}
-	text, cost, err := r.complete(ctx, m, system, prompt, func(content []ai.AssistantContentBlock) string {
+	text, used, err := r.complete(ctx, m, system, prompt, func(content []ai.AssistantContentBlock) string {
 		return ai.ContentText(content, "\n")
 	}, opts)
 	if err != nil {
 		if ctx.Err() != nil {
-			return "", cost, err
+			return "", used, err
 		}
-		return "", cost, fmt.Errorf("failed to answer with model %q: %w", model, err)
+		return "", used, fmt.Errorf("failed to answer with model %q: %w", model, err)
 	}
-	return text, cost, nil
+	return text, used, nil
 }
 
-// complete asks m once and returns the text join makes of its content and the
-// request's cost in dollars, also when it fails. Without text it fails with
+// complete asks m once and returns the text join makes of its content and what
+// the request used, also when it fails. Without text it fails with
 // ErrNoAnswer.
-func (r *Runtime) complete(ctx context.Context, m *ai.Model, system, prompt string, join func([]ai.AssistantContentBlock) string, opts ...ai.StreamOptions) (string, float64, error) {
+func (r *Runtime) complete(ctx context.Context, m *ai.Model, system, prompt string, join func([]ai.AssistantContentBlock) string, opts ...ai.StreamOptions) (string, Usage, error) {
 	msg := r.svcs.ModelRuntime().CompleteSimple(ctx, m, ai.Context{
 		SystemPrompt: system,
 		Messages:     []ai.Message{ai.UserMessage{Content: ai.UserText(prompt), Timestamp: time.Now().UnixMilli()}},
 	}, opts...)
-	var cost float64
+	var used Usage
 	if msg != nil {
-		cost = msg.Usage.Cost.Total
+		used = usageOf(msg, m)
 	}
 	// PiG reports a failed request only on the message, never as a Go error.
 	if ctx.Err() != nil {
-		return "", cost, ctx.Err()
+		return "", used, ctx.Err()
 	}
 	if msg == nil {
-		return "", cost, ErrNoAnswer
+		return "", used, ErrNoAnswer
 	}
 	if msg.StopReason == ai.StopReasonError || msg.StopReason == ai.StopReasonAborted {
-		return "", cost, errors.New(pigTexts.Replace(msg.ErrorMessage))
+		return "", used, errors.New(pigTexts.Replace(msg.ErrorMessage))
 	}
 	text := strings.TrimSpace(join(msg.Content))
 	if text == "" {
-		return "", cost, ErrNoAnswer
+		return "", used, ErrNoAnswer
 	}
-	return text, cost, nil
+	return text, used, nil
 }

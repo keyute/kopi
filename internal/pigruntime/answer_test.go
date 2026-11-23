@@ -34,10 +34,11 @@ func TestAnswerReturnsTheRequestsCost(t *testing.T) {
 		responsesStream(w, "An answer.", nil)
 	})
 
-	_, cost, err := r.Answer(t.Context(), searchModel, DefaultEffort, "system", "prompt")
+	_, used, err := r.Answer(t.Context(), searchModel, DefaultEffort, "system", "prompt")
 
 	require.NoError(t, err)
-	assert.Equal(t, 4.0, cost)
+	assert.Equal(t, 4.0, used.Cost())
+	assert.Equal(t, Usage{Tokens: Tokens{Input: 1, Output: 1}, Models: []ModelUsage{{Model: searchModel, Tokens: 2, Cost: 4}}}, used)
 }
 
 func TestAnswerReturnsTheCostOfAnEmptyAnswer(t *testing.T) {
@@ -45,10 +46,10 @@ func TestAnswerReturnsTheCostOfAnEmptyAnswer(t *testing.T) {
 		responsesStream(w, " ", nil)
 	})
 
-	_, cost, err := r.Answer(t.Context(), searchModel, DefaultEffort, "system", "prompt")
+	_, used, err := r.Answer(t.Context(), searchModel, DefaultEffort, "system", "prompt")
 
 	require.ErrorIs(t, err, ErrNoAnswer)
-	assert.Equal(t, 4.0, cost)
+	assert.Equal(t, 4.0, used.Cost())
 }
 
 func TestAnswerReportsProviderError(t *testing.T) {

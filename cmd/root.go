@@ -487,7 +487,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		WorkflowModel: resolved.Config.Workflows.Model, MaxWorkflows: resolved.Config.Workflows.MaxWorkflows, MaxAgents: resolved.Config.Workflows.MaxAgents,
 		Title: fullscreen && resolved.Config.Terminal.Title,
 	}
-	// Naming a plan limit segment in the layout is what makes Kopi call the provider.
+	// Naming a plan limit segment in the layout makes Kopi read the plan limits on activity; /usage reads them too, on its own.
 	cfg.Limits = fullscreen && slices.ContainsFunc(config.SegmentNames(resolved.Config.StatusLine.Left, resolved.Config.StatusLine.Right), func(name string) bool {
 		return slices.Contains(config.LimitSegments, name)
 	})

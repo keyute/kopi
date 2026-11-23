@@ -45,6 +45,7 @@ type Controller interface {
 	ToggleMode()
 	History() []string
 	Status() app.Status
+	Usage() app.Usage
 	Agents() []app.AgentStatus
 	Commands() []app.Command
 	Spans(session, text string) []app.Span

@@ -1,44 +1,81 @@
 package app
 
 import (
+	"cmp"
 	"context"
+	"maps"
+	"slices"
 
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/tool"
 )
 
-// chargeSide snapshots the root session and returns a func that adds a cost to
-// the root's side spend only if that session is still the root, so a request
-// that outlives a session switch charges nothing to the new one.
-func (c *Controller) chargeSide() func(cost float64) {
+// chargeSide snapshots the root session and returns a func that adds a request's
+// usage to the root's side spend only if that session is still the root, so a
+// request that outlives a session switch charges nothing to the new one.
+func (c *Controller) chargeSide() func(used pigruntime.Usage) {
 	c.mu.Lock()
 	root := c.main.sess
 	c.mu.Unlock()
-	return func(cost float64) { c.charge(root, cost) }
+	return func(used pigruntime.Usage) { c.charge(root, used) }
 }
 
-func (c *Controller) charge(root *pigruntime.Session, cost float64) {
+func (c *Controller) charge(root *pigruntime.Session, used pigruntime.Usage) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.main.sess == root {
-		c.spent += cost
+		c.spent = c.spent.Add(used)
 	}
 }
 
 // SideAnswer has model reply once to prompt under system, outside any session,
-// and charges its cost to the session total.
+// and charges its usage to the session total.
 func (c *Controller) SideAnswer(ctx context.Context, model string, effort pigruntime.Effort, system, prompt string) (string, error) {
 	charge := c.chargeSide()
-	text, cost, err := c.rt.Answer(ctx, model, effort, system, prompt)
-	charge(cost)
+	text, used, err := c.rt.Answer(ctx, model, effort, system, prompt)
+	charge(used)
 	return text, err
 }
 
 // sideSearch has model search the web for query under system, outside any
-// session, and charges its cost to the session total.
+// session, and charges its usage to the session total.
 func (c *Controller) sideSearch(ctx context.Context, model, system, query string) (tool.SearchResult, error) {
 	charge := c.chargeSide()
-	result, cost, err := c.rt.Search(ctx, model, system, query)
-	charge(cost)
+	result, used, err := c.rt.Search(ctx, model, system, query)
+	charge(used)
 	return result, err
+}
+
+// Usage returns what the current session has used, summed over the sources
+// Status.TotalCost sums. It also asks for a throttled read of the plan limits,
+// which Limits shows once LimitsChanged arrives.
+func (c *Controller) Usage() Usage {
+	c.limits.ask()
+	c.limits.refresh()
+	c.queue.Lock()
+	children := maps.Clone(c.children)
+	c.mu.Lock()
+	sess, sessID := c.main.sess, c.sessID
+	used := c.spent
+	c.mu.Unlock()
+	c.queue.Unlock()
+
+	u := Usage{SessionID: sessID, Model: c.Model(), Limits: c.limits.get()}
+	if sess != nil {
+		u.ToolCalls, _ = sess.Usage()
+		u.Messages = sess.LoggedMessages()
+		if tokens, window, ok := sess.ContextUsage(); ok {
+			u.ContextTokens, u.ContextWindow = tokens, window
+		}
+		u.Cache = sess.Cache()
+		used = used.Add(sess.UsageByModel())
+	}
+	for _, r := range children {
+		used = used.Add(r.sess.UsageByModel())
+	}
+	u.Tokens, u.Models, u.TotalCost = used.Tokens, slices.Clone(used.Models), used.Cost()
+	slices.SortFunc(u.Models, func(a, b ModelUsage) int {
+		return cmp.Or(cmp.Compare(b.Cost, a.Cost), cmp.Compare(a.Model, b.Model))
+	})
+	return u
 }

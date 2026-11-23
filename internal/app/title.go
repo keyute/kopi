@@ -72,8 +72,8 @@ func (c *Controller) nameSession(sess *pigruntime.Session, bound func(event.Even
 
 // title asks the small model for a title for a session that begins with prompt.
 func (c *Controller) title(ctx context.Context, sess *pigruntime.Session, prompt string) (string, error) {
-	reply, cost, err := c.rt.Answer(ctx, c.SmallModel(), pigruntime.LowestEffort, titleSystem, truncate(prompt, titlePromptBytes))
-	c.charge(sess, cost)
+	reply, used, err := c.rt.Answer(ctx, c.SmallModel(), pigruntime.LowestEffort, titleSystem, truncate(prompt, titlePromptBytes))
+	c.charge(sess, used)
 	if err != nil {
 		return "", fmt.Errorf("failed to ask for a title: %w", err)
 	}

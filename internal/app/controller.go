@@ -92,7 +92,8 @@ type Config struct {
 	// many agents of one workflow.
 	MaxWorkflows, MaxAgents int
 	// Limits reads the plan limits of the session model's provider on
-	// activity, for Status.Limits.
+	// activity, for Status.Limits. Without it they are read only once Usage has
+	// been called.
 	Limits bool
 	// Title names a session that has no name from its first prompt, using the
 	// small model.
@@ -133,9 +134,8 @@ type Controller struct {
 	skillErrs []error
 	authority *policy.Authority
 	relay     relay
-	// limits is nil unless Config.Limits.
-	limits *limits
-	wg     sync.WaitGroup
+	limits    *limits
+	wg        sync.WaitGroup
 	// titleCtx ends when Close starts, which stops a title request in flight.
 	titleCtx  context.Context
 	titleStop context.CancelFunc
@@ -175,9 +175,9 @@ type Controller struct {
 	followers map[*WorkQueue]struct{}
 
 	mu sync.Mutex
-	// spent is what the current root session has spent outside its open sessions,
-	// in estimated dollars: side requests and ended workflow agents.
-	spent float64
+	// spent is what the current root session has used outside its open sessions:
+	// side requests and ended workflow agents.
+	spent pigruntime.Usage
 	// model is the session model: Config.Model, or the runtime's default once resolved.
 	model  string
 	sessID string
@@ -251,8 +251,9 @@ func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
 	c.setup(nil)
 	cfg.Tasks.OnChange(c.taskChanged)
 	cfg.Tasks.OnForeground(func() { c.relay.emit(event.TasksChanged{}) })
+	c.limits = newLimits(rt.Limits, c.modelProvider, c.relay.emit)
 	if cfg.Limits {
-		c.limits = newLimits(rt.Limits, c.modelProvider, c.relay.emit)
+		c.limits.ask()
 		c.relay.subscribe(c.limits.observe)
 	}
 	return c
@@ -517,7 +518,7 @@ func (c *Controller) Sessions() ([]pigruntime.SessionInfo, error) {
 // session, Main or a subagent's task id; an unknown one fails with an error
 // wrapping tool.ErrUnknownTask. A control command always runs on the main
 // session, whatever session is, and is executed and returns (nil, nil), ErrQuit for /quit,
-// ErrShowTasks for /tasks, ErrMissingArgument for /resume, /model, /login or /logout
+// ErrShowTasks for /tasks, ErrShowUsage for /usage, ErrMissingArgument for /resume, /model, /login or /logout
 // without an argument, or ErrUnknownCommand. /new, /resume with an id, /model and
 // /login with a provider return at once and report their result through
 // events; while a login runs, /new and /resume return ErrLoggingIn.
@@ -816,7 +817,7 @@ func (c *Controller) Status() Status {
 	c.queue.Unlock()
 
 	mode, _ := c.authority.Snapshot()
-	s := Status{SessionID: sessID, Mode: mode, Model: c.Model(), Busy: busy, Branch: gitBranch(c.cfg.Workspace), Workspace: c.cfg.Workspace, TotalCost: side}
+	s := Status{SessionID: sessID, Mode: mode, Model: c.Model(), Busy: busy, Branch: gitBranch(c.cfg.Workspace), Workspace: c.cfg.Workspace, TotalCost: side.Cost()}
 	if sess != nil {
 		_, cost := sess.Usage()
 		s.TotalCost += cost
@@ -1188,7 +1189,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	c.main.sess, c.sessID, c.main.emit, c.main.bound, c.main.unsubscribe = sess, id, emit, bound, unsubscribe
 	c.main.told = ""
 	c.titled = sess.Name() != ""
-	c.spent = 0
+	c.spent = pigruntime.Usage{}
 	c.deferred = nil
 	c.mu.Unlock()
 	c.queue.Unlock()
