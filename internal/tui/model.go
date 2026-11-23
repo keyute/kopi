@@ -110,8 +110,6 @@ type model struct {
 	// barBeat is the bar's value, flipped on each so Bubble Tea writes it again.
 	barBeating bool
 	barBeat    int
-	// usageWakeAt is the cache expiry the last usageWakeMsg was armed for.
-	usageWakeAt time.Time
 	// readsStatus is set once the terminal answers the OSC 7501 query. records
 	// holds the child records the terminal has, by id, with their titles.
 	readsStatus    bool

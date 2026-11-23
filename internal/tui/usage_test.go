@@ -34,8 +34,7 @@ func usageFixture() app.Usage {
 			{Model: "openai-codex/gpt-5-codex", Tokens: 1_200_000, Cost: 3.90},
 			{Model: "openai-codex/gpt-5-mini", Tokens: 310_000, Cost: 0.41},
 		},
-		TotalCost: 4.31,
-		Cache:     app.Cache{Reported: true, Hit: 91, Misses: 2, MissedCost: 0.42, Expires: now.Add(3*time.Hour + 42*time.Minute)},
+		Cache: app.Cache{Reported: true, Hit: 91, Misses: 2, MissedCost: 0.42, Expires: now.Add(3*time.Hour + 42*time.Minute)},
 	}
 }
 
@@ -74,6 +73,17 @@ func openUsage(t *testing.T, m *model) []string {
 	t.Helper()
 	submitText(m, "/usage")
 	return dialogRows(t, m)
+}
+
+func usageOpen(t *testing.T, m *model) *usageDialog {
+	t.Helper()
+	for _, h := range m.prompts {
+		if u, ok := h.prompt.(*usageDialog); ok {
+			return u
+		}
+	}
+	require.FailNow(t, "no /usage dialog is open")
+	return nil
 }
 
 func TestUsageShowsEveryRow(t *testing.T) {
@@ -154,7 +164,6 @@ func TestUsageWithoutLimitsOrCacheLifetimeIsTwoGroups(t *testing.T) {
 		u := usageFixture()
 		u.Model, u.Limits, u.Cache.Expires = "mock/model-1", quota.Limits{}, time.Time{}
 		u.Models = []app.ModelUsage{{Model: "mock/model-1", Tokens: 1_500, Cost: 0.0049}, {Model: "", Tokens: 20, Cost: 0}}
-		u.TotalCost = 0.0049
 		m, _ := usageModel(t, 60, &u)
 
 		rule := strings.Repeat("─", 60)
@@ -258,7 +267,7 @@ func TestUsageCacheTurnsExpiredWithTheClock(t *testing.T) {
 		u := app.Usage{SessionID: "s", Cache: app.Cache{Expires: time.Now().Add(time.Minute)}}
 		m, c := usageModel(t, 60, &u)
 		assert.Contains(t, openUsage(t, m), "  Cache    warm until 12:01")
-		assert.Equal(t, u.Cache.Expires, m.usageWakeAt, "opening arms the wake")
+		assert.Equal(t, u.Cache.Expires, usageOpen(t, m).wakeAt, "opening arms the wake")
 		assert.Nil(t, m.usageWake(), "one wake per expiry")
 
 		time.Sleep(2 * time.Minute)
@@ -274,12 +283,27 @@ func TestUsageWakeFollowsAnExpiryReadAfterOpening(t *testing.T) {
 	usageBubble(t, func(t *testing.T) {
 		m, c := usageModel(t, 60, &app.Usage{SessionID: "s"})
 		openUsage(t, m)
-		assert.True(t, m.usageWakeAt.IsZero(), "no cache lifetime: nothing to wake for")
+		assert.True(t, usageOpen(t, m).wakeAt.IsZero(), "no cache lifetime: nothing to wake for")
 
 		c.usage.Cache.Expires = time.Now().Add(5 * time.Minute)
 		send(m, event.TurnEnd{})
 
-		assert.Equal(t, c.usage.Cache.Expires, m.usageWakeAt)
+		assert.Equal(t, c.usage.Cache.Expires, usageOpen(t, m).wakeAt)
+	})
+}
+
+func TestUsageWakeTicksAtTheExpiry(t *testing.T) {
+	usageBubble(t, func(t *testing.T) {
+		m, _ := usageModel(t, 60, &app.Usage{SessionID: "s"})
+		openUsage(t, m)
+		expires := time.Now().Add(5 * time.Minute)
+		usageOpen(t, m).u.Cache.Expires = expires
+
+		wake := m.usageWake()
+		require.NotNil(t, wake)
+
+		assert.Equal(t, usageWakeMsg{}, wake())
+		assert.True(t, time.Now().Equal(expires), "woke at %v, not %v", time.Now(), expires)
 	})
 }
 

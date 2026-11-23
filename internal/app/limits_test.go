@@ -45,7 +45,6 @@ func (f *fakeLimits) read(ctx context.Context, provider string) ([]quota.Window,
 func newTestLimits(f *fakeLimits) (*limits, chan event.Event) {
 	published := make(chan event.Event, 8)
 	l := newLimits(f.read, func() string { return "codex" }, func(ev event.Event) { published <- ev })
-	l.ask()
 	return l, published
 }
 
@@ -232,7 +231,7 @@ func TestLimitsForceBypassesTheThrottle(t *testing.T) {
 	})
 }
 
-func TestLimitsForceDoesNothingUntilAReadingIsAskedFor(t *testing.T) {
+func TestLimitsForceDoesNothingUntilARefresh(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newFakeLimits()
 		l := newLimits(f.read, func() string { return "codex" }, func(event.Event) {})
@@ -242,10 +241,15 @@ func TestLimitsForceDoesNothingUntilAReadingIsAskedFor(t *testing.T) {
 		synctest.Wait()
 		require.Empty(t, f.started)
 
-		l.ask()
+		l.refresh()
+		synctest.Wait()
+		require.Equal(t, "codex", <-f.started)
+		f.release <- limitsResult{}
+		synctest.Wait()
+
 		l.force()
 		synctest.Wait()
-		assert.Equal(t, "codex", <-f.started)
+		assert.Equal(t, "codex", <-f.started, "forced past the throttle")
 		f.release <- limitsResult{}
 	})
 }
@@ -257,7 +261,6 @@ func TestLimitsForceDuringAReadReadsAgainForTheNewProvider(t *testing.T) {
 		provider.Store("codex")
 		l := newLimits(f.read, func() string { return provider.Load().(string) }, func(event.Event) {})
 		t.Cleanup(l.close)
-		l.ask()
 
 		l.observe(event.TurnEnd{})
 		synctest.Wait()
@@ -291,7 +294,6 @@ func TestLimitsForceDuringAnEmptyProviderResolutionOwesNoRead(t *testing.T) {
 			return provider.Load().(string)
 		}, func(event.Event) {})
 		t.Cleanup(l.close)
-		l.ask()
 
 		l.observe(event.TurnEnd{})
 		<-resolving
@@ -336,7 +338,6 @@ func TestLimitsFailureOfAnotherProviderDropsTheLastReading(t *testing.T) {
 		provider.Store("codex")
 		l := newLimits(f.read, func() string { return provider.Load().(string) }, func(event.Event) {})
 		t.Cleanup(l.close)
-		l.ask()
 
 		l.observe(event.TurnEnd{})
 		synctest.Wait()
@@ -406,6 +407,7 @@ func TestLimitsWarnOncePerRunOfFailures(t *testing.T) {
 		f := newFakeLimits()
 		l, _ := newTestLimits(f)
 		t.Cleanup(l.close)
+		l.asked = true
 
 		for _, res := range []limitsResult{{err: errors.New("a")}, {err: errors.New("b")}, {windows: weekly}, {err: errors.New("c")}} {
 			l.force()

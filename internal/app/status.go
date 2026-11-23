@@ -55,10 +55,10 @@ type Usage struct {
 	ContextTokens, ContextWindow int
 	Limits                       quota.Limits
 	Tokens                       Tokens
-	Models                       []ModelUsage // by cost descending, then model
-	// TotalCost is the sum of Models, as Status.TotalCost.
-	TotalCost float64
-	Cache     Cache // the main session's
+	// Models are by cost descending, then model; their costs sum to
+	// Status.TotalCost.
+	Models []ModelUsage
+	Cache  Cache // the main session's
 }
 
 // AgentStatus describes one session for a frontend: the main session or a subagent's.

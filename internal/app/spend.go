@@ -50,7 +50,6 @@ func (c *Controller) sideSearch(ctx context.Context, model, system, query string
 // Status.TotalCost sums. It also asks for a throttled read of the plan limits,
 // which Limits shows once LimitsChanged arrives.
 func (c *Controller) Usage() Usage {
-	c.limits.ask()
 	c.limits.refresh()
 	c.queue.Lock()
 	children := maps.Clone(c.children)
@@ -73,7 +72,7 @@ func (c *Controller) Usage() Usage {
 	for _, r := range children {
 		used = used.Add(r.sess.UsageByModel())
 	}
-	u.Tokens, u.Models, u.TotalCost = used.Tokens, slices.Clone(used.Models), used.Cost()
+	u.Tokens, u.Models = used.Tokens, slices.Clone(used.Models)
 	slices.SortFunc(u.Models, func(a, b ModelUsage) int {
 		return cmp.Or(cmp.Compare(b.Cost, a.Cost), cmp.Compare(a.Model, b.Model))
 	})

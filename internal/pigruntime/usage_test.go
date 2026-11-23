@@ -143,7 +143,19 @@ func TestCacheExpiresAfterTheModelsLifetime(t *testing.T) {
 	last := open(t, "kopi-cache/cached-1", user,
 		assistantRecord("kopi-cache", "cached-1", "", started, usageJSON(10, 1, 0, 100, 0, `,"cacheWrite1h":100`)),
 		assistantRecord("kopi-cache", "cached-1", "", started+60_000, usageJSON(10, 1, 100, 0, 0, "")))
-	assert.Equal(t, time.UnixMilli(started+60_000).Add(5*time.Minute), last.Cache().Expires, "the last request decides")
+	assert.Equal(t, time.UnixMilli(started+60_000).Add(time.Hour), last.Cache().Expires, "a read keeps the tier of the latest write")
+
+	rewritten := open(t, "kopi-cache/cached-1", user,
+		assistantRecord("kopi-cache", "cached-1", "", started, usageJSON(10, 1, 0, 100, 0, `,"cacheWrite1h":100`)),
+		assistantRecord("kopi-cache", "cached-1", "", started+60_000, usageJSON(10, 1, 0, 100, 0, "")))
+	assert.Equal(t, time.UnixMilli(started+60_000).Add(5*time.Minute), rewritten.Cache().Expires, "the latest write decides the tier")
+
+	switched := open(t, "kopi-cache/cached-1", user, assistantRecord("kopi-cache", "plain-1", "", started, usageJSON(10, 1, 100, 0, 0, "")))
+	require.Equal(t, "cached-1", switched.inner.Model().ID)
+	assert.True(t, switched.Cache().Expires.IsZero(), "another model made the last request")
+
+	switchedAway := open(t, "kopi-cache/plain-1", user, assistantRecord("kopi-cache", "cached-1", "", started, usageJSON(10, 1, 100, 0, 0, "")))
+	assert.True(t, switchedAway.Cache().Expires.IsZero(), "the session's model is not the one whose cache was left")
 
 	failed := open(t, "kopi-cache/cached-1", user,
 		assistantRecord("kopi-cache", "cached-1", "", started, usageJSON(10, 1, 100, 0, 0, "")),

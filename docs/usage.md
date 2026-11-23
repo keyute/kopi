@@ -73,11 +73,11 @@ The whole word `ultrathink`, in any case, in a prompt to the main agent raises i
   Session  0195c2d4-7b1e-7c3a-9f2d-5e8a1b6c4d70 · 42 messages · 128 tool calls
 ```
 
-- Esc closes it. It stays open while turns run and shows the new figures as they change; a change of session closes it. PgUp/PgDn scroll it when it is taller than a third of the screen.
+- Esc closes it. It stays open while turns run and shows the new figures when a tool call or turn ends; a change of session closes it. PgUp/PgDn scroll it when it is taller than a third of the screen.
 - `Context` is the main session's context; it is absent until the model's window is known. `5h`, `wk` and the other plan windows are the share of the plan used, in the warning colour from 90%, with when each resets (as in [Plan limits](providers.md#plan-limits)). They show only for a provider Kopi reads plan limits from, and only when it is the main session's model's provider.
 - Each model row is the tokens and the cost of the requests the provider answered as that model. The cost is an estimate from the model's listed price; on a subscription sign-in it is not what you are billed. `summaries` is what compaction's own requests cost.
 - The total covers the main session, its subagents, the workflow agents that have ended, and the classifier, `WebFetch`, `WebSearch` and title requests. `Tokens` is the same sum by kind.
-- `Cache` is the main session's. `hit` is the share of the last request's prompt read from the provider's cache. A miss is prompt that had been cached and was paid for again; its dollar figure is what that cost over the cache-read price. `warm until` or `expired` appears only for a model that declares a cache lifetime and is judged by time alone, so switching model or compacting can still rebuild a cache shown as warm.
+- `Cache` is the main session's. `hit` is the share of the last request's prompt read from the provider's cache. A miss is prompt that had been cached and was paid for again; its dollar figure is what that cost over the cache-read price. `warm until` or `expired` appears only when the main session's model made the last request and declares a cache lifetime, so it is gone after switching model until the new model's first request. It is judged by time alone, so compacting can still rebuild a cache shown as warm.
 - `Session` is the session id and the messages and tool calls in the session's whole log. A row, or a group, with nothing to show is left out.
 
 ## Keys

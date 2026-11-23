@@ -17,7 +17,7 @@ const limitsEvery = time.Minute
 // limits holds the last reading of the main model's provider's plan limits,
 // refreshed on activity. Its mutex is a leaf: nothing is called with it held.
 // A nil *limits holds nothing: force, get and close are safe on it.
-// It reads nothing until ask says a reading is wanted.
+// A forced read does nothing until refresh has wanted a reading.
 type limits struct {
 	read     func(ctx context.Context, provider string) ([]quota.Window, error)
 	provider func() string
@@ -33,7 +33,7 @@ type limits struct {
 	// the last good one have failed; owed when a forced read was asked for
 	// during a read.
 	running, failing, owed, closed bool
-	// asked is set once a limit segment is configured or Usage was called.
+	// asked is set by the first refresh.
 	asked bool
 }
 
@@ -54,6 +54,7 @@ func (l *limits) observe(ev event.Event) {
 func (l *limits) refresh() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.asked = true
 	if l.closed || l.running || (!l.attempted.IsZero() && time.Since(l.attempted) < limitsEvery) {
 		return
 	}
@@ -77,15 +78,8 @@ func (l *limits) refresh() {
 	}()
 }
 
-// ask records that a reading is wanted, so that force reads from now on.
-func (l *limits) ask() {
-	l.mu.Lock()
-	l.asked = true
-	l.mu.Unlock()
-}
-
 // force starts a read now, past the throttle, for a change of credentials. It
-// does nothing until a reading has been asked for.
+// does nothing until refresh has wanted a reading.
 func (l *limits) force() {
 	if l == nil {
 		return

@@ -271,7 +271,7 @@ func TestWorkflowAgentModelRowSurvivesItsEnd(t *testing.T) {
 	got := a.c.Usage()
 	require.Len(t, got.Models, 1)
 	assert.Equal(t, priced, got.Models[0].Model)
-	assert.Equal(t, pigruntimetest.PricedModelCost, got.TotalCost)
+	assert.Equal(t, pigruntimetest.PricedModelCost, got.Models[0].Cost)
 }
 
 func TestWorkflowSchemaReturnsTheRecordedObject(t *testing.T) {

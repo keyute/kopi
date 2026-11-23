@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/MichaelKinsy/PiG/agent"
 	"github.com/MichaelKinsy/PiG/ai"
 )
 
@@ -110,13 +111,14 @@ type Cache struct {
 	Misses     int
 	MissedCost float64
 	// Expires is when the cache the last request left goes cold by time; zero
-	// when there is no request yet or the model declares no cache lifetime.
+	// when there is no request yet, another model made the last one, or the
+	// model declares no cache lifetime.
 	Expires time.Time
 }
 
 // Cache returns what the session's requests report about the prompt cache.
 // Hit and the misses are PiG's accounting; Expires is estimated by time alone,
-// so a model switch or a compaction still leaves it warm.
+// so a compaction still leaves it warm.
 func (s *Session) Cache() Cache {
 	accounting := s.inner.SessionManager().Accounting()
 	tokens := accounting.Tokens
@@ -132,33 +134,46 @@ func (s *Session) Cache() Cache {
 	return c
 }
 
-// cacheExpires dates the last request that sent a prompt. PiG's GetPromptCacheTtlMs
-// is internal and picks the tier from a retention setting Kopi never sets, or
-// from PI_CACHE_RETENTION in the environment, so the tier is read from what the
-// request wrote: long after a one-hour cache write, else short. The lifetimes
-// are the model's promptCache entries.
+// cacheExpires dates the last request that sent a prompt, when the session's
+// model made it. PiG's GetPromptCacheTtlMs is internal and picks the tier from
+// a retention setting Kopi never sets, or from PI_CACHE_RETENTION in the
+// environment, so the tier is read from what that model's requests wrote: long
+// when its latest cache write was for one hour, else short. A read that writes
+// nothing keeps the tier of the cache it hit. The lifetimes are the model's
+// promptCache entries.
 func (s *Session) cacheExpires() time.Time {
 	model := s.inner.Model()
 	if model == nil {
 		return time.Time{}
 	}
+	var last *agent.AssistantMessage
+	tier := "short"
 	messages := s.inner.Messages()
 	for i := len(messages) - 1; i >= 0; i-- {
-		last := messages[i].Assistant
-		if last == nil || last.Usage == nil || last.Usage.Input+last.Usage.CacheRead+last.Usage.CacheWrite == 0 {
+		m := messages[i].Assistant
+		if m == nil || m.Usage == nil || m.Usage.Input+m.Usage.CacheRead+m.Usage.CacheWrite == 0 {
 			continue
 		}
-		tier := "short"
-		if last.Usage.CacheWrite1h != nil && *last.Usage.CacheWrite1h > 0 {
+		if last == nil {
+			last = m
+		}
+		if m.Provider != last.Provider || m.ModelID != last.ModelID || m.Usage.CacheWrite == 0 {
+			continue
+		}
+		if m.Usage.CacheWrite1h != nil && *m.Usage.CacheWrite1h > 0 {
 			tier = "long"
 		}
-		seconds, ok := model.PromptCache[tier]
-		if !ok || last.Timestamp <= 0 {
-			return time.Time{}
-		}
-		return time.UnixMilli(last.Timestamp).Add(time.Duration(seconds * float64(time.Second)))
+		break
 	}
-	return time.Time{}
+	// Another model's cache is not one the session's model can hit.
+	if last == nil || last.Provider != model.ProviderMeta.ProviderID || last.ModelID != model.ID || last.Timestamp <= 0 {
+		return time.Time{}
+	}
+	seconds, ok := model.PromptCache[tier]
+	if !ok {
+		return time.Time{}
+	}
+	return time.UnixMilli(last.Timestamp).Add(time.Duration(seconds * float64(time.Second)))
 }
 
 // usageOf is the one request msg made, as a row keyed the way PiG's session

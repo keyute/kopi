@@ -253,7 +253,6 @@ func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
 	cfg.Tasks.OnForeground(func() { c.relay.emit(event.TasksChanged{}) })
 	c.limits = newLimits(rt.Limits, c.modelProvider, c.relay.emit)
 	if cfg.Limits {
-		c.limits.ask()
 		c.relay.subscribe(c.limits.observe)
 	}
 	return c

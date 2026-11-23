@@ -1,8 +1,10 @@
 package app
 
 import (
+	"sync/atomic"
 	"testing"
 
+	"github.com/MichaelKinsy/PiG/ai"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -89,14 +91,29 @@ func TestUsageRowsSumToTheTotal(t *testing.T) {
 
 	got := h.c.Usage()
 
-	assert.Equal(t, h.c.Status().TotalCost, got.TotalCost)
+	assert.Equal(t, h.c.Status().TotalCost, pigruntime.Usage{Models: got.Models}.Cost())
 	assert.Equal(t, []ModelUsage{{Model: priced, Tokens: 2_000_000, Cost: 2 * pigruntimetest.PricedModelCost}}, got.Models, "the turn's and the side request's rows merge")
 	assert.Equal(t, Tokens{Input: 2_000_000}, got.Tokens)
 	assert.Equal(t, h.c.Status().SessionID, got.SessionID)
 	assert.Equal(t, priced, got.Model)
 	assert.Equal(t, 2, got.Messages)
-	assert.Zero(t, got.ToolCalls)
-	assert.Positive(t, got.ContextWindow)
+}
+
+func TestUsageReadsTheMainSession(t *testing.T) {
+	var ran atomic.Int32
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{execTool(&ran)}})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Exec", "call-1")), pigruntimetest.Text("ok")})
+	h.turn(t, "run it")
+
+	got := h.c.Usage()
+
+	assert.Equal(t, 1, got.ToolCalls)
+	tokens, window, ok := h.c.main.sess.ContextUsage()
+	require.True(t, ok)
+	assert.Positive(t, tokens)
+	assert.Equal(t, tokens, got.ContextTokens)
+	assert.Equal(t, window, got.ContextWindow)
+	assert.True(t, got.Cache.Reported, "the second request read what the first cached")
 	assert.Equal(t, h.c.main.sess.Cache(), got.Cache)
 }
 
@@ -117,7 +134,7 @@ func TestUsageCountsARunningSubagent(t *testing.T) {
 	got := a.c.Usage()
 
 	assert.Equal(t, []ModelUsage{{Model: def.Model, Tokens: 1_000_000, Cost: pigruntimetest.PricedModelCost}}, got.Models, "the second request is still held")
-	assert.Equal(t, a.c.Status().TotalCost, got.TotalCost)
+	assert.Equal(t, a.c.Status().TotalCost, pigruntime.Usage{Models: got.Models}.Cost())
 	close(release)
 }
 
@@ -135,7 +152,7 @@ func TestUsageSortsRowsByCostThenModel(t *testing.T) {
 		order = append(order, row.Model)
 	}
 	assert.Equal(t, []string{"p/c", "", "p/a", "p/b"}, order)
-	assert.Equal(t, 7.0, got.TotalCost)
+	assert.Equal(t, 7.0, pigruntime.Usage{Models: got.Models}.Cost())
 }
 
 func TestNewSessionEmptiesTheUsage(t *testing.T) {
@@ -151,5 +168,4 @@ func TestNewSessionEmptiesTheUsage(t *testing.T) {
 
 	got := h.c.Usage()
 	assert.Empty(t, got.Models)
-	assert.Zero(t, got.TotalCost)
 }

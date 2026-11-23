@@ -25,6 +25,8 @@ type usageDialog struct {
 	bodyWidth int
 	bodyTheme theme
 	expired   bool
+	// wakeAt is the cache expiry the last usageWakeMsg was armed for.
+	wakeAt time.Time
 }
 
 // showUsage opens the dialog on what the session has used.
@@ -47,10 +49,10 @@ func (m *model) usageWake() tea.Cmd {
 			continue
 		}
 		at := u.u.Cache.Expires
-		if at.Equal(m.usageWakeAt) || !time.Now().Before(at) {
+		if at.Equal(u.wakeAt) || !time.Now().Before(at) {
 			return nil
 		}
-		m.usageWakeAt = at
+		u.wakeAt = at
 		return tea.Tick(time.Until(at), func(time.Time) tea.Msg { return usageWakeMsg{} })
 	}
 	return nil
@@ -143,7 +145,7 @@ func usageBars(u app.Usage) []usageBar {
 			tail: compactCount(u.ContextTokens) + " / " + compactCount(u.ContextWindow),
 		})
 	}
-	if l := u.Limits; l.Provider != "" && l.Provider == modelProvider(u.Model) {
+	if l := u.Limits; l.Provider == modelProvider(u.Model) {
 		for _, w := range l.Windows {
 			b := usageBar{label: w.Label, pct: w.UsedPercent, warnAt: limitWarnPercent}
 			if text := resetText(w.ResetsAt, l.At); text != "" {
@@ -175,16 +177,17 @@ func usageModels(u app.Usage, width int) []string {
 	}
 	type row struct{ name, tokens, cost string }
 	var rows []row
-	total := 0
+	total, totalCost := 0, 0.0
 	for _, m := range u.Models {
 		name := m.Model
 		if name == "" {
 			name = "summaries"
 		}
 		total += m.Tokens
+		totalCost += m.Cost
 		rows = append(rows, row{name, compactCount(m.Tokens), fmt.Sprintf("$%.2f", m.Cost)})
 	}
-	rows = append(rows, row{"Total (estimate)", compactCount(total), fmt.Sprintf("$%.2f", u.TotalCost)})
+	rows = append(rows, row{"Total (estimate)", compactCount(total), fmt.Sprintf("$%.2f", totalCost)})
 	var name, tokens, cost int
 	for _, r := range rows {
 		name, tokens, cost = max(name, lipgloss.Width(r.name)), max(tokens, len(r.tokens)), max(cost, len(r.cost))
