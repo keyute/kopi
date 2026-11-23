@@ -1,0 +1,173 @@
+name: Release
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/release.yml
+      - .github/homebrew/**
+permissions: {}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # Published binaries must not come from a restorable cache.
+          cache: false
+      - name: Build archives
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = tag ]; then version="${GITHUB_REF_NAME#v}"; else version=0.0.0; fi
+          SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          # Everything the script writes stays outside the checkout: an untracked file in the tree stamps later builds +dirty.
+          dist="$RUNNER_TEMP/dist"
+          mkdir "$dist"
+          for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            dir="$RUNNER_TEMP/build/${os}_${arch}"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags="-s -w" -o "$dir/kopi" .
+            # Apache-2.0 section 4 requires the licence and NOTICE with binary copies of the adapted code.
+            mkdir -p "$dir/third_party/codex" "$dir/third_party/sandbox-runtime"
+            cp LICENSE "$dir/LICENSE"
+            cp internal/sandbox/codex/LICENSE internal/sandbox/codex/NOTICE "$dir/third_party/codex/"
+            cp internal/sandbox/srt/LICENSE "$dir/third_party/sandbox-runtime/"
+            tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner -C "$dir" -cf - . | gzip -n > "$dist/kopi_${version}_${os}_${arch}.tar.gz"
+          done
+          (cd "$dist" && sha256sum kopi_*.tar.gz > checksums.txt)
+          # Catches a missing version stamp or a +dirty tree.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            test "$("$RUNNER_TEMP/build/linux_amd64/kopi" version | head -n 1)" = "kopi $GITHUB_REF_NAME"
+          fi
+          sed -e "s/@VERSION@/$version/g" .github/homebrew/kopi.rb > "$dist/kopi.rb"
+          for target in darwin_arm64 darwin_amd64 linux_arm64 linux_amd64; do
+            sum="$(awk -v name="kopi_${version}_${target}.tar.gz" '$2 == name { print $1 }' "$dist/checksums.txt")"
+            placeholder="@SHA256_$(echo "$target" | tr '[:lower:]' '[:upper:]')@"
+            sed -i "s/$placeholder/$sum/" "$dist/kopi.rb"
+          done
+          if grep -n '@[A-Z0-9_]*@' "$dist/kopi.rb"; then
+            exit 1
+          fi
+      - name: Upload dist
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: ${{ runner.temp }}/dist
+          if-no-files-found: error
+          # Long enough to re-run a failed later job.
+          retention-days: 7
+  formula:
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    permissions: {}
+    steps:
+      - name: Download dist
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: ${{ runner.temp }}/dist
+      - name: Setup Homebrew
+        uses: Homebrew/actions/setup-homebrew@ceec4e8419bb3c97ce96e9dda7738499ed5f869d # 2026.11.14.1
+      - name: Install, test and audit the formula
+        run: |
+          set -euo pipefail
+          tap="$(brew --repository)/Library/Taps/keyute/homebrew-tap"
+          mkdir -p "$tap/Formula"
+          version="$(sed -n 's|.*/releases/download/v\([^/]*\)/.*|\1|p' "$RUNNER_TEMP/dist/kopi.rb" | head -n 1)"
+          # Draft and unpublished assets cannot be downloaded, so the formula reads the artifact; checksums are unchanged.
+          # The path keeps github.com/.../releases/download/v<version>/ because Homebrew reads the version from that
+          # shape and takes "64" from kopi_0.0.0_linux_amd64.tar.gz in any other file URL.
+          releases="$RUNNER_TEMP/github.com/keyute/kopi/releases/download/v$version"
+          mkdir -p "$releases"
+          mv "$RUNNER_TEMP"/dist/kopi_*.tar.gz "$releases/"
+          sed "s|url \"https://|url \"file://$RUNNER_TEMP/|" "$RUNNER_TEMP/dist/kopi.rb" > "$tap/Formula/kopi.rb"
+          brew trust keyute/tap
+          brew install keyute/tap/kopi
+          brew test keyute/tap/kopi
+          brew audit --strict keyute/tap/kopi
+  release:
+    if: github.ref_type == 'tag'
+    needs: formula
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download dist
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
+      - name: Check for an existing release
+        id: existing
+        run: |
+          set -euo pipefail
+          # A full re-run finds its release already published: it must carry the same build.
+          if draft="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2> /dev/null)"; then
+            # A draft is never published by a re-run, and the tap job would then push URLs that 404.
+            if [ "$draft" = true ]; then
+              echo "::error::A draft release for $GITHUB_REF_NAME was left by an interrupted run; delete it before re-running."
+              exit 1
+            fi
+            gh release download "$GITHUB_REF_NAME" --pattern checksums.txt --dir "$RUNNER_TEMP/existing"
+            cmp "$RUNNER_TEMP/existing/checksums.txt" dist/checksums.txt
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Attest build provenance
+        if: steps.existing.outputs.exists != 'true'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: dist/checksums.txt
+      - name: Create release
+        if: steps.existing.outputs.exists != 'true'
+        # gh uploads the assets to a draft and then publishes it, the order immutable releases need.
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes dist/kopi_*.tar.gz dist/checksums.txt
+  tap:
+    if: github.ref_type == 'tag'
+    needs: release
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Download dist
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: ${{ runner.temp }}/dist
+      - name: Checkout tap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: keyute/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          # Must stay true: checkout removes the SSH key when its step ends otherwise, and the push below needs it.
+          persist-credentials: true
+      - name: Push formula
+        run: |
+          set -euo pipefail
+          mkdir -p Formula
+          cp "$RUNNER_TEMP/dist/kopi.rb" Formula/kopi.rb
+          git add Formula/kopi.rb
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git -c "user.name=github-actions[bot]" -c "user.email=41898282+github-actions[bot]@users.noreply.github.com" commit -m "kopi ${GITHUB_REF_NAME#v}"
+          git push origin HEAD
