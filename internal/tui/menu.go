@@ -29,6 +29,9 @@ type menu struct {
 	sel   int
 	// optional reports that q's command also runs without an argument.
 	optional bool
+	// arg is q's whole argument, trimmed: q.Text stops at the cursor, but Enter
+	// sends or replaces all of it.
+	arg string
 	// picked reports that Up or Down chose the row since the token's text changed.
 	picked bool
 	// seq numbers the latest load; an older candidatesMsg is dropped.
@@ -60,8 +63,12 @@ func (m *model) followMenu() tea.Cmd {
 		return nil
 	}
 	mn.dismissed = app.Query{}
-	prev := mn.q
-	mn.q = q
+	prev, prevArg := mn.q, mn.arg
+	mn.q, mn.arg = q, ""
+	if q.Kind == app.KindArgument {
+		l := []rune(strings.Split(m.composer.value(), "\n")[q.Line])
+		mn.arg = strings.TrimSpace(string(l[q.Start:q.End]))
+	}
 	var cmd tea.Cmd
 	if !mn.open || q.Kind != prev.Kind || q.Command != prev.Command {
 		mn.items, mn.sel, mn.picked, mn.optional = nil, 0, false, false
@@ -84,7 +91,7 @@ func (m *model) followMenu() tea.Cmd {
 				return candidatesMsg{seq, cs, err}
 			}
 		}
-	} else if q.Text != prev.Text {
+	} else if q.Text != prev.Text || mn.arg != prevArg {
 		mn.sel, mn.picked = 0, false
 	}
 	mn.open = true
@@ -132,10 +139,10 @@ func (mn *menu) lit() bool {
 	if mn.picked || mn.q.Kind != app.KindArgument {
 		return true
 	}
-	if mn.q.Text == "" {
+	if mn.arg == "" {
 		return !mn.optional
 	}
-	return !slices.ContainsFunc(mn.items, func(cd app.Candidate) bool { return cd.Value == mn.q.Text })
+	return !slices.ContainsFunc(mn.items, func(cd app.Candidate) bool { return cd.Value == mn.arg })
 }
 
 func (m *model) menuHeight() int { return m.geo.menu }

@@ -219,6 +219,20 @@ func TestOptionalArgumentMenu(t *testing.T) {
 	})
 }
 
+func TestEnterSendsAFullArgumentWithTheCursorBeforeIt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newMenuModel(t, 60, 30)
+		settle(m, keys(m, "/resume def456"))
+		for range len("def456") {
+			press(m, left)
+		}
+		assert.Equal(t, []string{"  2h ago      fix the bug", "  1d ago      add tests"}, menuText(m), "unlit")
+
+		press(m, enter)
+		assert.Equal(t, []string{"/resume def456"}, c.submitted)
+	})
+}
+
 func TestReferenceMenu(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, c := newMenuModel(t, 60, 30)
