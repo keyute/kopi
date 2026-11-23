@@ -243,6 +243,23 @@ func TestEnterSendsAFullArgumentWithTheCursorBeforeIt(t *testing.T) {
 	})
 }
 
+func TestForwardDeleteToAFullArgumentUnlightsTheMenu(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newMenuModel(t, 60, 30)
+		settle(m, keys(m, "/resume ddef456"))
+		for range len("ddef456") {
+			press(m, left)
+		}
+		press(m, down)
+		require.Equal(t, []string{"  2h ago      fix the bug", "❭ 1d ago      add tests"}, menuText(m))
+
+		settle(m, press(m, del))
+		assert.Equal(t, []string{"  2h ago      fix the bug", "  1d ago      add tests"}, menuText(m), "unlit")
+		press(m, enter)
+		assert.Equal(t, []string{"/resume def456"}, c.submitted)
+	})
+}
+
 func TestUpDownAndTabLightAnUnlitMenu(t *testing.T) {
 	unlit := func(t *testing.T) *model {
 		m, _ := newMenuModel(t, 60, 30)

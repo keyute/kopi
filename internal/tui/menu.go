@@ -32,7 +32,7 @@ type menu struct {
 	// arg is q's whole argument, trimmed: q.Text stops at the cursor, but Enter
 	// sends or replaces all of it.
 	arg string
-	// picked reports that Up or Down chose the row since the token's text changed.
+	// picked reports that Up, Down or Tab chose the row since the token's text changed.
 	picked bool
 	// seq numbers the latest load; an older candidatesMsg is dropped.
 	seq int
@@ -51,7 +51,8 @@ type candidatesMsg struct {
 // followMenu opens, refilters or closes the menu for the token at the cursor.
 func (m *model) followMenu() tea.Cmd {
 	mn := &m.menu
-	q, ok := app.QueryAt(m.composer.value(), m.composer.ta.Line(), m.composer.ta.Column())
+	v := m.composer.value()
+	q, ok := app.QueryAt(v, m.composer.ta.Line(), m.composer.ta.Column())
 	if !ok || m.composer.browsing() {
 		*mn = menu{seq: mn.seq}
 		return nil
@@ -66,7 +67,7 @@ func (m *model) followMenu() tea.Cmd {
 	prev, prevArg := mn.q, mn.arg
 	mn.q, mn.arg = q, ""
 	if q.Kind == app.KindArgument {
-		l := []rune(strings.Split(m.composer.value(), "\n")[q.Line])
+		l := []rune(strings.Split(v, "\n")[q.Line])
 		mn.arg = strings.TrimSpace(string(l[q.Start:q.End]))
 	}
 	var cmd tea.Cmd
