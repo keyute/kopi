@@ -89,7 +89,7 @@ func NewToolSearch(deferred []Tool, rank func(query string, tools []Tool, limit 
 				}
 				return fmt.Sprintf("loaded %d tools", n)
 			},
-			Action: Action{Verb: "Ran", One: "tool search", Many: "tool searches"},
+			Action: Action{Verb: "Searched", One: "tools"},
 		},
 	}
 }

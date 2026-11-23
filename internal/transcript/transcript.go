@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/tool"
 )
 
 type Transcript struct {
@@ -96,8 +97,14 @@ func (t *Transcript) Apply(ev event.Event) {
 			c.State = Failed
 		default:
 			c.State = OK
+			if ev.Done != "" {
+				done = ev.Done
+			}
 			if done != "" {
 				c.Title = done
+			}
+			if ev.Action != (tool.Action{}) {
+				c.Action = ev.Action
 			}
 			c.Summary = strings.Join(slices.DeleteFunc([]string{change, ev.Summary}, func(s string) bool { return s == "" }), " · ")
 			return

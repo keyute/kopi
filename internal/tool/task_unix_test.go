@@ -196,17 +196,19 @@ func TestTasksStopKillsGroup(t *testing.T) {
 	require.NoError(t, err)
 	waitFor(t, started, "the grandchild to start")
 
-	info, err := m.Stop("t1")
+	info, stopped, err := m.Stop("t1")
 
 	require.NoError(t, err)
+	assert.True(t, stopped)
 	assert.Equal(t, TaskStopped, info.Status)
 	assert.Empty(t, info.Reason)
 	assert.False(t, info.Ended.IsZero())
 	waitFor(t, dead, "the grandchild to die")
 	assert.Equal(t, TaskRunning, nextEvent(t, events).Status)
 	assert.Equal(t, info, nextEvent(t, events))
-	again, err := m.Stop("t1")
+	again, stopped, err := m.Stop("t1")
 	require.NoError(t, err)
+	assert.False(t, stopped)
 	assert.Equal(t, info, again)
 }
 

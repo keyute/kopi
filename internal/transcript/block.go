@@ -85,8 +85,9 @@ type Task struct {
 	// Agent is the subagent's name, "" for a shell command.
 	Agent   string
 	Elapsed time.Duration
-	// Agents, Failed, Reason and Result are a workflow's: its agent calls,
-	// those that did not complete, why a failed run failed and what it returned.
+	// Reason is why a failed task failed and Result is what its row opens to.
+	// Agents and Failed are a workflow's: its agent calls and those that did
+	// not complete.
 	Agents, Failed int
 	Reason, Result string
 }

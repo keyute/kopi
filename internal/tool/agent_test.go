@@ -17,6 +17,7 @@ type fakeAgents struct {
 	launched [][3]string
 	messages [][2]string
 	resumed  bool
+	to       TaskInfo
 	err      error
 }
 
@@ -28,12 +29,12 @@ func (f *fakeAgents) Launch(_ context.Context, agent, description, prompt string
 	return "t3", nil
 }
 
-func (f *fakeAgents) Message(_ context.Context, id, message string) (bool, error) {
+func (f *fakeAgents) Message(_ context.Context, id, message string) (TaskInfo, bool, error) {
 	if f.err != nil {
-		return false, f.err
+		return TaskInfo{}, false, f.err
 	}
 	f.messages = append(f.messages, [2]string{id, message})
-	return f.resumed, nil
+	return f.to, f.resumed, nil
 }
 
 var testDefs = []subagent.Definition{
@@ -140,7 +141,9 @@ func TestAgentDisplay(t *testing.T) {
 	assert.Equal(t, "explore › look", tool.Display.Title(json.RawMessage(`{"description":"look","prompt":"p","subagent_type":"explore"}`)))
 	assert.Equal(t, "Agent", tool.Display.Title(json.RawMessage(`{`)))
 	assert.Equal(t, "launched", tool.Display.Summary("Agent t3 started."))
-	assert.Empty(t, tool.Display.Body("Agent t3 started."))
+	_, lines := tool.Display.Change(json.RawMessage(`{"description":"look","prompt":"a\nb","subagent_type":"explore"}`))
+	assert.Equal(t, []PreviewLine{{Kind: Context, Text: "a"}, {Kind: Context, Text: "b"}}, lines)
+	assert.Nil(t, tool.Display.Body)
 	assert.Nil(t, tool.Display.Done)
 	assert.Empty(t, tool.Display.Summary("failed to start"))
 }

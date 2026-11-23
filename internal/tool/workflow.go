@@ -120,8 +120,11 @@ func NewStructuredOutput(schema map[string]any, record func(json.RawMessage)) To
 			return Result{Text: "Recorded."}, nil
 		},
 		Display: Display{
-			Body:   func(string) string { return "" },
-			Action: Action{Verb: "Recorded", One: "result", Many: "results"},
+			Done: func(json.RawMessage) string { return "Returned result" },
+			Change: func(raw json.RawMessage) (string, []PreviewLine) {
+				return "", jsonPreview(raw)
+			},
+			Action: Action{Verb: "Returned", One: "result", Many: "results"},
 		},
 	}
 }

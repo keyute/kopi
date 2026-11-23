@@ -324,6 +324,33 @@ func TestReadResultReachesNextRequest(t *testing.T) {
 	assert.Contains(t, req.ToolResults[0], "kopi fixture 42")
 }
 
+func TestResumeNamesTheTaskOfAHistoryTaskOutputRow(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	tasks := tool.NewTasks()
+	task := tasks.StartAgent("explorer", "find it", nil)
+	task.End(tool.TaskCompleted, "", "found")
+	cfg := Config{Tools: []tool.Tool{tool.NewTaskOutput(tasks)}, Tasks: tasks, Mode: policy.Execute}
+	h := newHarness(t, sb, cfg)
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(pigruntimetest.Call{Name: "TaskOutput", ID: "call-1", Args: map[string]any{"task_id": task.ID()}}),
+		pigruntimetest.Text("done"),
+	})
+	h.turn(t, "check it")
+	id := h.c.Status().SessionID
+	require.NoError(t, h.c.Close(t.Context()))
+
+	fresh := newHarness(t, sb, cfg)
+	require.NoError(t, fresh.c.Open(t.Context(), OpenRequest{ResumeID: id}))
+
+	changed := ofType[event.SessionChanged](fresh.rec.all())
+	require.Len(t, changed, 1)
+	ends := ofType[event.ToolEnd](changed[0].History)
+	require.Len(t, ends, 1)
+	assert.Equal(t, "Checked on explorer › find it", ends[0].Done)
+	assert.Equal(t, tool.Action{Verb: "Checked on", One: "agent", Many: "agents"}, ends[0].Action)
+}
+
 func TestResumeDeliversDisplayedHistory(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	require.NoError(t, os.WriteFile(filepath.Join(sb.Workspace, "notes.txt"), []byte("kopi fixture 42\n"), 0o600))

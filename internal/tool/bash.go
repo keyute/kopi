@@ -47,18 +47,18 @@ func resultPattern(format string, args ...string) *regexp.Regexp {
 	return regexp.MustCompile("^" + fmt.Sprintf(regexp.QuoteMeta(format), verbs...) + "$")
 }
 
-// backgroundTask returns the task id output names when it is one of the
-// background results, and whether the task was started rather than moved.
-func backgroundTask(output string) (id string, started, ok bool) {
-	if m := startedResult.FindStringSubmatch(output); m != nil {
-		return m[1], true, true
+// backgroundTask reports whether output is one of the background results, and
+// whether the task was started rather than moved.
+func backgroundTask(output string) (started, ok bool) {
+	if startedResult.MatchString(output) {
+		return true, true
 	}
 	for _, re := range []*regexp.Regexp{movedResult, timeoutResult} {
-		if m := re.FindStringSubmatch(output); m != nil {
-			return m[1], false, true
+		if re.MatchString(output) {
+			return false, true
 		}
 	}
-	return "", false, false
+	return false, false
 }
 
 // NewBash runs execute-mode calls in sh and plan-mode calls in plan, which
@@ -118,6 +118,12 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 		}
 	}
 	planSandboxed := plan.Sandboxed()
+	unsandboxed := func(args bashArgs) string {
+		if unsandboxedHook != nil && args.Unsandboxed {
+			return " · unsandboxed"
+		}
+		return ""
+	}
 	return Tool{
 		Name:        "Bash",
 		Label:       "Bash",
@@ -199,25 +205,35 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 				if args.RunInBackground {
 					done = "Started " + titleLine(args.Command) + " in background"
 				}
-				if unsandboxedHook != nil && args.Unsandboxed {
-					done += " · unsandboxed"
+				return done + unsandboxed(args)
+			},
+			Outcome: func(raw json.RawMessage, output string) (string, Action) {
+				started, ok := backgroundTask(output)
+				if !ok {
+					return "", Action{}
 				}
-				return done
+				var args bashArgs
+				_ = json.Unmarshal(raw, &args)
+				action := Action{Verb: "Started", One: "shell", Many: "shells"}
+				if started {
+					return "", action
+				}
+				return "Moved " + titleLine(args.Command) + " to background" + unsandboxed(args), action
 			},
 			Summary: func(output string) string {
-				id, started, ok := backgroundTask(output)
-				switch {
+				if timeoutResult.MatchString(output) {
+					return "timed out"
+				}
+				switch _, ok := backgroundTask(output); {
 				case !ok && output == noOutputNotice:
 					return "no output"
 				case !ok:
 					return lineCount(countLines(output))
-				case started:
-					return "task " + id
 				}
-				return "moved to background · task " + id
+				return ""
 			},
 			Body: func(output string) string {
-				if _, _, ok := backgroundTask(output); ok || output == noOutputNotice {
+				if _, ok := backgroundTask(output); ok || output == noOutputNotice {
 					return ""
 				}
 				return output

@@ -167,3 +167,17 @@ func TestWorkflowDisplayOpensToTheScript(t *testing.T) {
 	_, lines = display.Change(json.RawMessage(`not json`))
 	assert.Empty(t, lines)
 }
+
+func TestStructuredOutputDisplay(t *testing.T) {
+	display := NewStructuredOutput(map[string]any{"type": "object"}, func(json.RawMessage) {}).Display
+
+	assert.Equal(t, "Returned result", display.Done(json.RawMessage(`{"a":1}`)))
+	assert.Nil(t, display.Summary)
+	assert.Equal(t, Action{Verb: "Returned", One: "result", Many: "results"}, display.Action)
+	assert.Nil(t, display.Body)
+	summary, lines := display.Change(json.RawMessage(`{"a":1}`))
+	assert.Empty(t, summary)
+	assert.Equal(t, []PreviewLine{{Kind: Context, Text: "{"}, {Kind: Context, Text: `  "a": 1`}, {Kind: Context, Text: "}"}}, lines)
+	_, lines = display.Change(json.RawMessage(`not json`))
+	assert.Equal(t, []PreviewLine{{Kind: Context, Text: "not json"}}, lines)
+}

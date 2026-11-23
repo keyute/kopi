@@ -24,15 +24,19 @@ func TestSendMessageDescribesItself(t *testing.T) {
 	assert.Equal(t, policy.Read, tool.Capability)
 	assert.Nil(t, tool.Target)
 	assert.False(t, tool.Deferred)
-	assert.Equal(t, Action{Verb: "Sent", One: "message", Many: "messages"}, tool.Display.Action)
+	assert.Equal(t, Action{Verb: "Messaged", One: "agent", Many: "agents"}, tool.Display.Action)
 }
 
 func TestSendMessageQueuesAndResumes(t *testing.T) {
+	to := TaskInfo{ID: "t3", Agent: "explore", Command: "look"}
 	for _, tc := range []struct {
 		resumed bool
 		text    string
-	}{{false, "Message queued for t3."}, {true, "Agent t3 continued."}} {
-		agents := &fakeAgents{resumed: tc.resumed}
+	}{
+		{false, "Message queued for t3. [named task]\nAgent: explore › look"},
+		{true, "Agent t3 continued. [named task]\nAgent: explore › look"},
+	} {
+		agents := &fakeAgents{resumed: tc.resumed, to: to}
 		admit := func(target policy.Target) (policy.Mode, error) {
 			assert.Equal(t, policy.Target{}, target)
 			assert.Empty(t, agents.messages)
@@ -84,7 +88,32 @@ func TestSendMessageDisplay(t *testing.T) {
 	assert.Equal(t, "SendMessage t3", tool.Display.Title(json.RawMessage(`{"to":"t3","message":"hi"}`)))
 	assert.Equal(t, "SendMessage", tool.Display.Title(json.RawMessage(`{}`)))
 	assert.Equal(t, "Messaged t3", tool.Display.Done(json.RawMessage(`{"to":"t3","message":"hi"}`)))
-	assert.Empty(t, tool.Display.Body("Message queued for t3."))
+	assert.Nil(t, tool.Display.Body)
+	assert.Equal(t, "queued", tool.Display.Summary("Message queued for t3. [named task]\nAgent: explore › look"))
+	assert.Equal(t, "continued", tool.Display.Summary("Agent t3 continued. [named task]\nAgent: explore › look"))
 	assert.Equal(t, "queued", tool.Display.Summary("Message queued for t3."))
 	assert.Equal(t, "continued", tool.Display.Summary("Agent t3 continued."))
+
+	_, lines := tool.Display.Change(json.RawMessage(`{"to":"t3","message":"a\nb"}`))
+	assert.Equal(t, []PreviewLine{{Kind: Context, Text: "a"}, {Kind: Context, Text: "b"}}, lines)
+}
+
+func TestSendMessageOutcome(t *testing.T) {
+	tool := NewSendMessage(nil)
+	args := json.RawMessage(`{"to":"t3","message":"hi"}`)
+
+	done, action := tool.Display.Outcome(args, "Agent t3 continued. [named task]\nAgent: explore › look")
+	assert.Equal(t, "Messaged explore › look", done)
+	assert.Equal(t, Action{Verb: "Messaged", One: "agent", Many: "agents"}, action)
+
+	done, action = tool.Display.Outcome(args, "Message queued for t3.")
+	assert.Empty(t, done)
+	assert.Equal(t, Action{}, action)
+}
+
+func TestSendMessageOmitsTheNameLineWhenTheLookupFailed(t *testing.T) {
+	out, err := NewSendMessage(&fakeAgents{}).Run(t.Context(), json.RawMessage(`{"to":"t3","message":"hi"}`), allowTarget)
+
+	require.NoError(t, err)
+	assert.Equal(t, "Message queued for t3.", out.Text)
 }

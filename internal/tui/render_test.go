@@ -87,9 +87,9 @@ func TestTaskRow(t *testing.T) {
 		status, want string
 		bullet, text lipgloss.Style
 	}{
-		{"completed", "• task t1 finished · make build · 12s", fg(th.success), lipgloss.NewStyle()},
-		{"failed", "• task t1 failed · make build · 12s", fg(th.error), fg(th.error)},
-		{"stopped", "• task t1 stopped · make build · 12s", fg(th.error), fg(th.error)},
+		{"completed", "• shell finished · make build · 12s", fg(th.success), lipgloss.NewStyle()},
+		{"failed", "• shell failed · make build · 12s", fg(th.error), fg(th.error)},
+		{"stopped", "• shell stopped · make build · 12s", fg(th.error), fg(th.error)},
 	} {
 		t.Run(tc.status, func(t *testing.T) {
 			m, _ := newTestModel(t, 60, 20)
@@ -99,6 +99,26 @@ func TestTaskRow(t *testing.T) {
 			assert.Equal(t, tc.bullet.Render("• ")+tc.text.Render(strings.TrimPrefix(tc.want, "• ")), got)
 		})
 	}
+}
+
+func TestFailedShellRowShowsItsReason(t *testing.T) {
+	m, _ := newTestModel(t, 60, 20)
+	send(m, event.TaskEnded{ID: "t1", Command: "make build", Status: "failed", Elapsed: 12 * time.Second, Reason: "exit code 2"})
+	assert.Equal(t, []string{"", "• shell failed · make build · 12s", "  exit code 2"}, body(m))
+}
+
+func TestShellRowOpensToItsOutput(t *testing.T) {
+	m, _ := newTestModel(t, 60, 20)
+	send(m, event.TaskEnded{ID: "t1", Command: "make build", Status: "completed", Elapsed: 12 * time.Second, Result: "step 1\rstep 2\nbuilt"})
+	clickText(t, m, "• shell finished · make build · 12s")
+	assert.Equal(t, []string{"", "• shell finished · make build · 12s", "    step 2", "    built"}, body(m))
+}
+
+func TestAgentTaskRowOpensToItsReply(t *testing.T) {
+	m, _ := newTestModel(t, 60, 20)
+	send(m, event.TaskEnded{ID: "t3", Agent: "explore", Command: "look around", Status: "completed", Elapsed: 134 * time.Second, Result: "found it"})
+	clickText(t, m, "• explore finished · look around · 2m 14s")
+	assert.Equal(t, []string{"", "• explore finished · look around · 2m 14s", "    found it"}, body(m))
 }
 
 func TestAgentTaskRow(t *testing.T) {
@@ -225,7 +245,7 @@ func TestAgentToolRowAndGroup(t *testing.T) {
 func TestTaskRowCutsALongCommand(t *testing.T) {
 	m, _ := newTestModel(t, 40, 20)
 	send(m, event.TaskEnded{ID: "t1", Command: strings.Repeat("x", 100), Status: "completed", Elapsed: time.Minute})
-	assert.Equal(t, []string{"", "• task t1 finished · " + strings.Repeat("x", 10) + "… · 1m 0s"}, body(m))
+	assert.Equal(t, []string{"", "• shell finished · " + strings.Repeat("x", 12) + "… · 1m 0s"}, body(m))
 }
 
 func TestPlanBlockDrawsAMutedTitleAndMarkdownAndRerendersWhenEdited(t *testing.T) {
@@ -275,6 +295,71 @@ func TestGroupSentenceCountsUnsandboxedCalls(t *testing.T) {
 
 	send(m, event.TextDelta{Text: "Done."})
 	assert.Equal(t, []string{"", "▸ Ran 2 commands (1 unsandboxed)", "", "Done."}, body(m))
+}
+
+func TestGroupSentenceFollowsItsRowsVerbs(t *testing.T) {
+	plan := tool.Action{Verb: "Read", One: "the plan"}
+	web := tool.Action{Verb: "Searched", One: "the web"}
+	shell := tool.Action{Verb: "Started", One: "shell", Many: "shells"}
+	agents := tool.Action{Verb: "Checked on", One: "agent", Many: "agents"}
+	task := tool.Action{Verb: "Checked", One: "task", Many: "tasks"}
+	// The start carries the tool's static action; only the end's outcome names the shells and agents.
+	callAs := func(id, name, title string, static, outcome tool.Action) []event.Event {
+		return []event.Event{
+			event.ToolStart{CallID: id, Name: name, Title: title, Done: title, Action: static},
+			event.ToolEnd{CallID: id, Name: name, Done: title, Action: outcome},
+		}
+	}
+	call := func(id, name, title string, action tool.Action) []event.Event {
+		return callAs(id, name, title, action, action)
+	}
+	var events []event.Event
+	for _, c := range [][]event.Event{
+		{start("a"), ok("a", "")},
+		{start("b"), ok("b", "")},
+		call("c", "Read", "Read the plan", plan),
+		call("d", "WebSearch", "Searched the web for x", web),
+		call("e", "WebSearch", "Searched the web for y", web),
+		call("f", "WebSearch", "Searched the web for z", web),
+		callAs("g", "Bash", "Started make in background", tool.Action{}, shell),
+		callAs("h", "TaskOutput", "Checked on researcher › survey peers", task, agents),
+		callAs("i", "TaskOutput", "Checked on explorer › map the repo", task, agents),
+	} {
+		events = append(events, c...)
+	}
+	sentence := "Read 2 files, read the plan, searched the web 3 times, started 1 shell, checked on 2 agents"
+	members := []string{"  ↳ a.go", "  ↳ b.go", "  ↳ Read the plan", "  ↳ Searched the web for x", "  ↳ Searched the web for y", "  ↳ Searched the web for z", "  ↳ Started make in background", "  ↳ Checked on researcher › survey peers", "  ↳ Checked on explorer › map the repo"}
+	m, _ := newTestModel(t, 120, 30)
+	send(m, events...)
+	assert.Equal(t, append([]string{"", "• " + sentence}, members...), body(m))
+
+	send(m, event.TextDelta{Text: "Done."})
+	assert.Equal(t, []string{"", "▸ " + sentence, "", "Done."}, body(m))
+}
+
+func TestTaskOutputRowWithoutANameLineReadsAsATask(t *testing.T) {
+	m, _ := newTestModel(t, 60, 20)
+	send(m, event.ToolStart{CallID: "a", Name: "TaskOutput", Title: "TaskOutput t3", Done: "Checked task t3", Action: tool.Action{Verb: "Checked", One: "task", Many: "tasks"}},
+		event.ToolEnd{CallID: "a", Name: "TaskOutput", Summary: "completed (exit code 0)", Output: "Task t3 completed (exit code 0).\nout", Body: "out"})
+	assert.Equal(t, []string{"", "• Checked task t3", "  ↳ completed (exit code 0)"}, body(m))
+}
+
+func TestAgentRowOpensToItsPromptOnlyWithAPreview(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		prompt := []tool.PreviewLine{{Kind: tool.Context, Text: "look for the bug"}, {Kind: tool.Context, Text: "report the file"}}
+		launched := func(id string) event.ToolEnd { return event.ToolEnd{CallID: id, Name: "Agent", Summary: "launched"} }
+		m, _ := newTestModel(t, 60, 30)
+		send(m, event.ToolStart{CallID: "a", Name: "Agent", Title: "explore › look", Preview: prompt}, launched("a"))
+		collapsed := []string{"", "• explore › look", "  ↳ launched"}
+		require.Equal(t, collapsed, body(m))
+
+		clickText(t, m, "• explore › look")
+		assert.Equal(t, append(collapsed, "      look for the bug", "      report the file"), body(m))
+
+		m, _ = newTestModel(t, 60, 30)
+		send(m, agentStart("b", "look"), launched("b"))
+		assert.Equal(t, hit{}, m.view().lines[len(m.view().lines)-2].hit)
+	})
 }
 
 func TestRejectedRowShowsFeedbackInFull(t *testing.T) {

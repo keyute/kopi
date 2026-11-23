@@ -85,6 +85,7 @@ func NewEdit(ws *Workspace) Tool {
 			},
 			Preview: editPreview,
 			Action:  Action{Verb: "Edited", One: "file", Many: "files"},
+			Outcome: ws.fileOutcome("Edited"),
 		},
 	}
 }
