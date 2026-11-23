@@ -3,6 +3,7 @@ package pigruntime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -454,6 +455,48 @@ func TestRefreshAppliesChangedContextWindow(t *testing.T) {
 	got := r.svcs.ModelRuntime().GetModel(catalogProvider, bundled.ID)
 	require.NotNil(t, got)
 	assert.Equal(t, changed.Capabilities.ContextWindow, got.Capabilities.ContextWindow)
+}
+
+func writeContextWindowOverride(t *testing.T, sb sandbox, id string, window int) {
+	t.Helper()
+	writeAgentFile(t, sb, "models.json", fmt.Sprintf(`{"providers":{"%s":{"modelOverrides":{"%s":{"contextWindow":%d}}}}}`, catalogProvider, id, window))
+}
+
+func TestModelOverrideSetsContextWindow(t *testing.T) {
+	sb := newSandbox(t)
+	probe := newCatalogRuntime(t, sb, "http://127.0.0.1:1")
+	bundled := bundledMistral(t, probe)
+	override := bundled.Capabilities.ContextWindow + 5000
+	writeContextWindowOverride(t, sb, bundled.ID, override)
+
+	r := newCatalogRuntime(t, sb, "http://127.0.0.1:1")
+
+	got := r.svcs.ModelRuntime().GetModel(catalogProvider, bundled.ID)
+	require.NotNil(t, got)
+	assert.Equal(t, override, got.Capabilities.ContextWindow)
+}
+
+func TestModelOverrideHoldsOverSavedList(t *testing.T) {
+	sb := newSandbox(t)
+	withMistralKey(t, sb)
+	probe := newCatalogRuntime(t, sb, "http://127.0.0.1:1")
+	bundled := bundledMistral(t, probe)
+	saved := *bundled
+	saved.Capabilities.ContextWindow = bundled.Capabilities.ContextWindow + 1000
+	override := bundled.Capabilities.ContextWindow + 5000
+	writeContextWindowOverride(t, sb, bundled.ID, override)
+	s := newCatalogServer(t, &saved, http.StatusOK, bundled.ID)
+	r := newCatalogRuntime(t, sb, s.URL)
+	refreshUsed(t, r)
+	require.FileExists(t, filepath.Join(sb.agentDir, "models-store.json"))
+
+	fresh := newCatalogRuntime(t, sb, s.URL)
+
+	for name, rt := range map[string]*Runtime{"after refresh": r, "from the store": fresh} {
+		got := rt.svcs.ModelRuntime().GetModel(catalogProvider, bundled.ID)
+		require.NotNil(t, got, name)
+		assert.Equal(t, override, got.Capabilities.ContextWindow, name)
+	}
 }
 
 func TestForcedFetchDuringBackgroundRequestResolves(t *testing.T) {
