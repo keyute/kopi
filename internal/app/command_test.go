@@ -3,7 +3,10 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/MichaelKinsy/PiG/ai"
 	"github.com/stretchr/testify/assert"
@@ -287,7 +290,7 @@ func TestModelCommandHoldsTurnsAndSwitchesUntilTheChangeEnds(t *testing.T) {
 	_, err := h.c.Submit(t.Context(), Main, "/model "+otherRef)
 	require.NoError(t, err)
 	h.tasks.end(endedTask("t1"))
-	for _, text := range []string{"/model " + otherRef, "/new", "/effort high", "hello"} {
+	for _, text := range []string{"/model " + otherRef, "/new", "/resume some-id", "/login " + fauxProvider, "/logout " + fauxProvider, "/effort high", "hello"} {
 		_, err = h.c.Submit(t.Context(), Main, text)
 		assert.ErrorIs(t, err, ErrBusy, text)
 	}
@@ -298,6 +301,63 @@ func TestModelCommandHoldsTurnsAndSwitchesUntilTheChangeEnds(t *testing.T) {
 	receiveEnd(t, ends)
 	assert.Equal(t, 1, other.CallCount(), "the woken turn runs on the new model")
 	assertSwitchDone(t, h)
+}
+
+func TestCloseWhileModelChangeWaitsForLifeChangesNothing(t *testing.T) {
+	pigruntimetest.ClearEnv(t)
+	h, _ := openHarness(t, Config{})
+	_, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
+	before := h.c.Model()
+	changed := subscribeTo[event.ModelChanged](h.c)
+	errs := subscribeTo[event.Error](h.c)
+
+	h.c.life.Lock()
+	closed := make(chan error, 1)
+	go func() { closed <- h.c.Close(t.Context()) }()
+	// Close is queued on life first, so it runs before the change does.
+	waitBlockedOnLife(t, "(*Controller).Close(", 1)
+	_, err := h.c.Submit(t.Context(), Main, "/model "+otherRef)
+	require.NoError(t, err)
+	waitBlockedOnLife(t, "(*Controller).modelCommand.func", 1)
+	h.c.life.Unlock()
+
+	require.NoError(t, <-closed)
+	// The change's goroutine ends with endModelChange, which takes mu.
+	deadline := time.Now().Add(waitLimit)
+	for !modelChangeEnded(h.c) {
+		require.True(t, time.Now().Before(deadline), "the model change never ended")
+		runtime.Gosched()
+	}
+	assert.Equal(t, before, h.c.Model())
+	assert.Empty(t, changed)
+	assert.Empty(t, errs)
+}
+
+func modelChangeEnded(c *Controller) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.changingModel
+}
+
+// waitBlockedOnLife returns once n goroutines whose stack holds frame are
+// blocked locking a mutex.
+func waitBlockedOnLife(t *testing.T, frame string, n int) {
+	t.Helper()
+	deadline := time.Now().Add(waitLimit)
+	buf := make([]byte, 1<<20)
+	for time.Now().Before(deadline) {
+		found := 0
+		for _, g := range strings.Split(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
+			if strings.Contains(g, "[sync.Mutex.Lock") && strings.Contains(g, frame) {
+				found++
+			}
+		}
+		if found >= n {
+			return
+		}
+		runtime.Gosched()
+	}
+	t.Fatalf("no goroutine blocked on life in %s", frame)
 }
 
 func TestModelCommandLeavesRunningSubagentsAlone(t *testing.T) {

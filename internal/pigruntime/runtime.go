@@ -51,15 +51,14 @@ type Runtime struct {
 	refreshed map[string]error
 	fetching  map[string]chan struct{}
 	// used holds the providers whose models this process resolved. stopRefresh
-	// and refreshDone are set once StartModelListRefresh has run; refreshDone
-	// closes when its goroutine returns.
+	// is set once StartModelListRefresh has run.
 	used        map[string]struct{}
 	stopRefresh context.CancelFunc
-	refreshDone chan struct{}
 	// refreshCtx lives until stopRefresh; refreshLateLocked derives from it.
-	// lateRefreshes counts the refreshes of providers first used after start.
-	refreshCtx    context.Context
-	lateRefreshes sync.WaitGroup
+	// refreshes counts the startup refresh and the refreshes of providers first
+	// used after start.
+	refreshCtx context.Context
+	refreshes  sync.WaitGroup
 	// openURL opens a sign-in URL in the user's browser.
 	openURL func(string) error
 	// limitsClient sends the plan-limit requests.
@@ -418,9 +417,10 @@ func (r *Runtime) Models(ctx context.Context) ([]Model, error) {
 }
 
 // SetModel switches s to the model ref names, keeping its history. ref is
-// checked as Open checks it. A failure before the switch leaves the model; one
-// from PiG's persisting of the change does not: it sets the agent's model before
-// it appends the change to the session file (PiG v0.7.0 coding/session.go
+// checked as Open checks it. On ErrModelNotSaved the model changed and the
+// effort was applied; any other error leaves the model. PiG sets the agent's
+// model before it appends the change to the session file, and returns on a
+// failed append before it sets the level (PiG v0.7.0 coding/session.go
 // beginModelChangeState; recheck on a bump).
 func (r *Runtime) SetModel(ctx context.Context, s *Session, ref string) error {
 	model, err := r.usableModel(ctx, ref)
@@ -525,16 +525,12 @@ func (r *Runtime) Close() {
 	// The refresh must have returned before the runtime it calls is closed; PiG's
 	// close then joins any store write it left (PiG v0.7.0; recheck on a bump).
 	r.refreshMu.Lock()
-	stop, done := r.stopRefresh, r.refreshDone
-	if stop != nil {
+	if r.stopRefresh != nil {
 		// Under refreshMu, so refreshLateLocked starts nothing after it.
-		stop()
+		r.stopRefresh()
 	}
 	r.refreshMu.Unlock()
-	if stop != nil {
-		<-done
-	}
-	r.lateRefreshes.Wait()
+	r.refreshes.Wait()
 	if err := r.rt.Close(); err != nil {
 		slog.Warn("failed to close pig runtime", "error", err)
 	}

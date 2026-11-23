@@ -1025,7 +1025,7 @@ func (c *Controller) beginSwitch(cancelWait context.CancelFunc) (*sessionSwitch,
 		c.mu.Unlock()
 		return nil, ErrLoggingIn
 	}
-	if c.switching != nil || c.changingModel {
+	if c.busyLocked() {
 		c.mu.Unlock()
 		return nil, ErrBusy
 	}

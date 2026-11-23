@@ -117,7 +117,7 @@ func (c *Controller) effortCommand(_ context.Context, arg string) error {
 	case c.closed:
 		c.mu.Unlock()
 		return ErrNoSession
-	case c.switching != nil || c.changingModel:
+	case c.busyLocked():
 		c.mu.Unlock()
 		return ErrBusy
 	}
@@ -200,11 +200,12 @@ func (c *Controller) modelCommand(ctx context.Context, ref string) error {
 }
 
 func (c *Controller) changeModel(ctx context.Context, sess *pigruntime.Session, provider, ref string) error {
-	if err := c.rt.SetModel(ctx, sess, ref); err != nil {
-		if errors.Is(err, pigruntime.ErrNoCredential) {
-			return fmt.Errorf("%w: run /login %s", err, provider)
+	saveErr := c.rt.SetModel(ctx, sess, ref)
+	if saveErr != nil && !errors.Is(saveErr, pigruntime.ErrModelNotSaved) {
+		if errors.Is(saveErr, pigruntime.ErrNoCredential) {
+			return fmt.Errorf("%w: run /login %s", saveErr, provider)
 		}
-		return err
+		return saveErr
 	}
 	c.mu.Lock()
 	c.model = ref
@@ -212,6 +213,9 @@ func (c *Controller) changeModel(ctx context.Context, sess *pigruntime.Session, 
 	c.offerSearch(sess)
 	c.limits.force()
 	c.relay.emit(event.ModelChanged{Model: ref})
+	if saveErr != nil {
+		return saveErr
+	}
 	c.relay.emit(event.Notice{Text: fmt.Sprintf("Using %s until kopi exits. Set \"model\" in %s to keep it.", ref, c.cfg.ConfigFile)})
 	return nil
 }
@@ -227,7 +231,9 @@ func (c *Controller) beginModelChange() (*pigruntime.Session, error) {
 	switch {
 	case c.closed:
 		return nil, ErrNoSession
-	case c.switching != nil || c.changingModel:
+	case c.login != nil:
+		return nil, ErrLoggingIn
+	case c.busyLocked():
 		return nil, ErrBusy
 	case c.main.work != nil:
 		return nil, fmt.Errorf("failed to change model: %w", ErrWorkStillRunning)

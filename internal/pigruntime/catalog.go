@@ -97,10 +97,9 @@ func (r *Runtime) StartModelListRefresh() {
 	providers := slices.Sorted(maps.Keys(r.used))
 	r.refreshCtx, r.stopRefresh = context.WithCancel(context.Background())
 	ctx, cancel := context.WithTimeout(r.refreshCtx, modelListRefreshTimeout)
-	done := make(chan struct{})
-	r.refreshDone = done
+	r.refreshes.Add(1)
 	go func() {
-		defer close(done)
+		defer r.refreshes.Done()
 		defer cancel()
 		if len(providers) == 0 {
 			return
@@ -119,9 +118,9 @@ func (r *Runtime) refreshLateLocked(provider string) {
 	}
 	done := make(chan struct{})
 	r.fetching[provider] = done
-	r.lateRefreshes.Add(1)
+	r.refreshes.Add(1)
 	go func() {
-		defer r.lateRefreshes.Done()
+		defer r.refreshes.Done()
 		ctx, cancel := context.WithTimeout(r.refreshCtx, modelListRefreshTimeout)
 		defer cancel()
 		r.refreshModelList(ctx, []string{provider})

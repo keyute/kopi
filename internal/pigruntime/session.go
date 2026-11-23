@@ -213,20 +213,26 @@ func (s *Session) SetEffort(e Effort) error {
 }
 
 // setModel switches the model, then asks again for the level the session was
-// given, which the old model may have clamped.
+// given, which the old model may have clamped. A failure that leaves the
+// session on model, PiG's persisting of the change, wraps ErrModelNotSaved; it
+// returns before PiG applies the level, so asked is applied here.
 func (s *Session) setModel(model *ai.Model) error {
 	s.effortMu.Lock()
 	defer s.effortMu.Unlock()
-	if err := s.inner.SetModel(model); err != nil {
-		return err
+	err := s.inner.SetModel(model)
+	if err != nil {
+		now := s.inner.Model()
+		if now.ProviderMeta.ProviderID != model.ProviderMeta.ProviderID || now.ID != model.ID {
+			return err
+		}
+		err = fmt.Errorf("%w: %w", ErrModelNotSaved, err)
 	}
-	if s.asked == "" {
-		return nil
+	if s.asked != "" {
+		if lerr := s.inner.SetThinkingLevel(s.asked); lerr != nil {
+			slog.Warn("failed to restore the effort after the model change", "error", lerr)
+		}
 	}
-	if err := s.inner.SetThinkingLevel(s.asked); err != nil {
-		slog.Warn("failed to restore the effort after the model change", "error", err)
-	}
-	return nil
+	return err
 }
 
 // raise lifts the level to e for the rest of the Send, remembering the level
