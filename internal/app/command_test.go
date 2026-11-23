@@ -314,6 +314,7 @@ func TestModelCommandFailures(t *testing.T) {
 	require.NoError(t, err)
 	assert.ErrorIs(t, receiveEvent(t, errs).Err, pigruntime.ErrUnknownModel)
 	assert.Equal(t, before, h.c.Model())
+	assertModelChangeDone(t, h)
 
 	_, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("done")})
