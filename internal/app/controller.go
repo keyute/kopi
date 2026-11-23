@@ -76,8 +76,8 @@ type Config struct {
 	// Agent or SendMessage tool.
 	Agents []subagent.Definition
 	// AgentTools are the tools a subagent may have, besides the MCP servers'
-	// tools; Agent, SendMessage, TaskStop and ToolSearch are never given to
-	// one.
+	// tools; Agent, SendMessage, TaskStop, ToolSearch and Workflow are never
+	// given to one.
 	AgentTools []tool.Tool
 	// Plans is the root session's plan file; nil means there is none, and no
 	// ExitPlanMode tool.

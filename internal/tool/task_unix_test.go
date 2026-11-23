@@ -90,7 +90,8 @@ func TestTasksTimeoutMovesCommand(t *testing.T) {
 }
 
 func TestTasksDetachMovesCommand(t *testing.T) {
-	sh := NewShell(t.TempDir(), nil)
+	outputs, dir := newSavedOutputs(t)
+	sh := NewShell(t.TempDir(), nil).WithOutputs(outputs)
 	m, events := newTasks(t)
 	command, fifo := echoFIFO(t)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -104,7 +105,8 @@ func TestTasksDetachMovesCommand(t *testing.T) {
 
 	require.NoError(t, r.err)
 	assert.Empty(t, r.out)
-	assert.Equal(t, Moved{ID: "t1"}, r.moved)
+	assert.Equal(t, dir, filepath.Dir(r.moved.OutputFile))
+	assert.Equal(t, Moved{ID: "t1", OutputFile: r.moved.OutputFile}, r.moved)
 	assert.False(t, m.Foreground())
 	assert.False(t, m.Detach())
 	assert.Equal(t, TaskRunning, nextEvent(t, events).Status)

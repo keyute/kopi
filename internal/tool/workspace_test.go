@@ -1012,6 +1012,8 @@ func TestWorkspaceFileSubject(t *testing.T) {
 
 	assert.Equal(t, "a.go", subject("a.go"))
 	assert.Equal(t, subject("a.go"), subject(filepath.Join(dir, "a.go")), "one file however it is written")
+	assert.Equal(t, subject("a.go"), subject("./a.go"))
+	assert.Equal(t, subject("a.go"), subject(dir+"/./a.go"))
 	assert.Equal(t, "plan", subject(plan))
 	assert.Equal(t, "output bash-1.txt", subject(filepath.Join(outputs, "bash-1.txt")))
 	assert.Empty(t, ws.fileSubject(json.RawMessage(`{`), ""))

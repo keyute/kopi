@@ -497,7 +497,7 @@ func (w *Workspace) fileOutcome(verb string) func(json.RawMessage, string) (stri
 }
 
 // fileSubject is the Display.Subject of a tool acting on a file_path: the file
-// as a row names it.
+// as a row names it, cleaned so that one file written two ways counts once.
 func (w *Workspace) fileSubject(raw json.RawMessage, _ string) string {
 	var args struct {
 		FilePath string `json:"file_path"`
@@ -506,7 +506,7 @@ func (w *Workspace) fileSubject(raw json.RawMessage, _ string) string {
 	if args.FilePath == "" {
 		return ""
 	}
-	return w.shown(args.FilePath)
+	return filepath.Clean(w.shown(args.FilePath))
 }
 
 func (w *Workspace) relative(path string) (string, error) {

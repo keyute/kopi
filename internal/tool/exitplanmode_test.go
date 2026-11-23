@@ -125,6 +125,7 @@ func TestExitPlanModeReportsTheAnswer(t *testing.T) {
 		want    string
 	}{
 		{"approved", PlanAnswer{Approved: true}, policy.Execute, "", "The user approved the plan. The session is in execute mode. Carry out the plan now."},
+		{"approved but back in plan", PlanAnswer{Approved: true}, policy.Plan, "", "The user approved the plan. The session is in plan mode."},
 		{"feedback", PlanAnswer{Feedback: "smaller steps"}, policy.Plan, "", "The user asked for changes to the plan. The session is in plan mode. Their feedback:\nsmaller steps"},
 		{"dismissed", PlanAnswer{}, policy.Plan, "", "The user dismissed the plan without answering. The session is in plan mode."},
 		{"approved and edited", PlanAnswer{Approved: true}, policy.Execute, "# Edited\n", "The user approved the plan. The user edited the plan file before answering. The session is in execute mode. Carry out the plan now."},

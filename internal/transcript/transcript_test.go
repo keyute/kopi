@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -286,6 +287,32 @@ func TestRestoreMatchesApply(t *testing.T) {
 	}
 	restored.Restore(events)
 	assert.Equal(t, live.Blocks(), restored.Blocks())
+}
+
+func TestGroupCountsTheSubjectsOfItsCalls(t *testing.T) {
+	edited := tool.Action{Verb: "Edited", One: "file", Many: "files"}
+	events := []event.Event{event.TurnStart{Prompt: "go"}}
+	for i, subject := range []string{"a.go", "b.go", "a.go"} {
+		id := strconv.Itoa(i)
+		events = append(events,
+			event.ToolStart{CallID: id, Name: "Edit", Title: "Edit " + subject, Done: "Edited " + subject, Action: edited},
+			event.ToolEnd{CallID: id, Name: "Edit", Subject: subject})
+	}
+	var live, restored Transcript
+	for _, ev := range events {
+		live.Apply(ev)
+	}
+	restored.Restore(events)
+
+	for _, tr := range []Transcript{live, restored} {
+		var sentences []string
+		for _, b := range tr.Blocks() {
+			if g, ok := b.(Group); ok {
+				sentences = append(sentences, g.Sentence())
+			}
+		}
+		assert.Equal(t, []string{"Edited 2 files"}, sentences)
+	}
 }
 
 func TestRestoreMatchesApplyForOutcomeRows(t *testing.T) {

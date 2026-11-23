@@ -19,12 +19,25 @@ func NewTaskStop(tasks *Tasks) Tool {
 		Name:        "TaskStop",
 		Label:       "TaskStop",
 		Description: "Stops a running background task, a command or a subagent; a command is killed with the processes it started.",
-		Parameters:  taskIDParameters(),
-		Capability:  policy.Read,
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"task_id": map[string]any{
+					"type":        "string",
+					"description": "The task id, such as t1.",
+				},
+			},
+			"required":             []string{"task_id"},
+			"additionalProperties": false,
+		},
+		Capability: policy.Read,
 		Run: func(_ context.Context, raw json.RawMessage, admit func(policy.Target) (policy.Mode, error)) (Result, error) {
-			args, err := decodeTaskIDArgs(raw)
+			args, err := decodeArgs[taskIDArgs](raw)
 			if err != nil {
 				return Result{}, err
+			}
+			if strings.TrimSpace(args.TaskID) == "" {
+				return Result{}, fmt.Errorf("%w: task_id is required", ErrInvalidArgs)
 			}
 			if _, err := admit(policy.Target{}); err != nil {
 				return Result{}, err
@@ -71,31 +84,6 @@ func taskStopSummary(output string) string {
 		return summary
 	}
 	return ""
-}
-
-func taskIDParameters() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"task_id": map[string]any{
-				"type":        "string",
-				"description": "The task id, such as t1.",
-			},
-		},
-		"required":             []string{"task_id"},
-		"additionalProperties": false,
-	}
-}
-
-func decodeTaskIDArgs(raw json.RawMessage) (taskIDArgs, error) {
-	args, err := decodeArgs[taskIDArgs](raw)
-	if err != nil {
-		return args, err
-	}
-	if strings.TrimSpace(args.TaskID) == "" {
-		return args, fmt.Errorf("%w: task_id is required", ErrInvalidArgs)
-	}
-	return args, nil
 }
 
 // taskTitle runs before the arguments are validated, so it decodes leniently.

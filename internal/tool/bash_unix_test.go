@@ -208,6 +208,26 @@ func TestBashBackgroundResultNamesTheOutputFile(t *testing.T) {
 	}
 }
 
+func TestBashBackgroundResultWithoutWakePromisesNoReport(t *testing.T) {
+	outputs, _ := newSavedOutputs(t)
+	dir := t.TempDir()
+	tasks := NewTasks()
+	t.Cleanup(tasks.StopAll)
+	changes := taskChanges(tasks)
+	sh := NewShell(dir, nil).WithOutputs(outputs)
+	tool := NewBash(sh, sh, tasks, true, false)
+	command, started, _ := holdFIFO(t, dir)
+	args, err := json.Marshal(map[string]any{"command": command, "run_in_background": true})
+	require.NoError(t, err)
+
+	out, err := tool.Run(t.Context(), args, allowTarget)
+
+	require.NoError(t, err)
+	running := waitChange(t, changes)
+	assert.Equal(t, "Background task t1 started, writing its output to "+running.OutputFile+".", out.Text)
+	waitFor(t, started, "the command to start")
+}
+
 func TestBashDetachMovesCommandToBackground(t *testing.T) {
 	dir := t.TempDir()
 	tool, tasks := newTaskBash(t, dir)

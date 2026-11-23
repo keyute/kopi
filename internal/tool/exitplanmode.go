@@ -115,7 +115,7 @@ func planResult(a PlanAnswer, mode policy.Mode, edited bool) string {
 		text += planEdited
 	}
 	text += fmt.Sprintf(" The session is in %s mode.", mode)
-	if a.Approved {
+	if a.Approved && mode == policy.Execute {
 		text += planCarryOut
 	}
 	if !a.Approved && a.Feedback != "" {

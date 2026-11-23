@@ -3434,6 +3434,17 @@ func TestHeadlessPromptCarriesTheModeLine(t *testing.T) {
 	assert.Equal(t, []string{"hi", h.planLine()}, receive(t, requests).UserTexts)
 }
 
+func TestUnattendedPlanModeLineDoesNotNameExitPlanMode(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	plans := tool.NewPlans(filepath.Join(sb.Home, "plans"))
+	h := newHarness(t, sb, Config{Plans: plans, Unattended: true})
+	h.showModeLine()
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+
+	line := "The session is in plan mode. Its plan file is " + h.c.PlanFile() + "; Read, Write and Edit work on that file in both modes."
+	assert.Equal(t, [][]string{{"hi", line}}, h.userTexts(t, "hi"))
+}
+
 func TestModeLineIsToldAgainWhenItsPromptWasNotDelivered(t *testing.T) {
 	c := &Controller{authority: policy.NewAuthority()}
 	c.main = &runner{c: c}

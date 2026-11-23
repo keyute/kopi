@@ -252,10 +252,7 @@ func (b *outputBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.dir != "" && !b.closed && b.total+len(p) > 2*maxOutputPart {
-		// Head and tail still hold every byte written before p.
-		b.create()
-		b.save(b.head)
-		b.save(b.tail)
+		b.start()
 	}
 	b.save(p)
 	b.total += len(p)
@@ -282,14 +279,19 @@ func (b *outputBuffer) keep() {
 	if b.dir == "" {
 		return
 	}
-	// Head and tail still hold every byte written: a cut creates the file.
-	b.create()
-	b.save(b.head)
-	b.save(b.tail)
+	b.start()
 	if b.closed && b.f != nil {
 		_ = b.f.Close()
 		b.f = nil
 	}
+}
+
+// start creates the file with what is written so far. Head and tail still
+// hold every byte written: nothing is cut before the file exists.
+func (b *outputBuffer) start() {
+	b.create()
+	b.save(b.head)
+	b.save(b.tail)
 }
 
 // create opens the file, once. A failure is logged and the buffer carries on

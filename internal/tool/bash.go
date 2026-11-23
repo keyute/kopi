@@ -122,7 +122,7 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed, wakes bool) Tool {
 		description += "A command still running at its timeout is stopped; the error then holds the output so far."
 	} else {
 		description += "A command still running at its timeout, or one the user moves to the background, keeps running as a background task; " +
-			"run_in_background starts it as one at once. The result then gives the task id and the file its output is saved to: " +
+			"run_in_background starts it as one at once. The result then gives the task id and, when one is saved, the file its output is saved to: " +
 			"Read reads it and TaskStop stops the task."
 		timeoutText = "Milliseconds to wait for the command before it moves to the background; default 120000, at most 600000. " +
 			"Set it only for a command that needs longer than the default."
