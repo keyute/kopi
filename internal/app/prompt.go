@@ -148,8 +148,10 @@ func contextOf(total int, parts, tools []pigruntime.Size) Context {
 		c.Messages = total - estimated
 		return c
 	}
+	c.Messages = total
 	for _, n := range []*int{&c.SystemPrompt, &c.Tools, &c.Instructions, &c.Skills, &c.Agents, &c.MCP} {
 		*n = *n * total / estimated
+		c.Messages -= *n
 	}
 	return c
 }

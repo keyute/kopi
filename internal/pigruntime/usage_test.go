@@ -226,7 +226,7 @@ func TestRecordSumsDurationsAndCountsCompactions(t *testing.T) {
 	timed := func(record string, ms int) string {
 		return strings.Replace(record, `"timestamp"`, fmt.Sprintf(`"durationMs":%d,"timestamp"`, ms), 1)
 	}
-	appendHistoryMessage(t, manager, `{"role":"user","content":"hi","timestamp":1}`)
+	appendHistoryMessage(t, manager, timed(`{"role":"user","content":"hi","timestamp":1}`, 5000))
 	kept := appendHistoryMessage(t, manager, timed(assistantRecord("p1", "m1", "", 2, usageJSON(100, 10, 0, 0, 0.5, "")), 1500))
 	appendHistoryMessage(t, manager, timed(`{"role":"toolResult","toolCallId":"call-1","toolName":"Probe","content":[{"type":"text","text":"out"}],"isError":false,"timestamp":3}`, 250))
 	appendHistoryMessage(t, manager, `{"role":"toolResult","toolCallId":"call-2","toolName":"Probe","content":[{"type":"text","text":"never ran"}],"isError":true,"timestamp":4}`)

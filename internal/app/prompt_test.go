@@ -245,6 +245,13 @@ func TestContextOfSortsPartsAndToolsIntoCategories(t *testing.T) {
 	assert.Equal(t, Context{SystemPrompt: 100, Tools: 100, Instructions: 50, Skills: 7, Agents: 9, MCP: 16, Messages: 718}, got)
 }
 
+func TestContextOfScalingPreservesTheTotal(t *testing.T) {
+	got := contextOf(3, []pigruntime.Size{{Name: "preamble", Tokens: 2}}, []pigruntime.Size{{Name: "Read", Tokens: 2}})
+
+	assert.Equal(t, Context{SystemPrompt: 1, Tools: 1, Messages: 1}, got)
+	assert.Equal(t, 3, got.SystemPrompt+got.Tools+got.Instructions+got.Skills+got.Agents+got.MCP+got.Messages)
+}
+
 func TestContextOfScalesEstimatesAboveTheTotal(t *testing.T) {
 	got := contextOf(100, []pigruntime.Size{{Name: "preamble", Tokens: 150}}, []pigruntime.Size{{Name: "Read", Tokens: 50}})
 

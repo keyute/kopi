@@ -147,17 +147,23 @@ func (s *Session) Record() Record {
 			continue
 		}
 		var record struct {
-			Message agent.AgentMessage `json:"message"`
+			Message struct {
+				Role       string `json:"role"`
+				DurationMs *int64 `json:"durationMs"`
+			} `json:"message"`
 		}
 		if err := json.Unmarshal(entry.Raw(), &record); err != nil {
 			return rec
 		}
 		m := record.Message
-		if m.Assistant != nil && m.Assistant.DurationMs != nil {
-			model += *m.Assistant.DurationMs
+		if m.DurationMs == nil {
+			continue
 		}
-		if m.ToolResult != nil && m.ToolResult.DurationMs != nil {
-			tools += *m.ToolResult.DurationMs
+		switch m.Role {
+		case "assistant":
+			model += *m.DurationMs
+		case "toolResult":
+			tools += *m.DurationMs
 		}
 	}
 	rec.ModelTime, rec.ToolTime = time.Duration(model)*time.Millisecond, time.Duration(tools)*time.Millisecond

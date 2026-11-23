@@ -69,7 +69,7 @@ func (u *usageDialog) seen(m *model, msg tea.Msg) bool {
 	switch msg.(type) {
 	case event.SessionChanged:
 		return false
-	case event.TurnEnd, event.ToolEnd, event.TasksChanged, event.LimitsChanged, event.ModelChanged, event.SessionNamed:
+	case event.TurnStart, event.ModeChanged, event.TurnEnd, event.ToolEnd, event.TasksChanged, event.LimitsChanged, event.ModelChanged, event.SessionNamed:
 		u.u, u.bodyWidth = m.c.Usage(), 0
 	}
 	return true
