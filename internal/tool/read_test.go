@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -404,4 +405,18 @@ func TestToolsUseAdmittedHandlesAfterParentRetarget(t *testing.T) {
 			assert.Equal(t, []string{"file"}, listDir(t, filepath.Join(dir, "pinned")))
 		})
 	}
+}
+
+func TestReadDisplayOutcome(t *testing.T) {
+	ws, plan, outputs := newPlanWorkspace(t, t.TempDir())
+	d := NewRead(ws).Display
+
+	_, action := d.Outcome(json.RawMessage(`{"file_path":`+strconv.Quote(plan)+`}`), "")
+	assert.Equal(t, Action{Verb: "Read", One: "the plan"}, action)
+	_, action = d.Outcome(json.RawMessage(`{"file_path":`+strconv.Quote(filepath.Join(outputs, "x.txt"))+`}`), "")
+	assert.Equal(t, Action{Verb: "Read", One: "output file", Many: "output files"}, action)
+	_, action = d.Outcome(json.RawMessage(`{"file_path":"a.go"}`), "")
+	assert.Equal(t, Action{}, action)
+	_, action = d.Outcome(json.RawMessage(`{"file_path":"plan"}`), "")
+	assert.Equal(t, Action{}, action)
 }

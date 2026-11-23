@@ -174,7 +174,7 @@ func TestHistoryRestoresNotices(t *testing.T) {
 	assert.Equal(t, []event.Event{
 		event.TurnStart{Prompt: "go"},
 		event.ToolStart{CallID: "call-1", Name: "Probe", Args: "{}"},
-		event.ToolEnd{CallID: "call-1", Name: "Probe", Output: toolOutput},
+		event.ToolEnd{CallID: "call-1", Name: "Probe", Args: "{}", Output: toolOutput},
 		n.Shown,
 		event.TextDelta{Text: "noted"},
 	}, resumed.History())
@@ -288,7 +288,7 @@ func TestHistoryEndsFailedAndInterruptedTurns(t *testing.T) {
 		assert.Equal(t, []event.Event{
 			event.TurnStart{Prompt: "block"},
 			event.ToolStart{CallID: "call-1", Name: "Probe", Args: "{}"},
-			event.ToolEnd{CallID: "call-1", Name: "Probe", Output: context.Canceled.Error(), IsError: true},
+			event.ToolEnd{CallID: "call-1", Name: "Probe", Args: "{}", Output: context.Canceled.Error(), IsError: true},
 			event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}},
 		}, resume(t, r, sess.ID(), block).History())
 	})
@@ -325,7 +325,7 @@ func TestHistoryRetainsCompactedConversationOnActiveBranch(t *testing.T) {
 		event.TurnStart{Prompt: "old prompt"},
 		event.TextDelta{Text: "old answer"},
 		event.ToolStart{CallID: "old-call", Name: "Probe", Args: "{}"},
-		event.ToolEnd{CallID: "old-call", Name: "Probe", Output: "old output"},
+		event.ToolEnd{CallID: "old-call", Name: "Probe", Args: "{}", Output: "old output"},
 		event.TextDelta{Text: "old conclusion"},
 		event.TurnStart{Prompt: "new prompt"},
 		event.TextDelta{Text: "new answer"},
@@ -363,7 +363,7 @@ func TestHistoryOmitsFailedRetryAttempt(t *testing.T) {
 		event.TextDelta{Text: "earlier answer"},
 		event.TurnStart{Prompt: "try again"},
 		event.ToolStart{CallID: "call-1", Name: "Probe", Args: "{}"},
-		event.ToolEnd{CallID: "call-1", Name: "Probe", Output: "kept output"},
+		event.ToolEnd{CallID: "call-1", Name: "Probe", Args: "{}", Output: "kept output"},
 		event.TextDelta{Text: "recovered"},
 	}, resume(t, r, sess.ID()).History())
 }
@@ -812,4 +812,32 @@ func TestSavedHistoryOfAMissingFileIsNotSavedAndCreatesNothing(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrNotSaved)
 	assert.NoFileExists(t, path)
+}
+
+func TestHistoryRestoresTaskResultEnvelopes(t *testing.T) {
+	for _, output := range []string{
+		"Task t1 completed.\nCommand: make\nx\n",
+		"Task t1 completed.\nAgent: explore › look\nx\n",
+		"Task t1 completed.\nWorkflow: audit\nx\n",
+		"Task t1 completed.\nordinary output\nx\n",
+		"Task t1 completed. [named task]\nCommand: make\nx\n",
+	} {
+		t.Run(output, func(t *testing.T) {
+			r, _ := newTestRuntime(t, newSandbox(t))
+			sess := openTestSession(t, r)
+			manager := sess.inner.SessionManager()
+			appendHistoryMessage(t, manager, `{"role":"user","content":"go","timestamp":1}`)
+			appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"toolCall","id":"call-1","name":"TaskOutput","arguments":{"task_id":"t1"}}],"stopReason":"toolUse","timestamp":2}`)
+			encoded, err := json.Marshal(output)
+			require.NoError(t, err)
+			appendHistoryMessage(t, manager, `{"role":"toolResult","toolCallId":"call-1","toolName":"TaskOutput","content":[{"type":"text","text":`+string(encoded)+`}],"isError":false,"timestamp":3}`)
+			require.NoError(t, sess.Close(t.Context()))
+
+			assert.Equal(t, []event.Event{
+				event.TurnStart{Prompt: "go"},
+				event.ToolStart{CallID: "call-1", Name: "TaskOutput", Args: `{"task_id":"t1"}`},
+				event.ToolEnd{CallID: "call-1", Name: "TaskOutput", Args: `{"task_id":"t1"}`, Output: output},
+			}, resume(t, r, sess.ID(), tool.NewTaskOutput(nil)).History())
+		})
+	}
 }

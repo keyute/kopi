@@ -82,8 +82,13 @@ type Display struct {
 	Solo bool
 	// Preview is what an approval prompt shows of the change a call would make.
 	Preview func(args json.RawMessage) []PreviewLine
-	// Action is how a group counts calls: "Read 3 files".
+	// Action is how a group counts calls: "Read 3 files". With no Many the
+	// clause is not counted: "Searched the web", "Searched the web 3 times".
 	Action Action
+	// Outcome is the done title and the group action of a successful call when
+	// either depends on the call's arguments or its result; a zero value keeps
+	// Done or Action.
+	Outcome func(args json.RawMessage, output string) (done string, action Action)
 }
 
 type Action struct{ Verb, One, Many string }

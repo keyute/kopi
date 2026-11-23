@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -958,4 +959,44 @@ func TestWorkspaceShown(t *testing.T) {
 		other := filepath.Join(filepath.Dir(plans.Path()), "s2.md")
 		assert.Equal(t, other, withPlans.shown(other))
 	})
+}
+
+// newPlanWorkspace returns a workspace over dir that reaches a plan file and a
+// saved output folder, and the paths of both.
+func newPlanWorkspace(t *testing.T, dir string) (ws *Workspace, plan, outputs string) {
+	t.Helper()
+	plans := NewPlans(filepath.Join(t.TempDir(), "plans"))
+	require.NoError(t, plans.Select("s1"))
+	saved, outputDir := newSavedOutputs(t)
+	return newWorkspace(t, dir, nil).WithPlans(plans).WithOutputs(saved), plans.Path(), outputDir
+}
+
+func TestWorkspaceFileOutcome(t *testing.T) {
+	dir := t.TempDir()
+	ws, plan, outputs := newPlanWorkspace(t, dir)
+	outcome := ws.fileOutcome("Read")
+	args := func(path string) json.RawMessage {
+		raw, err := json.Marshal(map[string]string{"file_path": path})
+		require.NoError(t, err)
+		return raw
+	}
+
+	for _, tc := range []struct {
+		name, path string
+		want       Action
+	}{
+		{"plan", plan, Action{Verb: "Read", One: "the plan"}},
+		{"output file", filepath.Join(outputs, "bash-1.txt"), Action{Verb: "Read", One: "output file", Many: "output files"}},
+		{"workspace file", "a.go", Action{}},
+		{"workspace file named plan", "plan", Action{}},
+		{"workspace file named like an output", "output bash-1.txt", Action{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			done, action := outcome(args(tc.path), "")
+			assert.Empty(t, done)
+			assert.Equal(t, tc.want, action)
+		})
+	}
+	_, action := outcome(json.RawMessage(`{`), "")
+	assert.Equal(t, Action{}, action)
 }

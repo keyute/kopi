@@ -21,7 +21,7 @@ type Tasks interface {
 	Foreground() bool
 	List() []tool.TaskInfo
 	Output(id string) (tool.TaskInfo, error)
-	Stop(id string) (tool.TaskInfo, error)
+	Stop(id string) (info tool.TaskInfo, stopped bool, err error)
 	StopAll()
 	StartAgent(agent, description string, stop func()) *tool.AgentTask
 }
@@ -46,20 +46,34 @@ func (c *Controller) taskChanged(info tool.TaskInfo) {
 }
 
 func notice(info tool.TaskInfo, head string) pigruntime.Notice {
-	text := head
+	var lines []string
 	tail := outputTail(info.Output)
 	if tail != "" {
-		text += "\n" + tail
+		lines = append(lines, tail)
 	}
 	// A tail that still holds the output's cut marker already names the file.
 	if info.OutputFile != "" && !strings.Contains(tail, info.OutputFile) {
-		text += "\n[Output saved to " + info.OutputFile + "]"
+		lines = append(lines, "[Output saved to "+info.OutputFile+"]")
 	}
-	return pigruntime.Notice{Text: text, Shown: taskEnded(info)}
+	body := strings.Join(lines, "\n")
+	shown := taskEnded(info)
+	if info.Agent == "" {
+		shown.Result = body
+	}
+	if body != "" {
+		head += "\n" + body
+	}
+	return pigruntime.Notice{Text: head, Shown: shown}
 }
 
+// taskEnded is info as the transcript draws its end; a task that did not fail
+// has no reason to show.
 func taskEnded(info tool.TaskInfo) event.TaskEnded {
-	return event.TaskEnded{ID: info.ID, Agent: info.Agent, Command: info.Command, Status: string(info.Status), Elapsed: info.Ended.Sub(info.Started)}
+	shown := event.TaskEnded{ID: info.ID, Agent: info.Agent, Command: info.Command, Status: string(info.Status), Elapsed: info.Ended.Sub(info.Started), Result: info.Result}
+	if info.Status == tool.TaskFailed {
+		shown.Reason = info.Reason
+	}
+	return shown
 }
 
 func commandLine(command string) string {
@@ -131,7 +145,7 @@ func (c *Controller) StopTask(id string) error {
 		}
 		return nil
 	}
-	info, err = c.cfg.Tasks.Stop(id)
+	info, _, err = c.cfg.Tasks.Stop(id)
 	if err != nil {
 		return err
 	}

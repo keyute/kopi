@@ -70,7 +70,7 @@ Defaults; change them with [`keys`](configuration.md#keys).
 - Ctrl+V pastes text or an image from the clipboard.
 - Mouse wheel or PgUp/PgDn scrolls the transcript; while the open dialog's body is cut (an [approval](permissions.md#approval-dialog) preview, a `/tasks` output, an [`AskUserQuestion`](tools.md#askuserquestion) preview or review) they scroll that instead. PgUp/PgDn never move the cursor in a dialog's text field.
 - Keys while the model asks you a question are listed under [`AskUserQuestion`](tools.md#askuserquestion).
-- Ctrl+O opens every group and every row that opens, and every capped failure, until pressed again; see [Transcript](#transcript).
+- Ctrl+O opens every group and every row that opens, and every capped failure, until pressed again, including every agent's prompt and every message to an agent; see [Transcript](#transcript).
 
 ## Transcript
 
@@ -86,8 +86,39 @@ Each tool call is a row. It names the call by the tool while it runs, while it w
 ```
 
 - A run of successful calls folds into a group, `Read 3 files, ran 2 commands`; click it or press Ctrl+O to list its calls. A call that did not succeed, and the question and plan-approval rows below, are never in a group.
+- A group clause uses its rows' verb and a noun that covers every row in it: a `Read` of the plan and of a saved output file count as `read the plan` and `read 1 output file`, apart from `read 3 files`; a `Skill` call that reads a file of a skill (`Read skill <name> <file>`) counts as `read 1 skill file`.
+- Some clauses are not counted: `searched the web`, `searched tools`, `read the plan`, `wrote the plan`, `edited the plan`. Repeats read `searched the web 3 times`, `edited the plan 3 times`.
+- A background command counts as `started 1 shell`, a message to an agent as `messaged 1 agent`, a `TaskOutput` or `TaskStop` on an agent, shell or workflow as `checked on 2 agents`, `stopped 1 shell` (a `TaskStop` on a task that was already over counts as `checked on 1 agent`), and a `WebFetch` that only got a redirect as `hit 1 redirect`.
 - A group counts the commands that ran outside the [sandbox](sandbox.md#outside-the-sandbox): `ran 9 commands (1 unsandboxed)`. A succeeded command's own row ends `· unsandboxed`.
 - A question you answered (`Asked about …`) and a plan decision (`Plan approval`) stay visible, with your answer or decision on the line under them.
+
+Rows for background work name the agent (`researcher › survey peers`), the shell command (`shell npm run dev`) or the workflow (`workflow › review`), not a task id:
+
+```text
+• Started npm run dev in background
+• Checked on researcher › survey peers
+• Checked on shell npm run dev
+• Stopped shell npm run dev
+• Messaged researcher › survey peers
+  ↳ queued
+• shell finished · npm run dev · 12s
+```
+
+A row says what happened instead of the tool's usual verb when that verb would be untrue:
+
+```text
+• Moved go test ./... to background
+• TaskStop researcher › survey peers
+  ↳ already completed (exit code 0)
+• WebFetch example.com
+  ↳ redirected
+```
+
+- `Moved <command> to background` is a command you moved with the `background` key, or that its timeout moved (`↳ timed out`).
+- A `TaskStop` on a task that was already over keeps the tool's name and says how it ended: `↳ already completed (exit code 0)`, `↳ already failed (exit code 1)` or `↳ already stopped`.
+- A `WebFetch` that only got a redirect keeps the tool's name.
+- A task row that is running, waiting for approval, failed or denied shows the task id (`TaskOutput t3`).
+- A session saved before a task's name was recorded in its result shows each as its tool does: `Checked task t3`, `Stopped task t3`, `TaskStop t3` for a task that was already over, or `Messaged t3`.
 
 A call that did not succeed is one of:
 
@@ -101,10 +132,13 @@ A call that did not succeed is one of:
 Rejected, denied and interrupted rows have a warning-coloured bullet, a failed row the error colour.
 
 - A failed command's output shows under its line: in full up to 5 lines, otherwise its first two and last two lines around `… N more lines`. Click the row or press Ctrl+O for all of it.
-- A successful row opens to the result as the model received it. An `Edit` or `Write` row shows `+3 -1` or `+40` and opens to its removed lines and its added lines.
+- A successful row opens to the result as the model received it, except where this list says otherwise. An `Edit` or `Write` row shows `+3 -1` or `+40` and opens to its removed lines and its added lines.
 - A `Bash` row whose title cut the command (a second line, or more than 80 characters) opens to the whole command after `$ `, above its output, whatever the outcome; a rejected, denied or interrupted row opens to it under its summary, and a cut command with no output still opens.
 - Lines of an opened `Edit` or `Write` longer than 2000 characters end ` [line truncated]`.
-- A row that has nothing to add to its title and summary does not open: a command with no output, a file that is empty, a search with no match, a launched agent. A question's answers are on its row.
+- An agent's launch row opens to the prompt the main agent gave it, as a workflow's row opens to its script; a message row opens to the message.
+- An agent's end row opens to its final reply, and a failed one shows its reason under it. A shell's end row shows its reason (`exit code 1`) when it failed and opens to the last lines of its output that the model was sent.
+- An opened `TaskOutput` starts at the output, without the status line.
+- A row that has nothing to add to its title and summary does not open: a command with no output, a file that is empty, a search with no match. A question's answers are on its row.
 - A plan revision you asked for opens to your feedback.
 - An opened result is the model's text, so it includes notices written to the model, such as `use offset=2001 to continue`.
 - An edit's lines show without surrounding context or line numbers.

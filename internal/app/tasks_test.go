@@ -88,28 +88,30 @@ func (f *fakeTasks) Output(id string) (tool.TaskInfo, error) {
 	return f.infos[i], nil
 }
 
-func (f *fakeTasks) Stop(id string) (tool.TaskInfo, error) {
+func (f *fakeTasks) Stop(id string) (tool.TaskInfo, bool, error) {
 	f.mu.Lock()
 	f.stops = append(f.stops, id)
 	i := slices.IndexFunc(f.infos, func(info tool.TaskInfo) bool { return info.ID == id })
 	if i < 0 {
 		f.mu.Unlock()
-		return tool.TaskInfo{}, fmt.Errorf("failed to find task %q: %w", id, tool.ErrUnknownTask)
+		return tool.TaskInfo{}, false, fmt.Errorf("failed to find task %q: %w", id, tool.ErrUnknownTask)
 	}
-	if f.infos[i].Status == tool.TaskRunning {
+	running := f.infos[i].Status == tool.TaskRunning
+	if running {
 		f.infos[i].Status = tool.TaskStopped
 		f.infos[i].Ended = f.infos[i].Started.Add(3 * time.Second)
 	}
 	info, stop, agents := f.infos[i], f.stop, f.agents
 	f.mu.Unlock()
 	if info.Agent != "" {
-		info, _ = agents.Stop(id)
+		info, _, _ = agents.Stop(id)
 		f.set(info)
 	}
 	if stop != nil {
-		return stop(info)
+		info, err := stop(info)
+		return info, running, err
 	}
-	return info, nil
+	return info, running, nil
 }
 
 // StartAgent starts the task in a real registry and mirrors it into infos;
@@ -390,7 +392,7 @@ func TestTaskEndWakesIdleController(t *testing.T) {
 	assert.True(t, h.idle())
 	evs := h.rec.all()
 	assert.Equal(t, []event.TurnStart{{WorkID: end.WorkID}}, ofType[event.TurnStart](evs))
-	assert.Equal(t, []event.TaskEnded{{ID: "t1", Command: "make t1", Status: "completed", Elapsed: 12 * time.Second}}, ofType[event.TaskEnded](evs))
+	assert.Equal(t, []event.TaskEnded{{ID: "t1", Command: "make t1", Status: "completed", Elapsed: 12 * time.Second, Result: "built t1"}}, ofType[event.TaskEnded](evs))
 	assert.Len(t, ofType[event.TasksChanged](evs), 1)
 	assert.Empty(t, ofType[event.QueueChanged](evs), "notices are not queued input")
 	assert.Empty(t, h.queuedNotices())
@@ -598,7 +600,7 @@ func TestStopTaskQueuesNonWakingNotice(t *testing.T) {
 	h.turn(t, "hi")
 	want := "Background task t1 stopped by the user: make t1\nbuilt t1"
 	assert.Equal(t, []string{"hi", want}, receive(t, requests).UserTexts)
-	assert.Equal(t, []event.TaskEnded{{ID: "t1", Command: "make t1", Status: "stopped", Elapsed: 3 * time.Second}}, ofType[event.TaskEnded](h.rec.all()))
+	assert.Equal(t, []event.TaskEnded{{ID: "t1", Command: "make t1", Status: "stopped", Elapsed: 3 * time.Second, Result: "built t1"}}, ofType[event.TaskEnded](h.rec.all()))
 }
 
 func TestModelStoppedTaskQueuesNothing(t *testing.T) {
@@ -794,7 +796,7 @@ func TestNoticeText(t *testing.T) {
 	}
 	want := "Background task t7 failed (exit status 2): " + strings.Repeat("é", 80) + "\n" + strings.Join(tail, "\n")
 	assert.Equal(t, want, queued[0].Text)
-	assert.Equal(t, event.TaskEnded{ID: "t7", Command: info.Command, Status: "failed", Elapsed: 90 * time.Second}, queued[0].Shown)
+	assert.Equal(t, event.TaskEnded{ID: "t7", Command: info.Command, Status: "failed", Elapsed: 90 * time.Second, Reason: "exit status 2", Result: strings.Join(tail, "\n")}, queued[0].Shown)
 
 	info.Output = ""
 	info.ID = "t8"
@@ -972,6 +974,15 @@ func endedAgent(id string) tool.TaskInfo {
 	return info
 }
 
+func TestAgentTaskEndedShowsItsReplyOrFailure(t *testing.T) {
+	info := endedAgent("t1")
+	info.Result = "all good"
+	assert.Equal(t, event.TaskEnded{ID: "t1", Agent: "reviewer", Command: "make t1", Status: "completed", Elapsed: 12 * time.Second, Result: "all good"}, taskEnded(info))
+
+	info.Status, info.Reason, info.Result = tool.TaskFailed, "model error", ""
+	assert.Equal(t, event.TaskEnded{ID: "t1", Agent: "reviewer", Command: "make t1", Status: "failed", Elapsed: 12 * time.Second, Reason: "model error"}, taskEnded(info))
+}
+
 func TestAgentEndWakesWithoutWake(t *testing.T) {
 	for _, wake := range []bool{false, true} {
 		t.Run(fmt.Sprintf("wake=%t", wake), func(t *testing.T) {
@@ -985,7 +996,10 @@ func TestAgentEndWakesWithoutWake(t *testing.T) {
 			assert.Equal(t, event.Completed, receiveEnd(t, ends).Outcome.Status)
 			texts := receive(t, requests).UserTexts
 			assert.Equal(t, endText("t1"), texts[len(texts)-1])
-			assert.Equal(t, "reviewer", ofType[event.TaskEnded](h.rec.all())[0].Agent)
+			shown := ofType[event.TaskEnded](h.rec.all())[0]
+			assert.Equal(t, "reviewer", shown.Agent)
+			assert.Empty(t, shown.Reason)
+			assert.Empty(t, shown.Result)
 		})
 	}
 }
@@ -1072,10 +1086,13 @@ func TestTaskNoticeNamesTheSavedOutput(t *testing.T) {
 	assert.Equal(t, endText("t1"), notice(info, head).Text)
 
 	info.OutputFile = "/kopi/outputs/s1/a.txt"
-	assert.Equal(t, endText("t1")+"\n[Output saved to /kopi/outputs/s1/a.txt]", notice(info, head).Text)
+	n := notice(info, head)
+	assert.Equal(t, endText("t1")+"\n[Output saved to /kopi/outputs/s1/a.txt]", n.Text)
+	assert.Equal(t, "built t1\n[Output saved to /kopi/outputs/s1/a.txt]", n.Shown.Result)
 
 	info.Output = "[… 9 bytes cut; full output: /kopi/outputs/s1/a.txt; use Read with offset=3 to continue …]\nbuilt t1"
 	text := notice(info, head).Text
 	assert.Equal(t, 1, strings.Count(text, "/kopi/outputs/s1/a.txt"))
 	assert.NotContains(t, text, "[Output saved to")
+	assert.Equal(t, info.Output, notice(info, head).Shown.Result)
 }

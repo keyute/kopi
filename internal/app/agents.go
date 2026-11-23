@@ -102,8 +102,13 @@ func (l agentLauncher) Launch(ctx context.Context, agent, description, prompt st
 	return l.c.launch(ctx, agent, description, prompt)
 }
 
-func (l agentLauncher) Message(ctx context.Context, id, message string) (bool, error) {
-	return l.c.message(ctx, id, message)
+func (l agentLauncher) Message(ctx context.Context, id, message string) (tool.TaskInfo, bool, error) {
+	resumed, err := l.c.message(ctx, id, message)
+	if err != nil {
+		return tool.TaskInfo{}, false, err
+	}
+	to, _ := l.c.cfg.Tasks.Output(id)
+	return to, resumed, nil
 }
 
 // subagentRole is the role of a subagent's session. The session lives until

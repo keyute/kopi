@@ -39,7 +39,7 @@ func TestWebSearchDescribesItself(t *testing.T) {
 	assert.Nil(t, tool.Target)
 	assert.False(t, tool.Sandboxed)
 	assert.False(t, tool.PlanSandboxed)
-	assert.Equal(t, Action{Verb: "Ran", One: "web search", Many: "web searches"}, tool.Display.Action)
+	assert.Equal(t, Action{Verb: "Searched", One: "the web"}, tool.Display.Action)
 }
 
 func TestWebSearchRejectsInvalidArgs(t *testing.T) {
