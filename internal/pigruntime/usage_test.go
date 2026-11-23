@@ -104,6 +104,7 @@ func TestCacheIsNotReportedWithoutCacheTokens(t *testing.T) {
 }
 
 func TestCacheExpiresAfterTheModelsLifetime(t *testing.T) {
+	t.Setenv("PI_CACHE_RETENTION", "")
 	sb := newSandbox(t)
 	writeAgentFile(t, sb, "models.json", `{"providers":{"kopi-cache":{"baseUrl":"http://127.0.0.1:1","api":"openai-responses","apiKey":"synthetic-key","models":[
 		{"id":"cached-1","promptCache":{"short":300,"long":3600}},
@@ -145,6 +146,25 @@ func TestCacheExpiresAfterTheModelsLifetime(t *testing.T) {
 		assistantRecord("kopi-cache", "cached-1", "", started+60_000, usageJSON(10, 1, 100, 0, 0, "")))
 	assert.Equal(t, time.UnixMilli(started+60_000).Add(time.Hour), last.Cache().Expires, "a read keeps the tier of the latest write")
 
+	t.Run("compaction and resume", func(t *testing.T) {
+		manager := last.inner.SessionManager()
+		kept := appendHistoryMessage(t, manager, assistantRecord("kopi-cache", "cached-1", "", started+120_000, usageJSON(10, 1, 100, 0, 0, "")))
+		_, err := manager.AppendCompaction("summary", kept, 1000, nil, false, nil)
+		require.NoError(t, err)
+		want := time.UnixMilli(started + 120_000).Add(time.Hour)
+		assert.Equal(t, want, last.Cache().Expires)
+		require.NoError(t, last.Close(t.Context()))
+		resumed, err := r.Open(t.Context(), OpenOptions{Model: "kopi-cache/cached-1", ResumeID: last.ID(), SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+		require.NoError(t, err)
+		t.Cleanup(func() { assert.NoError(t, resumed.Close(t.Context())) })
+		for _, msg := range resumed.inner.Messages() {
+			if m := msg.Assistant; m != nil && m.Usage != nil {
+				assert.Zero(t, m.Usage.CacheWrite, "the write is no longer in active context")
+			}
+		}
+		assert.Equal(t, want, resumed.Cache().Expires, "full branch history keeps the hourly tier")
+	})
+
 	rewritten := open(t, "kopi-cache/cached-1", user,
 		assistantRecord("kopi-cache", "cached-1", "", started, usageJSON(10, 1, 0, 100, 0, `,"cacheWrite1h":100`)),
 		assistantRecord("kopi-cache", "cached-1", "", started+60_000, usageJSON(10, 1, 0, 100, 0, "")))
@@ -164,4 +184,24 @@ func TestCacheExpiresAfterTheModelsLifetime(t *testing.T) {
 
 	plain := open(t, "kopi-cache/plain-1", user, assistantRecord("kopi-cache", "plain-1", "", started, usageJSON(10, 1, 100, 0, 0, "")))
 	assert.True(t, plain.Cache().Expires.IsZero(), "the model declares no cache lifetime")
+
+	for _, tc := range []struct {
+		name, process, provider string
+		lifetime                time.Duration
+	}{
+		{"process long", "long", "", time.Hour},
+		{"process short", "short", "", 5 * time.Minute},
+		{"provider long", "short", "long", time.Hour},
+		{"provider short", "long", "short", 5 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PI_CACHE_RETENTION", tc.process)
+			_, err := r.svcs.Credentials().Modify(t.Context(), "kopi-cache", func(*ai.Credential) (*ai.Credential, error) {
+				return &ai.Credential{Type: ai.CredentialAPIKey, Key: "synthetic-key", Env: map[string]string{"PI_CACHE_RETENTION": tc.provider}}, nil
+			})
+			require.NoError(t, err)
+			sess := open(t, "kopi-cache/cached-1", user, assistantRecord("kopi-cache", "cached-1", "", started, usageJSON(10, 1, 100, 0, 0, "")))
+			assert.Equal(t, time.UnixMilli(started).Add(tc.lifetime), sess.Cache().Expires, "Responses usage has no hourly cache-write split")
+		})
+	}
 }

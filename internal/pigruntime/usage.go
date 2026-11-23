@@ -2,6 +2,7 @@ package pigruntime
 
 import (
 	"cmp"
+	"context"
 	"slices"
 	"time"
 
@@ -135,20 +136,28 @@ func (s *Session) Cache() Cache {
 }
 
 // cacheExpires dates the last request that sent a prompt, when the session's
-// model made it. PiG's GetPromptCacheTtlMs is internal and picks the tier from
-// a retention setting Kopi never sets, or from PI_CACHE_RETENTION in the
-// environment, so the tier is read from what that model's requests wrote: long
-// when its latest cache write was for one hour, else short. A read that writes
-// nothing keeps the tier of the cache it hit. The lifetimes are the model's
-// promptCache entries.
+// model made it. PiG's GetPromptCacheTtlMs is internal; Kopi sets no explicit
+// retention, so its tier comes from the provider/process environment unless a
+// cache write reports its tier. OpenAI Responses never reports CacheWrite1h.
+// Full branch history keeps that evidence when compaction drops active messages.
 func (s *Session) cacheExpires() time.Time {
 	model := s.inner.Model()
 	if model == nil {
 		return time.Time{}
 	}
-	var last *agent.AssistantMessage
+	env, err := ai.CredentialStoreProviderEnv(context.Background(), s.inner.Services().Credentials(), model.ProviderMeta.ProviderID)
+	if err != nil {
+		return time.Time{}
+	}
 	tier := "short"
-	messages := s.inner.Messages()
+	if ai.GetProviderEnvValue("PI_CACHE_RETENTION", env) == "long" {
+		tier = "long"
+	}
+	messages, err := branchMessages(s.inner.SessionManager().GetBranch())
+	if err != nil {
+		return time.Time{}
+	}
+	var last *agent.AssistantMessage
 	for i := len(messages) - 1; i >= 0; i-- {
 		m := messages[i].Assistant
 		if m == nil || m.Usage == nil || m.Usage.Input+m.Usage.CacheRead+m.Usage.CacheWrite == 0 {
@@ -160,8 +169,11 @@ func (s *Session) cacheExpires() time.Time {
 		if m.Provider != last.Provider || m.ModelID != last.ModelID || m.Usage.CacheWrite == 0 {
 			continue
 		}
-		if m.Usage.CacheWrite1h != nil && *m.Usage.CacheWrite1h > 0 {
-			tier = "long"
+		if m.Usage.CacheWrite1h != nil {
+			tier = "short"
+			if *m.Usage.CacheWrite1h > 0 {
+				tier = "long"
+			}
 		}
 		break
 	}
