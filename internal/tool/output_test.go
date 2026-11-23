@@ -108,6 +108,15 @@ func TestOutputBufferKeepSavesShortOutputFromThenOn(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, numbered(5000), string(data), "a file that already exists is not written twice")
 
+	ended := f.outputs.buffer()
+	_, err = ended.Write([]byte("done\n"))
+	require.NoError(t, err)
+	ended.close()
+	ended.keep()
+	data, err = os.ReadFile(ended.file())
+	require.NoError(t, err)
+	assert.Equal(t, "done\n", string(data), "a command that ended before keep still gets its file")
+
 	var none outputBuffer
 	none.keep()
 	assert.Empty(t, none.file())
