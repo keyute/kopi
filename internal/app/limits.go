@@ -16,7 +16,7 @@ const limitsEvery = time.Minute
 
 // limits holds the last reading of the main model's provider's plan limits,
 // refreshed on activity. Its mutex is a leaf: nothing is called with it held.
-// A nil *limits holds nothing: refresh, force, get and close are safe on it.
+// A nil *limits holds nothing: force, get and close are safe on it.
 // It reads nothing until ask says a reading is wanted.
 type limits struct {
 	read     func(ctx context.Context, provider string) ([]quota.Window, error)
@@ -52,9 +52,6 @@ func (l *limits) observe(ev event.Event) {
 // limitsEvery ago; such a trigger is dropped, not queued. A forced one is made
 // once the read in flight ends.
 func (l *limits) refresh() {
-	if l == nil {
-		return
-	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.closed || l.running || (!l.attempted.IsZero() && time.Since(l.attempted) < limitsEvery) {

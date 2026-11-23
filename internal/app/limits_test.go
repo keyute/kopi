@@ -423,7 +423,6 @@ func TestNilLimitsDoNothing(t *testing.T) {
 	var l *limits
 
 	l.close()
-	l.refresh()
 	l.force()
 
 	assert.Equal(t, quota.Limits{}, l.get())

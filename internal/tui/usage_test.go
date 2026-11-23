@@ -288,7 +288,7 @@ func TestUsageReadsAgainOnWhatChangesIt(t *testing.T) {
 		m, c := usageModel(t, 60, &u)
 		assert.NotContains(t, strings.Join(openUsage(t, m), "\n"), "5h")
 
-		for i, ev := range []event.Event{event.LimitsChanged{}, event.TurnEnd{}, event.ToolEnd{}, event.TasksChanged{}, event.ModelChanged{Model: "openai-codex/gpt-5-codex"}} {
+		for i, ev := range []event.Event{event.LimitsChanged{}, event.TurnEnd{}, event.ToolEnd{}, event.TasksChanged{}, event.ModelChanged{Model: "openai-codex/gpt-5-codex"}, event.SessionNamed{Name: "usage"}} {
 			c.usage = usageFixture()
 			c.usage.Tokens.Input = 1_000 * (i + 1)
 			send(m, ev)

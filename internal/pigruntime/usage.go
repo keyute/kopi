@@ -80,7 +80,7 @@ func modelKey(provider, asked, responded string) string {
 // from the log on resume; the accounting keeps one token total per model.
 func (s *Session) UsageByModel() Usage {
 	accounting := s.inner.SessionManager().Accounting()
-	tokens := s.inner.GetSessionStats().Tokens
+	tokens := accounting.Tokens
 	u := Usage{Tokens: Tokens{Input: tokens.Input, Output: tokens.Output, CacheRead: tokens.CacheRead, CacheWrite: tokens.CacheWrite}}
 	for _, row := range accounting.UsageBreakdown {
 		model := row.Key
@@ -95,8 +95,8 @@ func (s *Session) UsageByModel() Usage {
 // LoggedMessages is how many user and assistant messages the session's log
 // holds, which a compaction does not lower.
 func (s *Session) LoggedMessages() int {
-	st := s.inner.GetSessionStats()
-	return st.UserMessages + st.AssistantMessages
+	accounting := s.inner.SessionManager().Accounting()
+	return accounting.UserMessages + accounting.AssistantMessages
 }
 
 // Cache is what a session's requests report about the provider's prompt cache.
@@ -107,8 +107,8 @@ type Cache struct {
 	Hit      float64
 	// A miss is prompt an earlier request made cacheable that a later one paid
 	// for again; MissedCost is what that cost over the cache-read price.
-	Misses, MissedTokens int
-	MissedCost           float64
+	Misses     int
+	MissedCost float64
 	// Expires is when the cache the last request left goes cold by time; zero
 	// when there is no request yet or the model declares no cache lifetime.
 	Expires time.Time
@@ -119,11 +119,10 @@ type Cache struct {
 // so a model switch or a compaction still leaves it warm.
 func (s *Session) Cache() Cache {
 	accounting := s.inner.SessionManager().Accounting()
-	tokens := s.inner.GetSessionStats().Tokens
+	tokens := accounting.Tokens
 	c := Cache{
-		Misses:       accounting.CacheWaste.MissCount,
-		MissedTokens: accounting.CacheWaste.MissedTokens,
-		MissedCost:   accounting.CacheWaste.MissedCost,
+		Misses:     accounting.CacheWaste.MissCount,
+		MissedCost: accounting.CacheWaste.MissedCost,
 	}
 	// The footer rule of PiG: a share is shown once the session has cache tokens.
 	if rate := accounting.LatestCacheHitRate; rate != nil && (tokens.CacheRead > 0 || tokens.CacheWrite > 0) {
@@ -134,9 +133,10 @@ func (s *Session) Cache() Cache {
 }
 
 // cacheExpires dates the last request that sent a prompt. PiG's GetPromptCacheTtlMs
-// is internal and picks the tier from a retention setting Kopi never sets, so the
-// tier is read from what the request wrote: long after a one-hour cache write,
-// else short. The lifetimes are the model's promptCache entries.
+// is internal and picks the tier from a retention setting Kopi never sets, or
+// from PI_CACHE_RETENTION in the environment, so the tier is read from what the
+// request wrote: long after a one-hour cache write, else short. The lifetimes
+// are the model's promptCache entries.
 func (s *Session) cacheExpires() time.Time {
 	model := s.inner.Model()
 	if model == nil {
@@ -149,7 +149,7 @@ func (s *Session) cacheExpires() time.Time {
 			continue
 		}
 		tier := "short"
-		if last.Usage != nil && last.Usage.CacheWrite1h != nil && *last.Usage.CacheWrite1h > 0 {
+		if last.Usage.CacheWrite1h != nil && *last.Usage.CacheWrite1h > 0 {
 			tier = "long"
 		}
 		seconds, ok := model.PromptCache[tier]

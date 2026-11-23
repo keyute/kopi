@@ -70,7 +70,7 @@ The whole word `ultrathink`, in any case, in a prompt to the main agent raises i
 
   Tokens   502.0k in · 58.0k out · 940.0k read · 12.0k write
   Cache    91% hit · warm until 15:42 · 2 misses $0.42
-  Session  0195c2d4 · 42 messages · 128 tool calls
+  Session  0195c2d4-7b1e-7c3a-9f2d-5e8a1b6c4d70 · 42 messages · 128 tool calls
 ```
 
 - Esc closes it. It stays open while turns run and shows the new figures as they change; a change of session closes it. PgUp/PgDn scroll it when it is taller than a third of the screen.

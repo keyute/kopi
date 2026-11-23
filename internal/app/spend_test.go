@@ -8,6 +8,7 @@ import (
 
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
+	"github.com/keyute/kopi/internal/tool"
 )
 
 // spentCost is a request that cost dollars, to charge by hand.
@@ -94,6 +95,30 @@ func TestUsageRowsSumToTheTotal(t *testing.T) {
 	assert.Equal(t, h.c.Status().SessionID, got.SessionID)
 	assert.Equal(t, priced, got.Model)
 	assert.Equal(t, 2, got.Messages)
+	assert.Zero(t, got.ToolCalls)
+	assert.Positive(t, got.ContextWindow)
+	assert.Equal(t, h.c.main.sess.Cache(), got.Cache)
+}
+
+func TestUsageCountsARunningSubagent(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	reached, release := make(chan struct{}), make(chan struct{}, 1)
+	def := agentDef("explorer")
+	def.Model = sb.HeldPricedModel(t, reached, release)
+	a := newAgentHarness(t, sb, Config{}, def)
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, reached)
+	release <- struct{}{}
+	a.untilStatus(t, id, tool.TaskCompleted)
+	_, err := a.c.message(t.Context(), id, "again")
+	require.NoError(t, err)
+	wait(t, reached)
+
+	got := a.c.Usage()
+
+	assert.Equal(t, []ModelUsage{{Model: def.Model, Tokens: 1_000_000, Cost: pigruntimetest.PricedModelCost}}, got.Models, "the second request is still held")
+	assert.Equal(t, a.c.Status().TotalCost, got.TotalCost)
+	close(release)
 }
 
 func TestUsageSortsRowsByCostThenModel(t *testing.T) {

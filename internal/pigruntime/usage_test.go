@@ -90,7 +90,6 @@ func TestCacheEqualsTheSessionAccounting(t *testing.T) {
 	assert.True(t, got.Reported)
 	assert.Equal(t, *accounting.LatestCacheHitRate, got.Hit)
 	assert.Equal(t, accounting.CacheWaste.MissCount, got.Misses)
-	assert.Equal(t, accounting.CacheWaste.MissedTokens, got.MissedTokens)
 	assert.Equal(t, accounting.CacheWaste.MissedCost, got.MissedCost)
 	assert.True(t, got.Expires.IsZero(), "the faux model declares no cache lifetime")
 }
