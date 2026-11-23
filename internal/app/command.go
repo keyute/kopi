@@ -19,6 +19,8 @@ type Command struct {
 	Name, Summary string
 	// Argument reports that the command's argument is chosen from Arguments.
 	Argument bool
+	// Optional reports that the command also runs without that argument.
+	Optional bool
 	// Skill reports that the command is a skill, which loads with the prompt it
 	// is typed in.
 	Skill bool
@@ -32,7 +34,7 @@ type command struct {
 
 func commandTable() []command {
 	return []command{
-		{Command: Command{Name: "plan", Summary: "switch to plan mode (workspace read-only); /plan open edits the plan file"}, run: (*Controller).planCommand},
+		{Command: Command{Name: "plan", Summary: "switch to plan mode (workspace read-only); /plan open edits the plan file", Optional: true}, run: (*Controller).planCommand, args: (*Controller).planCandidates},
 		{Command: Command{Name: "execute", Summary: "switch to execute mode"}, run: func(c *Controller, _ context.Context, _ string) error {
 			c.EnterExecute()
 			return nil
@@ -93,6 +95,10 @@ func (c *Controller) planCommand(_ context.Context, arg string) error {
 		return nil
 	}
 	return fmt.Errorf("%w: /plan takes no argument or open, got %q", ErrUnknownArgument, arg)
+}
+
+func (c *Controller) planCandidates() ([]Candidate, error) {
+	return []Candidate{{Value: "open", Description: "edit the plan file"}}, nil
 }
 
 func (c *Controller) resumeCommand(ctx context.Context, id string) error {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -59,11 +60,23 @@ func TestArgumentsListsSessionsForResume(t *testing.T) {
 	assert.Contains(t, cs[0].Description, "first line")
 	assert.NotContains(t, cs[0].Description, "second line")
 
-	for _, name := range []string{"plan", "nope"} {
+	for _, name := range []string{"execute", "nope"} {
 		cs, err := h.c.Arguments(name)
 		require.NoError(t, err)
 		assert.Nil(t, cs, name)
 	}
+}
+
+func TestPlanOffersOpenAsOptionalArgument(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+	cs, err := h.c.Arguments("plan")
+	require.NoError(t, err)
+	assert.Equal(t, []Candidate{{Value: "open", Description: "edit the plan file"}}, cs)
+
+	i := slices.IndexFunc(h.c.Commands(), func(c Command) bool { return c.Name == "plan" })
+	require.GreaterOrEqual(t, i, 0)
+	assert.True(t, h.c.Commands()[i].Argument)
+	assert.True(t, h.c.Commands()[i].Optional)
 }
 
 func TestTasksCommandShowsTasksIdleAndMidTurn(t *testing.T) {
