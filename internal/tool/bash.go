@@ -25,26 +25,64 @@ type bashArgs struct {
 	Unsandboxed     bool `json:"unsandboxed"`
 }
 
+// A background result is one of these, then backgroundTail.
 const (
-	startedFormat = "Background task %s started."
-	movedFormat   = "Background task %s: the user moved this command to the background, where it keeps running."
-	timeoutFormat = "Background task %s: this command did not finish within its %v timeout and keeps running in the background."
+	startedFormat = "Background task %s started"
+	movedFormat   = "Background task %s: the user moved this command to the background, where it keeps running"
+	timeoutFormat = "Background task %s: this command did not finish within its %v timeout and keeps running in the background"
+
+	backgroundFile = ", writing its output to %s"
+	backgroundTold = ". You are told when it ends."
+	backgroundPoll = ". You are told when it ends: do not poll the file."
 )
 
 var (
 	startedResult = resultPattern(startedFormat)
 	movedResult   = resultPattern(movedFormat)
-	timeoutResult = resultPattern(timeoutFormat, `(?:\d+ms|(?:\d+m)?\d+(?:\.\d+)?s)`)
+	timeoutResult = resultPattern(timeoutFormat, `((?:\d+ms|(?:\d+m)?\d+(?:\.\d+)?s))`)
 )
 
 // resultPattern matches the text format produces, with the task id as the
-// first group and any further verbs matching args.
+// first group and any further verbs matching args, then one of backgroundTail's
+// tails; a result saved before those existed ends like the shortest of them.
 func resultPattern(format string, args ...string) *regexp.Regexp {
 	verbs := append([]any{`(t\d+)`}, make([]any, len(args))...)
 	for i, a := range args {
 		verbs[i+1] = a
 	}
-	return regexp.MustCompile("^" + fmt.Sprintf(regexp.QuoteMeta(format), verbs...) + "$")
+	tail := "(?:" + fmt.Sprintf(regexp.QuoteMeta(backgroundFile), `[^\n]+`) + ")?" +
+		`(?:\.|` + regexp.QuoteMeta(backgroundTold) + "|" + regexp.QuoteMeta(backgroundPoll) + ")"
+	return regexp.MustCompile("^" + fmt.Sprintf(regexp.QuoteMeta(format), verbs...) + tail + "$")
+}
+
+// backgroundTail ends a background result with where the command's output is
+// saved, when it is, and, when the command's end reaches the model whatever
+// its turn does, that it need not read the file to wait.
+func backgroundTail(file string, wakes bool) string {
+	var tail string
+	if file != "" {
+		tail = fmt.Sprintf(backgroundFile, file)
+	}
+	switch {
+	case !wakes:
+		return tail + "."
+	case file == "":
+		return tail + backgroundTold
+	}
+	return tail + backgroundPoll
+}
+
+// waitText is the time a call waited before its command moved, as a row shows
+// it: "1s", "500ms", "2m", "1m 30s".
+func waitText(d time.Duration) string {
+	if d < time.Minute {
+		return d.String()
+	}
+	m, s := d/time.Minute, d%time.Minute
+	if s == 0 {
+		return fmt.Sprintf("%dm", m)
+	}
+	return fmt.Sprintf("%dm %s", m, s)
 }
 
 // backgroundTask reports whether output is one of the background results, and
@@ -66,8 +104,10 @@ func backgroundTask(output string) (started, ok bool) {
 // mode cannot run commands. Commands run through tasks, which keeps those
 // moved to the background; with nil tasks they run in the foreground only and
 // one still running at its timeout is stopped. The unsandboxed parameter is
-// offered only when sh is sandboxed and allowUnsandboxed is true.
-func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
+// offered only when sh is sandboxed and allowUnsandboxed is true. wakes says
+// that a background command's end starts a turn when none runs; without it a
+// background result promises no report of the end.
+func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed, wakes bool) Tool {
 	description := "Runs a shell command (bash, else sh) in the workspace and returns its combined stdout and stderr; " +
 		"long output keeps its start and end. Every call starts a fresh shell in the workspace with no input: " +
 		"cd and variables do not carry over. A non-zero exit status is an error that reports the exit code. "
@@ -82,9 +122,10 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 		description += "A command still running at its timeout is stopped; the error then holds the output so far."
 	} else {
 		description += "A command still running at its timeout, or one the user moves to the background, keeps running as a background task; " +
-			"run_in_background starts it as one at once. The result then gives the task id: read its output with TaskOutput " +
-			"and stop it with TaskStop; you are told when it ends."
-		timeoutText = "Milliseconds before the command moves to the background; default 120000, at most 600000."
+			"run_in_background starts it as one at once. The result then gives the task id and the file its output is saved to: " +
+			"Read reads it and TaskStop stops the task."
+		timeoutText = "Milliseconds to wait for the command before it moves to the background; default 120000, at most 600000. " +
+			"Set it only for a command that needs longer than the default."
 		properties["run_in_background"] = map[string]any{
 			"type":        "boolean",
 			"description": "Start the command as a background task and return its id at once; timeout does not apply.",
@@ -175,7 +216,7 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 				if err != nil {
 					return Result{}, err
 				}
-				return Result{Text: fmt.Sprintf(startedFormat, info.ID)}, nil
+				return Result{Text: fmt.Sprintf(startedFormat, info.ID) + backgroundTail(info.OutputFile, wakes)}, nil
 			}
 			timeout := defaultBashTimeoutMS
 			if args.Timeout != nil {
@@ -191,9 +232,9 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 			case moved.ID == "":
 				return Result{Text: out}, err
 			case moved.TimedOut:
-				return Result{Text: fmt.Sprintf(timeoutFormat, moved.ID, d)}, nil
+				return Result{Text: fmt.Sprintf(timeoutFormat, moved.ID, d) + backgroundTail(moved.OutputFile, wakes)}, nil
 			default:
-				return Result{Text: fmt.Sprintf(movedFormat, moved.ID)}, nil
+				return Result{Text: fmt.Sprintf(movedFormat, moved.ID) + backgroundTail(moved.OutputFile, wakes)}, nil
 			}
 		},
 		Display: Display{
@@ -221,8 +262,10 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed bool) Tool {
 				return "Moved " + titleLine(args.Command) + " to background" + unsandboxed(args), action
 			},
 			Summary: func(output string) string {
-				if timeoutResult.MatchString(output) {
-					return "timed out"
+				if m := timeoutResult.FindStringSubmatch(output); m != nil {
+					if d, err := time.ParseDuration(m[2]); err == nil {
+						return "after " + waitText(d)
+					}
 				}
 				switch _, ok := backgroundTask(output); {
 				case !ok && output == noOutputNotice:

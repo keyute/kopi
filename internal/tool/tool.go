@@ -90,6 +90,10 @@ type Display struct {
 	// either depends on the call's arguments or its result; a zero value keeps
 	// Done or Action.
 	Outcome func(args json.RawMessage, output string) (done string, action Action)
+	// Subject is what a successful call acted on, when a group counts that
+	// thing once however many calls touched it: a file's path, a task's id.
+	// nil or "" counts the call itself.
+	Subject func(args json.RawMessage, output string) string
 }
 
 type Action struct{ Verb, One, Many string }

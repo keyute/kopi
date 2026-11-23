@@ -76,8 +76,8 @@ type Config struct {
 	// Agent or SendMessage tool.
 	Agents []subagent.Definition
 	// AgentTools are the tools a subagent may have, besides the MCP servers'
-	// tools; Agent, SendMessage, TaskOutput, TaskStop and ToolSearch are never
-	// given to one.
+	// tools; Agent, SendMessage, TaskStop and ToolSearch are never given to
+	// one.
 	AgentTools []tool.Tool
 	// Plans is the root session's plan file; nil means there is none, and no
 	// ExitPlanMode tool.
@@ -286,8 +286,8 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	if ask := tool.NewAskUserQuestion(c.askQuestion); !c.cfg.Unattended && !c.cfg.Rules.Removes(ask.Name) {
 		tools = append(tools, ask)
 	}
-	if exit := tool.NewExitPlanMode(c.cfg.Plans, c.reviewPlan); c.cfg.Plans != nil && !c.cfg.Unattended && !c.cfg.Rules.Removes(exit.Name) {
-		tools = append(tools, exit)
+	if c.planApproval() {
+		tools = append(tools, tool.NewExitPlanMode(c.cfg.Plans, c.reviewPlan))
 	}
 	var search []tool.Tool
 	if !c.cfg.Rules.Removes("WebSearch") {

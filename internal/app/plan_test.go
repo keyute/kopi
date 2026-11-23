@@ -61,7 +61,7 @@ func TestPlanApprovalSwitchesToExecuteAndTurnContinues(t *testing.T) {
 	assert.Equal(t, event.PlanEnded{Token: req.Token}, receiveEvent(t, ended))
 	assert.Equal(t, []event.ModeChanged{{Mode: policy.Execute}}, ofType[event.ModeChanged](h.rec.all()))
 	assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
-	assert.Equal(t, []string{"The user approved the plan. The session is in execute mode."}, receive(t, requests).ToolResults)
+	assert.Equal(t, []string{"The user approved the plan. The session is in execute mode. Carry out the plan now."}, receive(t, requests).ToolResults)
 
 	h.turn(t, "go on")
 	assert.Equal(t, []string{"plan it", h.planLine(), "go on"}, receive(t, next).UserTexts, "no mode line follows an approved plan")
@@ -169,8 +169,18 @@ func TestRefreshPlanRepeatsTheRequestWithTheEditedText(t *testing.T) {
 
 	assert.True(t, h.c.AnswerPlan(req.Token, tool.PlanAnswer{Approved: true}))
 	wait(t, w.Done())
-	assert.Equal(t, []string{"The user approved the plan. The user edited the plan file before answering. The session is in execute mode."}, receive(t, requests).ToolResults)
+	assert.Equal(t, []string{"The user approved the plan. The user edited the plan file before answering. The session is in execute mode. Carry out the plan now."}, receive(t, requests).ToolResults)
 	assert.False(t, h.c.RefreshPlan(req.Token), "the answered plan is gone")
+}
+
+func TestModeLineSteersToThePlanOnlyWhereItCanBeApproved(t *testing.T) {
+	assert.Equal(t, "Plan mode is on: do not change the workspace. When the request needs changes, research it, write a plan to /plans/s.md"+
+		" (Read, Write and Edit work on that file in both modes) and call ExitPlanMode for the user's approval instead of ending your turn;"+
+		" a request that needs no changes is just answered.", modeLine(policy.Plan, "/plans/s.md", true))
+	assert.Equal(t, "The session is in plan mode. Its plan file is /plans/s.md; Read, Write and Edit work on that file in both modes.",
+		modeLine(policy.Plan, "/plans/s.md", false), "ExitPlanMode is not offered")
+	assert.Equal(t, "The session is in plan mode.", modeLine(policy.Plan, "", true))
+	assert.Equal(t, "The session is in execute mode.", modeLine(policy.Execute, "/plans/s.md", true))
 }
 
 func TestExitPlanModeToolIsAttendedOnlyAndNeverForAgents(t *testing.T) {

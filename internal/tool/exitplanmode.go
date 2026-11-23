@@ -13,6 +13,7 @@ import (
 
 const (
 	planApproved  = "The user approved the plan."
+	planCarryOut  = " Carry out the plan now."
 	planRevise    = "The user asked for changes to the plan."
 	planDismissed = "The user dismissed the plan without answering."
 	planEdited    = " The user edited the plan file before answering."
@@ -114,6 +115,9 @@ func planResult(a PlanAnswer, mode policy.Mode, edited bool) string {
 		text += planEdited
 	}
 	text += fmt.Sprintf(" The session is in %s mode.", mode)
+	if a.Approved {
+		text += planCarryOut
+	}
 	if !a.Approved && a.Feedback != "" {
 		text += feedbackLead + a.Feedback
 	}

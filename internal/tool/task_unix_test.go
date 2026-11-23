@@ -5,6 +5,7 @@ package tool
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -65,7 +66,8 @@ func writeLine(t *testing.T, f *os.File, line string) {
 }
 
 func TestTasksTimeoutMovesCommand(t *testing.T) {
-	sh := NewShell(t.TempDir(), nil)
+	outputs, dir := newSavedOutputs(t)
+	sh := NewShell(t.TempDir(), nil).WithOutputs(outputs)
 	m, events := newTasks(t)
 	command, fifo := echoFIFO(t)
 
@@ -73,12 +75,18 @@ func TestTasksTimeoutMovesCommand(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Empty(t, out)
-	assert.Equal(t, Moved{ID: "t1", TimedOut: true}, moved)
-	assert.Equal(t, TaskRunning, nextEvent(t, events).Status)
+	assert.Equal(t, dir, filepath.Dir(moved.OutputFile))
+	assert.Equal(t, Moved{ID: "t1", TimedOut: true, OutputFile: moved.OutputFile}, moved)
+	running := nextEvent(t, events)
+	assert.Equal(t, TaskRunning, running.Status)
+	assert.Equal(t, moved.OutputFile, running.OutputFile)
 	writeLine(t, openWriter(t, fifo), "ping\n")
 	end := nextEvent(t, events)
 	assert.Equal(t, TaskCompleted, end.Status)
 	assert.Equal(t, "ping\n", end.Output)
+	data, err := os.ReadFile(moved.OutputFile)
+	require.NoError(t, err)
+	assert.Equal(t, "ping\n", string(data))
 }
 
 func TestTasksDetachMovesCommand(t *testing.T) {

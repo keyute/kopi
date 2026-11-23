@@ -226,7 +226,7 @@ func exitReason(e *exec.ExitError) string {
 // outputBuffer keeps the first maxOutputPart bytes written and a sliding
 // window of the last maxOutputPart, so memory stays bounded however much a
 // command prints. With a dir, the output is also saved to a file from the first
-// write that would cut it. The zero value saves nothing.
+// write that would cut it, or from keep. The zero value saves nothing.
 type outputBuffer struct {
 	mu         sync.Mutex
 	head, tail []byte
@@ -268,6 +268,20 @@ func (b *outputBuffer) Write(p []byte) (int, error) {
 	}
 	b.tail = append(b.tail, rest...)
 	return len(p), nil
+}
+
+// keep saves the output to the file from now on, however short it is: a
+// background command's output is read from the file while the command runs.
+func (b *outputBuffer) keep() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.dir == "" {
+		return
+	}
+	// Head and tail still hold every byte written: a cut creates the file.
+	b.create()
+	b.save(b.head)
+	b.save(b.tail)
 }
 
 // create opens the file, once. A failure is logged and the buffer carries on

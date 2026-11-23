@@ -70,7 +70,7 @@ func NewWorkflow(defs []subagent.Definition, w Workflows, maxWorkflows, maxAgent
 			if err != nil {
 				return Result{}, err
 			}
-			return Result{Text: fmt.Sprintf("Workflow %s started.", id)}, nil
+			return Result{Text: fmt.Sprintf("Workflow %s started.", id) + launchTail}, nil
 		},
 		Display: Display{
 			// It runs before the arguments are validated, so it decodes leniently.
@@ -82,12 +82,7 @@ func NewWorkflow(defs []subagent.Definition, w Workflows, maxWorkflows, maxAgent
 				}
 				return "Workflow › " + args.Description
 			},
-			Summary: func(output string) string {
-				if strings.HasSuffix(output, " started.") {
-					return "launched"
-				}
-				return ""
-			},
+			Summary: launchSummary,
 			Change: func(raw json.RawMessage) (string, []PreviewLine) {
 				var args workflowArgs
 				_ = json.Unmarshal(raw, &args)
@@ -138,9 +133,8 @@ func workflowDescription(defs []subagent.Definition, maxWorkflows, maxAgents int
 	}
 	var b strings.Builder
 	b.WriteString("Runs a JavaScript script that starts agents and combines their results. It is available because the user typed ultracode.\n" +
-		"The script is the body of an async function. The call returns at once with a task id while the script runs in the background. " +
-		"When it ends you are told, with the value it returned or the error it threw: within your turn, or in a new turn that its end starts if yours has ended. " +
-		"TaskOutput returns a line for each agent's start and end so far, and TaskStop stops the script and its agents.\n" +
+		"The script is the body of an async function. The call returns at once with a task id while the script runs in the background; " +
+		"its end is reported to you with the value it returned or the error it threw. TaskStop stops the script and its agents.\n" +
 		"Agents share the working directory and the session's mode with you and with each other; nothing isolates those that write at the same time.\n" +
 		"The script can call:\n" +
 		"- " + agentCall + " With schema, a JSON Schema of type object, the promise is of an object matching it, and rejects if the agent gives none. label names the agent to the user.\n" +

@@ -81,6 +81,38 @@ func TestOutputBufferSavesNothingAtOrUnderTheThreshold(t *testing.T) {
 	assert.NotEmpty(t, b.file())
 }
 
+func TestOutputBufferKeepSavesShortOutputFromThenOn(t *testing.T) {
+	f := newOutputFixture(t)
+	b := f.outputs.buffer()
+	_, err := b.Write([]byte("early\n"))
+	require.NoError(t, err)
+	require.Empty(t, b.file())
+
+	b.keep()
+	b.keep()
+	_, err = b.Write([]byte("late\n"))
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(b.file())
+	require.NoError(t, err)
+	assert.Equal(t, "early\nlate\n", string(data))
+	files, err := filepath.Glob(filepath.Join(f.outputsDir, "s1", "*"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+
+	spilled := f.outputs.buffer()
+	_, err = spilled.Write([]byte(numbered(5000)))
+	require.NoError(t, err)
+	spilled.keep()
+	data, err = os.ReadFile(spilled.file())
+	require.NoError(t, err)
+	assert.Equal(t, numbered(5000), string(data), "a file that already exists is not written twice")
+
+	var none outputBuffer
+	none.keep()
+	assert.Empty(t, none.file())
+}
+
 func TestOutputBufferSavesEveryByteInOrder(t *testing.T) {
 	text := numbered(20000)
 	for _, size := range []int{1, 1000, 4099, 70000} {

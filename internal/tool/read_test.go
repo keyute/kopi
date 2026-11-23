@@ -419,4 +419,6 @@ func TestReadDisplayOutcome(t *testing.T) {
 	assert.Equal(t, Action{}, action)
 	_, action = d.Outcome(json.RawMessage(`{"file_path":"plan"}`), "")
 	assert.Equal(t, Action{}, action)
+
+	assert.Equal(t, "a.go", d.Subject(json.RawMessage(`{"file_path":"a.go","offset":40,"limit":50}`), ""), "whatever range was read")
 }

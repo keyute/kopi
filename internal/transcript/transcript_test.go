@@ -291,8 +291,8 @@ func TestRestoreMatchesApply(t *testing.T) {
 func TestRestoreMatchesApplyForOutcomeRows(t *testing.T) {
 	events := []event.Event{
 		event.TurnStart{Prompt: "go"},
-		event.ToolStart{CallID: "a", Name: "TaskOutput", Title: "TaskOutput t1", Done: "Checked task t1", Action: tool.Action{Verb: "Checked", One: "task", Many: "tasks"}},
-		event.ToolEnd{CallID: "a", Name: "TaskOutput", Done: "Checked on researcher › survey peers", Action: tool.Action{Verb: "Checked on", One: "agent", Many: "agents"}, Summary: "completed", Body: "found"},
+		event.ToolStart{CallID: "a", Name: "TaskStop", Title: "TaskStop t1", Done: "Stopped task t1", Action: tool.Action{Verb: "Stopped", One: "task", Many: "tasks"}},
+		event.ToolEnd{CallID: "a", Name: "TaskStop", Done: "TaskStop researcher › survey peers", Action: tool.Action{Verb: "Checked on", One: "agent", Many: "agents"}, Summary: "already completed"},
 		event.TextDelta{Text: "x"},
 		event.ToolStart{CallID: "b", Name: "Bash", Title: "Bash make", Done: "Ran make", Action: tool.Action{Verb: "Ran", One: "command", Many: "commands"}},
 		event.ToolEnd{CallID: "b", Name: "Bash", Done: "Moved make to background", Action: tool.Action{Verb: "Started", One: "shell", Many: "shells"}},
@@ -316,7 +316,7 @@ func TestRestoreMatchesApplyForOutcomeRows(t *testing.T) {
 			titles = append(titles, row.Call.Title)
 		}
 	}
-	assert.Equal(t, []string{"Checked on researcher › survey peers", "Moved make to background", "WebFetch example.com", "Edited the plan"}, titles)
+	assert.Equal(t, []string{"TaskStop researcher › survey peers", "Moved make to background", "WebFetch example.com", "Edited the plan"}, titles)
 }
 
 func TestWorkflowTaskEndedCarriesItsOutcome(t *testing.T) {

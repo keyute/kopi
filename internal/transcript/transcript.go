@@ -106,6 +106,7 @@ func (t *Transcript) Apply(ev event.Event) {
 			if ev.Action != (tool.Action{}) {
 				c.Action = ev.Action
 			}
+			c.Subject = ev.Subject
 			c.Summary = strings.Join(slices.DeleteFunc([]string{change, ev.Summary}, func(s string) bool { return s == "" }), " · ")
 			return
 		}

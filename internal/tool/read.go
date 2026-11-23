@@ -113,6 +113,7 @@ func NewRead(ws *Workspace) Tool {
 			Body:    readBody,
 			Action:  Action{Verb: "Read", One: "file", Many: "files"},
 			Outcome: ws.fileOutcome("Read"),
+			Subject: ws.fileSubject,
 		},
 	}
 }

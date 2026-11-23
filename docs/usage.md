@@ -101,7 +101,8 @@ Each tool call is a row. It names the call by the tool while it runs, while it w
 - A run of successful calls folds into a group, `Read 3 files, ran 2 commands`; click it or press Ctrl+O to list its calls. A call that did not succeed, and the question and plan-approval rows below, are never in a group.
 - A group clause uses its rows' verb and a noun that covers every row in it: a `Read` of the plan and of a saved output file count as `read the plan` and `read 1 output file`, apart from `read 3 files`; a `Skill` call that reads a file of a skill (`Read skill <name> <file>`) counts as `read 1 skill file`.
 - Some clauses are not counted: `searched the web`, `searched tools`, `read the plan`, `wrote the plan`, `edited the plan`. Repeats read `searched the web 3 times`, `edited the plan 3 times`.
-- A background command counts as `started 1 shell`, a message to an agent as `messaged 1 agent`, a `TaskOutput` or `TaskStop` on an agent, shell or workflow as `checked on 2 agents`, `stopped 1 shell` (a `TaskStop` on a task that was already over counts as `checked on 1 agent`), and a `WebFetch` that only got a redirect as `hit 1 redirect`.
+- A clause counts a file, an agent, a shell or a workflow once however many calls touched it: seven edits of two files read `edited 2 files`, three messages to one agent `messaged 1 agent`. Commands, searches and launches count each call.
+- A background command counts as `started 1 shell`, a message to an agent as `messaged 1 agent`, a `TaskStop` on an agent, shell or workflow as `stopped 1 shell` (on a task that was already over as `checked on 1 agent`), and a `WebFetch` that only got a redirect as `hit 1 redirect`.
 - A group counts the commands that ran outside the [sandbox](sandbox.md#outside-the-sandbox): `ran 9 commands (1 unsandboxed)`. A succeeded command's own row ends `· unsandboxed`.
 - A question you answered (`Asked about …`) and a plan decision (`Plan approval`) stay visible, with your answer or decision on the line under them.
 
@@ -109,8 +110,6 @@ Rows for background work name the agent (`researcher › survey peers`), the she
 
 ```text
 • Started npm run dev in background
-• Checked on researcher › survey peers
-• Checked on shell npm run dev
 • Stopped shell npm run dev
 • Messaged researcher › survey peers
   ↳ queued
@@ -127,11 +126,11 @@ A row says what happened instead of the tool's usual verb when that verb would b
   ↳ redirected
 ```
 
-- `Moved <command> to background` is a command you moved with the `background` key, or that its timeout moved (`↳ timed out`).
+- `Moved <command> to background` is a command you moved with the `background` key, or that its timeout moved; the latter shows the time the call waited under it (`↳ after 2m`, or `↳ after 1s` when the model set a short timeout).
 - A `TaskStop` on a task that was already over keeps the tool's name and says how it ended: `↳ already completed (exit code 0)`, `↳ already failed (exit code 1)` or `↳ already stopped`.
 - A `WebFetch` that only got a redirect keeps the tool's name.
-- A task row that is running, waiting for approval, failed or denied shows the task id (`TaskOutput t3`).
-- A session saved before a task's name was recorded in its result shows each as its tool does: `Checked task t3`, `Stopped task t3`, `TaskStop t3` for a task that was already over, or `Messaged t3`.
+- A task row that is running, waiting for approval, failed or denied shows the task id (`TaskStop t3`).
+- A session saved before a task's name was recorded in its result shows each as its tool does: `Stopped task t3`, `TaskStop t3` for a task that was already over, or `Messaged t3`.
 
 A call that did not succeed is one of:
 
@@ -150,7 +149,6 @@ Rejected, denied and interrupted rows have a warning-coloured bullet, a failed r
 - Lines of an opened `Edit` or `Write` longer than 2000 characters end ` [line truncated]`.
 - An agent's launch row opens to the prompt the main agent gave it, as a workflow's row opens to its script; a message row opens to the message.
 - An agent's end row opens to its final reply, and a failed one shows its reason under it. A shell's end row shows its reason (`exit code 1`) when it failed and opens to the last lines of its output that the model was sent.
-- An opened `TaskOutput` starts at the output, without the status line.
 - A row that has nothing to add to its title and summary does not open: a command with no output, a file that is empty, a search with no match. A question's answers are on its row.
 - A plan revision you asked for opens to your feedback.
 - An opened result is the model's text, so it includes notices written to the model, such as `use offset=2001 to continue`.

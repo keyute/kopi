@@ -799,7 +799,7 @@ func TestWorkflowToolIsOfferedToTheMainSessionOnlyAndNotDescribedAsDeferredMCP(t
 }
 
 func TestNoChildSpecHasANeverChildToolWhateverItsDefinitionNames(t *testing.T) {
-	excluded := []string{"Agent", "SendMessage", "TaskOutput", "TaskStop", "Workflow"}
+	excluded := []string{"Agent", "SendMessage", "TaskStop", "Workflow"}
 	agentTools := []tool.Tool{testTool("Look", policy.Read, nil)}
 	for _, name := range excluded {
 		agentTools = append(agentTools, testTool(name, policy.Read, nil))
