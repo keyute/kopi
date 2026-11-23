@@ -3,12 +3,12 @@
 ## Running
 
 ```sh
-bin/kopi
-bin/kopi -c    # continue the latest session in this directory
-bin/kopi -r <id>
-bin/kopi -p "explain main.go"
-bin/kopi --mode execute --allowed-tools "Edit(docs/**)" -p "fix the typos in docs"
-git diff | bin/kopi -p "review this"
+kopi
+kopi -c    # continue the latest session in this directory
+kopi -r <id>
+kopi -p "explain main.go"
+kopi --mode execute --allowed-tools "Edit(docs/**)" -p "fix the typos in docs"
+git diff | kopi -p "review this"
 ```
 
 - `--model provider/id` picks the model for one run; see [`model`](configuration.md#model).

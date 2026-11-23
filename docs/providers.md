@@ -45,6 +45,13 @@
 
 - A provider whose built-in models ship without a base URL, such as `azure`, also needs `baseUrl`.
 - Fields worth setting, with the value used when omitted: `contextWindow` (128000), `maxTokens` (16384), `cost` (`input`, `output`, `cacheRead`, `cacheWrite`, per million tokens; all 0), `reasoning` (false), `input` (`["text"]`; add `"image"`).
+- `modelOverrides` under a provider, keyed by model id, changes a built-in model's values and takes the same fields; it also applies over a refreshed list:
+
+```json
+{"providers": {"openai-codex": {"modelOverrides": {"gpt-6-astra": {"contextWindow": 800000}}}}}
+```
+
+- The context window is where Kopi compacts: the conversation is summarised once it passes `contextWindow` less 16384 tokens, and a reply whose input exceeded `contextWindow` is compacted too. The value is not checked against what the provider accepts.
 - With no `model` set, the default model for a provider still follows the Kopi build.
 
 ## Identity
@@ -94,3 +101,4 @@
 - A Kopi provider identity.
 - A command to refresh the model lists on demand.
 - A key for the four-hour window.
+- A setting for where compaction starts apart from the context window.
