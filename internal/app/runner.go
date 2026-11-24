@@ -54,6 +54,11 @@ type runner struct {
 	// hold keeps notices from waking the model after an Interrupt until a human
 	// prompt starts a turn.
 	hold bool
+	// recording is set while recordSilently's record is in flight: the entries
+	// it handed are read one by one, so the queue can be empty with nothing
+	// handed while the session is still inside RecordNotices, which refuses a
+	// send.
+	recording bool
 	// told is the last mode line delivered to the model in the current session;
 	// "" when none was, or when one was not delivered. Only the main session's
 	// is used.
@@ -128,7 +133,7 @@ func (r *runner) submitLocked(ctx context.Context, p pigruntime.Prompt, now bool
 			c.mu.Unlock()
 			return nil, nil
 		}
-		if len(r.queued) == 0 {
+		if len(r.queued) == 0 && !r.recording {
 			return r.startTurn(ctx, []pigruntime.Prompt{p})
 		}
 		// Behind a command that has not finished, or a record in flight.
@@ -733,13 +738,13 @@ func (r *runner) finish(w *Work) {
 // command that finished or a waking notice; else it records the ready commands
 // without a reply, as nothing finished stays queued with no turn running. It
 // does nothing while a turn runs, a switch, a model change or a login is under
-// way, or a record is in flight (an entry is handed). It must be called with
-// queue and mu held, and releases mu.
+// way, or a record is in flight (an entry is handed, or recording is set). It
+// must be called with queue and mu held, and releases mu.
 func (r *runner) advanceLocked(wake bool) {
 	c := r.c
 	// A login holds the main session's wakes and silent records; a subagent's run
 	// is independent of it.
-	if c.closed || r.sess == nil || r.work != nil || c.switching != nil || r.changingModel() || r == c.main && c.login != nil || r.anyHanded() {
+	if c.closed || r.sess == nil || r.work != nil || c.switching != nil || r.changingModel() || r == c.main && c.login != nil || r.anyHanded() || r.recording {
 		c.mu.Unlock()
 		return
 	}
@@ -765,11 +770,13 @@ func (r *runner) recordSilently(prefix []*entry, wake bool) {
 	c := r.c
 	sess, emit := r.sess, r.emit
 	notices := r.commandNotices(prefix)
+	r.recording = true
 	c.mu.Unlock()
 	c.wg.Go(func() {
 		err := sess.RecordNotices(notices)
 		c.queue.Lock()
 		defer c.queue.Unlock()
+		r.recording = false
 		r.unhand(prefix)
 		// An entry still queued was not read, as a session that has been replaced
 		// does not report to the queue.

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -303,6 +304,48 @@ func TestCommandFinishingWithNoTurnWakesTheModel(t *testing.T) {
 	require.Len(t, req.UserTexts, 1)
 	wantNotice(t, req.UserTexts[0], a, exited)
 	assert.Equal(t, []string{"start:", "cmd:a:exited", "end"}, u.trace())
+}
+
+func TestPromptWhileASilentRecordIsInFlightWaitsForItsEnd(t *testing.T) {
+	u := newUserHarness(t, Config{})
+	a := u.cmd("a", "out-a")
+	u.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, u.requests, "ok")})
+	ends := turnEnds(u.c)
+
+	// Subscribed after the runner's own listener, this one holds the record open
+	// once the command left the queue: the session is still recording.
+	reached, release := make(chan struct{}), make(chan struct{})
+	u.c.mu.Lock()
+	sess := u.c.main.sess
+	u.c.mu.Unlock()
+	var once sync.Once
+	sess.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.UserCommand); ok {
+			once.Do(func() {
+				close(reached)
+				<-release
+			})
+		}
+	})
+
+	u.run(t, a)
+	wait(t, a.started)
+	require.True(t, u.c.Interrupt(Main))
+	wait(t, reached)
+	u.untilShape(t)
+
+	w, err := u.c.Submit(t.Context(), Main, "hi")
+	require.NoError(t, err)
+	assert.Nil(t, w, "no turn starts under the record")
+	assert.Equal(t, []string{"hi"}, u.shape())
+
+	close(release)
+	assert.Equal(t, event.Completed, receiveEnd(t, ends).Outcome.Status)
+	texts := receive(t, u.requests).UserTexts
+	require.NotEmpty(t, texts)
+	assert.Equal(t, "hi", texts[len(texts)-1])
+	assert.Empty(t, ofType[event.Error](u.rec.all()))
+	assert.Equal(t, 1, u.faux.CallCount(), "one turn")
 }
 
 func TestEscapeMidTurnKeepsTheCommandsAndSilencesThem(t *testing.T) {
