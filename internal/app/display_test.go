@@ -188,6 +188,29 @@ func TestDisplayBody(t *testing.T) {
 	}
 }
 
+func TestDisplayRefusedResultEndsRejected(t *testing.T) {
+	plan := tool.NewExitPlanMode(nil, nil)
+	ask := tool.NewAskUserQuestion(nil)
+	d := newDisplay([]tool.Tool{plan, ask, testTool("Plain", policy.Read, nil)})
+
+	revised := "The user asked for changes to the plan. The session is in plan mode. Their feedback:\nshorter"
+	got := d.apply(event.ToolEnd{Name: "ExitPlanMode", Output: revised}).(event.ToolEnd)
+	assert.Equal(t, event.EndRejected, got.Kind)
+	assert.False(t, got.IsError)
+	assert.Equal(t, "revision requested", got.Summary)
+	assert.Equal(t, "shorter", got.Body)
+
+	dismissed := "The user dismissed the questions without answering."
+	got = d.apply(event.ToolEnd{Name: "AskUserQuestion", Output: dismissed}).(event.ToolEnd)
+	assert.Equal(t, event.EndRejected, got.Kind)
+	assert.Equal(t, "dismissed", got.Summary)
+
+	approved := "The user approved the plan. The session is in execute mode. Carry out the plan now."
+	got = d.apply(event.ToolEnd{Name: "ExitPlanMode", Output: approved}).(event.ToolEnd)
+	assert.Equal(t, event.EndRan, got.Kind)
+	assert.Equal(t, "approved", got.Summary)
+}
+
 func TestDisplaySummarizesWithoutStart(t *testing.T) {
 	shown := testTool("Show", policy.Read, nil)
 	shown.Display.Summary = func(output string) string { return "shown " + output }

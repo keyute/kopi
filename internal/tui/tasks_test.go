@@ -441,7 +441,7 @@ func TestTasksListBulletsFollowTheStatus(t *testing.T) {
 		submitText(m, "/tasks")
 
 		th := m.th
-		for i, want := range []string{fg(th.text).Render("•"), fg(th.error).Render("•"), fg(th.error).Render("•"), fg(th.success).Render("•")} {
+		for i, want := range []string{fg(th.muted).Render("•"), fg(th.error).Render("•"), fg(th.warning).Render("•"), fg(th.success).Render("•")} {
 			drawn := tasksOf(m).d.options[i].drawn
 			assert.Contains(t, drawn[len(drawn)-1], "  "+want+" ", "option %d", i)
 		}

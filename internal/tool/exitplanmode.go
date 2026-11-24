@@ -79,6 +79,9 @@ func NewExitPlanMode(plans *Plans, review ReviewPlan) Tool {
 		Display: Display{
 			Title: func(json.RawMessage) string { return "Plan approval" },
 			Solo:  true,
+			Refused: func(output string) bool {
+				return strings.HasPrefix(output, planRevise) || strings.HasPrefix(output, planDismissed)
+			},
 			Body: func(output string) string {
 				if !strings.HasPrefix(output, planRevise) {
 					return ""

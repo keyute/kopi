@@ -46,7 +46,7 @@ type renderCache struct {
 	th      theme
 	entries map[string]cached
 	md      *markdown
-	// planMD draws a plan four columns in; created on first use.
+	// planMD draws a plan bodyIndent columns in; created on first use.
 	planMD *markdown
 }
 
@@ -80,10 +80,10 @@ func (c *renderCache) render(b transcript.Block, f blockFolds, spans func(string
 		out := renderRow(b.Call, f, width, th)
 		if b.Call.Plan != "" && (b.Call.State == transcript.Running || f.expanded[0]) {
 			if c.planMD == nil {
-				c.planMD = newMarkdown(max(1, width-4), th)
+				c.planMD = newMarkdown(max(1, width-bodyIndent), th)
 			}
 			for _, s := range c.planMD.lines(b.Key(), b.Call.Plan) {
-				out = append(out, line{text: "    " + s})
+				out = append(out, line{text: bodyPad(0) + s})
 			}
 		}
 		return out
@@ -101,72 +101,123 @@ func (c *renderCache) render(b transcript.Block, f blockFolds, spans func(string
 	return nil
 }
 
+// memberIndent is how far a member's ↳ sits in from the start of the group's
+// row, where its sentence text starts too, and bodyIndent how far an opened body
+// sits in from the start of its own row; a member's body is at their sum.
+const (
+	memberIndent = 2
+	bodyIndent   = 6
+)
+
+// tone is how a row's outcome reads in colour: a neutral, or a signal.
+type tone int
+
+const (
+	toneRunning tone = iota
+	toneOK
+	// toneRefused is a person or a rule saying no, or cutting the row short.
+	toneRefused
+	toneFailed
+)
+
+// styles are the colours of the row's bullet and of its line under the title.
+func (t tone) styles(th theme) (bullet, under lipgloss.Style) {
+	switch t {
+	case toneRunning:
+		return fg(th.muted), fg(th.dim)
+	case toneOK:
+		return fg(th.success), fg(th.dim)
+	case toneRefused:
+		return fg(th.warning), fg(th.warning)
+	}
+	return fg(th.error), fg(th.error)
+}
+
+func callTone(s transcript.State) tone {
+	switch s {
+	case transcript.OK:
+		return toneOK
+	case transcript.Denied, transcript.Rejected, transcript.Unfinished:
+		return toneRefused
+	case transcript.Failed:
+		return toneFailed
+	}
+	return toneRunning
+}
+
+func taskTone(s tool.TaskStatus) tone {
+	switch s {
+	case tool.TaskCompleted:
+		return toneOK
+	case tool.TaskStopped:
+		return toneRefused
+	case tool.TaskRunning:
+		return toneRunning
+	}
+	return toneFailed
+}
+
 func renderRow(c transcript.Call, f blockFolds, width int, th theme) []line {
-	none := lipgloss.NewStyle()
+	bullet, lineStyle := callTone(c.State).styles(th)
+	title := fg(th.text)
+	if c.State == transcript.Running {
+		return plain(hang("• ", bullet, c.Title, title, width))
+	}
+	h := commandHit(c)
+	var rest []line
 	switch c.State {
 	case transcript.OK:
-		out := withHit(openHit(c), hang("• ", fg(th.success), c.Title, none, width))
-		if c.Summary != "" {
-			out = append(out, plain(hang("  ↳ ", fg(th.dim), c.Summary, fg(th.dim), width))...)
-		}
+		h = openHit(c)
 		if f.expanded[0] {
-			out = append(out, openedLines(c, width, th)...)
+			rest = opened(c, 0, width, th)
 		}
-		return out
 	case transcript.Failed:
 		text := bodyText(c.Body)
 		head, tail, omitted := capBody(text)
-		h := commandHit(c)
 		if omitted > 0 {
 			h = hit{kind: hitOutput, id: c.ID}
 		}
-		out := withHit(h, hang("• ", fg(th.error), c.Title, none, width))
-		if c.Summary != "" {
-			out = append(out, plain(hang("  ↳ ", fg(th.error), c.Summary, fg(th.error), width))...)
-		}
 		if f.expanded[0] {
-			out = append(out, commandLines(c, width, th)...)
+			rest = commandLines(c, 0, width, th)
 		}
 		switch {
 		case text == "":
 		case omitted == 0 || f.expanded[0]:
-			out = append(out, mutedBody(text, width, th)...)
+			rest = append(rest, bodyLines(text, 0, width, th)...)
 		default:
-			out = append(out, mutedBody(strings.Join(head, "\n"), width, th)...)
-			out = append(out, plain(hang("    ", fg(th.dim), fmt.Sprintf("… %d more lines", omitted), fg(th.dim), width))...)
-			out = append(out, mutedBody(strings.Join(tail, "\n"), width, th)...)
+			rest = append(rest, bodyLines(strings.Join(head, "\n"), 0, width, th)...)
+			rest = append(rest, plain(hang(bodyPad(0), fg(th.dim), fmt.Sprintf("… %d more lines", omitted), fg(th.dim), width))...)
+			rest = append(rest, bodyLines(strings.Join(tail, "\n"), 0, width, th)...)
 		}
-		return out
-	case transcript.Denied, transcript.Rejected:
-		out := withHit(commandHit(c), hang("• ", fg(th.warning), c.Title, none, width))
-		out = append(out, plain(hang("  ↳ ", fg(th.dim), c.Summary, fg(th.dim), width))...)
+	default:
 		if f.expanded[0] {
-			out = append(out, commandLines(c, width, th)...)
+			rest = commandLines(c, 0, width, th)
 		}
-		if text := bodyText(c.Body); c.State == transcript.Rejected && text != "" {
-			out = append(out, mutedBody(text, width, th)...)
+		if c.State == transcript.Rejected {
+			rest = append(rest, bodyLines(bodyText(c.Body), 0, width, th)...)
 		}
-		return out
-	case transcript.Unfinished:
-		out := withHit(commandHit(c), hang("• ", fg(th.warning), c.Title, none, width))
-		out = append(out, plain(hang("  ↳ ", fg(th.dim), "interrupted", fg(th.dim), width))...)
-		if f.expanded[0] {
-			out = append(out, commandLines(c, width, th)...)
-		}
-		return out
 	}
-	return plain(hang("• ", fg(th.muted), c.Title, none, width))
+	out := withHit(h, hang("• ", bullet, c.Title, title, width))
+	summary := c.Summary
+	if c.State == transcript.Unfinished {
+		summary = "interrupted"
+	}
+	if summary != "" {
+		out = append(out, plain(under(summary, lineStyle, width))...)
+	}
+	return append(out, rest...)
 }
 
 // renderGroup draws a live group, or a sealed one closed behind ▸ or open
 // behind ▾; live and open groups list their members.
 func renderGroup(g transcript.Group, f blockFolds, width int, th theme) []line {
 	var out []line
+	text := fg(th.text)
 	switch {
 	case !g.Sealed:
-		out = plain(hang("• ", fg(th.success), g.Sentence(), lipgloss.NewStyle(), width))
+		out = plain(hang("• ", fg(th.success), g.Sentence(), text, width))
 	case f.open:
-		out = withHit(hit{kind: hitHandle, id: g.Key()}, hang("▾ ", lipgloss.NewStyle(), g.Sentence(), lipgloss.NewStyle(), width))
+		out = withHit(hit{kind: hitHandle, id: g.Key()}, hang("▾ ", text, g.Sentence(), text, width))
 	default:
 		return withHit(hit{kind: hitHandle, id: g.Key()}, hang("▸ ", fg(th.dim), g.Sentence(), fg(th.dim), width))
 	}
@@ -175,9 +226,9 @@ func renderGroup(g transcript.Group, f blockFolds, width int, th theme) []line {
 		if c.Summary != "" {
 			label += " · " + c.Summary
 		}
-		out = append(out, withHit(openHit(c), hang("  ↳ ", fg(th.dim), label, fg(th.dim), width))...)
+		out = append(out, withHit(openHit(c), under(label, fg(th.dim), width))...)
 		if f.expanded[i] {
-			out = append(out, openedLines(c, width, th)...)
+			out = append(out, opened(c, memberIndent, width, th)...)
 		}
 	}
 	return out
@@ -201,17 +252,25 @@ func commandHit(c transcript.Call) hit {
 	return hit{kind: hitOutput, id: c.ID}
 }
 
-// openedLines is what a successful call opens to, four in: its command when
-// the title cut it, then a file change's lines, else its body in full.
-func openedLines(c transcript.Call, width int, th theme) []line {
-	out := commandLines(c, width, th)
+// bodyPad is the columns before an opened body of a row that starts in columns in.
+func bodyPad(in int) string { return strings.Repeat(" ", in+bodyIndent) }
+
+// under is the line below a row: its arrow sits memberIndent in, and wrapped
+// text hangs under the text.
+func under(text string, style lipgloss.Style, width int) []string {
+	return hang(strings.Repeat(" ", memberIndent)+"↳ ", style, text, style, width)
+}
+
+// opened is what a successful call opens to: its command when the title cut
+// it, then a file change's lines, else its body in full.
+func opened(c transcript.Call, in, width int, th theme) []line {
+	out := commandLines(c, in, width, th)
 	if len(c.Preview) == 0 {
-		return append(out, mutedBody(bodyText(c.Body), width, th)...)
+		return append(out, bodyLines(bodyText(c.Body), in, width, th)...)
 	}
-	for _, l := range c.Preview {
-		for _, s := range previewLine(l, width-4, th) {
-			out = append(out, line{text: "    " + s})
-		}
+	pad := bodyPad(in)
+	for _, s := range previewRows(c.Preview, width-in-bodyIndent, th) {
+		out = append(out, line{text: pad + s})
 	}
 	return out
 }
@@ -219,18 +278,19 @@ func openedLines(c transcript.Call, width int, th theme) []line {
 // commandLines is the whole command after a "$", nil when the title shows it
 // all. It is not passed through bodyText, which would drop what the command
 // itself holds.
-func commandLines(c transcript.Call, width int, th theme) []line {
+func commandLines(c transcript.Call, in, width int, th theme) []line {
 	if c.Command == "" {
 		return nil
 	}
-	return plain(hang("    $ ", fg(th.dim), c.Command, lipgloss.NewStyle(), width))
+	return plain(hang(bodyPad(in)+"$ ", fg(th.dim), c.Command, fg(th.text), width))
 }
 
-func mutedBody(text string, width int, th theme) []line {
+// bodyLines draws text as the body of a row that starts in columns in.
+func bodyLines(text string, in, width int, th theme) []line {
 	if text == "" {
 		return nil
 	}
-	return plain(hang("    ", fg(th.muted), text, fg(th.muted), width))
+	return plain(hang(bodyPad(in), fg(th.muted), text, fg(th.muted), width))
 }
 
 // bodyText prepares a command's output for drawing: a carriage return redraws
@@ -292,9 +352,10 @@ func renderTurn(t transcript.Turn, v verb, width int, th theme) []string {
 // agent's: description's) first line cut to fit. A workflow adds its agent
 // count and a failed run's reason; a task with a result opens to it.
 func renderTask(t transcript.Task, expanded bool, width int, th theme) []line {
-	word, ps, ts := "finished", fg(th.success), lipgloss.NewStyle()
+	bullet, lineStyle := taskTone(tool.TaskStatus(t.Status)).styles(th)
+	word := "finished"
 	if t.Status != string(tool.TaskCompleted) {
-		word, ps, ts = t.Status, fg(th.error), fg(th.error)
+		word = t.Status
 	}
 	head := "shell " + word + " · "
 	if t.Agent != "" {
@@ -308,16 +369,19 @@ func renderTask(t transcript.Task, expanded bool, width int, th theme) []line {
 	if result != "" {
 		h = hit{kind: hitOutput, id: t.Key()}
 	}
-	out := withHit(h, hang("• ", ps, head+command+tail, ts, width))
+	out := withHit(h, hang("• ", bullet, head+command+tail, fg(th.text), width))
+	var parts []string
 	if t.Agents > 0 {
-		text := countText(t.Agents, "agent") + failedSuffix(t.Failed)
-		out = append(out, plain(hang("  ↳ ", fg(th.dim), text, fg(th.dim), width))...)
+		parts = append(parts, countText(t.Agents, "agent")+failedSuffix(t.Failed))
 	}
 	if t.Reason != "" {
-		out = append(out, plain(hang("  ", fg(th.error), t.Reason, fg(th.error), width))...)
+		parts = append(parts, t.Reason)
+	}
+	if len(parts) > 0 {
+		out = append(out, plain(under(strings.Join(parts, " · "), lineStyle, width))...)
 	}
 	if expanded {
-		out = append(out, mutedBody(result, width, th)...)
+		out = append(out, bodyLines(result, 0, width, th)...)
 	}
 	return out
 }

@@ -168,6 +168,13 @@ func TestAskUserQuestionTitle(t *testing.T) {
 	assert.Equal(t, "Asked", done(json.RawMessage(`{}`)))
 }
 
+func TestAskUserQuestionRefused(t *testing.T) {
+	refused := NewAskUserQuestion(nil).Display.Refused
+
+	assert.True(t, refused(questionsDismissed))
+	assert.False(t, refused("The user answered:\n"+`"Which database?" = "PostgreSQL"`))
+}
+
 func TestAskUserQuestionSummary(t *testing.T) {
 	summary := NewAskUserQuestion(nil).Display.Summary
 

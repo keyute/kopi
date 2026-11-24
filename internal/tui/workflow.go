@@ -304,7 +304,8 @@ func (w *workflowDialog) header() {
 	w.head[0] = "  " + text.Bold(true).Render(cut("Workflow › "+oneLine(run.Description), w.width-2))
 	parts := []string{text.Render(workflowCounts(run))}
 	if run.State == tool.TaskFailed || run.State == tool.TaskStopped {
-		parts = append(parts, fg(w.th.error).Render(string(run.State)))
+		_, word := taskTone(run.State).styles(w.th)
+		parts = append(parts, word.Render(string(run.State)))
 	}
 	end := run.Ended
 	if end.IsZero() {
@@ -330,16 +331,11 @@ func agentWhat(a app.WorkflowAgent) string {
 
 // stateBullet is the bullet of a list row in the colour of state.
 func stateBullet(state tool.TaskStatus, th theme) string {
-	c := th.text
-	switch state {
-	case tool.TaskCompleted:
-		c = th.success
-	case tool.TaskFailed, tool.TaskStopped:
-		c = th.error
-	case app.WorkflowQueued:
-		c = th.dim
+	if state == app.WorkflowQueued {
+		return fg(th.dim).Render("•")
 	}
-	return fg(c).Render("•")
+	bullet, _ := taskTone(state).styles(th)
+	return bullet.Render("•")
 }
 
 // stateRow is a list row of width cells: lead, what the row is, cut to leave

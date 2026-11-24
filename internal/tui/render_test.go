@@ -81,22 +81,111 @@ func TestWrapPreservesPlainText(t *testing.T) {
 	assert.Equal(t, "a\nb", strings.Join(wrap("a\nb", 10), "\n"))
 }
 
+func TestToneStylesBulletAndLine(t *testing.T) {
+	th := mocha()
+	for name, tc := range map[string]struct {
+		tone         tone
+		bullet, line lipgloss.Style
+	}{
+		"running": {toneRunning, fg(th.muted), fg(th.dim)},
+		"ok":      {toneOK, fg(th.success), fg(th.dim)},
+		"refused": {toneRefused, fg(th.warning), fg(th.warning)},
+		"failed":  {toneFailed, fg(th.error), fg(th.error)},
+	} {
+		bullet, line := tc.tone.styles(th)
+		assert.Equal(t, tc.bullet.Render("•"), bullet.Render("•"), name)
+		assert.Equal(t, tc.line.Render("↳"), line.Render("↳"), name)
+	}
+
+	for state, want := range map[transcript.State]tone{
+		transcript.Running: toneRunning, transcript.OK: toneOK, transcript.Denied: toneRefused,
+		transcript.Rejected: toneRefused, transcript.Unfinished: toneRefused, transcript.Failed: toneFailed,
+	} {
+		assert.Equal(t, want, callTone(state), state)
+	}
+	for status, want := range map[tool.TaskStatus]tone{
+		tool.TaskRunning: toneRunning, tool.TaskCompleted: toneOK, tool.TaskStopped: toneRefused, tool.TaskFailed: toneFailed,
+	} {
+		assert.Equal(t, want, taskTone(status), status)
+	}
+}
+
+func TestRowStatesColourTheirBulletAndLine(t *testing.T) {
+	th := mocha()
+	for name, tc := range map[string]struct {
+		call         transcript.Call
+		bullet, line lipgloss.Style
+		summary      string
+	}{
+		"ok":         {transcript.Call{State: transcript.OK, Summary: "s"}, fg(th.success), fg(th.dim), "s"},
+		"failed":     {transcript.Call{State: transcript.Failed, Summary: "s"}, fg(th.error), fg(th.error), "s"},
+		"denied":     {transcript.Call{State: transcript.Denied, Summary: "s"}, fg(th.warning), fg(th.warning), "s"},
+		"rejected":   {transcript.Call{State: transcript.Rejected, Summary: "s"}, fg(th.warning), fg(th.warning), "s"},
+		"unfinished": {transcript.Call{State: transcript.Unfinished}, fg(th.warning), fg(th.warning), "interrupted"},
+	} {
+		tc.call.Title = "t"
+		got := renderRow(tc.call, blockFolds{expanded: []bool{false}}, 40, th)
+		require.Len(t, got, 2, name)
+		assert.Equal(t, tc.bullet.Render("• ")+fg(th.text).Render("t"), got[0].text, name)
+		assert.Equal(t, tc.line.Render("  ↳ ")+tc.line.Render(tc.summary), got[1].text, name)
+	}
+}
+
+func TestMemberBodyDiffersFromLoneBodyOnlyByMemberIndent(t *testing.T) {
+	th := mocha()
+	pad := strings.Repeat(" ", memberIndent)
+	for name, c := range map[string]transcript.Call{
+		"output":  {ID: "a", State: transcript.OK, Title: "Bash ls", Summary: "2 lines", Command: "ls\nmore", Body: "a.go\nb.go"},
+		"preview": {ID: "a", State: transcript.OK, Title: "Edit a.go", Summary: "+1 -1", Preview: []tool.PreviewLine{{Kind: tool.Removed, Text: "old"}, {Kind: tool.Added, Text: "new"}}},
+		"prompt":  {ID: "a", State: transcript.OK, Title: "explore", Summary: "launched", Preview: []tool.PreviewLine{{Kind: tool.Context, Text: "look"}}},
+	} {
+		lone := opened(c, 0, 40, th)
+		member := opened(c, memberIndent, 40, th)
+		require.Len(t, lone, len(member), name)
+		require.NotEmpty(t, lone, name)
+		for i := range lone {
+			assert.Equal(t, pad+ansi.Strip(lone[i].text), ansi.Strip(member[i].text), name)
+		}
+
+		full := renderGroup(transcript.Group{Sealed: true, Calls: []transcript.Call{c, c}}, blockFolds{open: true, expanded: []bool{true, false}}, 40, th)
+		assert.Equal(t, member, full[2:2+len(member)], name)
+	}
+
+	// A line wider than the member's body column wraps differently from the lone
+	// row's, so these only check the width and the column.
+	long := strings.Repeat("word ", 10)
+	for name, c := range map[string]transcript.Call{
+		"output":  {ID: "a", State: transcript.OK, Title: "Bash ls", Summary: "1 line", Body: long},
+		"preview": {ID: "a", State: transcript.OK, Title: "Edit a.go", Summary: "+1", Preview: []tool.PreviewLine{{Kind: tool.Added, Text: long}}},
+	} {
+		member := opened(c, memberIndent, 40, th)
+		require.Greater(t, len(member), 1, name)
+		for _, l := range member {
+			assert.LessOrEqual(t, ansi.StringWidth(l.text), 40, name)
+			assert.True(t, strings.HasPrefix(ansi.Strip(l.text), strings.Repeat(" ", 8)), "%q starts eight in", l.text)
+		}
+		for _, l := range renderGroup(transcript.Group{Sealed: true, Calls: []transcript.Call{c, c}}, blockFolds{open: true, expanded: []bool{true, false}}, 40, th) {
+			assert.LessOrEqual(t, ansi.StringWidth(l.text), 40, name)
+		}
+	}
+}
+
 func TestTaskRow(t *testing.T) {
 	th := mocha()
 	for _, tc := range []struct {
 		status, want string
-		bullet, text lipgloss.Style
+		bullet       lipgloss.Style
 	}{
-		{"completed", "• shell finished · make build · 12s", fg(th.success), lipgloss.NewStyle()},
-		{"failed", "• shell failed · make build · 12s", fg(th.error), fg(th.error)},
-		{"stopped", "• shell stopped · make build · 12s", fg(th.error), fg(th.error)},
+		{"completed", "• shell finished · make build · 12s", fg(th.success)},
+		{"failed", "• shell failed · make build · 12s", fg(th.error)},
+		{"stopped", "• shell stopped · make build · 12s", fg(th.warning)},
 	} {
 		t.Run(tc.status, func(t *testing.T) {
 			m, _ := newTestModel(t, 60, 20)
 			send(m, event.TaskEnded{ID: "t1", Command: "make build\nmake test", Status: tc.status, Elapsed: 12 * time.Second})
 			assert.Equal(t, []string{"", tc.want}, body(m))
 			got := m.view().lines[len(m.view().lines)-1].text
-			assert.Equal(t, tc.bullet.Render("• ")+tc.text.Render(strings.TrimPrefix(tc.want, "• ")), got)
+			assert.Equal(t, tc.bullet.Render("• ")+fg(th.text).Render(strings.TrimPrefix(tc.want, "• ")), got)
 		})
 	}
 }
@@ -104,39 +193,39 @@ func TestTaskRow(t *testing.T) {
 func TestFailedShellRowShowsItsReason(t *testing.T) {
 	m, _ := newTestModel(t, 60, 20)
 	send(m, event.TaskEnded{ID: "t1", Command: "make build", Status: "failed", Elapsed: 12 * time.Second, Reason: "exit code 2"})
-	assert.Equal(t, []string{"", "• shell failed · make build · 12s", "  exit code 2"}, body(m))
+	assert.Equal(t, []string{"", "• shell failed · make build · 12s", "  ↳ exit code 2"}, body(m))
 }
 
 func TestShellRowOpensToItsOutput(t *testing.T) {
 	m, _ := newTestModel(t, 60, 20)
 	send(m, event.TaskEnded{ID: "t1", Command: "make build", Status: "completed", Elapsed: 12 * time.Second, Result: "step 1\rstep 2\nbuilt"})
 	clickText(t, m, "• shell finished · make build · 12s")
-	assert.Equal(t, []string{"", "• shell finished · make build · 12s", "    step 2", "    built"}, body(m))
+	assert.Equal(t, []string{"", "• shell finished · make build · 12s", "      step 2", "      built"}, body(m))
 }
 
 func TestAgentTaskRowOpensToItsReply(t *testing.T) {
 	m, _ := newTestModel(t, 60, 20)
 	send(m, event.TaskEnded{ID: "t3", Agent: "explore", Command: "look around", Status: "completed", Elapsed: 134 * time.Second, Result: "found it"})
 	clickText(t, m, "• explore finished · look around · 2m 14s")
-	assert.Equal(t, []string{"", "• explore finished · look around · 2m 14s", "    found it"}, body(m))
+	assert.Equal(t, []string{"", "• explore finished · look around · 2m 14s", "      found it"}, body(m))
 }
 
 func TestAgentTaskRow(t *testing.T) {
 	th := mocha()
 	for _, tc := range []struct {
 		status, want string
-		bullet, text lipgloss.Style
+		bullet       lipgloss.Style
 	}{
-		{"completed", "• explore finished · look around · 2m 14s", fg(th.success), lipgloss.NewStyle()},
-		{"failed", "• explore failed · look around · 2m 14s", fg(th.error), fg(th.error)},
-		{"stopped", "• explore stopped · look around · 2m 14s", fg(th.error), fg(th.error)},
+		{"completed", "• explore finished · look around · 2m 14s", fg(th.success)},
+		{"failed", "• explore failed · look around · 2m 14s", fg(th.error)},
+		{"stopped", "• explore stopped · look around · 2m 14s", fg(th.warning)},
 	} {
 		t.Run(tc.status, func(t *testing.T) {
 			m, _ := newTestModel(t, 60, 20)
 			send(m, event.TaskEnded{ID: "t3", Agent: "explore", Command: "look around\nmore", Status: tc.status, Elapsed: 134 * time.Second})
 			assert.Equal(t, []string{"", tc.want}, body(m))
 			got := m.view().lines[len(m.view().lines)-1].text
-			assert.Equal(t, tc.bullet.Render("• ")+tc.text.Render(strings.TrimPrefix(tc.want, "• ")), got)
+			assert.Equal(t, tc.bullet.Render("• ")+fg(th.text).Render(strings.TrimPrefix(tc.want, "• ")), got)
 		})
 	}
 }
@@ -163,8 +252,8 @@ func TestWorkflowEndRowShowsItsAgents(t *testing.T) {
 		"failed": {
 			workflowEnd("failed", 2, 2, "first line of why\nsecond line of why is long enough to wrap around the width", ""),
 			[]string{
-				"• workflow failed · audit route handlers · 6m 3s", "  ↳ 2 agents · 2 failed", "  first line of why",
-				"  second line of why is long enough to wrap around the width",
+				"• workflow failed · audit route handlers · 6m 3s", "  ↳ 2 agents · 2 failed · first line of why",
+				"    second line of why is long enough to wrap around the", "    width",
 			},
 		},
 		"stopped":   {workflowEnd("stopped", 3, 3, "", ""), []string{"• workflow stopped · audit route handlers · 6m 3s", "  ↳ 3 agents · 3 failed"}},
@@ -178,9 +267,28 @@ func TestWorkflowEndRowShowsItsAgents(t *testing.T) {
 	}
 
 	ls := renderTask(transcript.Task{Status: "failed", Agents: 1, Reason: "why"}, false, 40, th)
-	require.Len(t, ls, 3)
-	assert.Equal(t, fg(th.dim).Render("  ↳ ")+fg(th.dim).Render("1 agent"), ls[1].text)
-	assert.Equal(t, fg(th.error).Render("  ")+fg(th.error).Render("why"), ls[2].text)
+	require.Len(t, ls, 2)
+	assert.Equal(t, fg(th.error).Render("  ↳ ")+fg(th.error).Render("1 agent · why"), ls[1].text)
+}
+
+func TestTaskEndRowLineColours(t *testing.T) {
+	th := mocha()
+	for name, tc := range map[string]struct {
+		task  transcript.Task
+		style lipgloss.Style
+		line  string
+	}{
+		"stopped workflow":     {transcript.Task{Agent: "workflow", Status: "stopped", Agents: 3, Failed: 3}, fg(th.warning), "3 agents · 3 failed"},
+		"workflow w/ failures": {transcript.Task{Agent: "workflow", Status: "completed", Agents: 9, Failed: 1}, fg(th.dim), "9 agents · 1 failed"},
+	} {
+		ls := renderTask(tc.task, false, 60, th)
+		require.Len(t, ls, 2, name)
+		assert.Equal(t, tc.style.Render("  ↳ ")+tc.style.Render(tc.line), ls[1].text, name)
+	}
+
+	ls := renderTask(transcript.Task{Agent: "explorer", Status: "failed", Reason: "boom"}, false, 60, th)
+	require.Len(t, ls, 2)
+	assert.Equal(t, "  ↳ boom", ansi.Strip(ls[1].text))
 }
 
 func TestTaskWithAResultOpensToItVerbatim(t *testing.T) {
@@ -191,7 +299,7 @@ func TestTaskWithAResultOpensToItVerbatim(t *testing.T) {
 		require.Equal(t, head, body(m))
 
 		clickText(t, m, "• workflow finished · audit route handlers · 6m 3s")
-		assert.Equal(t, append(head, "    line one", "      indented line two that is long enough to wrap"), body(m))
+		assert.Equal(t, append(head, "      line one", "        indented line two that is long enough to wrap"), body(m))
 
 		clickText(t, m, "• workflow finished · audit route handlers · 6m 3s")
 		assert.Equal(t, head, body(m))
@@ -267,7 +375,7 @@ func TestPlanRowDrawsItsPlanWhileRunningAndOnlyWhenOpenedAfter(t *testing.T) {
 	assert.NotContains(t, joined, "# Heading", "the Markdown is rendered")
 	for _, l := range got[1:] {
 		if l != "" {
-			assert.True(t, strings.HasPrefix(l, "    "), "%q is four in", l)
+			assert.True(t, strings.HasPrefix(l, "      "), "%q is six in", l)
 		}
 	}
 	assert.Contains(t, joined, "Heading")
@@ -278,20 +386,64 @@ func TestPlanRowDrawsItsPlanWhileRunningAndOnlyWhenOpenedAfter(t *testing.T) {
 	assert.Contains(t, joined, "second step")
 	assert.NotContains(t, joined, "first step")
 
-	tr.Apply(event.ToolEnd{CallID: "p", Name: "ExitPlanMode", Summary: "revision requested", Body: "split step 2"})
+	tr.Apply(event.ToolEnd{CallID: "p", Name: "ExitPlanMode", Kind: event.EndRejected, Summary: "revision requested", Body: "split step 2"})
 	closed := blockFolds{expanded: []bool{false}}
-	assert.Equal(t, []string{"• Plan approval", "  ↳ revision requested"}, text(closed))
+	assert.Equal(t, []string{"• Plan approval", "  ↳ revision requested", "      split step 2"}, text(closed), "the feedback shows while the row is closed")
+	th := mocha()
+	raw := c.lines(tr.Blocks()[0], closed, nil, 40, th)
+	assert.Equal(t, fg(th.warning).Render("• ")+fg(th.text).Render("Plan approval"), raw[0].text)
+	assert.Equal(t, fg(th.warning).Render("  ↳ ")+fg(th.warning).Render("revision requested"), raw[1].text)
 
 	opened := text(blockFolds{expanded: []bool{true}})
 	require.Greater(t, len(opened), 4)
-	assert.Equal(t, []string{"• Plan approval", "  ↳ revision requested", "    split step 2"}, opened[:3])
+	assert.Equal(t, []string{"• Plan approval", "  ↳ revision requested", "      split step 2"}, opened[:3])
 	assert.Contains(t, strings.Join(opened[3:], "\n"), "second step", "the plan follows the feedback")
+	assert.Equal(t, []string{"• Plan approval", "  ↳ revision requested", "      split step 2"}, text(closed), "closing takes the plan away")
 
 	var bare transcript.Transcript
 	bare.Apply(event.ToolStart{CallID: "q", Name: "ExitPlanMode", Title: "Plan approval", Solo: true})
 	bare.Apply(event.PlanRequested{Token: 2, Plan: "# Heading\n\n- step"})
 	bare.Apply(event.ToolEnd{CallID: "q", Name: "ExitPlanMode", Summary: "approved"})
 	assert.Equal(t, hit{kind: hitOutput, id: "q"}, c.lines(bare.Blocks()[0], closed, nil, 40, mocha())[0].hit, "the plan alone makes the row open")
+}
+
+func TestDismissedPlanRowReadsDismissedAndOpensToItsPlan(t *testing.T) {
+	th := mocha()
+	var tr transcript.Transcript
+	tr.Apply(event.ToolStart{CallID: "p", Name: "ExitPlanMode", Title: "Plan approval", Solo: true})
+	tr.Apply(event.PlanRequested{Token: 1, Plan: "# Heading\n\n- first step"})
+	tr.Apply(event.ToolEnd{CallID: "p", Name: "ExitPlanMode", Kind: event.EndRejected, Summary: "dismissed"})
+	var c renderCache
+	text := func(f blockFolds) []string {
+		var out []string
+		for _, l := range c.lines(tr.Blocks()[0], f, nil, 40, th) {
+			out = append(out, strings.TrimRight(ansi.Strip(l.text), " "))
+		}
+		return out
+	}
+
+	closed := blockFolds{expanded: []bool{false}}
+	assert.Equal(t, []string{"• Plan approval", "  ↳ dismissed"}, text(closed))
+	assert.Equal(t, hit{kind: hitOutput, id: "p"}, c.lines(tr.Blocks()[0], closed, nil, 40, th)[0].hit)
+
+	opened := text(blockFolds{expanded: []bool{true}})
+	require.Greater(t, len(opened), 2)
+	assert.Equal(t, []string{"• Plan approval", "  ↳ dismissed"}, opened[:2])
+	for _, l := range opened[2:] {
+		if l != "" {
+			assert.True(t, strings.HasPrefix(l, "      ") && !strings.HasPrefix(l, "       "), "%q starts at column six", l)
+		}
+	}
+}
+
+func TestAgentPromptIsFlushAtTheBodyColumn(t *testing.T) {
+	th := mocha()
+	c := transcript.Call{ID: "a", State: transcript.OK, Title: "explore", Preview: []tool.PreviewLine{{Kind: tool.Context, Text: "look"}}}
+	lone, member := opened(c, 0, 40, th), opened(c, memberIndent, 40, th)
+	require.Len(t, lone, 1)
+	require.Len(t, member, 1)
+	assert.Equal(t, "      look", ansi.Strip(lone[0].text))
+	assert.Equal(t, "        look", ansi.Strip(member[0].text))
 }
 
 func TestPlanRowRewrapsWhenTheWidthChanges(t *testing.T) {
@@ -302,7 +454,7 @@ func TestPlanRowRewrapsWhenTheWidthChanges(t *testing.T) {
 	planLines := func(width int) []string {
 		var out []string
 		for _, l := range c.lines(tr.Blocks()[0], blockFolds{}, nil, width, mocha())[1:] {
-			out = append(out, strings.TrimPrefix(l.text, "    "))
+			out = append(out, strings.TrimPrefix(l.text, "      "))
 		}
 		return out
 	}
@@ -310,7 +462,7 @@ func TestPlanRowRewrapsWhenTheWidthChanges(t *testing.T) {
 	narrow, wide := planLines(40), planLines(80)
 	assert.Less(t, len(wide), len(narrow))
 	for _, l := range wide {
-		assert.LessOrEqual(t, ansi.StringWidth(l), 76, "%q fits the width less the indent", l)
+		assert.LessOrEqual(t, ansi.StringWidth(l), 74, "%q fits the width less the indent", l)
 	}
 }
 
@@ -406,9 +558,9 @@ func TestRejectedRowShowsFeedbackInFull(t *testing.T) {
 	th := mocha()
 	m, _ := newTestModel(t, 60, 20)
 	send(m, start("a"), event.ToolEnd{CallID: "a", IsError: true, Kind: event.EndRejected, Summary: "rejected", Body: "use b\ninstead"})
-	assert.Equal(t, []string{"", "• a.go", "  ↳ rejected", "    use b", "    instead"}, body(m))
+	assert.Equal(t, []string{"", "• a.go", "  ↳ rejected", "      use b", "      instead"}, body(m))
 	lines := m.view().lines
-	assert.Equal(t, fg(th.warning).Render("• ")+"a.go", lines[len(lines)-4].text)
+	assert.Equal(t, fg(th.warning).Render("• ")+fg(th.text).Render("a.go"), lines[len(lines)-4].text)
 	for _, l := range lines {
 		assert.Equal(t, hit{}, l.hit)
 	}
@@ -416,6 +568,18 @@ func TestRejectedRowShowsFeedbackInFull(t *testing.T) {
 	m, _ = newTestModel(t, 60, 20)
 	send(m, start("a"), event.ToolEnd{CallID: "a", IsError: true, Kind: event.EndRejected, Summary: "rejected"})
 	assert.Equal(t, []string{"", "• a.go", "  ↳ rejected"}, body(m))
+}
+
+func TestDismissedQuestionRowIsWarningColoured(t *testing.T) {
+	th := mocha()
+	var tr transcript.Transcript
+	tr.Apply(event.ToolStart{CallID: "a", Name: "AskUserQuestion", Title: "AskUserQuestion"})
+	tr.Apply(event.ToolEnd{CallID: "a", Name: "AskUserQuestion", Kind: event.EndRejected, Summary: "dismissed", Done: "Asked"})
+	var c renderCache
+	got := c.lines(tr.Blocks()[0], blockFolds{expanded: []bool{false}}, nil, 40, th)
+	require.Len(t, got, 2)
+	assert.Equal(t, fg(th.warning).Render("• ")+fg(th.text).Render("AskUserQuestion"), got[0].text)
+	assert.Equal(t, fg(th.warning).Render("  ↳ ")+fg(th.warning).Render("dismissed"), got[1].text)
 }
 
 func TestDeniedRowHasNoBodyAndNoHit(t *testing.T) {
@@ -443,7 +607,7 @@ func TestFailedRowDrawsErrorSummaryAndCapsItsBody(t *testing.T) {
 	for _, l := range got {
 		text = append(text, ansi.Strip(l.text))
 	}
-	assert.Equal(t, []string{"• t", "  ↳ failed", "    1", "    2", "    … 2 more lines", "    5", "    6"}, text)
+	assert.Equal(t, []string{"• t", "  ↳ failed", "      1", "      2", "      … 2 more lines", "      5", "      6"}, text)
 }
 
 func TestEditRowOpensToAllItsChangedLines(t *testing.T) {
@@ -464,10 +628,10 @@ func TestEditRowOpensToAllItsChangedLines(t *testing.T) {
 		clickText(t, m, "• Edited a.go")
 		got := body(m)
 		require.Len(t, got, 3+60)
-		assert.Equal(t, "    - old0", got[3])
-		assert.Equal(t, "    - old29", got[32])
-		assert.Equal(t, "    + new0", got[33])
-		assert.Equal(t, "    + new29", got[62])
+		assert.Equal(t, "      - old0", got[3])
+		assert.Equal(t, "      - old29", got[32])
+		assert.Equal(t, "      + new0", got[33])
+		assert.Equal(t, "      + new29", got[62])
 	})
 }
 
@@ -475,11 +639,11 @@ func TestCarriageReturnsKeepWhatFollowsTheLast(t *testing.T) {
 	m, _ := newTestModel(t, 40, 20)
 	send(m, start("a"), okOut("a", "3 lines", "10%\r50%\r100%\r\nline\r\nx\ry\r"))
 	press(m, ctrlO)
-	assert.Equal(t, []string{"", "• a.go", "  ↳ 3 lines", "    100%", "    line", "    y"}, body(m))
+	assert.Equal(t, []string{"", "• a.go", "  ↳ 3 lines", "      100%", "      line", "      y"}, body(m))
 
 	var pv []tool.PreviewLine
 	pv = append(pv, tool.PreviewLine{Kind: tool.Added, Text: "a\rb"})
-	assert.Equal(t, line{text: "    " + fg(mocha().success).Render("+ ") + fg(mocha().success).Render("ab")}, renderRow(transcript.Call{State: transcript.OK, Title: "t", Preview: pv}, blockFolds{expanded: []bool{true}}, 40, mocha())[1])
+	assert.Equal(t, line{text: "      " + fg(mocha().success).Render("+ ") + fg(mocha().success).Render("ab")}, renderRow(transcript.Call{State: transcript.OK, Title: "t", Preview: pv}, blockFolds{expanded: []bool{true}}, 40, mocha())[1])
 }
 
 func TestSoloRowBreaksAGroup(t *testing.T) {
@@ -503,7 +667,7 @@ func TestOpenedBashRowShowsTheWholeCommandBeforeItsOutput(t *testing.T) {
 
 		clickText(t, m, "• Bash first …")
 
-		assert.Equal(t, []string{"", "• Bash first …", "  ↳ 1 line", "    $ first", "      second line", "    out"}, body(m))
+		assert.Equal(t, []string{"", "• Bash first …", "  ↳ 1 line", "      $ first", "        second line", "      out"}, body(m))
 	})
 }
 
@@ -514,15 +678,15 @@ func TestBashRowWithACutCommandAndNoOutputOpens(t *testing.T) {
 
 		clickText(t, m, "• Bash first …")
 
-		assert.Equal(t, []string{"", "• Bash first …", "  ↳ no output", "    $ first", "      second"}, body(m))
+		assert.Equal(t, []string{"", "• Bash first …", "  ↳ no output", "      $ first", "        second"}, body(m))
 	})
 }
 
 func TestCommandLinesKeepWhatBodyTextWouldDrop(t *testing.T) {
 	th := mocha()
 	c := transcript.Call{ID: "a", Command: "echo a\rb\n\n  c"}
-	assert.Equal(t, []string{"    $ echo ab", "", "        c"}, plainRows(lineTexts(commandLines(c, 40, th))))
-	assert.Nil(t, commandLines(transcript.Call{}, 40, th))
+	assert.Equal(t, []string{"      $ echo ab", "", "          c"}, plainRows(lineTexts(commandLines(c, 0, 40, th))))
+	assert.Nil(t, commandLines(transcript.Call{}, 0, 40, th))
 }
 
 func TestRefusedAndFailedRowsOpenToTheCommand(t *testing.T) {
@@ -541,9 +705,9 @@ func TestRefusedAndFailedRowsOpenToTheCommand(t *testing.T) {
 
 				clickText(t, m, "• Bash first …")
 				open := body(m)
-				at := slices.Index(open, "    $ first")
+				at := slices.Index(open, "      $ first")
 				require.Greater(t, at, 2, "the command follows the summary")
-				assert.Equal(t, "      second", open[at+1])
+				assert.Equal(t, "        second", open[at+1])
 
 				clickText(t, m, "• Bash first …")
 				assert.Equal(t, closed, body(m))
@@ -582,10 +746,10 @@ func TestFailedRowWithACommandAndAShortBodyOpens(t *testing.T) {
 	c := transcript.Call{ID: "a", State: transcript.Failed, Title: "t", Summary: "failed", Body: "boom", Command: "a\nb"}
 	got := renderRow(c, blockFolds{expanded: []bool{false}}, 40, th)
 	assert.Equal(t, hit{kind: hitOutput, id: "a"}, got[0].hit)
-	assert.Equal(t, []string{"• t", "  ↳ failed", "    boom"}, plainRows(lineTexts(got)))
+	assert.Equal(t, []string{"• t", "  ↳ failed", "      boom"}, plainRows(lineTexts(got)))
 
 	got = renderRow(c, blockFolds{expanded: []bool{true}}, 40, th)
-	assert.Equal(t, []string{"• t", "  ↳ failed", "    $ a", "      b", "    boom"}, plainRows(lineTexts(got)))
+	assert.Equal(t, []string{"• t", "  ↳ failed", "      $ a", "        b", "      boom"}, plainRows(lineTexts(got)))
 }
 
 func lineTexts(ls []line) []string {
@@ -606,7 +770,7 @@ func TestOpenedGroupMemberShowsItsCommand(t *testing.T) {
 
 		clickText(t, m, "  ↳ Bash first … · 1 line")
 
-		assert.Equal(t, []string{"", "▾ Ran 2 commands", "  ↳ Bash first … · 1 line", "    $ first", "      second", "    out", "  ↳ Bash first … · 1 line", "", "Done."}, body(m))
+		assert.Equal(t, []string{"", "▾ Ran 2 commands", "  ↳ Bash first … · 1 line", "        $ first", "          second", "        out", "  ↳ Bash first … · 1 line", "", "Done."}, body(m))
 	})
 }
 
