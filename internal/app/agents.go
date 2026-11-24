@@ -74,7 +74,7 @@ func (c *Controller) buildSpecs(base, serverTools []tool.Tool, servers []mcpServ
 	tools := slices.DeleteFunc(slices.Clone(base), func(t tool.Tool) bool { return !named(t) })
 	mcp := slices.DeleteFunc(slices.Clone(serverTools), func(t tool.Tool) bool { return !named(t) })
 	if deferred := slices.DeleteFunc(slices.Clone(mcp), func(t tool.Tool) bool { return !t.Deferred }); len(deferred) > 0 {
-		tools = append(tools, tool.NewToolSearch(deferred, pigruntime.RankTools, pigruntime.LoadTools))
+		tools = append(tools, tool.NewToolSearch(func() []tool.Tool { return deferred }, nil, pigruntime.RankTools, pigruntime.LoadTools))
 	}
 	tools = append(tools, mcp...)
 
@@ -90,8 +90,8 @@ func (c *Controller) buildSpecs(base, serverTools []tool.Tool, servers []mcpServ
 	spec.tools = tools
 	classified := c.cfg.Classifier != nil
 	child := spec
-	child.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, classified, def, false)
-	spec.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, classified, def, true)
+	child.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, classified, def, false, false)
+	spec.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, classified, def, true, false)
 	return [2]agentSpec{child, spec}
 }
 
@@ -263,11 +263,14 @@ func (c *Controller) offerSearch(sess *pigruntime.Session) {
 // launch starts a run of the subagent agent in the background and returns its
 // task id.
 func (c *Controller) launch(ctx context.Context, agent, description, prompt string) (string, error) {
-	i := slices.IndexFunc(c.agents, func(s agentSpec) bool { return s.def.Name == agent })
+	c.mu.Lock()
+	agents := c.agents
+	c.mu.Unlock()
+	i := slices.IndexFunc(agents, func(s agentSpec) bool { return s.def.Name == agent })
 	if i < 0 {
 		return "", fmt.Errorf("failed to start subagent: %w: %s", tool.ErrUnknownAgent, agent)
 	}
-	spec := c.agents[i]
+	spec := agents[i]
 
 	c.queue.Lock()
 	c.mu.Lock()

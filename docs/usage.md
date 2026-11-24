@@ -18,7 +18,7 @@ git diff | kopi -p "review this"
 - Print mode prints only the final message of the reply.
 - Ctrl+C interrupts the turn. A failed or interrupted turn exits with status 1.
 - `-c` and `-r` work with `-p`.
-- Resuming (`-c`, `-r` or `/resume`) redraws the earlier conversation in the fullscreen interface, with its tool activity folded. With `-c` and `-r` it is drawn at once, while the [MCP servers](mcp.md#startup) connect.
+- Resuming (`-c`, `-r` or `/resume`) redraws the earlier conversation in the fullscreen interface, with its tool activity folded. With `-c` and `-r` the session is open at once, while the [MCP servers](mcp.md#startup) connect.
 - A session resumed with `-c` or `-r` runs on that run's [session model](configuration.md#model), not the one it last ran on.
 - On exit from a session with messages, the fullscreen interface prints the command to resume it.
 - `--mode` and `--allowed-tools` are described in [tools](tools.md#modes) and [permissions](permissions.md#rules). `kopi mcp list` is in [MCP](mcp.md#kopi-mcp-list).

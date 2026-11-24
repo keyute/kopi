@@ -535,6 +535,20 @@ func TestNewGateCopiesTools(t *testing.T) {
 	assert.ErrorIs(t, g.Before(t.Context(), "c2", "Bash", nil), ErrUnknownTool)
 }
 
+func TestAddMakesALaterToolKnown(t *testing.T) {
+	g := NewGate(NewAuthority(), nil, nil, nil, nil)
+	require.ErrorIs(t, g.Before(t.Context(), "c1", "mcp__late__echo", nil), ErrUnknownTool)
+
+	tools := map[string]ToolSpec{"mcp__late__echo": {Capability: Read}}
+	g.Add(tools)
+	tools["mcp__late__echo"] = ToolSpec{Capability: Exec}
+
+	require.NoError(t, g.Before(t.Context(), "c2", "mcp__late__echo", nil))
+	mode, err := g.Admit("c2", "mcp__late__echo", nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, Plan, mode)
+}
+
 func admitApproved(g *Gate, id, tool string) error {
 	gr := g.grants[id]
 	_, err := g.Admit(id, tool, gr.args, gr.target)

@@ -571,26 +571,12 @@ func (m *model) apply(ev event.Event) *view {
 	case event.SessionNamed:
 		m.title = ev.Name
 		return nil
-	case event.SessionPreview:
-		old := m.views[app.Main]
-		main := newView()
-		main.queued, main.unsent = old.queued, old.unsent
-		main.tr.Restore(ev.History)
-		m.views[app.Main] = main
-		return main
 	case event.SessionChanged:
 		old := m.views[app.Main]
 		unsent := old.unsent
-		main := old
-		if ev.Previewed {
-			// The view already holds this conversation: its opened rows and
-			// scroll position stand.
-			main.unsent = nil
-		} else {
-			// A turn running across the switch keeps its working row.
-			main = newView()
-			main.busy, main.turnStart, main.verb = old.busy, old.turnStart, old.verb
-		}
+		// A turn running across the switch keeps its working row.
+		main := newView()
+		main.busy, main.turnStart, main.verb = old.busy, old.turnStart, old.verb
 		delete(m.views, app.Main)
 		for _, a := range m.agents {
 			if v := m.views[a.ID]; v != nil {

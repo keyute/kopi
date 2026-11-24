@@ -93,12 +93,13 @@ type grant struct {
 // between the two, including one while an approval is pending, is caught.
 type Gate struct {
 	authority *Authority
-	tools     map[string]ToolSpec
 	rules     *Rules
 	approve   Approver
 	review    Reviewer
 	mu        sync.Mutex
-	grants    map[string]grant
+	// tools grows when Add gives the session more tools.
+	tools  map[string]ToolSpec
+	grants map[string]grant
 	// consecutiveDenials and totalDenials count the reviewer's denials.
 	consecutiveDenials, totalDenials int
 }
@@ -111,12 +112,24 @@ func NewGate(a *Authority, tools map[string]ToolSpec, rules *Rules, approve Appr
 	if rules == nil {
 		rules = &Rules{}
 	}
-	return &Gate{authority: a, tools: maps.Clone(tools), rules: rules, approve: approve, review: review, grants: map[string]grant{}}
+	g := &Gate{authority: a, tools: map[string]ToolSpec{}, rules: rules, approve: approve, review: review, grants: map[string]grant{}}
+	maps.Copy(g.tools, tools)
+	return g
+}
+
+// Add makes the gate know tools the session was given after it opened; a name
+// it already knows gets the new spec.
+func (g *Gate) Add(tools map[string]ToolSpec) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	maps.Copy(g.tools, tools)
 }
 
 func (g *Gate) Before(ctx context.Context, callID, tool string, args json.RawMessage) error {
 	args = bytes.Clone(args)
+	g.mu.Lock()
 	spec, ok := g.tools[tool]
+	g.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("tool %q: %w", tool, ErrUnknownTool)
 	}
@@ -274,6 +287,7 @@ func (g *Gate) Admit(callID, tool string, args json.RawMessage, target *Target) 
 	g.mu.Lock()
 	gr, ok := g.grants[callID]
 	delete(g.grants, callID)
+	known := g.tools[tool]
 	g.mu.Unlock()
 	if !ok || gr.tool != tool {
 		return Plan, fmt.Errorf("tool %q: %w", tool, ErrNoGrant)
@@ -281,7 +295,7 @@ func (g *Gate) Admit(callID, tool string, args json.RawMessage, target *Target) 
 	if !bytes.Equal(gr.args, args) || (gr.target == nil) != (target == nil) || (target != nil && *gr.target != *target) {
 		return Plan, fmt.Errorf("tool %q: arguments or target changed; make a new call: %w", tool, ErrChangedCall)
 	}
-	spec, _ := g.tools[tool].forCall(args)
+	spec, _ := known.forCall(args)
 	mode, gen, ok := g.authority.Permits(spec)
 	if (target == nil || !target.PlanFile) && (!ok || (spec.Capability.NeedsExecute() && gen != gr.generation)) {
 		return Plan, fmt.Errorf("tool %q: the session mode changed after the call was approved: %w", tool, ErrRevoked)
