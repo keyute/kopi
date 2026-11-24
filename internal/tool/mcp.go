@@ -42,6 +42,49 @@ func mcpNamePart(s string) string {
 	}, s)
 }
 
+// mcpLabel is <server>/<tool> of the name MCPName gives; the server part never
+// contains "__" (ValidateMCPServerName).
+func mcpLabel(name string) string {
+	rest := strings.TrimPrefix(name, policy.MCPPrefix)
+	if server, tool, ok := strings.Cut(rest, "__"); ok {
+		return server + "/" + tool
+	}
+	return rest
+}
+
+// MCPDisplay is how a call of the MCP tool named name reads. It needs only the
+// name, so a stored call reads the same while its server is not connected.
+func MCPDisplay(name string) Display {
+	label := mcpLabel(name)
+	// It runs before the arguments are validated, so it decodes leniently.
+	title := func(raw json.RawMessage) string {
+		line := label
+		var compact bytes.Buffer
+		if json.Compact(&compact, raw) == nil && compact.String() != "{}" {
+			line += " " + compact.String()
+		}
+		return titleLine(line)
+	}
+	return Display{
+		Title: title,
+		Done:  func(raw json.RawMessage) string { return "Called " + title(raw) },
+		Body: func(output string) string {
+			if output == noOutputNotice {
+				return ""
+			}
+			return output
+		},
+		Summary: func(output string) string {
+			if output == noOutputNotice {
+				return "no output"
+			}
+			return lineCount(countLines(output))
+		},
+		Preview: jsonPreview,
+		Action:  Action{Verb: "Called", One: "MCP tool", Many: "MCP tools"},
+	}
+}
+
 type mcpError struct {
 	text string
 	err  error
@@ -64,16 +107,7 @@ type MCPTool struct {
 // name against MCPNameLimit and other tools' names. Errors and supplemental
 // text share the same output bound.
 func NewMCP(t MCPTool, call func(ctx context.Context, args json.RawMessage) (string, error)) Tool {
-	label := t.Server + "/" + t.Tool
-	// It runs before the arguments are validated, so it decodes leniently.
-	title := func(raw json.RawMessage) string {
-		line := label
-		var compact bytes.Buffer
-		if json.Compact(&compact, raw) == nil && compact.String() != "{}" {
-			line += " " + compact.String()
-		}
-		return titleLine(line)
-	}
+	name := MCPName(t.Server, t.Tool)
 	description := t.Description
 	if description == "" {
 		description = "Tool " + t.Tool + " of MCP server " + t.Server + "."
@@ -83,8 +117,8 @@ func NewMCP(t MCPTool, call func(ctx context.Context, args json.RawMessage) (str
 		capability = policy.Read
 	}
 	return Tool{
-		Name:        MCPName(t.Server, t.Tool),
-		Label:       label,
+		Name:        name,
+		Label:       mcpLabel(name),
 		Description: description,
 		Parameters:  t.Parameters,
 		Capability:  capability,
@@ -110,24 +144,7 @@ func NewMCP(t MCPTool, call func(ctx context.Context, args json.RawMessage) (str
 			_, _ = out.Write([]byte(text))
 			return Result{Text: out.String()}, nil
 		},
-		Display: Display{
-			Title: title,
-			Done:  func(raw json.RawMessage) string { return "Called " + title(raw) },
-			Body: func(output string) string {
-				if output == noOutputNotice {
-					return ""
-				}
-				return output
-			},
-			Summary: func(output string) string {
-				if output == noOutputNotice {
-					return "no output"
-				}
-				return lineCount(countLines(output))
-			},
-			Preview: jsonPreview,
-			Action:  Action{Verb: "Called", One: "MCP tool", Many: "MCP tools"},
-		},
+		Display: MCPDisplay(name),
 	}
 }
 

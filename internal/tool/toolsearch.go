@@ -22,9 +22,11 @@ type toolSearchArgs struct {
 }
 
 // NewToolSearch returns the tool that loads deferred tools into the session.
-// rank picks at most limit names from tools for a keyword query; load makes the
-// named tools callable from the next response on.
-func NewToolSearch(deferred []Tool, rank func(query string, tools []Tool, limit int) []string, load func(ctx context.Context, names []string) error) Tool {
+// deferred is the tools to search when a call runs, and connecting, which may
+// be nil, names the MCP servers whose tools are not among them yet. rank picks at
+// most limit names from tools for a keyword query; load makes the named tools
+// callable from the next response on.
+func NewToolSearch(deferred func() []Tool, connecting func() []string, rank func(query string, tools []Tool, limit int) []string, load func(ctx context.Context, names []string) error) Tool {
 	return Tool{
 		Name:  "ToolSearch",
 		Label: "ToolSearch",
@@ -58,17 +60,24 @@ func NewToolSearch(deferred []Tool, rank func(query string, tools []Tool, limit 
 			if _, err := admit(policy.Target{}); err != nil {
 				return Result{}, err
 			}
-			names := exactToolNames(args.Query, deferred)
+			tools := deferred()
+			names := exactToolNames(args.Query, tools)
 			if names == nil {
-				names = rank(args.Query, deferred, *args.Limit)
+				names = rank(args.Query, tools, *args.Limit)
 			}
 			if len(names) == 0 {
-				return Result{Text: fmt.Sprintf("%s%q. Try other keywords, or exact names from the system prompt.", toolSearchNoMatch, args.Query)}, nil
+				text := fmt.Sprintf("%s%q. Try other keywords, or exact names from the system prompt.", toolSearchNoMatch, args.Query)
+				if connecting != nil {
+					if servers := connecting(); len(servers) > 0 {
+						text += " MCP servers still connecting, whose tools cannot be found yet: " + strings.Join(servers, ", ") + "."
+					}
+				}
+				return Result{Text: text}, nil
 			}
 			if err := load(ctx, names); err != nil {
 				return Result{}, fmt.Errorf("failed to load tools: %w", err)
 			}
-			return Result{Text: loadedText(names, deferred)}, nil
+			return Result{Text: loadedText(names, tools)}, nil
 		},
 		Display: Display{
 			Title: queryTitle("ToolSearch", false),

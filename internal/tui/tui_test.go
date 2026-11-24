@@ -63,20 +63,7 @@ func TestRunNormalQuitCancelsOwnedContext(t *testing.T) {
 
 func TestExitHint(t *testing.T) {
 	assert.Empty(t, exitHint(app.Status{SessionID: "s1", Model: "anthropic/claude-sonnet-4-5"}))
-	for _, tt := range []struct {
-		model string
-		want  string
-	}{
-		{"anthropic/claude-sonnet-4-5", "'anthropic/claude-sonnet-4-5'"},
-		{"custom/model name", "'custom/model name'"},
-		{"custom/model's-name", "'custom/model'\"'\"'s-name'"},
-		{"custom/$MODEL`id`$(id);&|<>*?\"name", "'custom/$MODEL`id`$(id);&|<>*?\"name'"},
-	} {
-		t.Run(tt.model, func(t *testing.T) {
-			assert.Equal(t, "Resume with: kopi -r s1 --model "+tt.want,
-				exitHint(app.Status{SessionID: "s1", Model: tt.model, MessageCount: 2}))
-		})
-	}
+	assert.Equal(t, "Resume with: kopi -r s1", exitHint(app.Status{SessionID: "s1", Model: "anthropic/claude-sonnet-4-5", MessageCount: 2}))
 }
 
 // waitLimit only guards against a hung test; no test relies on it elapsing.
@@ -135,7 +122,7 @@ func TestRunQuitsOnSecondInterruptAtIdleAndPrintsResumeHint(t *testing.T) {
 		interrupts <- os.Interrupt
 		interrupts <- os.Interrupt
 	})
-	assert.True(t, strings.HasSuffix(out, "Resume with: kopi -r s1 --model 'anthropic/claude-sonnet-4-5'\n"), "output ends %q", out[max(0, len(out)-100):])
+	assert.True(t, strings.HasSuffix(out, "Resume with: kopi -r s1\n"), "output ends %q", out[max(0, len(out)-100):])
 }
 
 // watchBuffer closes seen once the output holds want.

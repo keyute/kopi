@@ -129,7 +129,7 @@ func permissionRules(cwd, home string, tools []tool.Tool, perms config.Permissio
 		{Name: origins["permissions.deny"], Deny: perms.Deny},
 	}
 	// ToolSearch, Skill, WebSearch, AskUserQuestion, ExitPlanMode, Agent, SendMessage, Workflow and StructuredOutput are known to rules even when the session lacks them.
-	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil), tool.NewSkill(nil, ""), tool.NewWebSearch(nil), tool.NewAskUserQuestion(nil), tool.NewExitPlanMode(nil, nil), tool.NewAgent(nil, nil), tool.NewSendMessage(nil), tool.NewWorkflow(nil, nil, 1, 1), tool.NewStructuredOutput(nil, nil)}))
+	specs := tool.Specs(slices.Concat(tools, []tool.Tool{tool.NewToolSearch(nil, nil, nil, nil), tool.NewSkill(nil, ""), tool.NewWebSearch(nil), tool.NewAskUserQuestion(nil), tool.NewExitPlanMode(nil, nil), tool.NewAgent(nil, nil), tool.NewSendMessage(nil), tool.NewWorkflow(nil, nil, 1, 1), tool.NewStructuredOutput(nil, nil)}))
 	rules, err := policy.NewRules(cwd, home, specs, append(sources, flagRules...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load permission rules: %w", err)
@@ -318,10 +318,9 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	instructions, instructionErrs := instruction.Load(paths.InstructionFile, []instruction.Root{{Dir: instructionDir, Trusted: set.trusted}}, resolved.Config.InstructionFallbacks)
 	// From here until the frontend runs, SIGINT does not kill Kopi: stdio
 	// servers run in their own process group, so the terminal's SIGINT does not
-	// reach them, and the deferred Close must run. In print mode it ends startup
-	// at the wait for servers or at Open; in fullscreen the wait runs behind the
-	// interface and ends when the interface is quit (c.Close). ctx outlives
-	// startup as the runtime's signal.
+	// reach them, and the deferred Close must run. It ends startup at Start or
+	// Open, and in print mode at the wait for the servers. ctx outlives startup
+	// as the runtime's signal.
 	startCtx, stopStart := signal.NotifyContext(ctx, os.Interrupt)
 	defer stopStart()
 	// interrupts is notified only once the frontend is about to run; stopping
@@ -497,7 +496,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	cfg.Agents = agents
 	cfg.AgentTools = agentTools(tools, ws, outputs, shell, planShell, resolved.Config.Sandbox.AllowUnsandboxed)
 	if len(set.servers) > 0 {
-		cfg.Servers = func(ctx context.Context) ([]pigruntime.ServerStatus, error) { return waitServers(ctx, servers) }
+		cfg.Servers = servers
 	}
 	// Only the fullscreen interface records prompts.
 	if fullscreen {
@@ -524,7 +523,6 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		f = headless.New(c, prompt, cmd.OutOrStdout())
 	}
 	if fullscreen {
-		// The session opens behind the interface; prompts given meanwhile queue.
 		err = c.Start(startCtx, req)
 	} else {
 		// The headless frontend shows no notices or errors; startup's all
@@ -704,7 +702,7 @@ func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome
 func waitServers(ctx context.Context, servers *pigruntime.Servers) ([]pigruntime.ServerStatus, error) {
 	statuses := servers.Wait(ctx)
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("failed to start MCP servers: startup was interrupted: %w", err)
+		return nil, fmt.Errorf("%w: %w", app.ErrStartupInterrupted, err)
 	}
 	return statuses, nil
 }

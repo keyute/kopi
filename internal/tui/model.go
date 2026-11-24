@@ -572,11 +572,11 @@ func (m *model) apply(ev event.Event) *view {
 		m.title = ev.Name
 		return nil
 	case event.SessionChanged:
+		old := m.views[app.Main]
+		unsent := old.unsent
 		// A turn running across the switch keeps its working row.
 		main := newView()
-		old := m.views[app.Main]
 		main.busy, main.turnStart, main.verb = old.busy, old.turnStart, old.verb
-		unsent := old.unsent
 		delete(m.views, app.Main)
 		for _, a := range m.agents {
 			if v := m.views[a.ID]; v != nil {

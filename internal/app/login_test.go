@@ -5,7 +5,6 @@ import (
 	"errors"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -235,23 +234,15 @@ func TestLoginRefusals(t *testing.T) {
 }
 
 func TestLogoutRefusesWhileASwitchRuns(t *testing.T) {
-	started, release := make(chan struct{}), make(chan struct{})
-	h := firstRunHarness(t, Config{Servers: func(context.Context) ([]pigruntime.ServerStatus, error) {
-		close(started)
-		<-release
-		return nil, nil
-	}})
-	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
-	run := h.loginRun()
-	require.NotNil(t, run)
-	req := h.next(t, func(ev event.Event) bool { _, ok := ev.(event.LoginRequested); return ok }).(event.LoginRequested)
-	require.True(t, h.c.AnswerLogin(req.Token, "synthetic-code"))
-	wait(t, started)
-	wait(t, run.done)
+	h := openLoginHarness(t, Config{})
+	// A switch holds life until it finishes.
+	h.c.life.Lock()
+	_, err := h.c.Submit(t.Context(), Main, "/new")
+	require.NoError(t, err)
 
-	_, err := h.c.Submit(t.Context(), Main, "/logout "+loginProvider)
+	_, err = h.c.Submit(t.Context(), Main, "/logout "+loginProvider)
 	assert.ErrorIs(t, err, ErrBusy)
-	close(release)
+	h.c.life.Unlock()
 	h.next(t, func(ev event.Event) bool { _, ok := ev.(event.SessionChanged); return ok })
 }
 
@@ -383,6 +374,14 @@ func TestStartRunsFirstRunLoginThenOpens(t *testing.T) {
 	assert.Empty(t, ofType[event.Error](h.rec.all()))
 }
 
+func TestStartReportsConnectingServersWhileFirstRunLoginIsOpen(t *testing.T) {
+	h := firstRunHarness(t, Config{Servers: holdServers("s")})
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	require.NotNil(t, h.loginRun())
+	h.next(t, func(ev event.Event) bool { _, ok := ev.(event.LoginRequested); return ok })
+	assert.Contains(t, ofType[event.Activity](h.rec.all()), event.Activity{Text: "Connecting to MCP servers…"})
+}
+
 func TestFirstRunLoginCancelThenLoginOpens(t *testing.T) {
 	h := firstRunHarness(t, Config{})
 	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
@@ -445,25 +444,38 @@ func TestFirstRunLoginFailureReportsTheCauseThenMissing(t *testing.T) {
 	assert.NotContains(t, h.rec.all(), event.Notice{Text: "Login cancelled."})
 }
 
+func TestFirstRunLoginEndsWhileLifeIsHeld(t *testing.T) {
+	h := firstRunHarness(t, Config{})
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	run := h.loginRun()
+	require.NotNil(t, run)
+	req := h.next(t, func(ev event.Event) bool { _, ok := ev.(event.LoginRequested); return ok }).(event.LoginRequested)
+
+	// Close holds life while it waits for the login to end.
+	h.c.life.Lock()
+	require.True(t, h.c.AnswerLogin(req.Token, "synthetic-code"))
+	wait(t, run.done)
+	h.c.life.Unlock()
+
+	h.next(t, func(ev event.Event) bool { _, ok := ev.(event.SessionChanged); return ok })
+	assertSwitchDone(t, h.harness)
+}
+
 func TestStartUnattendedKeepsMissingCredentialError(t *testing.T) {
 	h := firstRunHarness(t, Config{Unattended: true})
 	require.ErrorIs(t, h.c.Start(t.Context(), OpenRequest{}), pigruntime.ErrNoCredential)
 	assert.Nil(t, h.loginRun())
 }
 
-func TestFirstRunLoginDoesNotRetryAnOpenThatStarted(t *testing.T) {
-	var calls atomic.Int32
-	h := firstRunHarness(t, Config{Servers: func(context.Context) ([]pigruntime.ServerStatus, error) {
-		calls.Add(1)
-		return nil, errors.New("servers down")
-	}})
+func TestFirstRunLoginDoesNotRetryAnOpenThatWasTried(t *testing.T) {
+	h := firstRunHarness(t, Config{Tools: []tool.Tool{unopenableOnce()}})
 	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
 	run := h.loginRun()
 	require.NotNil(t, run)
 	req := h.next(t, func(ev event.Event) bool { _, ok := ev.(event.LoginRequested); return ok }).(event.LoginRequested)
 	require.True(t, h.c.AnswerLogin(req.Token, "synthetic-code"))
 	h.notice(t, "Logged in to "+loginProvider+".")
-	h.next(t, func(ev event.Event) bool { e, ok := ev.(event.Error); return ok && e.Err.Error() == "servers down" })
+	h.next(t, func(ev event.Event) bool { e, ok := ev.(event.Error); return ok && errors.Is(e.Err, errOpen) })
 	wait(t, run.done)
 	assert.Empty(t, h.c.Status().SessionID)
 
@@ -471,8 +483,7 @@ func TestFirstRunLoginDoesNotRetryAnOpenThatStarted(t *testing.T) {
 	require.True(t, h.c.AnswerLogin(req.Token, "synthetic-code"))
 	wait(t, run.done)
 
-	assert.Equal(t, int32(1), calls.Load())
-	assert.Empty(t, h.c.Status().SessionID)
+	assert.Empty(t, h.c.Status().SessionID, "the open would succeed now, and is not tried again")
 }
 
 // unsetLoginHarness is an unset-model harness with a login provider and a

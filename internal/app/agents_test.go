@@ -165,7 +165,7 @@ func TestNoDefinitionsMeansNoAgentTools(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read", "AskUserQuestion"}, req.ToolNames)
-	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil)}, nil, nil, false, nil, false)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil)}, nil, nil, false, nil, false, false)), req.SystemPrompt)
 }
 
 func TestDefinitionsAddAgentAndSendMessageUnlessRuleRemovesThem(t *testing.T) {
@@ -199,21 +199,23 @@ func TestAgentToolsAreResolvedPerDefinition(t *testing.T) {
 	agentTools := []tool.Tool{
 		read, execTool(new(atomic.Int32)), testTool("Gone", policy.Read, nil), testTool("Agent", policy.Read, nil),
 		testTool("SendMessage", policy.Read, nil), testTool("TaskStop", policy.Read, nil),
-		tool.NewToolSearch(nil, nil, nil),
+		tool.NewToolSearch(nil, nil, nil, nil),
 	}
 	specs := map[string]policy.ToolSpec{"Read": {}, "Exec": {}, "Gone": {}, "ToolSearch": {}}
 	plain, named, all := agentDef("plain"), agentDef("named"), agentDef("all")
 	plain.Tools = []string{"Read"}
 	named.Tools = []string{"Read", "Gone", "Agent", "TaskStop", "mcp__s__a", "mcp__missing__x"}
-	statuses := servers(
-		pigruntime.ServerStatus{Name: "s", Instructions: "use s", Tools: []tool.Tool{serverTool("mcp__s__a"), serverTool("mcp__s__b")}},
-		pigruntime.ServerStatus{Name: "t", Tools: []tool.Tool{serverTool("mcp__t__c")}},
-	)
+	statuses := func() Servers {
+		return servers(
+			pigruntime.ServerStatus{Name: "s", Instructions: "use s", Tools: []tool.Tool{serverTool("mcp__s__a"), serverTool("mcp__s__b")}},
+			pigruntime.ServerStatus{Name: "t", Tools: []tool.Tool{serverTool("mcp__t__c")}},
+		)
+	}
 
 	t.Run("rules removing a tool", func(t *testing.T) {
 		rules, err := policy.NewRules(sb.Workspace, sb.Home, specs, policy.Source{Name: "test", Deny: []string{"Gone"}})
 		require.NoError(t, err)
-		a := newAgentHarness(t, sb, Config{Tools: []tool.Tool{read}, AgentTools: agentTools, Rules: rules, Servers: statuses}, all, named, plain)
+		a := newAgentHarness(t, sb, Config{Tools: []tool.Tool{read}, AgentTools: agentTools, Rules: rules, Servers: statuses()}, all, named, plain)
 
 		require.Len(t, a.c.agents, 3)
 		assert.Equal(t, []string{"Read", "Exec", "WebSearch", "ToolSearch", "mcp__s__a", "mcp__s__b", "mcp__t__c"}, toolNames(a.c.agents[0].tools))
@@ -230,11 +232,23 @@ func TestAgentToolsAreResolvedPerDefinition(t *testing.T) {
 	t.Run("rule removing ToolSearch", func(t *testing.T) {
 		rules, err := policy.NewRules(sb.Workspace, sb.Home, specs, policy.Source{Name: "test", Deny: []string{"ToolSearch"}})
 		require.NoError(t, err)
-		a := newAgentHarness(t, sb, Config{Tools: []tool.Tool{read}, AgentTools: agentTools, Rules: rules, Servers: statuses}, all)
+		a := newAgentHarness(t, sb, Config{Tools: []tool.Tool{read}, AgentTools: agentTools, Rules: rules, Servers: statuses()}, all)
 
 		assert.Equal(t, []string{"Read", "Exec", "Gone", "WebSearch"}, toolNames(a.c.agents[0].tools), "the deferred tools cannot be loaded, so the child has none")
 		assert.Equal(t, []string{"preamble"}, partNames(a.c.agents[0].prompt))
 	})
+}
+
+func TestSubagentStartedAfterAServerSettlesHasItsTools(t *testing.T) {
+	srv := holdServers("s")
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Servers: srv, Agents: []subagent.Definition{agentDef("all")}})
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	assert.Equal(t, []string{"WebSearch"}, toolNames(h.c.agents[0].tools))
+
+	srv.settle(pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{serverTool("mcp__s__t")}})
+
+	assert.Equal(t, []string{"WebSearch", "ToolSearch", "mcp__s__t"}, toolNames(h.c.agents[0].tools))
+	assert.Equal(t, []string{"WebSearch", "ToolSearch", "mcp__s__t"}, toolNames(h.c.workflowSpecs[0].tools))
 }
 
 func TestLaunchReturnsAtOnceWhileChildRunsWithItsDefinition(t *testing.T) {

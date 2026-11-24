@@ -19,12 +19,14 @@ var searchable = []Tool{
 	{Name: "mcp__docs__fetch"},
 }
 
+func searchableNow() []Tool { return searchable }
+
 func noRank(string, []Tool, int) []string { return nil }
 
 func noLoad(context.Context, []string) error { return nil }
 
 func TestToolSearchDescribesItself(t *testing.T) {
-	tool := NewToolSearch(searchable, noRank, noLoad)
+	tool := NewToolSearch(searchableNow, nil, noRank, noLoad)
 
 	assert.Equal(t, "ToolSearch", tool.Name)
 	assert.Equal(t, "ToolSearch", tool.Label)
@@ -42,7 +44,7 @@ func TestToolSearchDescribesItself(t *testing.T) {
 
 func TestToolSearchAdmitsBeforeLoading(t *testing.T) {
 	var order []string
-	tool := NewToolSearch(searchable,
+	tool := NewToolSearch(searchableNow, nil,
 		func(string, []Tool, int) []string {
 			order = append(order, "rank")
 			return []string{"mcp__docs__fetch"}
@@ -64,7 +66,7 @@ func TestToolSearchAdmitsBeforeLoading(t *testing.T) {
 
 func TestToolSearchDoesNotLoadWithoutAdmission(t *testing.T) {
 	loaded := false
-	tool := NewToolSearch(searchable, noRank, func(context.Context, []string) error {
+	tool := NewToolSearch(searchableNow, nil, noRank, func(context.Context, []string) error {
 		loaded = true
 		return nil
 	})
@@ -78,7 +80,7 @@ func TestToolSearchDoesNotLoadWithoutAdmission(t *testing.T) {
 
 func TestToolSearchLoadsRankedMatches(t *testing.T) {
 	var loaded []string
-	tool := NewToolSearch(searchable,
+	tool := NewToolSearch(searchableNow, nil,
 		func(query string, tools []Tool, limit int) []string {
 			assert.Equal(t, "issue tracker", query)
 			assert.Equal(t, searchable, tools)
@@ -99,7 +101,7 @@ func TestToolSearchLoadsRankedMatches(t *testing.T) {
 	assert.Equal(t, out.Text, tool.Display.Body(out.Text))
 
 	failed := errors.New("failed")
-	failing := NewToolSearch(searchable, func(string, []Tool, int) []string { return []string{"mcp__docs__fetch"} },
+	failing := NewToolSearch(searchableNow, nil, func(string, []Tool, int) []string { return []string{"mcp__docs__fetch"} },
 		func(context.Context, []string) error { return failed })
 	_, err = failing.Run(t.Context(), json.RawMessage(`{"query":"docs","limit":3}`), allowTarget)
 	require.ErrorIs(t, err, failed)
@@ -108,7 +110,7 @@ func TestToolSearchLoadsRankedMatches(t *testing.T) {
 
 func TestToolSearchExactNamesLoadOnlyThose(t *testing.T) {
 	var loaded []string
-	tool := NewToolSearch(searchable,
+	tool := NewToolSearch(searchableNow, nil,
 		func(string, []Tool, int) []string {
 			t.Error("rank called for exact names")
 			return nil
@@ -132,7 +134,7 @@ func TestToolSearchExactNamesLoadOnlyThose(t *testing.T) {
 
 func TestToolSearchReportsNoMatch(t *testing.T) {
 	loaded := false
-	tool := NewToolSearch(searchable, noRank, func(context.Context, []string) error {
+	tool := NewToolSearch(searchableNow, nil, noRank, func(context.Context, []string) error {
 		loaded = true
 		return nil
 	})
@@ -147,8 +149,33 @@ func TestToolSearchReportsNoMatch(t *testing.T) {
 	assert.False(t, loaded)
 }
 
+func TestToolSearchSearchesTheToolsOfTheMomentAndNamesConnectingServers(t *testing.T) {
+	var deferred []Tool
+	connecting := []string{"docs", "gh"}
+	var loaded []string
+	tool := NewToolSearch(func() []Tool { return deferred }, func() []string { return connecting }, noRank, func(_ context.Context, names []string) error {
+		loaded = names
+		return nil
+	})
+
+	out, err := tool.Run(t.Context(), json.RawMessage(`{"query":"mcp__docs__fetch"}`), allowTarget)
+	require.NoError(t, err)
+	assert.Equal(t, `No deferred tool matches "mcp__docs__fetch". Try other keywords, or exact names from the system prompt. MCP servers still connecting, whose tools cannot be found yet: docs, gh.`, out.Text)
+	assert.Equal(t, "no match", tool.Display.Summary(out.Text))
+
+	deferred, connecting = searchable, nil
+	out, err = tool.Run(t.Context(), json.RawMessage(`{"query":"mcp__docs__fetch"}`), allowTarget)
+	require.NoError(t, err)
+	assert.Equal(t, "Loaded 1 tool; call it in your next response:\n- mcp__docs__fetch", out.Text)
+	assert.Equal(t, []string{"mcp__docs__fetch"}, loaded)
+
+	out, err = tool.Run(t.Context(), json.RawMessage(`{"query":"weather"}`), allowTarget)
+	require.NoError(t, err)
+	assert.Equal(t, `No deferred tool matches "weather". Try other keywords, or exact names from the system prompt.`, out.Text)
+}
+
 func TestToolSearchRejectsBlankQuery(t *testing.T) {
-	tool := NewToolSearch(searchable, noRank, noLoad)
+	tool := NewToolSearch(searchableNow, nil, noRank, noLoad)
 	for _, args := range []string{`{}`, `{"query":"  "}`, `{"query":"docs","limit":0}`, `{"query":"docs","limit":21}`, `{"query":"docs","extra":1}`} {
 		t.Run(args, func(t *testing.T) {
 			admitted := false
@@ -163,7 +190,7 @@ func TestToolSearchRejectsBlankQuery(t *testing.T) {
 }
 
 func TestToolSearchDisplay(t *testing.T) {
-	d := NewToolSearch(searchable, noRank, noLoad).Display
+	d := NewToolSearch(searchableNow, nil, noRank, noLoad).Display
 
 	for _, tc := range []struct{ name, args, want string }{
 		{"no query", `{}`, "ToolSearch"},

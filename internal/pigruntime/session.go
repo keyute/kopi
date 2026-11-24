@@ -19,6 +19,7 @@ import (
 	"github.com/MichaelKinsy/PiG/coding/extension/host/subprocess"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
 )
 
@@ -26,7 +27,13 @@ import (
 // are never used: an un-drained Events channel stalls the agent loop, and
 // ListSessions resolves PiG's default agent dir, not the runtime's.
 type Session struct {
-	inner          *coding.Session
+	inner *coding.Session
+	// gate admits the session's tool calls; joining is the runtime's extension.
+	gate    *policy.Gate
+	joining *extension.Extension
+	// partsMu guards parts, the system prompt as it is now.
+	partsMu        sync.Mutex
+	parts          []PromptPart
 	sendInProgress atomic.Bool
 	// listenersMu guards listeners and nextID. notify holds it while calling
 	// listeners, so no listener may call back into Session.
@@ -179,6 +186,35 @@ func toAI(images []Image) []ai.ImageContent {
 }
 
 func (s *Session) ID() string { return s.inner.ID() }
+
+// SetPromptPart replaces the part of the system prompt that has p's name, or
+// adds p after the others, from the session's next model request. A part with
+// empty text removes the part of that name; the session may have none.
+func (s *Session) SetPromptPart(p PromptPart) {
+	s.partsMu.Lock()
+	defer s.partsMu.Unlock()
+	i := slices.IndexFunc(s.parts, func(q PromptPart) bool { return q.Name == p.Name })
+	switch {
+	case p.Text == "":
+		if i < 0 {
+			return
+		}
+		s.parts = slices.Delete(s.parts, i, i+1)
+	case i < 0:
+		s.parts = append(s.parts, p)
+	case s.parts[i] == p:
+		return
+	default:
+		s.parts[i] = p
+	}
+	s.inner.SetSystemPromptSections(promptSections(s.parts))
+}
+
+func (s *Session) sections() ai.OrderedSections {
+	s.partsMu.Lock()
+	defer s.partsMu.Unlock()
+	return promptSections(s.parts)
+}
 
 // Name is the session's name; empty when it has none.
 func (s *Session) Name() string { return s.inner.SessionName() }

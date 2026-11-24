@@ -159,7 +159,7 @@ func TestMCPDisplay(t *testing.T) {
 			assert.Equal(t, tc.want, d.Title(json.RawMessage(tc.args)))
 		})
 	}
-	assert.Equal(t, "a …", NewMCP(MCPTool{Server: "a\nb", Tool: "t"}, noCall).Display.Title(json.RawMessage(`{}`)))
+	assert.Equal(t, "a_b/t", NewMCP(MCPTool{Server: "a\nb", Tool: "t"}, noCall).Display.Title(json.RawMessage(`{}`)))
 	assert.Equal(t, `Called gh/get_issue {"n":1}`, d.Done(json.RawMessage(`{ "n": 1 }`)))
 	assert.Equal(t, "Called gh/get_issue", d.Done(json.RawMessage(`{}`)))
 	assert.Empty(t, d.Body(noOutputNotice))
@@ -170,6 +170,22 @@ func TestMCPDisplay(t *testing.T) {
 		{Kind: Context, Text: `  "n": 1`},
 		{Kind: Context, Text: "}"},
 	}, d.Preview(json.RawMessage(`{"n":1}`)))
+}
+
+func TestMCPDisplayNeedsOnlyTheName(t *testing.T) {
+	for _, tc := range []struct{ server, tool, want string }{
+		{"gh", "get_issue", "gh/get_issue"},
+		{"my.server", "get file", "my_server/get_file"},
+		{"a", "_b__c", "a/_b__c"},
+	} {
+		live := NewMCP(MCPTool{Server: tc.server, Tool: tc.tool}, noCall)
+		stored := MCPDisplay(live.Name)
+
+		assert.Equal(t, tc.want, live.Label)
+		assert.Equal(t, tc.want+` {"n":1}`, stored.Title(json.RawMessage(`{"n":1}`)))
+		assert.Equal(t, live.Display.Title(json.RawMessage(`{"n":1}`)), stored.Title(json.RawMessage(`{"n":1}`)))
+		assert.Equal(t, live.Display.Action, stored.Action)
+	}
 }
 
 func TestValidateMCPServerName(t *testing.T) {

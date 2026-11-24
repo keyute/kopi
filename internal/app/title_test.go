@@ -113,20 +113,18 @@ func TestTitleWorkerStartedAfterSessionSwitchChargesNothing(t *testing.T) {
 	assert.Empty(t, ofType[event.SessionNamed](h.rec.all()))
 }
 
-func TestPromptQueuedWhileOpeningNamesSession(t *testing.T) {
-	srv := holdServers()
-	h, title := unopenedTitleHarness(t, Config{Title: true, Servers: srv.wait})
+func TestPromptSentWhileServersConnectNamesSession(t *testing.T) {
+	srv := holdServers("s")
+	h, title := unopenedTitleHarness(t, Config{Title: true, Servers: srv})
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("one")})
 	title.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("Fix the build")})
 	named := subscribeTo[event.SessionNamed](h.c)
-	queued := subscribeTo[event.QueueChanged](h.c)
 
 	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
 	w, err := h.c.Submit(t.Context(), Main, "fix the build")
 	require.NoError(t, err)
-	assert.Nil(t, w)
-	receiveEvent(t, queued)
-	close(srv.release)
+	require.NotNil(t, w)
+	close(srv.grace)
 
 	assert.Equal(t, event.SessionNamed{Name: "Fix the build"}, receiveEvent(t, named))
 	assert.Equal(t, 1, title.CallCount())
@@ -280,7 +278,7 @@ func TestTitleCommitCoversPersistenceAndAnnouncement(t *testing.T) {
 		h.c.titleCommit.Unlock()
 	}
 	assert.False(t, locked, "title commit must cover persistence and announcement")
-	op, err := h.c.beginSwitch(nil)
+	op, err := h.c.beginSwitch(false)
 	require.NoError(t, err)
 	switching, switched := make(chan struct{}), make(chan error, 1)
 	go func() {

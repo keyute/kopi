@@ -136,7 +136,7 @@ func TestServersSkipLongAndDuplicateNames(t *testing.T) {
 		fmt.Sprintf("%s: name longer than 64 characters", long),
 		"a_b: same name as a.b",
 	}, st.Skipped)
-	assert.Equal(t, "srv/a.b", st.Tools[0].Label)
+	assert.Equal(t, "Tool a.b of MCP server srv.", st.Tools[0].Description)
 }
 
 func TestServersErrorResult(t *testing.T) {
@@ -1010,7 +1010,7 @@ func TestServersSuccessfulHTTPOutlivesConnectContext(t *testing.T) {
 	s, _ := startWith(t, map[string]config.MCPServer{"srv": {Command: "fake"}}, scriptedHTTP(t, fake, nil))
 	st := s.Wait(t.Context())[0]
 	require.NoError(t, st.Err)
-	require.ErrorIs(t, s.startup.Err(), context.Canceled)
+	require.ErrorIs(t, s.connect.Err(), context.Canceled)
 	out, err := call(t, st.Tools[0], `{"startup":true}`)
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"startup":true}`, out)
@@ -1072,4 +1072,91 @@ func TestServerToolsSaveALongResult(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, long, string(data))
 	assert.Contains(t, out, "full output: "+files[0])
+}
+
+// startHeld starts the servers "fast" and "slow"; slow does not connect until
+// release is closed.
+func startHeld(t *testing.T) (s *Servers, release chan struct{}) {
+	t.Helper()
+	release = make(chan struct{})
+	fakes := map[string]*mcpfake.Server{"fast": {Tools: []map[string]any{echoTool("a")}}, "slow": {Tools: []map[string]any{echoTool("b")}, Reply: echo}}
+	s, _ = startWith(t, map[string]config.MCPServer{"fast": {Command: "fake"}, "slow": {Command: "fake"}}, func(name string, _ config.MCPServer) (mcp.Transport, error) {
+		if name == "slow" {
+			<-release
+		}
+		return fakes[name].Connect(), nil
+	})
+	return s, release
+}
+
+func TestWatchReportsEachServerAsItSettles(t *testing.T) {
+	s, release := startHeld(t)
+	settled := make(chan ServerStatus, 2)
+	s.Watch(func(st ServerStatus) { settled <- st })
+
+	first := <-settled
+	require.NoError(t, first.Err)
+	assert.Equal(t, []string{"mcp__fast__a"}, toolNames(first))
+	assert.Equal(t, []string{"fast", "slow"}, s.Names())
+	assert.Equal(t, []string{"slow"}, s.Connecting())
+
+	// The time Wait gives the servers is up, and nothing waits: slow still joins.
+	s.wait = 0
+	close(release)
+	second := <-settled
+	require.NoError(t, second.Err)
+	assert.Empty(t, s.Connecting())
+	out, err := call(t, findTool(t, second, "mcp__slow__b"), `{"late":true}`)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"late":true}`, out)
+
+	late := make(chan ServerStatus, 2)
+	s.Watch(func(st ServerStatus) { late <- st })
+	assert.ElementsMatch(t, []string{"fast", "slow"}, []string{(<-late).Name, (<-late).Name}, "a later Watch is told of the servers already settled")
+}
+
+func TestWatchReportsAServerWaitGaveUpOn(t *testing.T) {
+	s, release := startHeld(t)
+	settled := make(chan ServerStatus, 2)
+	s.Watch(func(st ServerStatus) { settled <- st })
+	require.Equal(t, "fast", (<-settled).Name)
+
+	s.wait = 0
+	statuses := s.Wait(t.Context())
+	require.ErrorIs(t, statuses[1].Err, ErrServerStartTimeout)
+	close(release)
+
+	slow := <-settled
+	assert.Equal(t, "slow", slow.Name)
+	assert.ErrorIs(t, slow.Err, ErrServerStartTimeout)
+}
+
+func TestReadyReturnsWhenServersSettleOrTheirGraceIsOver(t *testing.T) {
+	s, release := startHeld(t)
+	<-s.servers[0].done
+
+	s.grace = 0
+	s.Ready(t.Context())
+	assert.Equal(t, []string{"slow"}, s.Connecting(), "a prompt waits no longer than the grace")
+
+	s.grace = time.Hour
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	s.Ready(cancelled)
+	assert.Equal(t, []string{"slow"}, s.Connecting())
+
+	close(release)
+	s.Ready(t.Context())
+	assert.Empty(t, s.Connecting())
+}
+
+func TestServersHaveLongerToConnectThanWaitWaits(t *testing.T) {
+	s := StartServers(ServerOptions{})
+	t.Cleanup(s.Close)
+
+	deadline, ok := s.connect.Deadline()
+	require.True(t, ok)
+	assert.WithinDuration(t, s.started.Add(30*time.Second), deadline, time.Second)
+	assert.Equal(t, 10*time.Second, s.wait)
+	assert.Equal(t, 2*time.Second, s.grace)
 }

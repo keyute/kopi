@@ -54,11 +54,9 @@ type Config struct {
 	// Errors are reported once as Error events, after the first session
 	// opens, before those about the MCP servers.
 	Errors []error
-	// Servers waits for the MCP servers to settle and returns their statuses;
-	// Open or Start calls it once, before the first session. Open returns its
-	// error unchanged; Start reports it as an Error event. Nil means there are
-	// no servers.
-	Servers func(ctx context.Context) ([]pigruntime.ServerStatus, error)
+	// Servers are the MCP servers, which join the session as they settle; nil
+	// means there are none.
+	Servers Servers
 	// Tasks is the background task manager the Bash tool shares; nil means one
 	// no tool shares, so there are never tasks.
 	Tasks Tasks
@@ -100,6 +98,22 @@ type Config struct {
 	Title bool
 }
 
+// Servers are the MCP servers of a run, already starting.
+type Servers interface {
+	// Names lists the servers, and Connecting those that have not settled.
+	Names() []string
+	Connecting() []string
+	// Watch calls fn with each server's status once it has settled, from one
+	// goroutine.
+	Watch(fn func(pigruntime.ServerStatus))
+	// Wait returns once the servers have settled or have had the time a run
+	// with one turn gives them, or when ctx is done.
+	Wait(ctx context.Context) []pigruntime.ServerStatus
+	// Ready returns once the servers have settled or have had the time a
+	// prompt waits for them, or when ctx is done.
+	Ready(ctx context.Context)
+}
+
 const maxReferenceEntries = 10000
 
 // Main is the main session's id.
@@ -121,12 +135,26 @@ const Main = ""
 type Controller struct {
 	rt  *pigruntime.Runtime
 	cfg Config
-	// tools and prompt are what every session opens with; set before the
-	// first session and not changed after.
-	tools  []tool.Tool
-	prompt []pigruntime.PromptPart
-	// agents are the subagents' tools and prompts, set with tools; workflowSpecs
-	// are the workflow agents', the default one first.
+	// builtin are the tools every session opens with ahead of the MCP servers'
+	// tools, and workflow the one after them; search is WebSearch. All are set
+	// once. searchable reports that ToolSearch can load the servers' tools.
+	builtin, workflow, search []tool.Tool
+	searchable                bool
+	// settled are the statuses of the MCP servers that have settled, sorted by
+	// name; life guards it. joined is closed once every server is among them.
+	settled []pigruntime.ServerStatus
+	joined  chan struct{}
+	// tools and prompt are what a session opens with now: builtin, the tools of
+	// the settled servers, then workflow. agents are the subagents' tools and
+	// prompts and workflowSpecs the workflow agents', the default one first.
+	// serverTools are the servers' tools among tools. All five are written
+	// with life and mu held, when a server settles.
+	tools       []tool.Tool
+	prompt      []pigruntime.PromptPart
+	serverTools []tool.Tool
+	// connecting are the configured servers not among settled; it is written
+	// with serverTools, so a server is in one of them at every moment.
+	connecting    []string
 	agents        []agentSpec
 	workflowSpecs []agentSpec
 	// skills is what users can type; skillErrs reports the skills it left out.
@@ -143,11 +171,11 @@ type Controller struct {
 	// and installing a replacement, including a resume of the same session.
 	// It is never held across wg.Wait: title workers need it to finish.
 	titleCommit sync.Mutex
-	// startup is what the first open that succeeds reports, so a failed first
-	// open does not lose it; life guards it once a session can be opened.
+	// startup is what the next open that succeeds reports after its
+	// SessionChanged, which clears the transcript: Config.Errors, and what the
+	// servers that settled with no session open reported. life guards it.
 	startup []event.Event
-	// attempted is set once the first open has been tried or its wait for the
-	// servers has failed; life guards it.
+	// attempted is set once the first open has been tried; life guards it.
 	attempted bool
 
 	// life serialises session start, switch and close.
@@ -208,6 +236,12 @@ type Controller struct {
 	// registered. The login's questions and an approval would otherwise share
 	// the one dialog the frontend has.
 	login *loginRun
+	// loginActivity is the Activity text of the running login; "" when it
+	// shows none.
+	loginActivity string
+	// activity serialises showActivity; it is taken before mu and by nothing
+	// else.
+	activity sync.Mutex
 	// requestSeq numbers the requests of every kind, so a token names one
 	// request for the Controller's lifetime; requests holds the end of each
 	// request still open, by token. Both are guarded by mu.
@@ -222,10 +256,6 @@ type Controller struct {
 type sessionSwitch struct {
 	work *Work
 	emit func(event.Event)
-	// cancelWait is set only for the first open started by Start, during which
-	// prompts are queued rather than refused; Close calls it to end the wait
-	// for the servers.
-	cancelWait context.CancelFunc
 }
 
 func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
@@ -248,40 +278,28 @@ func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
 	if cfg.Mode == policy.Execute {
 		c.authority.EnterExecute()
 	}
-	c.setup(nil)
+	for _, err := range slices.Concat(cfg.Errors, c.skillErrs) {
+		c.startup = append(c.startup, event.Error{Err: err})
+	}
+	c.setup()
 	cfg.Tasks.OnChange(c.taskChanged)
 	cfg.Tasks.OnForeground(func() { c.relay.emit(event.TasksChanged{}) })
 	c.limits = newLimits(rt.Limits, c.modelProvider, c.relay.emit)
 	if cfg.Limits {
 		c.relay.subscribe(c.limits.observe)
 	}
+	if cfg.Servers != nil {
+		c.joined = make(chan struct{})
+		if len(cfg.Servers.Names()) == 0 {
+			close(c.joined)
+		}
+		cfg.Servers.Watch(c.serverSettled)
+	}
 	return c
 }
 
-// setup sets the session tools and prompt from the built-in tools and
-// statuses, and returns the events about the servers.
-func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
-	var events []event.Event
-	var serverTools []tool.Tool
-	var servers []mcpServer
-	for _, st := range statuses {
-		if st.Err != nil {
-			events = append(events, event.Error{Err: fmt.Errorf("MCP server %s failed to start: %w", st.Name, st.Err)})
-			continue
-		}
-		server := mcpServer{name: st.Name, instructions: st.Instructions}
-		for _, t := range st.Tools {
-			if c.cfg.Rules.Removes(t.Name) {
-				continue
-			}
-			serverTools = append(serverTools, t)
-			server.tools = append(server.tools, t.Name)
-		}
-		for _, skipped := range st.Skipped {
-			events = append(events, event.Notice{Text: fmt.Sprintf("MCP server %s: skipped tool %s", st.Name, skipped)})
-		}
-		servers = append(servers, server)
-	}
+// setup sets the tools every session opens with besides the MCP servers'.
+func (c *Controller) setup() {
 	tools := slices.Clone(c.cfg.Tools)
 	if ask := tool.NewAskUserQuestion(c.askQuestion); !c.cfg.Unattended && !c.cfg.Rules.Removes(ask.Name) {
 		tools = append(tools, ask)
@@ -289,12 +307,11 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 	if c.planApproval() {
 		tools = append(tools, tool.NewExitPlanMode(c.cfg.Plans, c.reviewPlan))
 	}
-	var search []tool.Tool
 	if !c.cfg.Rules.Removes("WebSearch") {
-		search = append(search, tool.NewWebSearch(func(ctx context.Context, system, query string) (tool.SearchResult, error) {
+		c.search = []tool.Tool{tool.NewWebSearch(func(ctx context.Context, system, query string) (tool.SearchResult, error) {
 			return c.sideSearch(ctx, c.SmallModel(), system, query)
-		}))
-		tools = append(tools, search...)
+		})}
+		tools = append(tools, c.search...)
 	}
 	if len(c.cfg.Agents) > 0 && !c.cfg.Rules.Removes("Agent") {
 		launcher := agentLauncher{c}
@@ -303,37 +320,162 @@ func (c *Controller) setup(statuses []pigruntime.ServerStatus) []event.Event {
 			tools = append(tools, send)
 		}
 	}
-	if len(serverTools) > 0 {
-		toolSearch := tool.NewToolSearch(serverTools, pigruntime.RankTools, pigruntime.LoadTools)
-		if c.cfg.Rules.Removes(toolSearch.Name) {
-			// ToolSearch is the only way to load deferred tools.
-			serverTools = nil
-			for i := range servers {
-				servers[i].tools = nil
-			}
-		} else {
+	if c.cfg.Servers != nil {
+		toolSearch := tool.NewToolSearch(c.serverToolsNow, c.connectingNow, pigruntime.RankTools, pigruntime.LoadTools)
+		// ToolSearch is the only way to load deferred tools.
+		if c.searchable = !c.cfg.Rules.Removes(toolSearch.Name); c.searchable {
 			tools = append(tools, toolSearch)
 		}
 	}
-	tools = append(tools, serverTools...)
+	c.builtin = tools
 	// Workflow never reaches a subagent's tools, which buildAgents builds from
-	// search and serverTools.
+	// search and the servers' tools.
 	if c.workflowOffered() {
-		tools = append(tools, tool.NewWorkflow(c.cfg.Agents, workflowLauncher{c}, c.cfg.MaxWorkflows, c.cfg.MaxAgents))
+		c.workflow = []tool.Tool{tool.NewWorkflow(c.cfg.Agents, workflowLauncher{c}, c.cfg.MaxWorkflows, c.cfg.MaxAgents)}
 	}
-	c.tools = tools
-	c.prompt = buildPrompt(c.cfg.Workspace, c.tools, c.cfg.Instructions, servers, c.cfg.Classifier != nil, nil, false)
-	c.agents, c.workflowSpecs = c.buildAgents(search, serverTools, servers)
-	return events
+	c.rebuild()
 }
 
-// prepareStartup sets up the first session from statuses and keeps what it
-// reports once open: Config.Errors, then the events about the servers.
-func (c *Controller) prepareStartup(statuses []pigruntime.ServerStatus) {
-	for _, err := range slices.Concat(c.cfg.Errors, c.skillErrs) {
-		c.startup = append(c.startup, event.Error{Err: err})
+// rebuild sets what a session opens with from the settled servers. life is
+// held, or the Controller is not yet shared.
+func (c *Controller) rebuild() {
+	var serverTools []tool.Tool
+	var servers []mcpServer
+	var connecting []string
+	if c.cfg.Servers != nil {
+		connecting = slices.DeleteFunc(slices.Clone(c.cfg.Servers.Names()), func(name string) bool {
+			_, ok := slices.BinarySearchFunc(c.settled, name, func(s pigruntime.ServerStatus, name string) int { return strings.Compare(s.Name, name) })
+			return ok
+		})
 	}
-	c.startup = append(c.startup, c.setup(statuses)...)
+	for _, st := range c.settled {
+		if st.Err != nil {
+			continue
+		}
+		server := mcpServer{name: st.Name, instructions: st.Instructions}
+		for _, t := range c.offered(st) {
+			serverTools = append(serverTools, t)
+			server.tools = append(server.tools, t.Name)
+		}
+		servers = append(servers, server)
+	}
+	tools := slices.Concat(c.builtin, serverTools, c.workflow)
+	prompt := buildPrompt(c.cfg.Workspace, tools, c.cfg.Instructions, servers, c.cfg.Classifier != nil, nil, false, c.cfg.Servers != nil)
+	agents, workflowSpecs := c.buildAgents(c.search, serverTools, servers)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tools, c.prompt, c.serverTools, c.connecting, c.agents, c.workflowSpecs = tools, prompt, serverTools, connecting, agents, workflowSpecs
+}
+
+// offered are the tools of the settled server st that sessions get: those the
+// rules leave in, and none when nothing can load them.
+func (c *Controller) offered(st pigruntime.ServerStatus) []tool.Tool {
+	if !c.searchable {
+		return nil
+	}
+	return slices.DeleteFunc(slices.Clone(st.Tools), func(t tool.Tool) bool { return c.cfg.Rules.Removes(t.Name) })
+}
+
+// serverToolsNow are the tools of the servers settled so far.
+func (c *Controller) serverToolsNow() []tool.Tool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.serverTools
+}
+
+// connectingNow are the servers not yet settled and joined, sorted.
+func (c *Controller) connectingNow() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.connecting
+}
+
+// serverSettled gives the tools of st's server to the sessions opened from now
+// on and to the open main session at once, and the servers part to the open
+// main session once the last server has settled. A subagent or workflow agent
+// keeps what it opened with.
+func (c *Controller) serverSettled(st pigruntime.ServerStatus) {
+	c.life.Lock()
+	defer c.life.Unlock()
+	closed := c.isClosed()
+	c.mu.Lock()
+	sess := c.main.sess
+	switching := c.switching != nil
+	c.mu.Unlock()
+	// The session has the tools before ToolSearch can find them.
+	if !closed && sess != nil && st.Err == nil {
+		if err := sess.AddTools(c.offered(st)); err != nil {
+			st = pigruntime.ServerStatus{Name: st.Name, Err: err}
+		}
+	}
+	i, _ := slices.BinarySearchFunc(c.settled, st.Name, func(s pigruntime.ServerStatus, name string) int { return strings.Compare(s.Name, name) })
+	c.settled = slices.Insert(c.settled, i, st)
+	last := len(c.settled) == len(c.cfg.Servers.Names())
+	if last {
+		defer close(c.joined)
+	}
+	if closed {
+		return
+	}
+	c.rebuild()
+	var events []event.Event
+	if st.Err != nil {
+		events = append(events, event.Error{Err: fmt.Errorf("MCP server %s failed to start: %w", st.Name, st.Err)})
+	}
+	for _, skipped := range st.Skipped {
+		events = append(events, event.Notice{Text: fmt.Sprintf("MCP server %s: skipped tool %s", st.Name, skipped)})
+	}
+	if sess != nil && last {
+		// The part the session kept, if any, goes when no server has one.
+		part := pigruntime.PromptPart{Name: serversPart}
+		if p := c.prompt[len(c.prompt)-1]; p.Name == serversPart {
+			part = p
+		}
+		sess.SetPromptPart(part)
+	}
+	if sess == nil || switching {
+		// A pending switch's SessionChanged wipes what is emitted now; the
+		// next open that succeeds reports it.
+		c.startup = append(c.startup, events...)
+	} else {
+		for _, ev := range events {
+			c.relay.emit(ev)
+		}
+	}
+	if last {
+		c.showActivity()
+	}
+}
+
+// showActivity reports what the Controller is busy with outside a turn: a
+// login, else the MCP servers still connecting.
+func (c *Controller) showActivity() {
+	// Held across the read and the emit, so the last report is of the latest state.
+	c.activity.Lock()
+	defer c.activity.Unlock()
+	c.mu.Lock()
+	text := c.loginActivity
+	c.mu.Unlock()
+	if text == "" && len(c.connectingNow()) > 0 {
+		text = "Connecting to MCP servers…"
+	}
+	c.relay.emit(event.Activity{Text: text})
+}
+
+// awaitServers gives the servers still connecting the time a prompt waits for
+// them, and those that have settled the time to join.
+func (c *Controller) awaitServers(ctx context.Context) {
+	if c.cfg.Servers == nil {
+		return
+	}
+	c.cfg.Servers.Ready(ctx)
+	if len(c.cfg.Servers.Connecting()) > 0 {
+		return
+	}
+	select {
+	case <-c.joined:
+	case <-ctx.Done():
+	}
 }
 
 // Subscribe registers fn for every event of the current session plus
@@ -383,28 +525,29 @@ func (c *Controller) resolveModel(ctx context.Context) ([]event.Event, error) {
 	return []event.Event{event.Notice{Text: fmt.Sprintf("Using %s. Set \"model\" in %s to choose another.", ref, c.cfg.ConfigFile)}}, nil
 }
 
-// Open checks that req can be opened, waits for the MCP servers, opens the
-// first session with their tools, then emits each of Config.Errors and the
-// events about the servers.
+// Open checks that req can be opened, waits for the MCP servers as long as a
+// run with one turn does, opens the first session with the tools of those that
+// settled, then emits each of Config.Errors and the events about the servers.
 func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
 	notices, err := c.check(ctx, req)
 	if err != nil {
 		return err
 	}
-	statuses, err := c.servers(ctx)
-	if err != nil {
-		return err
+	if c.cfg.Servers != nil {
+		c.cfg.Servers.Wait(ctx)
+		select {
+		case <-c.joined:
+		case <-ctx.Done():
+		}
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("%w: %w", ErrStartupInterrupted, err)
+		}
 	}
-	c.startup = append(c.startup, notices...)
-	c.prepareStartup(statuses)
-	return c.start(ctx, req)
+	return c.first(ctx, req, notices)
 }
 
-// Start is Open without waiting: it returns the check's error, and otherwise
-// returns at once and opens the session in the background, reporting failure
-// as an Error event. Prompts given until the session opens are queued and
-// start its first turn; /new and /resume are refused with ErrBusy meanwhile.
-// The wait for the servers runs without life, so Close can end it.
+// Start is Open without the wait: the session opens at once, and each MCP
+// server joins it when it settles.
 //
 // When the check fails only because the model's provider has no credential,
 // an attended Start instead returns nil and runs that provider's login, as
@@ -418,48 +561,38 @@ func (c *Controller) Start(ctx context.Context, req OpenRequest) error {
 		if !c.canLoginFirst(ctx, err) {
 			return err
 		}
+		if c.cfg.Servers != nil {
+			c.showActivity()
+		}
 		return c.loginFirst(ctx, req, c.withLoginHint(err))
 	}
-	return c.startFirst(ctx, req, notices)
+	if c.cfg.Servers != nil {
+		c.showActivity()
+	}
+	return c.first(ctx, req, notices)
 }
 
-// startFirst opens the first session in the background; notices are reported
-// after it opens, ahead of the other startup events.
-func (c *Controller) startFirst(ctx context.Context, req OpenRequest, notices []event.Event) error {
-	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	op, err := c.beginSwitch(cancel)
+// first opens the session Open or Start owes.
+func (c *Controller) first(ctx context.Context, req OpenRequest, notices []event.Event) error {
+	c.life.Lock()
+	defer c.life.Unlock()
+	op, err := c.beginSwitch(false)
 	if err != nil {
-		cancel()
 		return err
 	}
-	if c.cfg.Servers != nil {
-		c.relay.emit(event.Activity{Text: "Connecting to MCP servers…"})
+	return c.startFirst(ctx, req, op, notices)
+}
+
+// startFirst is startSwitch for the open Open, Start or a login owes; notices
+// are reported after it opens, ahead of the other startup events. It runs with
+// life held.
+func (c *Controller) startFirst(ctx context.Context, req OpenRequest, op *sessionSwitch, notices []event.Event) error {
+	kept := c.startup
+	c.startup = slices.Concat(notices, kept)
+	if err := c.startSwitch(ctx, req, op); err != nil {
+		c.startup = kept
+		return err
 	}
-	go func() {
-		defer cancel()
-		statuses, err := c.servers(ctx)
-		if c.cfg.Servers != nil {
-			c.relay.emit(event.Activity{})
-		}
-		c.life.Lock()
-		defer c.life.Unlock()
-		if err == nil {
-			c.startup = append(c.startup, notices...)
-			c.prepareStartup(statuses)
-			err = c.startSwitch(ctx, req, op)
-		} else {
-			c.attempted = true
-			c.mu.Lock()
-			c.switching = nil
-			c.mu.Unlock()
-			for _, ev := range notices {
-				c.relay.emit(ev)
-			}
-		}
-		if err != nil {
-			c.relay.emit(event.Error{Err: err})
-		}
-	}()
 	return nil
 }
 
@@ -471,13 +604,6 @@ func (c *Controller) check(ctx context.Context, req OpenRequest) ([]event.Event,
 		return nil, err
 	}
 	return notices, c.rt.Check(ctx, pigruntime.OpenOptions{Model: c.Model(), ResumeID: req.ResumeID, Continue: req.Continue})
-}
-
-func (c *Controller) servers(ctx context.Context) ([]pigruntime.ServerStatus, error) {
-	if c.cfg.Servers == nil {
-		return nil, nil
-	}
-	return c.cfg.Servers(ctx)
 }
 
 func (c *Controller) NewSession(ctx context.Context) error {
@@ -495,18 +621,36 @@ func (c *Controller) Resume(ctx context.Context, id string) error {
 // life. start refuses once closed, and Close shuts the relay before releasing
 // life, so nothing reaches the runtime or a subscriber after Close.
 func (c *Controller) switchTo(ctx context.Context, req OpenRequest) error {
-	op, err := c.beginSwitch(nil)
+	op, err := c.beginSwitch(false)
 	if err != nil {
 		return err
 	}
 	go func() {
 		c.life.Lock()
 		defer c.life.Unlock()
-		if err := c.startSwitch(ctx, req, op); err != nil {
-			c.relay.emit(event.Error{Err: err})
-		}
+		c.finishSwitch(ctx, req, op)
 	}()
 	return nil
+}
+
+// finishSwitch runs the switch switchTo began, with life held. When it fails
+// and the session it was to replace stays open, the events of servers that
+// settled meanwhile are reported there.
+func (c *Controller) finishSwitch(ctx context.Context, req OpenRequest, op *sessionSwitch) {
+	err := c.startSwitch(ctx, req, op)
+	if err == nil {
+		return
+	}
+	c.relay.emit(event.Error{Err: err})
+	c.mu.Lock()
+	open := c.main.sess != nil
+	c.mu.Unlock()
+	if open {
+		for _, ev := range c.startup {
+			c.relay.emit(ev)
+		}
+		c.startup = nil
+	}
 }
 
 func (c *Controller) Sessions() ([]pigruntime.SessionInfo, error) {
@@ -673,7 +817,7 @@ func (c *Controller) Files() ([]Candidate, error) {
 }
 
 // TakeQueued removes and returns the human's input queued for the running turn
-// of session or, for Main, the first session. An unknown session has none.
+// of session. An unknown session has none.
 func (c *Controller) TakeQueued(session string) []event.Input {
 	c.queue.Lock()
 	defer c.queue.Unlock()
@@ -910,9 +1054,6 @@ func (c *Controller) Close(ctx context.Context) error {
 	if login != nil {
 		login.cancel()
 	}
-	if c.switching != nil && c.switching.cancelWait != nil {
-		c.switching.cancelWait()
-	}
 	if c.switching != nil && c.switching.work != nil {
 		w = c.switching.work
 	}
@@ -996,7 +1137,7 @@ func (c *Controller) stopTasks(ctx context.Context) error {
 func (c *Controller) start(ctx context.Context, req OpenRequest) error {
 	c.life.Lock()
 	defer c.life.Unlock()
-	op, err := c.beginSwitch(nil)
+	op, err := c.beginSwitch(false)
 	if err != nil {
 		return err
 	}
@@ -1004,10 +1145,10 @@ func (c *Controller) start(ctx context.Context, req OpenRequest) error {
 }
 
 // beginSwitch marks and stops in one queue section, before settlement can
-// drain input queued after an earlier Interrupt. cancelWait is non-nil only
-// for the first open started by Start, which a login's deferred open also
-// starts; every other switch is refused with ErrLoggingIn while a login runs.
-func (c *Controller) beginSwitch(cancelWait context.CancelFunc) (*sessionSwitch, error) {
+// drain input queued after an earlier Interrupt. login is set only for the
+// open a login owes; every other switch is refused with ErrLoggingIn while a
+// login runs.
+func (c *Controller) beginSwitch(login bool) (*sessionSwitch, error) {
 	c.queue.Lock()
 	defer c.queue.Unlock()
 	c.mu.Lock()
@@ -1015,7 +1156,7 @@ func (c *Controller) beginSwitch(cancelWait context.CancelFunc) (*sessionSwitch,
 		c.mu.Unlock()
 		return nil, ErrNoSession
 	}
-	if c.login != nil && cancelWait == nil {
+	if c.login != nil && !login {
 		c.mu.Unlock()
 		return nil, ErrLoggingIn
 	}
@@ -1023,7 +1164,7 @@ func (c *Controller) beginSwitch(cancelWait context.CancelFunc) (*sessionSwitch,
 		c.mu.Unlock()
 		return nil, ErrBusy
 	}
-	op := &sessionSwitch{work: c.main.work, emit: c.main.emit, cancelWait: cancelWait}
+	op := &sessionSwitch{work: c.main.work, emit: c.main.emit}
 	c.switching = op
 	c.mu.Unlock()
 	if op.work != nil {
@@ -1034,28 +1175,12 @@ func (c *Controller) beginSwitch(cancelWait context.CancelFunc) (*sessionSwitch,
 }
 
 // startSwitch runs with life held and resolves the captured operation, not
-// the current turn, which may already have deregistered. Once the session is
-// open, input still pending, which only the first open started by Start or a
-// later open after it failed can leave, starts the session's first turn in the
-// same queue section that ends the switch, ahead of any input given later.
-func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessionSwitch) (err error) {
+// the current turn, which may already have deregistered.
+func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessionSwitch) error {
 	defer func() {
-		c.queue.Lock()
-		defer c.queue.Unlock()
-		var parts []pigruntime.Prompt
-		if err == nil {
-			c.mu.Lock()
-			emit := c.main.emit
-			c.mu.Unlock()
-			parts = c.main.take(emit)
-		}
 		c.mu.Lock()
 		c.switching = nil
-		if len(parts) == 0 {
-			c.mu.Unlock()
-			return
-		}
-		_, _ = c.main.startTurn(ctx, parts)
+		c.mu.Unlock()
 	}()
 	c.mu.Lock()
 	if c.closed {
@@ -1086,7 +1211,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		if err != nil {
 			return err
 		}
-		c.startup = append(c.startup, notices...)
+		c.startup = slices.Concat(notices, c.startup)
 	}
 
 	later := c.attempted
@@ -1104,6 +1229,8 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		Continue:     req.Continue,
 		SystemPrompt: c.prompt,
 		Tools:        c.tools,
+		Joining:      c.joining(),
+		Later:        c.later(),
 		Authority:    c.authority,
 		Rules:        c.cfg.Rules,
 		Approve:      c.approver(d, c.main),
@@ -1227,6 +1354,24 @@ func (c *Controller) releaseSwitch(w *Work, emit func(event.Event), committed bo
 		}
 		emit(end)
 	}
+}
+
+// joining names the servers whose tools a session opened now may be given
+// later.
+func (c *Controller) joining() []string {
+	if !c.searchable {
+		return nil
+	}
+	return c.cfg.Servers.Names()
+}
+
+// later names the prompt parts a session opened now is given after the open:
+// the servers part, while servers are still to settle. It runs with life held.
+func (c *Controller) later() []string {
+	if c.cfg.Servers == nil || len(c.settled) == len(c.cfg.Servers.Names()) {
+		return nil
+	}
+	return []string{serversPart}
 }
 
 // workflowOffered reports that the main session has the Workflow tool.

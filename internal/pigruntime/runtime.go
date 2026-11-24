@@ -17,6 +17,7 @@ import (
 	"github.com/MichaelKinsy/PiG/agent"
 	"github.com/MichaelKinsy/PiG/ai"
 	"github.com/MichaelKinsy/PiG/coding"
+	"github.com/MichaelKinsy/PiG/coding/extension"
 	"github.com/pkg/browser"
 
 	"github.com/keyute/kopi/internal/policy"
@@ -41,8 +42,14 @@ type Options struct {
 }
 
 type Runtime struct {
-	svcs             *coding.AgentSessionServices
-	rt               *coding.Runtime
+	svcs *coding.AgentSessionServices
+	rt   *coding.Runtime
+	// joining holds the tools of root sessions that are not always callable or
+	// that join after an open. PiG fixes the tools a session is created with;
+	// the only ones a session reads again are an extension's registrations
+	// (PiG v0.7.0 coding/session_tool_registry.go refresh; recheck on a bump).
+	// It holds tool registrations only: no handlers, commands or flags.
+	joining          extension.Extension
 	installationFile string
 	refreshMu        sync.Mutex
 	modelsPath       string
@@ -104,7 +111,10 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		models.Close()
 		return nil, fmt.Errorf("failed to create pig services: %w", err)
 	}
-	rt, err := coding.NewRuntime(coding.RuntimeOptions{Services: svcs})
+	joining := extension.Extension{Name: "kopi", Path: "<kopi>"}
+	// The runner PiG builds keeps a copy, which shares this registry.
+	joining.InitializeToolRegistry()
+	rt, err := coding.NewRuntime(coding.RuntimeOptions{Services: svcs, NewExtensions: []extension.Extension{joining}})
 	if err != nil {
 		svcs.Close()
 		models.Close()
@@ -115,6 +125,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	return &Runtime{
 		svcs:             svcs,
 		rt:               rt,
+		joining:          joining,
 		installationFile: filepath.Join(opts.Home, "installation_id"),
 		openURL:          browser.OpenURL,
 		limitsClient:     &http.Client{},
@@ -164,8 +175,16 @@ type OpenOptions struct {
 	// Parent is the session this one works for; the transcript is saved beside the parent's, where Sessions does not list it.
 	Parent       *Session
 	SystemPrompt []PromptPart
-	Tools        []tool.Tool
-	Authority    *policy.Authority
+	// Later names the prompt parts that SetPromptPart gives after the open. A
+	// resumed or continued session keeps what its transcript has for each, a
+	// part or none, until then, whatever SystemPrompt says; a new session
+	// ignores it.
+	Later []string
+	Tools []tool.Tool
+	// Joining names the MCP servers whose tools AddTools may give the session
+	// after it opens. A session with a Parent takes none.
+	Joining   []string
+	Authority *policy.Authority
 	// Rules nil means no rules.
 	Rules *policy.Rules
 	// Approve nil means nobody can answer, so a call needing approval is denied.
@@ -239,19 +258,31 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	tools := make([]agent.AgentTool, 0, len(o.Tools))
 	names := make([]string, 0, len(o.Tools))
 	allowed := make(map[string]struct{}, len(o.Tools))
+	var deferred []tool.Tool
 	for _, t := range o.Tools {
-		tools = append(tools, agentTool{tool: t, gate: gate})
+		// A child has a runner of its own, which the runtime's extension is not
+		// part of; it keeps the tools it opens with.
+		if t.Deferred && o.Parent == nil {
+			deferred = append(deferred, t)
+		} else {
+			tools = append(tools, agentTool{tool: t, gate: gate})
+		}
 		if !t.Deferred {
 			names = append(names, t.Name)
 		}
 		allowed[t.Name] = struct{}{}
 	}
-	// Sections must be non-nil even when empty: nil with no SystemPrompt
-	// selects PiG's stock prompt.
-	sections := make(ai.OrderedSections, 0, len(o.SystemPrompt))
-	for _, p := range o.SystemPrompt {
-		sections = append(sections, ai.PromptSection{Name: p.Name, Value: &p.Text})
+	if o.Parent == nil {
+		// PiG admits a tool registered after the open only when the allowlist
+		// names or matches it.
+		for _, server := range o.Joining {
+			allowed[tool.MCPName(server, "")+"*"] = struct{}{}
+		}
+		if err := register(&r.joining, deferred); err != nil {
+			return nil, fmt.Errorf("failed to open session: %w", err)
+		}
 	}
+	sections := promptSections(o.SystemPrompt)
 	// InitialActiveToolNames must be set too: nil falls back to PiG's
 	// read/bash/edit/write defaults. An explicit Model also stops a resumed
 	// session from restoring the model it was saved with.
@@ -292,8 +323,23 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	// InitialActiveToolNames says, and a resumed session restores the tools
 	// its transcript last declared, so deferred tools are deactivated here.
 	sess.SetActiveToolsByName(names)
+	s := &Session{inner: sess, gate: gate, parts: slices.Clone(o.SystemPrompt)}
+	if o.Parent == nil {
+		s.joining = &r.joining
+	}
 	if o.ResumeID != "" || o.Continue {
 		a := sess.Agent()
+		var stored ai.OrderedSections
+		if current := ai.GetCurrentSystemMessage(a.MessagesSnapshot()); current != nil {
+			stored = current.Sections
+		}
+		for _, name := range o.Later {
+			part := PromptPart{Name: name}
+			if i := slices.IndexFunc(stored, func(p ai.PromptSection) bool { return p.Name == name }); i >= 0 && stored[i].Value != nil {
+				part.Text = *stored[i].Value
+			}
+			s.SetPromptPart(part)
+		}
 		previous := a.PreparePromptHook()
 		a.SetPreparePrompt(func(ctx context.Context, messages []agent.AgentMessage) ([]agent.AgentMessage, error) {
 			if previous != nil {
@@ -303,6 +349,9 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 					return nil, err
 				}
 			}
+			// The parts as they are now: SetPromptPart may have changed them
+			// since the open.
+			sections := s.sections()
 			history := a.MessagesSnapshot()
 			current := ai.GetCurrentSystemMessage(history)
 			var committed ai.OrderedSections
@@ -346,7 +395,6 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 			return slices.Concat(messages[:at], repair, messages[at:]), nil
 		})
 	}
-	s := &Session{inner: sess}
 	if o.Recall != nil {
 		s.recallAfterCompaction(o.Recall)
 	}
@@ -541,4 +589,14 @@ func (r *Runtime) Close() {
 	r.svcs.Close()
 	// svcs does not close a model runtime it was handed.
 	r.svcs.ModelRuntime().Close()
+}
+
+// promptSections is parts as PiG takes them. It is non-nil even when empty: nil
+// with no SystemPrompt selects PiG's stock prompt.
+func promptSections(parts []PromptPart) ai.OrderedSections {
+	sections := make(ai.OrderedSections, 0, len(parts))
+	for _, p := range parts {
+		sections = append(sections, ai.PromptSection{Name: p.Name, Value: &p.Text})
+	}
+	return sections
 }

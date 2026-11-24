@@ -2,6 +2,7 @@ package pigruntime
 
 import (
 	"context"
+	"fmt"
 	"slices"
 
 	"github.com/MichaelKinsy/PiG/coding/extension/builtin/toolsearch"
@@ -19,6 +20,31 @@ func LoadTools(ctx context.Context, names []string) error {
 		return ErrNoTurn
 	}
 	s.loadTools(names)
+	return nil
+}
+
+// AddTools gives the session tools it did not open with, from its next model
+// request; none is callable until LoadTools makes it so. Each is a Deferred
+// tool of a server OpenOptions.Joining named. A session with a Parent takes
+// none.
+func (s *Session) AddTools(tools []tool.Tool) error {
+	if len(tools) == 0 {
+		return nil
+	}
+	if s.joining == nil {
+		return fmt.Errorf("failed to add tools: %w", ErrNoJoining)
+	}
+	s.gate.Add(tool.Specs(tools))
+	if err := register(s.joining, tools); err != nil {
+		return fmt.Errorf("failed to add tools: %w", err)
+	}
+	s.toolsMu.Lock()
+	err := s.inner.RefreshTools()
+	s.toolsMu.Unlock()
+	if err != nil {
+		return fmt.Errorf("failed to add tools: %w", reword(err))
+	}
+	s.notify(event.ToolsChanged{})
 	return nil
 }
 

@@ -41,9 +41,7 @@ type runner struct {
 	// The fields below are guarded by Controller.queue.
 
 	// pending is the input queued for the running turn, the only source of
-	// QueueChanged. It is non-empty only while a turn is registered, or once
-	// the first open was started by Start and until a session opens and takes
-	// it.
+	// QueueChanged. It is non-empty only while a turn is registered.
 	pending []pigruntime.Prompt
 	// notices are the task notices waiting for the model. They are never part
 	// of pending: they are not the human's input, so they are never reported,
@@ -80,10 +78,9 @@ func (m mainRole) begin(w *Work) error {
 
 func (mainRole) end(*Work, []pigruntime.Prompt) {}
 
-// submit starts a turn with p or queues p for the running one or, during the
-// first open started by Start, for the first session. It never waits for a
-// turn to end: input given after an interrupt starts the next turn once the
-// stopped one ends.
+// submit starts a turn with p or queues p for the running one. It never waits
+// for a turn to end: input given after an interrupt starts the next turn once
+// the stopped one ends.
 func (r *runner) submit(ctx context.Context, p pigruntime.Prompt, now bool) (*Work, error) {
 	r.c.queue.Lock()
 	defer r.c.queue.Unlock()
@@ -94,7 +91,6 @@ func (r *runner) submit(ctx context.Context, p pigruntime.Prompt, now bool) (*Wo
 func (r *runner) submitLocked(ctx context.Context, p pigruntime.Prompt, now bool) (*Work, error) {
 	c := r.c
 	c.mu.Lock()
-	first := c.switching != nil && c.switching.cancelWait != nil
 	if c.closed {
 		c.mu.Unlock()
 		return nil, ErrNoSession
@@ -103,16 +99,16 @@ func (r *runner) submitLocked(ctx context.Context, p pigruntime.Prompt, now bool
 		c.mu.Unlock()
 		return nil, ErrLoggingIn
 	}
-	if r.sess == nil && !first {
+	if r.sess == nil {
 		c.mu.Unlock()
 		return nil, ErrNoSession
 	}
-	if (c.switching != nil && !first) || r.changingModel() {
+	if c.switching != nil || r.changingModel() {
 		c.mu.Unlock()
 		return nil, ErrBusy
 	}
 	w, emit := r.work, r.emit
-	if w == nil && !first {
+	if w == nil {
 		if p.Text == "" {
 			c.mu.Unlock()
 			return nil, nil
@@ -120,14 +116,11 @@ func (r *runner) submitLocked(ctx context.Context, p pigruntime.Prompt, now bool
 		return r.startTurn(ctx, []pigruntime.Prompt{p})
 	}
 	c.mu.Unlock()
-	if emit == nil {
-		emit = c.relay.emit
-	}
 	if p.Text != "" {
 		r.pending = append(r.pending, p)
 		r.queueChanged(emit)
 	}
-	if now && w != nil && !w.stopped && len(r.pending) > 0 {
+	if now && !w.stopped && len(r.pending) > 0 {
 		// Not stopped: the end of the send continues the Work with pending.
 		w.cancel()
 	}
@@ -276,6 +269,9 @@ func (r *runner) runTurn(ctx context.Context, sess *pigruntime.Session, emit fun
 	// carry keeps a send-now's raise subject to the session's effort revision;
 	// a turn that follows a completed send starts at its own level.
 	var carry *pigruntime.EffortContinuation
+	if r == c.main {
+		c.awaitServers(ctx)
+	}
 	for {
 		start := time.Now()
 		p := joined(parts)

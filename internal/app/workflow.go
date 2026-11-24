@@ -246,11 +246,14 @@ func (r *workflowRun) call(ctx context.Context, raw json.RawMessage) (result jso
 	case <-callCtx.Done():
 		return nil, context.Cause(callCtx)
 	}
-	i = slices.IndexFunc(c.workflowSpecs, func(s agentSpec) bool { return s.def.Name == arg.AgentType })
+	c.mu.Lock()
+	specs := c.workflowSpecs
+	c.mu.Unlock()
+	i = slices.IndexFunc(specs, func(s agentSpec) bool { return s.def.Name == arg.AgentType })
 	if i < 0 {
 		return nil, fmt.Errorf("failed to start agent: %w: %s", ErrUnknownAgentType, arg.AgentType)
 	}
-	spec := c.workflowSpecs[i]
+	spec := specs[i]
 	tools := spec.tools
 	var recorded structuredResult
 	if arg.Schema != nil {

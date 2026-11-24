@@ -25,11 +25,21 @@ func newDisplay(tools []tool.Tool) *display {
 	return d
 }
 
+// tool is the tool named name. A call of an MCP tool this run does not have,
+// as in a session resumed before its server connects, reads as it did.
+func (d *display) tool(name string) tool.Tool {
+	t, ok := d.tools[name]
+	if !ok && strings.HasPrefix(name, policy.MCPPrefix) {
+		t.Display = tool.MCPDisplay(name)
+	}
+	return t
+}
+
 // apply returns ev with its display fields filled; other events pass through.
 func (d *display) apply(ev event.Event) event.Event {
 	switch e := ev.(type) {
 	case event.ToolStart:
-		t := d.tools[e.Name]
+		t := d.tool(e.Name)
 		args := json.RawMessage(e.Args)
 		e.Title = d.title(e.Name, args)
 		if t.Display.Done != nil {
@@ -57,7 +67,7 @@ func (d *display) apply(ev event.Event) event.Event {
 			e.Kind, e.Summary, e.Body = d.failure(e.Name, e.Output)
 			return e
 		}
-		display := d.tools[e.Name].Display
+		display := d.tool(e.Name).Display
 		if display.Outcome != nil {
 			e.Done, e.Action = display.Outcome(json.RawMessage(e.Args), e.Output)
 		}
@@ -88,7 +98,7 @@ func (d *display) failure(name, text string) (event.EndKind, string, string) {
 	if kind, summary, body := classify(name, text); kind != event.EndRan {
 		return kind, summary, body
 	}
-	if failure := d.tools[name].Display.Failure; failure != nil {
+	if failure := d.tool(name).Display.Failure; failure != nil {
 		summary, body := failure(text)
 		return event.EndRan, summary, body
 	}
@@ -99,7 +109,7 @@ func (d *display) failure(name, text string) (event.EndKind, string, string) {
 }
 
 func (d *display) title(name string, args json.RawMessage) string {
-	t := d.tools[name]
+	t := d.tool(name)
 	switch {
 	case t.Display.Title != nil:
 		return t.Display.Title(args)
@@ -111,7 +121,7 @@ func (d *display) title(name string, args json.RawMessage) string {
 
 func (d *display) approval(r policy.Request) event.ApprovalRequested {
 	ev := event.ApprovalRequested{CallID: r.CallID, Title: d.title(r.Tool, r.Args), Rule: r.Rule, Review: r.Review, Edits: r.Edits}
-	if preview := d.tools[r.Tool].Display.Preview; preview != nil {
+	if preview := d.tool(r.Tool).Display.Preview; preview != nil {
 		ev.Preview = preview(r.Args)
 	}
 	return ev

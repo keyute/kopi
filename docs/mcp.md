@@ -26,16 +26,21 @@
 
 ## Startup
 
-- Servers start at startup.
-- The fullscreen interface shows at once with "Connecting to MCP servers…", and the session opens when the servers have settled or after 10 seconds. A prompt sent before then is queued and sent when the session opens.
-- Print mode waits for the servers before it runs.
-- A server that fails or is late is reported and its tools are absent for the run. The fullscreen interface shows the reasons in the transcript, print mode on stderr.
+- Servers start at startup, and each has 30 seconds to connect.
+- The fullscreen interface does not wait for them: the session opens at once, with "Connecting to MCP servers…" above the input until the last server has connected or failed.
+  - A server joins the open session when it connects: its tools can be loaded from the agent's next request on, in a turn that is already running too.
+  - The system prompt's list of servers is updated once, when the last server has connected or failed. A resumed session keeps the list it had until then.
+  - A prompt sent while servers are still connecting waits for them until 2 seconds after Kopi started, then runs with the servers that have connected.
+  - A subagent or workflow agent has the servers that had connected when it started.
+- Print mode waits for the servers, at most 10 seconds, before it runs; a server that has not connected by then is left out.
+- A server that fails or runs out of time is reported and its tools are absent for the run. The fullscreen interface shows the reason in the transcript when it happens, print mode on stderr.
 - Server instructions are added to the system prompt, at most 2 KB each.
 - Results are text, capped like other tool output, with the whole of a longer result [saved to a file](tools.md#saved-output); images and other content show as placeholders.
 
 ## Tool names
 
 - A server's tools are named `mcp__<server>__<tool>`, with characters outside `A-Z`, `a-z`, `0-9`, `_` and `-` turned into `_`.
+- A call's row and its approval read `<server>/<tool>` with the names spelled as in the tool's name, whether or not the server is connected.
 - The normalized server component must be nonempty, must not contain `__`, and must not end in `_`, so a whole-server permission prefix cannot match another server.
 - Invalid server names fail before connecting.
 - A name over 64 characters, or one that two tools share, is skipped and reported.
@@ -50,7 +55,8 @@
 
 ## ToolSearch
 
-- The system prompt lists each server's tool names.
+- The system prompt lists each connected server's tool names; the list is updated once, when the last server has connected or failed.
+- `ToolSearch` is there whenever a server is configured. A search that finds nothing names the servers still connecting.
 - A tool's schema reaches the model only after the model loads it with `ToolSearch`, by keywords or by exact names, at most 20 per keyword search.
 - `ToolSearch` works in both modes and, with no rule matching, never asks.
 - Each new or resumed session starts with no MCP tool loaded.

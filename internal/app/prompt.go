@@ -17,6 +17,10 @@ import (
 // the system prompt carries.
 const maxServerInstructions = 2048
 
+// serversPart names the prompt part that says what the MCP servers report. It
+// is the last part, and the only one replaced while a session is open.
+const serversPart = "mcp-servers"
+
 // mcpServer is what the system prompt says about a started MCP server: tools
 // are the full names of its tools that the rules left in.
 type mcpServer struct {
@@ -33,7 +37,10 @@ type mcpServer struct {
 // def is nil for the root session and for the default workflow agent; a
 // subagent's or a workflow agent's preamble says who it is, and a definition's
 // own part follows the preamble.
-func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group, servers []mcpServer, reviewed bool, def *subagent.Definition, workflow bool) []pigruntime.PromptPart {
+//
+// joining reports that MCP servers may give the session tools after it opens,
+// so the preamble speaks of tools that are not read-only whatever tools has.
+func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group, servers []mcpServer, reviewed bool, def *subagent.Definition, workflow, joining bool) []pigruntime.PromptPart {
 	names := make([]string, 0, len(tools))
 	for _, t := range tools {
 		if !t.Deferred {
@@ -66,7 +73,7 @@ func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group
 		lines = append(lines, available)
 	}
 	lines = append(lines, modes)
-	if slices.ContainsFunc(tools, func(t tool.Tool) bool { return t.Capability != policy.Read }) {
+	if joining || slices.ContainsFunc(tools, func(t tool.Tool) bool { return t.Capability != policy.Read }) {
 		line := works + ", and any tool call may need the user's approval."
 		if i := slices.IndexFunc(tools, func(t tool.Tool) bool { return t.PlanSandboxed }); i >= 0 {
 			line = works + ", and any tool call may need the user's approval; in plan mode " + tools[i].Name + " runs too, but cannot write the workspace."
@@ -110,7 +117,7 @@ func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group
 		}
 	}
 	if len(serverLines) > 0 {
-		parts = append(parts, pigruntime.PromptPart{Name: "mcp-servers", Text: strings.Join(serverLines, "\n")})
+		parts = append(parts, pigruntime.PromptPart{Name: serversPart, Text: strings.Join(serverLines, "\n")})
 	}
 	return parts
 }
@@ -125,7 +132,7 @@ func contextOf(total int, parts, tools []pigruntime.Size) Context {
 		switch {
 		case strings.HasPrefix(p.Name, "instructions "):
 			c.Instructions += p.Tokens
-		case p.Name == "mcp-servers":
+		case p.Name == serversPart:
 			c.MCP += p.Tokens
 		default:
 			c.SystemPrompt += p.Tokens

@@ -22,7 +22,14 @@ import (
 )
 
 const (
+	// connectTimeout is how long a server has to connect and list its tools.
+	connectTimeout = 30 * time.Second
+	// startupWait is how long Wait waits for the servers, counted from
+	// StartServers.
 	startupWait = 10 * time.Second
+	// serverGrace is how long Ready waits for the servers, counted from
+	// StartServers.
+	serverGrace = 2 * time.Second
 	callTimeout = 60 * time.Second
 	// stderrLines is how much of a stdio server's stderr a start failure shows.
 	stderrLines = 5
@@ -46,10 +53,14 @@ type ServerStatus struct {
 }
 
 type Servers struct {
-	startup context.Context // ends at startupWait, at Wait's end, or at Close
+	connect context.Context // ends at connectTimeout, at Wait's end, or at Close
 	cancel  context.CancelFunc
 	servers []*server // sorted by name
 	wg      sync.WaitGroup
+	started time.Time
+	// Fields rather than the constants so a test can shorten them.
+	wait, grace time.Duration
+	settled     chan struct{} // closed once every server has settled
 
 	waitOnce  sync.Once
 	result    []ServerStatus
@@ -81,12 +92,12 @@ type server struct {
 // StartServers begins connecting every server, each on its own goroutine, and
 // returns at once.
 func StartServers(o ServerOptions) *Servers {
-	ctx, cancel := context.WithTimeout(context.Background(), startupWait)
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
 	return startServers(ctx, cancel, o, dialTransport(o.CWD))
 }
 
 func startServers(ctx context.Context, cancel context.CancelFunc, o ServerOptions, dial dialFunc) *Servers {
-	s := &Servers{startup: ctx, cancel: cancel}
+	s := &Servers{connect: ctx, cancel: cancel, started: time.Now(), wait: startupWait, grace: serverGrace, settled: make(chan struct{})}
 	prefixes := map[string]string{}
 	for _, name := range slices.Sorted(maps.Keys(o.Servers)) {
 		life, stop := context.WithCancel(context.Background())
@@ -122,7 +133,76 @@ func startServers(ctx context.Context, cancel context.CancelFunc, o ServerOption
 		srv.cfg = cfg
 		s.wg.Go(func() { srv.start(ctx) })
 	}
+	s.wg.Go(func() {
+		for _, srv := range s.servers {
+			<-srv.done
+		}
+		close(s.settled)
+	})
 	return s
+}
+
+// Names lists the servers, sorted.
+func (s *Servers) Names() []string {
+	names := make([]string, 0, len(s.servers))
+	for _, srv := range s.servers {
+		names = append(names, srv.name)
+	}
+	return names
+}
+
+// Connecting lists the servers that have not settled, sorted.
+func (s *Servers) Connecting() []string {
+	var names []string
+	for _, srv := range s.servers {
+		select {
+		case <-srv.done:
+		default:
+			names = append(names, srv.name)
+		}
+	}
+	return names
+}
+
+// Watch calls fn with each server's status once it has settled, in the order
+// they settle, including those settled before the call. The calls come from
+// one goroutine, which Close joins.
+func (s *Servers) Watch(fn func(ServerStatus)) {
+	settled := make(chan *server)
+	for _, srv := range s.servers {
+		s.wg.Go(func() {
+			<-srv.done
+			settled <- srv
+		})
+	}
+	s.wg.Go(func() {
+		for range s.servers {
+			fn(s.status(<-settled))
+		}
+	})
+}
+
+// status is the status of srv, which has settled. A start that ended because
+// its time was up, or because Wait or Close gave up on the servers, reads as
+// ErrServerStartTimeout.
+func (s *Servers) status(srv *server) ServerStatus {
+	st := srv.status
+	if err := s.connect.Err(); err != nil && errors.Is(st.Err, err) {
+		st.Err = ErrServerStartTimeout
+	}
+	return st
+}
+
+// Ready returns once every server has settled, serverGrace after StartServers,
+// or when ctx is done, whichever is first.
+func (s *Servers) Ready(ctx context.Context) {
+	grace := time.NewTimer(time.Until(s.started.Add(s.grace)))
+	defer grace.Stop()
+	select {
+	case <-s.settled:
+	case <-grace.C:
+	case <-ctx.Done():
+	}
 }
 
 func dialTransport(cwd string) dialFunc {
@@ -164,13 +244,17 @@ func (t *stdioTransport) Close() error {
 // with ErrServerStartTimeout. Later calls return the same result.
 func (s *Servers) Wait(ctx context.Context) []ServerStatus {
 	s.waitOnce.Do(func() {
+		expiry := time.NewTimer(time.Until(s.started.Add(s.wait)))
+		defer expiry.Stop()
 		out := make([]ServerStatus, len(s.servers))
 		expired := false
 		for i, srv := range s.servers {
 			if !expired {
 				select {
 				case <-srv.done:
-				case <-s.startup.Done():
+				case <-expiry.C:
+					expired = true
+				case <-s.connect.Done():
 					expired = true
 				case <-ctx.Done():
 					expired = true
@@ -178,10 +262,7 @@ func (s *Servers) Wait(ctx context.Context) []ServerStatus {
 			}
 			select {
 			case <-srv.done:
-				out[i] = srv.status
-				if err := s.startup.Err(); err != nil && errors.Is(out[i].Err, err) {
-					out[i].Err = ErrServerStartTimeout
-				}
+				out[i] = s.status(srv)
 			default:
 				out[i] = ServerStatus{Name: srv.name, Err: ErrServerStartTimeout}
 				srv.close()

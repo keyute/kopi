@@ -57,14 +57,21 @@ func (c *Controller) beginLogin(ctx context.Context, provider string) (*loginRun
 // runLogin signs in to provider through the runtime and returns its notice. It
 // runs only for the registered login, which ends when ctx does.
 func (c *Controller) runLogin(ctx context.Context, provider string) (string, error) {
-	c.relay.emit(event.Activity{Text: fmt.Sprintf("Logging in to %s…", provider)})
-	defer c.relay.emit(event.Activity{})
+	c.setLoginActivity(fmt.Sprintf("Logging in to %s…", provider))
+	defer c.setLoginActivity("")
 	return c.rt.Login(ctx, provider, pigruntime.LoginUI{
 		Ask: func(ctx context.Context, p pigruntime.LoginPrompt) (string, error) {
 			return c.askLogin(ctx, provider, p)
 		},
 		Show: func(text string) { c.relay.emit(event.Notice{Text: text}) },
 	})
+}
+
+func (c *Controller) setLoginActivity(text string) {
+	c.mu.Lock()
+	c.loginActivity = text
+	c.mu.Unlock()
+	c.showActivity()
 }
 
 func (c *Controller) askLogin(ctx context.Context, provider string, p pigruntime.LoginPrompt) (string, error) {
@@ -175,7 +182,7 @@ func (c *Controller) loginFirst(ctx context.Context, req OpenRequest, missing er
 
 // loginTask runs the registered login and reports its end. Not in wg: Close
 // waits on done instead, since it needs no session. A successful login with a
-// deferred first open starts that open while still registered, so prompts
+// deferred first open makes that open while still registered, so prompts
 // never see a moment with neither and no other login can start in between. A
 // cancelled or failed login of the first open also reports missing.
 func (c *Controller) loginTask(run *loginRun, ctx context.Context, missing error) {
@@ -216,16 +223,21 @@ func (c *Controller) loginTask(run *loginRun, ctx context.Context, missing error
 		chosen, err = c.check(context.WithoutCancel(ctx), *req)
 		notices = append(notices, chosen...)
 		if err == nil {
-			err = c.startFirst(ctx, *req, notices)
-			if err == nil {
+			var op *sessionSwitch
+			if op, err = c.beginSwitch(true); err == nil {
 				// The open has started; a failed one is retried with /new or /resume.
 				c.mu.Lock()
 				c.deferred = nil
 				c.mu.Unlock()
-			} else if !errors.Is(err, ErrNoSession) {
-				c.relay.emit(event.Error{Err: err})
+				// Not joined: Close holds life while it waits for the login, and
+				// the open needs life. As for switchTo, the open refuses once
+				// closed and nothing reaches a subscriber after Close.
+				go c.openDeferred(context.WithoutCancel(ctx), *req, op, notices)
+				return
 			}
-			return
+			if errors.Is(err, ErrNoSession) {
+				return
+			}
 		}
 	}
 	for _, ev := range notices {
@@ -237,6 +249,23 @@ func (c *Controller) loginTask(run *loginRun, ctx context.Context, missing error
 		}
 		c.relay.emit(event.Error{Err: err})
 	}
+}
+
+// openDeferred makes the open a login owed, for the switch the login began.
+func (c *Controller) openDeferred(ctx context.Context, req OpenRequest, op *sessionSwitch, notices []event.Event) {
+	c.life.Lock()
+	defer c.life.Unlock()
+	err := c.startFirst(ctx, req, op, notices)
+	if err == nil || errors.Is(err, ErrNoSession) {
+		return
+	}
+	for _, ev := range notices {
+		c.relay.emit(ev)
+	}
+	if errors.Is(err, pigruntime.ErrNoCredential) {
+		err = c.withLoginHint(err)
+	}
+	c.relay.emit(event.Error{Err: err})
 }
 
 // chooseProvider asks which provider to log in to, among those that offer a

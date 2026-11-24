@@ -326,3 +326,189 @@ func TestSetCallableTurnsAToolOnAndOffAndReportsToolsChanged(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Plain", "Deferred"}, declared(<-requests))
 }
+
+const joiningName = "mcp__late__echo"
+
+// joiningTool is a tool of the server "late", which a session gets after it
+// opens.
+func joiningTool(ran *atomic.Bool) tool.Tool {
+	t := readTool(joiningName, func(context.Context) (string, error) {
+		ran.Store(true)
+		return deferredOutput, nil
+	})
+	t.Deferred = true
+	return t
+}
+
+func joiningLoader() tool.Tool {
+	return readTool("Load", func(ctx context.Context) (string, error) {
+		return "loaded", LoadTools(ctx, []string{joiningName})
+	})
+}
+
+func TestAddedToolIsCallableOnceLoadedAndRunsThroughTheGate(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 4)
+	asked := make(chan policy.Request, 1)
+	sess, err := r.Open(t.Context(), OpenOptions{
+		Model: fauxModel, SystemPrompt: kopiPrompt, Tools: []tool.Tool{joiningLoader()}, Joining: []string{"late"}, Authority: policy.NewAuthority(),
+		Approve: func(_ context.Context, req policy.Request) (policy.Decision, error) {
+			asked <- req
+			return policy.Decision{Answer: policy.Allow}, nil
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+	changed := 0
+	t.Cleanup(sess.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.ToolsChanged); ok {
+			changed++
+		}
+	}))
+
+	faux.SetResponses([]ai.FauxResponseStep{callTool(joiningName, "call-1"), captureRequest(requests, "ok")})
+	_, err = sess.Send(t.Context(), Prompt{Text: "call it"}, nil, nil)
+	require.NoError(t, err)
+	assert.Contains(t, lastToolResult(t, <-requests), "not found", "the session does not have the tool yet")
+
+	var ran atomic.Bool
+	joining := joiningTool(&ran)
+	joining.Ask = true
+	require.NoError(t, sess.AddTools([]tool.Tool{joining}))
+	assert.Equal(t, 1, changed)
+	assert.False(t, sess.Callable(joiningName))
+
+	faux.SetResponses([]ai.FauxResponseStep{
+		captureAndCall(requests, "Load", "call-2"),
+		captureAndCall(requests, joiningName, "call-3"),
+		captureRequest(requests, "done"),
+	})
+	_, err = sess.Send(t.Context(), Prompt{Text: "load it and call it"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Load"}, declared(<-requests), "an added tool is not declared until it is loaded")
+	assert.ElementsMatch(t, []string{"Load", joiningName}, declared(<-requests))
+	assert.Equal(t, deferredOutput, lastToolResult(t, <-requests))
+	assert.True(t, ran.Load())
+	assert.Equal(t, joiningName, (<-asked).Tool)
+}
+
+func TestAddedExecToolIsRefusedInPlanMode(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 4)
+	sess, err := r.Open(t.Context(), OpenOptions{
+		Model: fauxModel, SystemPrompt: kopiPrompt, Tools: []tool.Tool{joiningLoader()}, Joining: []string{"late"}, Authority: policy.NewAuthority(),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+
+	var ran atomic.Bool
+	joining := joiningTool(&ran)
+	joining.Capability = policy.Exec
+	require.NoError(t, sess.AddTools([]tool.Tool{joining}))
+
+	faux.SetResponses([]ai.FauxResponseStep{
+		captureAndCall(requests, "Load", "call-1"),
+		captureAndCall(requests, joiningName, "call-2"),
+		captureRequest(requests, "done"),
+	})
+	_, err = sess.Send(t.Context(), Prompt{Text: "load it and call it"}, nil, nil)
+	require.NoError(t, err)
+	<-requests
+	assert.ElementsMatch(t, []string{"Load", joiningName}, declared(<-requests))
+	assert.Contains(t, lastToolResult(t, <-requests), "needs execute mode")
+	assert.False(t, ran.Load())
+}
+
+func TestAddToolsFailsOnAChildSession(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	root := openTestSession(t, r)
+	child, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, Parent: root, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, child.Close(context.Background())) })
+
+	var ran atomic.Bool
+	assert.ErrorIs(t, child.AddTools([]tool.Tool{joiningTool(&ran)}), ErrNoJoining)
+}
+
+func TestChildSessionLoadsAndCallsItsDeferredTool(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 3)
+	root := openTestSession(t, r)
+	var ran atomic.Bool
+	child, err := r.Open(t.Context(), OpenOptions{
+		Model: fauxModel, Parent: root, SystemPrompt: kopiPrompt, Tools: []tool.Tool{loaderTool(), deferredTool(&ran)}, Authority: policy.NewAuthority(),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, child.Close(context.Background())) })
+
+	faux.SetResponses([]ai.FauxResponseStep{
+		captureAndCall(requests, "Load", "call-1"),
+		captureAndCall(requests, "Deferred", "call-2"),
+		captureRequest(requests, "done"),
+	})
+	_, err = child.Send(t.Context(), Prompt{Text: "load it and call it"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Load"}, declared(<-requests))
+	assert.ElementsMatch(t, []string{"Load", "Deferred"}, declared(<-requests))
+	assert.Equal(t, deferredOutput, lastToolResult(t, <-requests))
+	assert.True(t, ran.Load())
+}
+
+func TestAddToolsLeavesTheOtherToolsAsTheyWere(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	var ran atomic.Bool
+	tools := []tool.Tool{readTool("Plain", func(context.Context) (string, error) { return "", nil }), deferredTool(&ran)}
+	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: kopiPrompt, Tools: tools, Joining: []string{"late"}, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+
+	require.NoError(t, sess.AddTools([]tool.Tool{joiningTool(&ran)}))
+	assert.True(t, sess.Callable("Plain"))
+	assert.False(t, sess.Callable("Deferred"), "a tool that was not callable stays so")
+	assert.False(t, sess.Callable(joiningName))
+
+	sess.SetCallable("Deferred", true)
+	sess.SetCallable("Deferred", false)
+	other := joiningTool(&ran)
+	other.Name = "mcp__late__other"
+	require.NoError(t, sess.AddTools([]tool.Tool{other}))
+	assert.False(t, sess.Callable("Deferred"), "a tool that was withdrawn stays so")
+	assert.True(t, sess.Callable("Plain"))
+}
+
+func TestToolAddedToAResumedSessionIsNotCallableUntilLoadedAgain(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 3)
+	var ran atomic.Bool
+	open := func(r *Runtime, resume string) *Session {
+		sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, ResumeID: resume, SystemPrompt: kopiPrompt, Tools: []tool.Tool{joiningLoader()}, Joining: []string{"late"}, Authority: policy.NewAuthority()})
+		require.NoError(t, err)
+		return sess
+	}
+	sess := open(r, "")
+	require.NoError(t, sess.AddTools([]tool.Tool{joiningTool(&ran)}))
+	faux.SetResponses([]ai.FauxResponseStep{callTool("Load", "call-1"), captureRequest(requests, "loaded")})
+	_, err := sess.Send(t.Context(), Prompt{Text: "load it"}, nil, nil)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"Load", joiningName}, declared(<-requests))
+	require.NoError(t, sess.Close(t.Context()))
+
+	// A new process has a runtime whose extension holds no tool yet. PiG keeps
+	// the tools a transcript last declared pending until they are registered
+	// (PiG v0.7.0 coding/session_tools.go restoreToolsFromTranscript).
+	r, faux = newTestRuntime(t, sb)
+	resumed := open(r, sess.ID())
+	t.Cleanup(func() { assert.NoError(t, resumed.Close(context.Background())) })
+	require.NoError(t, resumed.AddTools([]tool.Tool{joiningTool(&ran)}))
+	assert.False(t, resumed.Callable(joiningName))
+	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "again")})
+	_, err = resumed.Send(t.Context(), Prompt{Text: "again"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Load"}, declared(<-requests))
+}
