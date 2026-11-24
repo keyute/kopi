@@ -20,6 +20,8 @@ const (
 	KindCommand Kind = iota + 1
 	KindArgument
 	KindReference
+	// KindShell is the "!" that makes the input a shell command.
+	KindShell
 )
 
 // Span is runes [Start, End) of logical line Line of the input.
@@ -28,11 +30,35 @@ type Span struct {
 	Kind             Kind
 }
 
+// shellInput is the command of an input that opens with "!" at its very start;
+// after a space it is an ordinary prompt.
+func shellInput(text string) (command string, ok bool) {
+	rest, ok := strings.CutPrefix(text, "!")
+	if !ok {
+		return "", false
+	}
+	return strings.TrimSpace(rest), true
+}
+
+// AsPrompt is text as input that is always read as a prompt: a text that would
+// run as a shell command gets the leading space that makes it a prompt, any
+// other text is returned unchanged.
+func AsPrompt(text string) string {
+	if _, ok := shellInput(text); ok {
+		return " " + text
+	}
+	return text
+}
+
 // Spans returns the input's highlighted runs in line and rune-offset order.
+// A shell input gets one run, its "!".
 // A control command is highlighted alone; any other input gets its @ references,
 // the skill commands skills types and, when ultracode or ultrathink is set, the
 // keyword that turns it on, unless it opens with an unknown command.
 func Spans(text string, skills *skill.Set, ultracode, ultrathink bool) []Span {
+	if _, ok := shellInput(text); ok {
+		return []Span{{Kind: KindShell, End: 1}}
+	}
 	if line, col, ok := commandAt(text); ok {
 		name, _, _ := parse(text)
 		if isControl(name) {
@@ -116,6 +142,9 @@ type Query struct {
 
 // QueryAt returns the query at rune col of logical line line, if any.
 func QueryAt(text string, line, col int) (Query, bool) {
+	if _, ok := shellInput(text); ok {
+		return Query{}, false
+	}
 	l := []rune(strings.Split(text, "\n")[line])
 	if cl, c, ok := commandAt(text); ok {
 		cmdLine := []rune(strings.Split(text, "\n")[cl])

@@ -63,6 +63,9 @@ type Config struct {
 	// Wake lets a task's end start a turn on its own; otherwise its notice
 	// waits for a request a human prompt starts.
 	Wake bool
+	// UserShell runs the commands the human types after "!"; nil means there are
+	// none, and such input is a prompt.
+	UserShell *tool.Shell
 	// Skills are the loaded skills; users type one as /SkillPrefix:name, or
 	// /name when SkillPrefix is empty.
 	Skills      []skill.Skill
@@ -125,7 +128,11 @@ const Main = ""
 // Lock order is life, then titleCommit, then queue, then mu. mu is never held
 // while calling into PiG or delivering events; life is held across both and
 // queue across delivering events, which is safe because subscribers must not
-// call back into the Controller. Neither queue nor mu is held while calling Config.Tasks,
+// call back into the Controller. A session's listeners run on PiG's event
+// executor with neither queue nor mu held, and the one a runner wraps for its
+// session (runner.reading) takes queue on the model reading a prompt; so nothing
+// may call into a session or wait for its send with queue held, except
+// Subscribe on a session that has not sent yet. Neither queue nor mu is held while calling Config.Tasks,
 // whose callback takes both, except for starting an agent task and its
 // AgentTask.Run and End, which a subagent's or a workflow's run makes with
 // queue held, and Tasks.List, which Status calls with queue held. That is
@@ -182,10 +189,12 @@ type Controller struct {
 	life sync.Mutex
 	// stopAllDone retains a task cleanup across timed-out Close calls; life guards it.
 	stopAllDone chan struct{}
-	// queue makes queueing input atomic with taking it from pending and with
+	// queue makes queueing input atomic with taking it from the queue and with
 	// deciding to stop, continue or end the running Work; it guards the
-	// runners' pending, notices and hold and the Work's queue fields. PiG calls back under its own lock to take
-	// pending, so nothing may call into PiG with queue held.
+	// runners' queued, notices and hold and the Work's queue fields. PiG calls
+	// back under its own lock to hand over queued input, and on a session's
+	// listeners when the model reads it, so nothing may call into PiG with queue
+	// held.
 	queue sync.Mutex
 	// children are the subagents of the current session by task id, and live
 	// counts the running ones; both are guarded by queue.
@@ -721,6 +730,9 @@ func (c *Controller) input(ctx context.Context, session, text string, paths []st
 	if closed {
 		return nil, ErrNoSession
 	}
+	if command, ok := shellInput(text); ok && c.cfg.UserShell != nil {
+		return nil, c.runShell(command, text)
+	}
 	if name, _, isCommand := parse(text); isCommand && isControl(name) {
 		session = Main
 	}
@@ -831,7 +843,7 @@ func (c *Controller) TakeQueued(session string) []event.Input {
 	if emit == nil {
 		emit = c.relay.emit
 	}
-	return inputs(r.takeHuman(emit))
+	return c.inputs(r.takeHuman(emit))
 }
 
 func (c *Controller) Commands() []Command {
@@ -874,23 +886,42 @@ func (c *Controller) signalLocked() {
 // without waking the model. A subagent stopped this way is reported to the main
 // session as stopped by the user.
 func (c *Controller) Interrupt(session string) bool {
+	stop, ok := c.interruptLocked(session)
+	if stop != nil {
+		stop()
+	}
+	return ok
+}
+
+// interruptLocked is Interrupt's work under queue; stop kills the command the
+// human's Esc stopped, which the caller does once queue is released.
+func (c *Controller) interruptLocked(session string) (stop func(), ok bool) {
 	c.queue.Lock()
 	defer c.queue.Unlock()
 	c.mu.Lock()
 	login := c.login
+	emit := c.main.emit
 	c.mu.Unlock()
 	if login != nil {
 		login.cancel()
-		return true
+		return nil, true
 	}
 	r, err := c.runnerLocked(session)
 	if err != nil {
-		return false
+		return nil, false
 	}
 	if r != c.main {
-		return c.interruptByHumanLocked(r) != nil
+		return nil, c.interruptByHumanLocked(r) != nil
 	}
-	return r.interrupt()
+	// A turn's stop never touches the commands; with no turn, the stop is the
+	// running command's.
+	if r.interrupt() {
+		return nil, true
+	}
+	if emit == nil {
+		return nil, false
+	}
+	return r.interruptCommand(emit)
 }
 
 // interruptByHumanLocked stops r's running Work as the human's stop and returns
@@ -904,7 +935,7 @@ func (c *Controller) interruptByHumanLocked(r *runner) *Work {
 	if w == nil {
 		return nil
 	}
-	if !w.stopped || len(r.pending) > 0 {
+	if !w.stopped || len(r.waiting()) > 0 {
 		w.byHuman = true
 	}
 	r.interrupt()
@@ -1065,7 +1096,9 @@ func (c *Controller) Close(ctx context.Context) error {
 		w.terminal = nil
 		c.main.stop(w, emit)
 	}
+	stopCommand := c.main.clearQueueLocked()
 	c.queue.Unlock()
+	stopCommand()
 	ctx, cancel := context.WithTimeout(ctx, c.cfg.JoinTimeout)
 	defer cancel()
 	// closed is set, so no login starts now. The login needs neither life nor
@@ -1178,9 +1211,23 @@ func (c *Controller) beginSwitch(login bool) (*sessionSwitch, error) {
 // the current turn, which may already have deregistered.
 func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessionSwitch) error {
 	defer func() {
+		// A command that finished meanwhile, or input given before the switch
+		// failed, goes on once the session is free.
+		c.queue.Lock()
+		defer c.queue.Unlock()
 		c.mu.Lock()
 		c.switching = nil
 		c.mu.Unlock()
+		c.mu.Lock()
+		emit := c.main.emit
+		c.mu.Unlock()
+		if c.main.startNextLocked() && emit != nil {
+			c.main.queueChanged(emit)
+		}
+		// Only a command's reply wakes the model: the notices that queued during a
+		// failed switch wait for the next prompt, as they always did.
+		c.mu.Lock()
+		c.main.advanceLocked(c.main.replies(c.main.ready()))
 	}()
 	c.mu.Lock()
 	if c.closed {
@@ -1287,7 +1334,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		rec.Observe(ev)
 		bound(d.apply(ev))
 	}
-	unsubscribe := sess.Subscribe(emit)
+	unsubscribe := sess.Subscribe(c.main.reading(sess, emit))
 	id := sess.ID()
 	var planErr error
 	if c.cfg.Plans != nil {
@@ -1303,9 +1350,13 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	}
 	c.queue.Lock()
 	c.mu.Lock()
+	var stopCommand func()
+	cleared := false
 	if old != nil {
 		c.main.notices = nil
 		c.main.hold = false
+		cleared = len(c.main.queued) > 0
+		stopCommand = c.main.clearQueueLocked()
 	}
 	c.main.sess, c.sessID, c.main.emit, c.main.bound, c.main.unsubscribe = sess, id, emit, bound, unsubscribe
 	c.main.told = ""
@@ -1314,6 +1365,9 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	c.deferred = nil
 	c.mu.Unlock()
 	c.queue.Unlock()
+	if stopCommand != nil {
+		stopCommand()
+	}
 	changed := event.SessionChanged{
 		SessionID:    id,
 		Resumed:      req.ResumeID != "" || req.Continue,
@@ -1327,6 +1381,9 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		}
 	}
 	c.relay.emit(changed)
+	if cleared {
+		c.relay.emit(event.QueueChanged{Pending: []event.Queued{}})
+	}
 	if planErr != nil {
 		c.relay.emit(event.Error{Err: planErr})
 	}

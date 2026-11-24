@@ -74,6 +74,9 @@ func TestSpans(t *testing.T) {
 		{text: "\n\u3000/nope @x\n@y"},
 		{text: "hi\nsee @a\\ b", want: []Span{{Line: 1, Start: 4, End: 9, Kind: KindReference}}},
 		{text: "a @ b"},
+		{text: "!ls @x", want: []Span{{End: 1, Kind: KindShell}}},
+		{text: "!", want: []Span{{End: 1, Kind: KindShell}}},
+		{text: " !ls"},
 	} {
 		t.Run(tc.text, func(t *testing.T) {
 			assert.Equal(t, tc.want, Spans(tc.text, nil, false, false))
@@ -216,5 +219,49 @@ func TestPromptSpans(t *testing.T) {
 		t.Run(tc.text, func(t *testing.T) {
 			assert.Equal(t, tc.want, promptSpans(tc.text, testSkills(), true, false))
 		})
+	}
+}
+
+func TestShellInput(t *testing.T) {
+	for _, tc := range []struct {
+		text, command string
+		ok            bool
+	}{
+		{"!ls @x", "ls @x", true},
+		{"!  ls  \n", "ls", true},
+		{"!", "", true},
+		{" !ls", "", false},
+		{"ls", "", false},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			command, ok := shellInput(tc.text)
+			assert.Equal(t, tc.command, command)
+			assert.Equal(t, tc.ok, ok)
+		})
+	}
+}
+
+func TestQueryAtShellInputOpensNoMenu(t *testing.T) {
+	for _, text := range []string{"!ls @x", "!/pl", "!"} {
+		_, ok := QueryAt(text, 0, len([]rune(text)))
+		assert.False(t, ok, text)
+	}
+	_, ok := QueryAt(" !ls @x", 0, 7)
+	assert.True(t, ok, "a leading space makes it a prompt")
+}
+
+func TestAsPrompt(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"!ls", " !ls"},
+		{"![x](y)\n", " ![x](y)\n"},
+		{"!", " !"},
+		{" !ls", " !ls"},
+		{"hello", "hello"},
+		{"", ""},
+	} {
+		got := AsPrompt(tc.in)
+		assert.Equal(t, tc.want, got, tc.in)
+		_, ok := shellInput(got)
+		assert.False(t, ok, tc.in)
 	}
 }

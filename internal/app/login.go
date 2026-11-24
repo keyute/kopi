@@ -290,7 +290,7 @@ func (c *Controller) endLogin() {
 	defer c.queue.Unlock()
 	c.mu.Lock()
 	c.login = nil
-	c.main.wakeLocked()
+	c.main.advanceLocked(true)
 }
 
 // busyLocked reports a session switch or model change under way; the caller

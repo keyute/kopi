@@ -14,6 +14,7 @@ import (
 
 	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/config"
+	"github.com/keyute/kopi/internal/event"
 )
 
 const (
@@ -169,7 +170,15 @@ func (m *model) elapsedTicks() bool {
 // ticks.
 func (m *model) tickWanted() bool {
 	_, working := m.workingText()
-	return working || m.elapsedTicks() || len(m.workflows) > 0
+	return working || m.elapsedTicks() || len(m.workflows) > 0 || m.queuedRunning()
+}
+
+// queuedRunning reports whether the shown view's queue holds a running user
+// command, whose elapsed time and output tail change while the agent is idle.
+func (m *model) queuedRunning() bool {
+	return slices.ContainsFunc(m.view().queued, func(q event.Queued) bool {
+		return q.Command != nil && q.Command.State == event.CommandRunning
+	})
 }
 
 // rowTargets are the agent rows' entries and the ids of every row: the entries'

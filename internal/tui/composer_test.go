@@ -407,7 +407,7 @@ func TestComposerClickPlacesCursor(t *testing.T) {
 func TestComposerClickHitsRightRowWhilePendingShown(t *testing.T) {
 	m, _ := newTestModel(t, 60, 30)
 	send(m, event.TurnStart{Prompt: "go"})
-	send(m, event.QueueChanged{Pending: []string{"a", "b"}})
+	send(m, event.QueueChanged{Pending: []event.Queued{{Text: "a"}, {Text: "b"}}})
 	typeText(m, "abc\ndef")
 
 	pressAt(m, 3, m.composerTop()+1)

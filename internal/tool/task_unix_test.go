@@ -118,6 +118,143 @@ func TestTasksDetachMovesCommand(t *testing.T) {
 	assert.Equal(t, "hi\n", end.Output)
 }
 
+// waitAsync runs l.Wait without a timeout in the background.
+func waitAsync(ctx context.Context, l *Live) <-chan Moved {
+	ch := make(chan Moved, 1)
+	go func() { ch <- l.Wait(ctx, 0) }()
+	return ch
+}
+
+func waitMoved(t *testing.T, ch <-chan Moved) Moved {
+	t.Helper()
+	select {
+	case m := <-ch:
+		return m
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for Wait to return")
+		return Moved{}
+	}
+}
+
+func TestLiveWaitEndsInForeground(t *testing.T) {
+	sh := NewShell(t.TempDir(), nil)
+	m, events := newTasks(t)
+	command, fifo := echoFIFO(t)
+	l, err := m.Begin(t.Context(), sh, command)
+	require.NoError(t, err)
+	done := waitAsync(t.Context(), l)
+	writeLine(t, openWriter(t, fifo), "ok\n")
+
+	assert.Equal(t, Moved{}, waitMoved(t, done))
+
+	info := l.Info()
+	assert.Equal(t, TaskCompleted, info.Status)
+	assert.Equal(t, "exit code 0", info.Reason)
+	assert.Equal(t, command, info.Command)
+	assert.Equal(t, "ok\n", info.Output)
+	assert.False(t, info.Ended.IsZero())
+	assert.False(t, m.Foreground())
+
+	failed, err := m.Begin(t.Context(), sh, "exit 3")
+	require.NoError(t, err)
+	assert.Equal(t, Moved{}, failed.Wait(t.Context(), 0))
+	assert.Equal(t, TaskFailed, failed.Info().Status)
+	assert.Equal(t, "exit code 3", failed.Info().Reason)
+	assert.Empty(t, events)
+}
+
+func TestLiveOutputWhileRunning(t *testing.T) {
+	dir := t.TempDir()
+	sh := NewShell(dir, nil)
+	m, _ := newTasks(t)
+	fifo := mkfifo(t, dir, "in")
+	l, err := m.Begin(t.Context(), sh, "echo first; read x <'"+fifo+"'")
+	require.NoError(t, err)
+	done := waitAsync(t.Context(), l)
+	require.Eventually(t, func() bool { return l.Output() == "first\n" }, waitLimit, time.Millisecond)
+
+	writeLine(t, openWriter(t, fifo), "go\n")
+
+	assert.Equal(t, Moved{}, waitMoved(t, done))
+}
+
+func TestLiveStop(t *testing.T) {
+	sh := NewShell(t.TempDir(), nil)
+	m, events := newTasks(t)
+	command, fifo := echoFIFO(t)
+	l, err := m.Begin(t.Context(), sh, command)
+	require.NoError(t, err)
+	done := waitAsync(t.Context(), l)
+	openWriter(t, fifo)
+
+	l.Stop()
+	l.Stop()
+
+	assert.Equal(t, Moved{}, waitMoved(t, done))
+	assert.Equal(t, TaskStopped, l.Info().Status)
+	l.Stop()
+	assert.Empty(t, events)
+	assert.Empty(t, m.List())
+}
+
+func TestLiveDetachMovesCommand(t *testing.T) {
+	outputs, dir := newSavedOutputs(t)
+	sh := NewShell(t.TempDir(), nil).WithOutputs(outputs)
+	m, events := newTasks(t)
+	command, fifo := echoFIFO(t)
+	l, err := m.Begin(t.Context(), sh, command)
+	require.NoError(t, err)
+	done := waitAsync(t.Context(), l)
+	f := openWriter(t, fifo)
+
+	assert.True(t, m.Detach())
+	moved := waitMoved(t, done)
+
+	assert.Equal(t, Moved{ID: "t1", OutputFile: moved.OutputFile}, moved)
+	assert.Equal(t, dir, filepath.Dir(moved.OutputFile))
+	assert.Equal(t, TaskRunning, nextEvent(t, events).Status)
+	writeLine(t, f, "hi\n")
+	end := nextEvent(t, events)
+	assert.Equal(t, TaskCompleted, end.Status)
+	assert.Equal(t, "hi\n", end.Output)
+}
+
+func TestLiveStopAfterMoveLeavesTask(t *testing.T) {
+	sh := NewShell(t.TempDir(), nil)
+	m, events := newTasks(t)
+	command, fifo := echoFIFO(t)
+	l, err := m.Begin(t.Context(), sh, command)
+	require.NoError(t, err)
+	done := waitAsync(t.Context(), l)
+	f := openWriter(t, fifo)
+
+	assert.True(t, m.Detach())
+	waitMoved(t, done)
+	assert.Equal(t, TaskRunning, nextEvent(t, events).Status)
+	l.Stop()
+	writeLine(t, f, "hi\n")
+
+	end := nextEvent(t, events)
+	assert.Equal(t, TaskCompleted, end.Status)
+	assert.Equal(t, "hi\n", end.Output)
+}
+
+func TestLiveStopAllEndsWait(t *testing.T) {
+	sh := NewShell(t.TempDir(), nil)
+	m, _ := newTasks(t)
+	command, started, dead := holdFIFO(t, t.TempDir())
+	l, err := m.Begin(t.Context(), sh, command)
+	require.NoError(t, err)
+	done := waitAsync(t.Context(), l)
+	waitFor(t, started, "the grandchild to start")
+
+	m.StopAll()
+
+	assert.Equal(t, Moved{}, waitMoved(t, done))
+	assert.Equal(t, TaskStopped, l.Info().Status)
+	waitFor(t, dead, "the grandchild to die")
+}
+
 func TestTasksCancelKillsForegroundGroup(t *testing.T) {
 	dir := t.TempDir()
 	sh := NewShell(dir, nil)

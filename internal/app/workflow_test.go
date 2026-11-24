@@ -915,8 +915,8 @@ func TestKeywordSetsPromptToolsOnlyForTheMainSessionWhenOffered(t *testing.T) {
 
 			a.c.queue.Lock()
 			defer a.c.queue.Unlock()
-			require.Len(t, target.pending, 1)
-			assert.Equal(t, tc.want, target.pending[0].Tools)
+			require.Len(t, target.queued, 1)
+			assert.Equal(t, tc.want, target.queued[0].prompt.Tools)
 		})
 	}
 }
@@ -1129,8 +1129,8 @@ func TestWorkflowTaskEndedCarriesCountsReasonAndResult(t *testing.T) {
 
 		notices := a.queuedNotices()
 		require.Len(t, notices, 1)
-		assert.Equal(t, 1, notices[0].Shown.Agents)
-		assert.Equal(t, 1, notices[0].Shown.Failed, "the call that has not yet noticed the stop counts as stopped")
+		assert.Equal(t, 1, notices[0].Shown.(event.TaskEnded).Agents)
+		assert.Equal(t, 1, notices[0].Shown.(event.TaskEnded).Failed, "the call that has not yet noticed the stop counts as stopped")
 		a.untilStatus(t, id, tool.TaskStopped)
 		a.until(t, func() bool { return a.workflowAgents(id)[0].State != tool.TaskRunning })
 		agents := a.workflowAgents(id)

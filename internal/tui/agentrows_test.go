@@ -335,7 +335,7 @@ func TestAgentRowsTakeSpaceOnlyFromTheTranscript(t *testing.T) {
 		return m
 	}
 	approval := event.ApprovalRequested{Token: 1, CallID: "c1", Title: "Write a.go"}
-	queued := event.QueueChanged{Pending: []string{"first", "second"}}
+	queued := event.QueueChanged{Pending: []event.Queued{{Text: "first"}, {Text: "second"}}}
 	for _, height := range []int{12, 16, 20} {
 		for name, events := range map[string][]event.Event{"dialog": {approval}, "queued rows": {event.TurnStart{Prompt: "go"}, queued}} {
 			t.Run(fmt.Sprintf("%s at %d", name, height), func(t *testing.T) {

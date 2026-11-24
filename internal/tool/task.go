@@ -178,6 +178,26 @@ func (m *Tasks) Start(ctx context.Context, sh *Shell, command string) (TaskInfo,
 // it went.
 // A cancel of ctx kills the command only while it is in the foreground.
 func (m *Tasks) Run(ctx context.Context, sh *Shell, command string, timeout time.Duration) (string, Moved, error) {
+	l, err := m.Begin(ctx, sh, command)
+	if err != nil {
+		return "", Moved{}, err
+	}
+	if moved := l.Wait(ctx, timeout); moved.ID != "" {
+		return "", moved, nil
+	}
+	out, err := l.t.p.result()
+	return out, Moved{}, err
+}
+
+// Live is a foreground command begun by Begin.
+type Live struct {
+	m *Tasks
+	t *task
+}
+
+// Begin starts command in the foreground; ctx is checked only before it
+// starts. The caller must Wait on the result or Stop it.
+func (m *Tasks) Begin(ctx context.Context, sh *Shell, command string) (*Live, error) {
 	t := &task{command: command, ready: make(chan struct{}), moved: make(chan struct{})}
 	m.mu.Lock()
 	m.fg[t] = struct{}{}
@@ -188,7 +208,7 @@ func (m *Tasks) Run(ctx context.Context, sh *Shell, command string, timeout time
 		delete(m.fg, t)
 		m.mu.Unlock()
 		close(t.ready)
-		return "", Moved{}, err
+		return nil, err
 	}
 	t.p, t.started = p, time.Now()
 	close(t.ready)
@@ -198,14 +218,27 @@ func (m *Tasks) Run(ctx context.Context, sh *Shell, command string, timeout time
 	if f != nil {
 		f()
 	}
+	return &Live{m: m, t: t}, nil
+}
 
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+// Wait blocks until the command ends, is detached, reaches timeout (none when
+// timeout <= 0) or ctx is canceled, which kills it. A non-zero Moved means the
+// command now runs as a background task; the zero Moved means it ended, and Info
+// describes it. A stopped command is never moved.
+func (l *Live) Wait(ctx context.Context, timeout time.Duration) Moved {
+	m, t := l.m, l.t
+	p := t.p
+	var timeoutC <-chan time.Time
+	if timeout > 0 {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		timeoutC = timer.C
+	}
 	var timedOut, canceled bool
 	select {
 	case <-p.done:
 	case <-t.moved:
-	case <-timer.C:
+	case <-timeoutC:
 		timedOut = true
 	case <-ctx.Done():
 		canceled = true
@@ -218,7 +251,7 @@ func (m *Tasks) Run(ctx context.Context, sh *Shell, command string, timeout time
 		delete(m.fg, t)
 	}
 	change := m.onChange
-	f = m.onForeground
+	f := m.onForeground
 	m.mu.Unlock()
 	if info.ID != "" {
 		p.out.keep()
@@ -230,7 +263,7 @@ func (m *Tasks) Run(ctx context.Context, sh *Shell, command string, timeout time
 			change(info)
 		}
 		go m.watch(t)
-		return "", Moved{ID: info.ID, TimedOut: !detach, OutputFile: info.OutputFile}, nil
+		return Moved{ID: info.ID, TimedOut: !detach, OutputFile: info.OutputFile}
 	}
 	if canceled {
 		p.stop(ctx.Err())
@@ -243,9 +276,30 @@ func (m *Tasks) Run(ctx context.Context, sh *Shell, command string, timeout time
 	if f != nil {
 		f()
 	}
-	out, err := p.result()
-	return out, Moved{}, err
+	return Moved{}
 }
+
+// Output is the combined output so far, as a Bash result would carry it.
+func (l *Live) Output() string { return l.t.p.text() }
+
+// Stop kills the command, before or during Wait; it has no effect once the
+// command has ended or has been moved to the background, where only Tasks.Stop
+// reaches it.
+func (l *Live) Stop() {
+	l.m.mu.Lock()
+	if l.t.id != "" {
+		l.m.mu.Unlock()
+		return
+	}
+	l.t.stopped = true
+	l.m.mu.Unlock()
+	l.t.p.stop(ErrStopped)
+}
+
+// Info describes a command that Wait returned the zero Moved for. Output is the
+// capped text a Bash result carries, with the saved file's pointer when the
+// output was long.
+func (l *Live) Info() TaskInfo { return l.t.report() }
 
 // adopt registers t in the background while the caller holds m.mu.
 func (m *Tasks) adopt(t *task) TaskInfo {

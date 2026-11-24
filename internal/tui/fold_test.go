@@ -315,3 +315,27 @@ func TestTaskWithoutAResultHasNoFold(t *testing.T) {
 	assert.Equal(t, blockFolds{}, f.of(transcript.Task{}))
 	assert.Equal(t, blockFolds{}, f.of(transcript.Task{Result: " \n"}))
 }
+
+func TestUserCommandOutputOpensByClickAndCtrlO(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out []string
+		for i := 1; i <= 12; i++ {
+			out = append(out, fmt.Sprintf("l%d", i))
+		}
+		m, _ := newTestModel(t, 40, 40)
+		send(m, event.UserCommand{Command: "seq", State: event.CommandExited, Exit: "exit 0", Elapsed: 2 * time.Second, Output: strings.Join(out, "\n")})
+		hint := "  ↳ exit 0 · 2s"
+		assert.Contains(t, body(m), "    … 2 earlier lines")
+		assert.NotContains(t, body(m), "    l1")
+
+		clickText(t, m, hint)
+		assert.Contains(t, body(m), "    l1")
+		assert.NotContains(t, body(m), "    … 2 earlier lines")
+
+		clickText(t, m, hint)
+		assert.NotContains(t, body(m), "    l1")
+
+		press(m, ctrlO)
+		assert.Contains(t, body(m), "    l1")
+	})
+}

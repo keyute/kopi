@@ -492,6 +492,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// Print mode has no plan approval, so its session has no plan file.
 	if fullscreen {
 		cfg.Plans = plans
+		cfg.UserShell = tool.NewShell(cwd, nil).WithOutputs(outputs)
 	}
 	cfg.Agents = agents
 	cfg.AgentTools = agentTools(tools, ws, outputs, shell, planShell, resolved.Config.Sandbox.AllowUnsandboxed)

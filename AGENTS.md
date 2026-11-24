@@ -33,6 +33,7 @@
 - Skills load only from `$KOPI_HOME/skills`, `~/.agents/skills` and a trusted folder's `.agents/skills`; the `Skill` tool reads only a loaded skill's text and files inside the directory that skill was loaded from, and on every read refuses a file in Kopi's home outside `skills/`.
 - Subagent definitions load only from `$KOPI_HOME/agents`, once at startup. A subagent's session has its own gate over the same rules and shares the mode holder unless its definition pins plan mode. A subagent never gets `Agent`, `SendMessage`, `Workflow`, `AskUserQuestion`, `ExitPlanMode` or `TaskStop`, never reaches the plan file, and its `Bash` never backgrounds.
 - `Workflow` is offered only in the fullscreen interface and becomes callable only when a human prompt in the main session contains `ultracode`. A workflow agent's session is opened as a subagent's is, from the same definitions, and never gets `Workflow`; the script reaches Kopi only through `agent()`.
+- A command the human types with `!` is control input, not a tool call: it runs through `tool.Shell` outside the sandbox and the gate, in both modes, only from the fullscreen composer and only for the main session. Model output, `Controller.Prompt`, print mode, skills and subagents never run one.
 - Only human control input changes mode: `/plan`, `/execute`, Shift+Tab and Yes in the `ExitPlanMode` dialog. Sessions start and resume in the configured `mode` (default plan); `--mode` overrides the config file.
 - A session never waits for MCP servers. A server's tools join the root session when it settles, and what the servers say about themselves joins once the last has settled; a session opened later has them from the start, and a subagent or workflow agent keeps what it opened with. Only a prompt and print mode wait: a prompt sent while servers connect waits for them at most 2 seconds after start, print mode at most 10 seconds before its one turn. No state exists in which there is no session yet, except the first-run login.
 - MCP servers start only from `mcpServers` in `config.json` and from a trusted folder's `.mcp.json`. Every MCP tool call asks unless a rule allows it or the opt-in classifier reviews an unmatched call; deny rules take precedence, and explicit and built-in ask rules always ask the human. A tool is Read only when its server marks it read-only.
@@ -44,7 +45,7 @@
 - Kopi reads and writes only under its home (`$KOPI_HOME`, default `~/.kopi`). Never read or write `~/.pi`, `~/.pig`, `~/.claude` or any other tool's store, in code or in tests. A shared place outside the project (see Built in or configured), such as `~/.agents/skills`, is not another tool's store; Kopi only reads it.
 - `trust.json` under Kopi's home holds trust decisions; the binary never writes `config.json`.
 - `plans/` under Kopi's home holds one plan file per root session; Kopi never deletes them.
-- `outputs/` under Kopi's home holds tool output too long to return whole and every background command's output, one folder per root session; Kopi removes files older than a week at startup.
+- `outputs/` under Kopi's home holds tool output too long to return whole, every background command's output and the output of the human's `!` commands, one folder per root session; Kopi removes files older than a week at startup.
 - Tests use `t.TempDir()`, synthetic credentials and no network, and synchronise on channels, never sleeps.
 
 ## Built in or configured
@@ -79,6 +80,7 @@
 - Skills are read once at startup; `internal/skill` finds the project folders and PiG loads them. The `Skill` tool's description lists them, and a skill a user names arrives as a message with that prompt.
 - Always-loaded text is what every session needs. Guidance for one tool goes in its description; what is needed only sometimes loads on demand, as deferred MCP tools do, and `Workflow` on its keyword.
 - Text is injected on an event, once; no per-turn reminders.
+- Human input reaches the model in the order typed; the transcript shows what is in the session in session order, and input not in yet is shown above the composer until the event for its being read.
 - Kopi sets no size budget on instruction files; text from an MCP server is capped.
 
 ## TUI

@@ -67,6 +67,8 @@ type fakeController struct {
 	// foreground is what Background returns; backgrounds counts the calls.
 	foreground  bool
 	backgrounds int
+	// commandOutput is what CommandOutput returns.
+	commandOutput string
 	// tasks is what Tasks returns; TaskOutput adds the output in outputs.
 	tasks   []tool.TaskInfo
 	outputs map[string]string
@@ -207,6 +209,8 @@ func (f *fakeController) Background() bool {
 	f.backgrounds++
 	return f.foreground
 }
+
+func (f *fakeController) CommandOutput() string { return f.commandOutput }
 
 func (f *fakeController) Usage() app.Usage {
 	f.usageReads++
@@ -704,6 +708,36 @@ func TestSubmitSendsExpandedTextAndImages(t *testing.T) {
 	assert.Empty(t, m.composer.blocks)
 }
 
+func TestSubmitSendsOnlyAVisibleCommandAsOne(t *testing.T) {
+	long := "!" + linesOf(11)
+	for name, tc := range map[string]struct {
+		paste bool
+		text  string
+		want  string
+		shell bool
+	}{
+		"typed command":   {text: "!ls", want: "!ls", shell: true},
+		"short paste":     {paste: true, text: "!ls", want: "!ls", shell: true},
+		"collapsed paste": {paste: true, text: long, want: " " + long},
+		"plain prompt":    {text: "hello", want: "hello"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, c := newTestModel(t, 40, 20)
+			if tc.paste {
+				pasteText(m, tc.text)
+			} else {
+				typeText(m, tc.text)
+				m.syncInput(false)
+			}
+			require.Equal(t, tc.shell, m.composer.shell())
+
+			press(m, enter)
+
+			assert.Equal(t, []string{tc.want}, c.submitted)
+		})
+	}
+}
+
 func TestBlankEnterDoesNothing(t *testing.T) {
 	m, _ := newTestModel(t, 30, 20)
 	typeText(m, "  ")
@@ -1024,7 +1058,7 @@ func TestSendNowRefusalKeepsDraft(t *testing.T) {
 
 // queueTwo starts a turn with a and b queued.
 func queueTwo(m *model, c *fakeController) {
-	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []string{"a", "b"}})
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []event.Queued{{Text: "a"}, {Text: "b"}}})
 	c.queued = []event.Input{{Text: "a"}, {Text: "b"}}
 }
 
@@ -1047,7 +1081,7 @@ func TestQueueEditAfterSubmitRestoresBeforeNewDraft(t *testing.T) {
 	send(m, event.TurnStart{Prompt: "go"})
 	submitText(m, "x")
 	c.queued = []event.Input{{Text: "x"}}
-	send(m, event.QueueChanged{Pending: []string{"x"}})
+	send(m, event.QueueChanged{Pending: []event.Queued{{Text: "x"}}})
 	typeText(m, "draft")
 
 	press(m, up)
@@ -1061,7 +1095,7 @@ func TestQueueEditRegistersImages(t *testing.T) {
 	m.composer.insertImage("/tmp/a.png")
 	mk := fmt.Sprintf("[image #%d]", imageCount.Load())
 	m.composer.reset()
-	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []string{"see " + mk}})
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []event.Queued{{Text: "see " + mk}}})
 	c.queued = []event.Input{{Text: "see " + mk, Images: []string{"/tmp/a.png"}}}
 
 	press(m, up)
@@ -1105,6 +1139,25 @@ func TestUnsentInputReturnsBeforeDraft(t *testing.T) {
 	send(m, event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}, Unsent: []event.Input{{Text: "a"}, {Text: "b"}}})
 
 	assert.Equal(t, "a\n\nb\n\ndraft", m.composer.value())
+}
+
+func TestUnsentEventReturnsInputs(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	typeText(m, "draft")
+
+	send(m, event.Unsent{Inputs: []event.Input{{Text: "a"}, {Text: "b"}}})
+
+	assert.Equal(t, "a\n\nb\n\ndraft", m.composer.value())
+}
+
+func TestUnsentDroppedCommandsFlash(t *testing.T) {
+	for n, want := range map[int]string{1: "dropped 1 queued command", 2: "dropped 2 queued commands"} {
+		m, _ := newTestModel(t, 60, 30)
+
+		send(m, event.Unsent{Dropped: n})
+
+		assert.Contains(t, statusText(m), want)
+	}
 }
 
 // submitThenStop types text and presses Enter in a running turn, then

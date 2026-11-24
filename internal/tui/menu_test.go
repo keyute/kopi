@@ -586,7 +586,7 @@ func TestResizeCancelsComposerDrag(t *testing.T) {
 func TestLoadedMenuShrinksExhaustedPendingBudget(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, _ := newMenuModel(t, 80, 14)
-		send(m, event.QueueChanged{Pending: []string{linesOf(8)}})
+		send(m, event.QueueChanged{Pending: []event.Queued{{Text: linesOf(8)}}})
 		cmd := keys(m, "@")
 		require.False(t, m.view().busy)
 		require.Zero(t, m.menuHeight(), "the async load has not arrived")

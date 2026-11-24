@@ -286,7 +286,7 @@ func TestComposerDragNeverSelectsTranscript(t *testing.T) {
 func TestPressesBelowTranscriptSelectRowsAsDrawn(t *testing.T) {
 	m, _ := newTestModel(t, 60, 30)
 	send(m, event.TurnStart{Prompt: "go"})
-	send(m, event.QueueChanged{Pending: []string{"a"}})
+	send(m, event.QueueChanged{Pending: []event.Queued{{Text: "a"}}})
 	typeText(m, "draft")
 	top := m.composerTop()
 
@@ -473,7 +473,7 @@ func TestRowSelectionClearsWhenItsRowsChange(t *testing.T) {
 	dragRow(m, 0, 3, row)
 	require.Equal(t, []int{row}, reversedRows(m))
 
-	send(m, event.QueueChanged{Pending: []string{"c", "b"}})
+	send(m, event.QueueChanged{Pending: []event.Queued{{Text: "c"}, {Text: "b"}}})
 
 	require.Equal(t, row, rowOf(t, m, "❯ c"), "the rows keep their count")
 	assert.True(t, m.sel.empty())
@@ -482,7 +482,7 @@ func TestRowSelectionClearsWhenItsRowsChange(t *testing.T) {
 
 func TestRowSelectionClearsWhenTheWorkingRowTakesItsPlace(t *testing.T) {
 	m, _ := newTestModel(t, 40, 14)
-	send(m, event.QueueChanged{Pending: []string{linesOf(8), "b"}})
+	send(m, event.QueueChanged{Pending: []event.Queued{{Text: linesOf(8)}, {Text: "b"}}})
 	n := len(m.below)
 	y := m.transcriptHeight() + 1 + len(m.pending) - busyRows
 	dragRow(m, 0, 10, y)

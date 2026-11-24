@@ -221,15 +221,15 @@ func TestBashDisplayBackgroundNotifications(t *testing.T) {
 	for _, tc := range []struct {
 		name, output, summary string
 	}{
-		{"started", "Background task t1 started" + backgroundTail("/outputs/s1/a.txt", true), ""},
-		{"started without a file", "Background task t1 started" + backgroundTail("", true), ""},
-		{"started where no end wakes", "Background task t1 started" + backgroundTail("/outputs/s1/a.txt", false), ""},
-		{"timeout moved where no end wakes", "Background task t2: this command did not finish within its 10s timeout and keeps running in the background" + backgroundTail("/outputs/s1/a.txt", false), "after 10s"},
-		{"user moved", "Background task t12: the user moved this command to the background, where it keeps running" + backgroundTail("/outputs/s1/a.txt", true), ""},
-		{"timeout moved", "Background task t123: this command did not finish within its 1s timeout and keeps running in the background" + backgroundTail("/outputs/s1/a.txt", true), "after 1s"},
-		{"timeout moved without a file", "Background task t123: this command did not finish within its 1m30s timeout and keeps running in the background" + backgroundTail("", true), "after 1m 30s"},
-		{"millisecond timeout", "Background task t1: this command did not finish within its 1ms timeout and keeps running in the background" + backgroundTail("", true), "after 1ms"},
-		{"fractional timeout", "Background task t1: this command did not finish within its 1.001s timeout and keeps running in the background" + backgroundTail("", true), "after 1.001s"},
+		{"started", "Background task t1 started" + BackgroundTail("/outputs/s1/a.txt", true), ""},
+		{"started without a file", "Background task t1 started" + BackgroundTail("", true), ""},
+		{"started where no end wakes", "Background task t1 started" + BackgroundTail("/outputs/s1/a.txt", false), ""},
+		{"timeout moved where no end wakes", "Background task t2: this command did not finish within its 10s timeout and keeps running in the background" + BackgroundTail("/outputs/s1/a.txt", false), "after 10s"},
+		{"user moved", "Background task t12: the user moved this command to the background, where it keeps running" + BackgroundTail("/outputs/s1/a.txt", true), ""},
+		{"timeout moved", "Background task t123: this command did not finish within its 1s timeout and keeps running in the background" + BackgroundTail("/outputs/s1/a.txt", true), "after 1s"},
+		{"timeout moved without a file", "Background task t123: this command did not finish within its 1m30s timeout and keeps running in the background" + BackgroundTail("", true), "after 1m 30s"},
+		{"millisecond timeout", "Background task t1: this command did not finish within its 1ms timeout and keeps running in the background" + BackgroundTail("", true), "after 1ms"},
+		{"fractional timeout", "Background task t1: this command did not finish within its 1.001s timeout and keeps running in the background" + BackgroundTail("", true), "after 1.001s"},
 		{"started, saved before the tail", "Background task t1 started.", ""},
 		{"user moved, saved before the tail", "Background task t12: the user moved this command to the background, where it keeps running.", ""},
 		{"timeout moved, saved before the tail", "Background task t123: this command did not finish within its 2m0s timeout and keeps running in the background.", "after 2m"},
@@ -247,10 +247,10 @@ func TestBashDisplayBackgroundNotifications(t *testing.T) {
 }
 
 func TestBackgroundTailPromisesAReportOnlyWhereTheEndWakes(t *testing.T) {
-	assert.Equal(t, ", writing its output to /o/a.txt. You are told when it ends: do not poll the file.", backgroundTail("/o/a.txt", true))
-	assert.Equal(t, ". You are told when it ends.", backgroundTail("", true))
-	assert.Equal(t, ", writing its output to /o/a.txt.", backgroundTail("/o/a.txt", false))
-	assert.Equal(t, ".", backgroundTail("", false))
+	assert.Equal(t, ", writing its output to /o/a.txt. You are told when it ends: do not poll the file.", BackgroundTail("/o/a.txt", true))
+	assert.Equal(t, ". You are told when it ends.", BackgroundTail("", true))
+	assert.Equal(t, ", writing its output to /o/a.txt.", BackgroundTail("/o/a.txt", false))
+	assert.Equal(t, ".", BackgroundTail("", false))
 }
 
 func TestBashDisplayPreservesBackgroundLookalikes(t *testing.T) {
@@ -281,10 +281,10 @@ func TestBashDisplayDone(t *testing.T) {
 func TestBashDisplayOutcome(t *testing.T) {
 	tool, _ := newBashTool(t)
 	started := Action{Verb: "Started", One: "shell", Many: "shells"}
-	moved := "Background task t1: the user moved this command to the background, where it keeps running" + backgroundTail("/outputs/s1/a.txt", true)
-	timeout := "Background task t1: this command did not finish within its 2m0s timeout and keeps running in the background" + backgroundTail("/outputs/s1/a.txt", true)
+	moved := "Background task t1: the user moved this command to the background, where it keeps running" + BackgroundTail("/outputs/s1/a.txt", true)
+	timeout := "Background task t1: this command did not finish within its 2m0s timeout and keeps running in the background" + BackgroundTail("/outputs/s1/a.txt", true)
 
-	done, action := tool.Display.Outcome(json.RawMessage(`{"command":"sleep 5","run_in_background":true}`), "Background task t1 started"+backgroundTail("/outputs/s1/a.txt", true))
+	done, action := tool.Display.Outcome(json.RawMessage(`{"command":"sleep 5","run_in_background":true}`), "Background task t1 started"+BackgroundTail("/outputs/s1/a.txt", true))
 	assert.Empty(t, done)
 	assert.Equal(t, started, action)
 

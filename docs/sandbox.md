@@ -79,6 +79,7 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
 - Its title reads `Bash (unsandboxed) …`, in the approval dialog too. Once it succeeded its row reads `Ran <command> · unsandboxed`, and a group of rows counts it: `ran 9 commands (1 unsandboxed)`.
 - A [subagent](subagents.md) can use it like the main agent; one whose definition pins plan mode is always refused.
 - Without the sandbox, or with `sandbox.allowUnsandboxed` false, the parameter is not offered.
+- A command you type with `!` is your action, not the agent's: it runs outside the sandbox, and plan mode does not restrict it. See [your own commands](usage.md#your-own-commands).
 
 ## Limitations
 

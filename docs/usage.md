@@ -109,22 +109,22 @@ Defaults; change them with [`keys`](configuration.md#keys).
 - Enter sends the prompt or command.
   - While a turn runs, it queues the prompt for that turn.
   - Before the first session is open, it queues the prompt for that session.
-  - Queued messages show in one shaded block above the working row, with `↳ queued · ctrl+enter to send now · up to edit` under it.
+  - Queued prompts and your [commands](#your-own-commands) show above the working row in the order typed: consecutive prompts share one shaded block, each command has its own, and `↳ queued · ctrl+enter to send now · up to edit` sits under the last prompt block.
   - These work in a [subagent's view](subagents.md#views) too, for that subagent.
-- Ctrl+Enter sends now: it stops the current response and continues the turn with the queued messages plus the draft.
+- Ctrl+Enter sends now: it stops the current response and continues the turn with the queued messages plus the draft. It does not put a prompt ahead of a running [command of yours](#your-own-commands).
 - Alt+Enter, Shift+Enter or Ctrl+J inserts a newline. Ctrl+Enter and Shift+Enter need a terminal that reports modified Enter.
-- Up at the top of the input pulls queued messages back into it for editing; with nothing queued it browses input history, and Down goes back.
+- Up at the top of the input pulls queued prompts back into it for editing (not your commands); with nothing queued it browses input history, and Down goes back.
 - Down from the last line of the input, with no newer history entry, moves into the [agent rows](subagents.md#agent-rows) under the status line: Up and Down move, Enter opens that session's view, `x` stops the selected subagent or workflow (a workflow's row opens its [progress dialog](workflows.md#progress-dialog)), Esc or typing returns to the input.
-- Esc interrupts the running turn of the session whose view is open: the main agent's in the main view, only that subagent's run in a [subagent's view](subagents.md#views). It never acts on another session.
+- Esc interrupts the running turn of the session whose view is open: the main agent's in the main view, only that subagent's run in a [subagent's view](subagents.md#views). It never acts on another session. It leaves your [commands](#your-own-commands) alone; with no turn running it stops the command that runs.
 - The row above the input, in priority order: `Waiting for you…` while an approval, question or plan dialog is open; `<Verb>… <elapsed>` (`Brewing… 12s`) while the open view's turn runs; in the main view, Kopi's own activity such as `Connecting to MCP servers…` or `Logging in to <provider>…`; `2 agents, 1 workflow, 1 shell still running` in the main view while the main agent is idle and background tasks, subagents or [workflows](workflows.md) run.
 - A turn ends with `κ Brewed for 41s`, `κ Interrupted after 12s` or `κ Failed after 12s` followed by the error.
 - Each turn has its own row and time, including a turn started by a task's end. The time is wall time and includes time spent waiting on an approval.
 - After an interrupt, a task's end starts no turn until the next prompt; see [background tasks](tools.md#background-tasks).
-- Ctrl+C with a dialog open dismisses it as Esc does. Otherwise it interrupts the open view's running turn as Esc does, else clears the draft, else a second press within two seconds exits.
+- Ctrl+C with a dialog open dismisses it as Esc does. Otherwise it interrupts the open view's running turn as Esc does, or stops your running command when no turn runs, else clears the draft, else a second press within two seconds exits.
 - After an interrupt, queued messages return to the input; `/new`, `/resume` and exiting discard them.
 - Ctrl+D exits when the input is empty.
 - Shift+Tab switches between plan and execute.
-- Ctrl+B moves the running foreground `Bash` command to the background, where it keeps running as a [task](tools.md#background-tasks).
+- Ctrl+B moves the running foreground `Bash` command to the background, where it keeps running as a [task](tools.md#background-tasks). It moves your running [command](#your-own-commands) the same way.
   - While one runs, the working row shows `ctrl+b to background`.
   - With none running, Ctrl+B keeps its meaning in the input.
 - Ctrl+G, while an [`ExitPlanMode`](tools.md#exitplanmode) plan is open, opens the plan file in `$VISUAL`, else `$EDITOR`.
@@ -152,6 +152,7 @@ Each tool call is a row. It names the call by the tool while it runs, while it w
 - A clause counts a file, an agent, a shell or a workflow once however many calls touched it: seven edits of two files read `edited 2 files`, three messages to one agent `messaged 1 agent`. Commands, searches and launches count each call.
 - A background command counts as `started 1 shell`, a message to an agent as `messaged 1 agent`, a `TaskStop` on an agent, shell or workflow as `stopped 1 shell` (on a task that was already over as `checked on 1 agent`), and a `WebFetch` that only got a redirect as `hit 1 redirect`.
 - A group counts the commands that ran outside the [sandbox](sandbox.md#outside-the-sandbox): `ran 9 commands (1 unsandboxed)`. A succeeded command's own row ends `· unsandboxed`.
+- A [command of yours](#your-own-commands) is one block, never in a group, drawn again on resume.
 - A question you answered (`Asked about …`) and a plan decision (`Plan approval`) stay visible, with your answer or decision on the line under them.
 
 Rows for background work name the agent (`researcher › survey peers`), the shell command (`shell npm run dev`) or the workflow (`workflow › review`), not a task id:
@@ -220,6 +221,31 @@ Rejected, denied and interrupted rows have a warning-coloured bullet, a failed r
 - Known commands, skill commands (wherever they appear in the input) and `@` references are highlighted in the input. Sent and queued messages highlight the same skill commands and references.
 - An `@path` is sent as written; a space in an inserted path is written `\ `.
 
+## Your own commands
+
+An input that starts with `!` runs the rest as a shell command of yours. A leading space makes it an ordinary prompt.
+
+- It runs in the session's working directory, with the same shell as the [`Bash`](tools.md#bash) tool, outside the [sandbox](sandbox.md#outside-the-sandbox) and the [permission rules](permissions.md#limitations), in both modes, with no time limit.
+- Only the fullscreen interface runs them. While you watch a subagent, a `!` command still runs for the main session and shows there.
+- It runs at once, even while the agent works. Commands run one at a time in the order typed; a later one waits (`queued`).
+- What you type reaches the agent in the order you typed it. A prompt typed behind a running command waits for that command.
+- The agent reads a command's result at its next step when it is working, or at once when it is idle, and then replies to it. It reads the command, its exit status and time, and the same capped output a `Bash` result carries; long output is [saved](tools.md#saved-output) under the session's output folder.
+- No reply is made for a command you stopped, for one moved to the background, or for one that finishes after you interrupted the agent, until you type something.
+- Until the agent has read it, a command sits above the input with what else is queued, in the order typed. Once read, it is in the [transcript](#transcript) at that point.
+- Ctrl+B moves the running command to the background, where it is a background shell like any other: listed and stoppable in `/tasks`, its output saved to a file the agent can read, the agent told when it ends. The next queued command starts.
+- Esc and Ctrl+C interrupt the agent's turn when one runs and leave your commands alone. With no turn running they stop your running command; commands still queued behind it are dropped, and prompts waiting behind it return to the input.
+- `/new`, `/resume` and exit stop your running command and drop the queued ones. A result the agent had not read yet is lost.
+
+A command is a shaded block: `!` and the command, a status line under it, then the last lines of its output, 5 while above the input and 10 in the transcript. Click the status line or press Ctrl+O to see all of the stored output.
+
+| Status line | Meaning |
+| --- | --- |
+| `queued` | Waiting for an earlier command |
+| `running 12s · ctrl+b to background · esc to stop` | Running |
+| `exit 0 · 12s` | Finished; `· unread` is added while it is above the input |
+| `stopped after 12s` | You stopped it |
+| `moved to background after 12s` | You moved it to the background |
+
 ## Mouse
 
 - Click a folded group to open it, and a row that [opens](#transcript) to open or close it. Only the row's title line takes the click.
@@ -273,5 +299,11 @@ Limits:
 - A session title that follows a change of topic.
 - Session titles in the resume list.
 - Paste blocks in recalled history and re-edited queued messages: they show their full text.
-- Running commands from the input.
+- Keeping a command's output from the agent.
+- A time limit for your commands.
+- Starting a command in the background.
+- A `cd` that lasts beyond its command.
+- Completing from earlier commands.
+- `!` in print mode: `kopi -p` sends it as text.
+- Aliases and functions from your shell's startup files: your commands do not read them.
 - Release packaging and self-update.

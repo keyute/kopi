@@ -91,17 +91,28 @@ func branchMessages(entries []coding.SessionEntry) ([]agent.AgentMessage, error)
 			if err := json.Unmarshal(entry.Raw(), &record); err != nil {
 				return msgs, fmt.Errorf("failed to decode history custom message %s: %w", entry.Base().ID, err)
 			}
-			if record.CustomType != noticeType {
+			var details any
+			switch record.CustomType {
+			case noticeType:
+				details = &noticeDetails{}
+			case commandType:
+				details = &commandDetails{}
+			default:
 				continue
 			}
-			var notice struct {
-				Details noticeDetails `json:"details"`
-			}
-			if err := json.Unmarshal(entry.Raw(), &notice); err != nil {
+			stored := struct {
+				Details any `json:"details"`
+			}{details}
+			if err := json.Unmarshal(entry.Raw(), &stored); err != nil {
 				return msgs, fmt.Errorf("failed to decode history notice %s: %w", entry.Base().ID, err)
 			}
 			// Only history reads the message, so it carries details decoded.
-			msgs = append(msgs, agent.AgentMessage{Custom: map[string]any{"role": agent.RoleCustom, "customType": noticeType, "details": notice.Details}})
+			switch d := details.(type) {
+			case *noticeDetails:
+				msgs = append(msgs, agent.AgentMessage{Custom: map[string]any{"role": agent.RoleCustom, "customType": noticeType, "details": *d}})
+			case *commandDetails:
+				msgs = append(msgs, agent.AgentMessage{Custom: map[string]any{"role": agent.RoleCustom, "customType": commandType, "details": *d}})
+			}
 			continue
 		}
 		if entry.Base().Type != "message" {
@@ -118,7 +129,7 @@ func branchMessages(entries []coding.SessionEntry) ([]agent.AgentMessage, error)
 	return msgs, nil
 }
 
-// history skips system messages and custom messages other than notices; the
+// history skips system messages and custom messages other than notices and user commands; the
 // skipped include compaction and branch summaries.
 func history(msgs []agent.AgentMessage) []event.Event {
 	var out []event.Event
@@ -170,11 +181,18 @@ func history(msgs []agent.AgentMessage) []event.Event {
 			out = append(out, end)
 			afterText = false
 		case isNotice(m):
-			d, _ := m.Custom["details"].(noticeDetails)
-			out = append(out, event.TaskEnded{
-				ID: d.ID, Command: d.Command, Agent: d.Agent, Status: d.Status, Elapsed: time.Duration(d.ElapsedMs) * time.Millisecond,
-				Agents: d.Agents, Failed: d.Failed, Reason: d.Reason, Result: d.Result,
-			})
+			switch d := m.Custom["details"].(type) {
+			case commandDetails:
+				out = append(out, event.UserCommand{
+					Command: d.Command, State: event.CommandState(d.State), Elapsed: time.Duration(d.ElapsedMs) * time.Millisecond,
+					Exit: d.Exit, Failed: d.Failed, Output: d.Output, TaskID: d.Task,
+				})
+			case noticeDetails:
+				out = append(out, event.TaskEnded{
+					ID: d.ID, Command: d.Command, Agent: d.Agent, Status: d.Status, Elapsed: time.Duration(d.ElapsedMs) * time.Millisecond,
+					Agents: d.Agents, Failed: d.Failed, Reason: d.Reason, Result: d.Result,
+				})
+			}
 			afterText = false
 		}
 	}

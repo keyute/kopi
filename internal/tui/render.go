@@ -97,6 +97,12 @@ func (c *renderCache) render(b transcript.Block, f blockFolds, spans func(string
 		return plain(renderTurn(b, f.verb, width, th))
 	case transcript.Task:
 		return renderTask(b, len(f.expanded) > 0 && f.expanded[0], width, th)
+	case transcript.Command:
+		return commandRows(b.UserCommand, commandOptions{
+			Lines:    transcriptCommandLines,
+			Expanded: len(f.expanded) > 0 && f.expanded[0],
+			Hit:      hit{kind: hitOutput, id: b.Key()},
+		}, width, th)
 	}
 	return nil
 }
@@ -322,6 +328,94 @@ func renderTask(t transcript.Task, expanded bool, width int, th theme) []line {
 	return out
 }
 
+// transcriptCommandLines is how many output lines a command in the transcript
+// shows before it is opened.
+const transcriptCommandLines = 10
+
+// commandOptions says how commandRows draws a user command, which the
+// transcript and the steering section above the composer both show.
+type commandOptions struct {
+	// Lines is how many output lines to show while not Expanded.
+	Lines    int
+	Expanded bool
+	Unread   bool
+	// Elapsed is the time a running command has run so far.
+	Elapsed time.Duration
+	// BackgroundKey and StopKey name the keys of the running hints; empty omits one.
+	BackgroundKey, StopKey string
+	// Hit is what a click on the hint row does; it applies only when there is output.
+	Hit hit
+}
+
+// commandRows is a user command: its shaded box, a blank row, the hint row
+// for its state and its output rows.
+func commandRows(c event.UserCommand, o commandOptions, width int, th theme) []line {
+	ps := commandShade(th).Foreground(th.error)
+	out := plain(shadedBox("! ", ps, c.Command, nil, width, th))
+	out = append(out, line{})
+
+	output := bodyText(c.Output)
+	h := hit{}
+	if output != "" {
+		h = o.Hit
+	}
+	out = append(out, withHit(h, commandHint(c, o, width, th))...)
+
+	if output == "" {
+		return out
+	}
+	ls := strings.Split(output, "\n")
+	if !o.Expanded && len(ls) > o.Lines {
+		omitted := len(ls) - o.Lines
+		out = append(out, plain(hang("    ", fg(th.dim), fmt.Sprintf("… %d earlier lines", omitted), fg(th.dim), width))...)
+		ls = ls[omitted:]
+	}
+	return append(out, mutedBody(strings.Join(ls, "\n"), width, th)...)
+}
+
+func commandHint(c event.UserCommand, o commandOptions, width int, th theme) []string {
+	// since is " · 12s" or "" under a second.
+	since := func(sep string, d time.Duration) string {
+		if d < time.Second {
+			return ""
+		}
+		return sep + formatDuration(d)
+	}
+	unread := ""
+	if o.Unread {
+		unread = " · unread"
+	}
+	const lead = "  ↳ "
+	dim := fg(th.dim)
+	switch c.State {
+	case event.CommandQueued:
+		return hang(lead, dim, "queued", dim, width)
+	case event.CommandRunning:
+		text := "running" + since(" ", o.Elapsed)
+		if o.BackgroundKey != "" {
+			text += " · " + o.BackgroundKey + " to background"
+		}
+		if o.StopKey != "" {
+			text += " · " + o.StopKey + " to stop"
+		}
+		return hang(lead, dim, text, dim, width)
+	case event.CommandExited:
+		text := c.Exit + since(" · ", c.Elapsed) + unread
+		if c.Failed {
+			return hang(lead, fg(th.error), text, fg(th.error), width)
+		}
+		out := hang(lead, dim, text, dim, width)
+		// The exit text leads the hint, so it sits on the first row unless the width cuts it.
+		start := lipgloss.Width(lead)
+		out[0] = lipgloss.StyleRanges(out[0], lipgloss.NewRange(start, start+lipgloss.Width(c.Exit), fg(th.success)))
+		return out
+	case event.CommandStopped:
+		text := "stopped" + since(" after ", c.Elapsed) + unread
+		return hang(lead, fg(th.warning), text, fg(th.warning), width)
+	}
+	return hang(lead, dim, "moved to background"+since(" after ", c.Elapsed), dim, width)
+}
+
 // formatDuration renders d as "41s", "1m 12s" or "1h 2m".
 func formatDuration(d time.Duration) string {
 	h, m, s := int(d.Hours()), int(d.Minutes())%60, int(d.Seconds())%60
@@ -350,11 +444,13 @@ func hang(prefix string, ps lipgloss.Style, text string, ts lipgloss.Style, widt
 	return out
 }
 
-// shadedBox is the user box: a blank shaded row, prefix and the wrapped text
-// with continuation lines two in, a blank shaded row, all full width. spans,
+// shadedBox is a shaded box: a blank shaded row, prefix and the wrapped text
+// with continuation lines two in, a blank shaded row, all full width. ps styles
+// the prefix and carries the shade, which the text takes with the theme's text
+// colour. spans,
 // when not nil, gives the runs of the cleaned text to highlight.
 func shadedBox(prefix string, ps lipgloss.Style, text string, spans func(string) []app.Span, width int, th theme) []string {
-	st := shade(th)
+	st := ps.Foreground(th.text)
 	blank := st.Render(strings.Repeat(" ", width))
 	out := []string{blank}
 	text = clean(text)
@@ -387,6 +483,11 @@ func shadedBox(prefix string, ps lipgloss.Style, text string, spans func(string)
 
 func shade(th theme) lipgloss.Style {
 	return lipgloss.NewStyle().Background(th.userMessageBg).Foreground(th.text)
+}
+
+// commandShade is shade for a command the user ran.
+func commandShade(th theme) lipgloss.Style {
+	return lipgloss.NewStyle().Background(th.userCommandBg).Foreground(th.text)
 }
 
 // wrap breaks text into lines no wider than width. Tabs become spaces because

@@ -63,11 +63,13 @@
 - The file is created at the first write that would cut the output, so output that fits is never saved, except for a background command: its output is saved from the moment it starts in or moves to the background, however short, because the file is how the model reads it while the command runs. It is mode `0600` in a `0700` folder, and holds at most 64 MiB; past that the notice reads `first <n> bytes of output` in place of `full output`, and the end of the output is only in the result. If the file cannot be created the notice is the plain `[… 70000 bytes cut …]`.
 - `Read` reaches the file with `offset` and `limit`, and `Grep` searches it when `path` names it. Only the session's own files are reachable, one at a time, and read only: `Write` and `Edit` refuse them, and so does everything else in Kopi's home, including the `outputs/` folder itself. The root session, its [subagents](subagents.md) and [workflow agents](workflows.md#workflow-agents) share one folder, and its files show as `output <name>` in a row.
 - A resumed session keeps its folder; a new session gets a new one. Kopi removes files older than a week, and the folders left empty, when it starts, so a resumed session older than that names a file that is gone.
+- Output of [your own commands](usage.md#your-own-commands) that is long, or that you moved to the background, is saved in the same folder.
 - The end notice of a background command ends with `[Output saved to <path>]`.
 
 ## Background tasks
 
 - Tasks are background commands, [subagents](subagents.md) and [workflows](workflows.md), numbered `t1`, `t2`, … per run in one sequence.
+- A command of yours moved to the background with the `background` key is a background task like the agent's; see [your own commands](usage.md#your-own-commands).
 - They have no time limit. A command keeps the sandbox profile of the mode it started in; a subagent follows the session's mode unless its definition pins plan mode.
 - `/tasks` lists the running tasks first, in the order they started, then the others under `Finished`, the last to end first. A row is a bullet in the colour of the task's status, the command's first line or `<agent> › <description>`, and at the right `failed` or `stopped` and how long the task has run or ran. The ids are not shown. Enter opens the selected task and Esc closes the list, or goes back to it from an open task.
 - `/tasks` shows an open task's output from its end and follows new output; PgUp/PgDn or the mouse wheel over the dialog scroll it when it does not fit, and scrolling back to the end follows again. Otherwise those keys scroll the transcript.

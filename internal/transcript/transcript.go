@@ -28,6 +28,7 @@ const (
 	errorItem
 	turnItem
 	taskItem
+	commandItem
 )
 
 type item struct {
@@ -37,6 +38,7 @@ type item struct {
 	outcome event.Outcome
 	elapsed time.Duration
 	task    event.TaskEnded
+	command event.UserCommand
 }
 
 // visible reports whether the item draws a block; whitespace-only assistant
@@ -118,6 +120,8 @@ func (t *Transcript) Apply(ev event.Event) {
 		t.items = append(t.items, item{kind: turnItem, outcome: ev.Outcome, elapsed: ev.Elapsed})
 	case event.TaskEnded:
 		t.items = append(t.items, item{kind: taskItem, task: ev})
+	case event.UserCommand:
+		t.items = append(t.items, item{kind: commandItem, command: ev})
 	case event.PlanRequested:
 		// The plan's tool is exclusive, so its call is the one solo call running.
 		for i := len(t.items) - 1; i >= 0; i-- {

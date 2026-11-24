@@ -755,7 +755,7 @@ func TestPromptWhileBusyIsQueuedAndCommandRuns(t *testing.T) {
 	assert.Equal(t, []string{"hold", "another prompt", "The session is in execute mode."}, receive(t, requests).UserTexts)
 	evs := untimed(h.rec.all())
 	queuedAt := slices.IndexFunc(evs, func(ev event.Event) bool {
-		return assert.ObjectsAreEqual(event.QueueChanged{Pending: []string{"another prompt"}}, ev)
+		return assert.ObjectsAreEqual(event.QueueChanged{Pending: []event.Queued{{Text: "another prompt"}}}, ev)
 	})
 	sentAt := slices.Index(evs, event.Event(event.UserMessage{Text: "another prompt"}))
 	require.GreaterOrEqual(t, queuedAt, 0)
@@ -786,10 +786,57 @@ func TestQueuedInputIsDeliveredAtBoundary(t *testing.T) {
 		return true
 	})
 	assert.Equal(t, []event.Event{
-		event.QueueChanged{Pending: []string{"next"}},
-		event.QueueChanged{Pending: []string{}},
+		event.QueueChanged{Pending: []event.Queued{{Text: "next"}}},
+		event.QueueChanged{Pending: []event.Queued{}},
 		event.UserMessage{Text: "next"},
 	}, queueing)
+}
+
+func TestQueuedPromptsLeaveOneByOneRightBeforeTheirUserMessage(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h, _ := openHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}})
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Capture(t, requests, "done")})
+
+	w, err := h.c.Submit(t.Context(), Main, "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	for _, text := range []string{"first", "second"} {
+		_, err = h.c.Submit(t.Context(), Main, text)
+		require.NoError(t, err)
+	}
+	close(release)
+	wait(t, w.Done())
+
+	assert.Equal(t, []string{"hold", "first", "second"}, receive(t, requests).UserTexts)
+	var queueing []event.Event
+	for _, ev := range h.rec.all() {
+		switch ev.(type) {
+		case event.QueueChanged, event.UserMessage:
+			queueing = append(queueing, ev)
+		}
+	}
+	queued := func(texts ...string) event.Event {
+		q := event.QueueChanged{Pending: []event.Queued{}}
+		for _, text := range texts {
+			q.Pending = append(q.Pending, event.Queued{Text: text})
+		}
+		return q
+	}
+	assert.Equal(t, []event.Event{
+		queued("first"),
+		queued("first", "second"),
+		queued("second"),
+		event.UserMessage{Text: "first"},
+		queued(),
+		event.UserMessage{Text: "second"},
+	}, queueing)
+	evs := h.rec.all()
+	for i, ev := range evs {
+		if _, ok := ev.(event.UserMessage); ok {
+			assert.IsType(t, event.QueueChanged{}, evs[i-1], "the queue drops the prompt right before it is drawn")
+		}
+	}
 }
 
 // blockTool blocks until its ctx is cancelled.
@@ -915,7 +962,7 @@ func TestAsyncResumeCapturesInputBeforeWaitingForLife(t *testing.T) {
 	close(release)
 	wait(t, w.Done())
 	h.c.queue.Lock()
-	assert.Empty(t, h.c.main.pending)
+	assert.Empty(t, h.c.main.queued)
 	assert.True(t, w.switchHold)
 	assert.NotNil(t, w.terminal)
 	h.c.queue.Unlock()
@@ -1214,7 +1261,7 @@ func TestTakeQueuedDuringSendIsNeverDelivered(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []event.Input{{Text: queued}}, h.c.TakeQueued(Main))
 	evs := h.rec.all()
-	assert.Equal(t, event.QueueChanged{Pending: []string{}}, evs[len(evs)-1])
+	assert.Equal(t, event.QueueChanged{Pending: []event.Queued{}}, evs[len(evs)-1])
 	close(release)
 	wait(t, w.Done())
 
