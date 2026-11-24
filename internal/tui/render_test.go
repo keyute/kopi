@@ -248,30 +248,70 @@ func TestTaskRowCutsALongCommand(t *testing.T) {
 	assert.Equal(t, []string{"", "• shell finished · " + strings.Repeat("x", 12) + "… · 1m 0s"}, body(m))
 }
 
-func TestPlanBlockDrawsAMutedTitleAndMarkdownAndRerendersWhenEdited(t *testing.T) {
+func TestPlanRowDrawsItsPlanWhileRunningAndOnlyWhenOpenedAfter(t *testing.T) {
 	var tr transcript.Transcript
+	tr.Apply(event.ToolStart{CallID: "p", Name: "ExitPlanMode", Title: "Plan approval", Solo: true})
 	tr.Apply(event.PlanRequested{Token: 1, Plan: "# Heading\n\n- first step"})
 	var c renderCache
-	text := func() []string {
+	text := func(f blockFolds) []string {
 		var out []string
-		for _, l := range c.lines(tr.Blocks()[0], blockFolds{}, nil, 40, mocha()) {
+		for _, l := range c.lines(tr.Blocks()[0], f, nil, 40, mocha()) {
 			out = append(out, strings.TrimRight(ansi.Strip(l.text), " "))
 		}
 		return out
 	}
 
-	got := text()
-	assert.Equal(t, "Plan", got[0])
-	assert.Equal(t, fg(mocha().muted).Render("Plan"), c.lines(tr.Blocks()[0], blockFolds{}, nil, 40, mocha())[0].text)
+	got := text(blockFolds{})
+	assert.Equal(t, "• Plan approval", got[0])
 	joined := strings.Join(got[1:], "\n")
-	assert.Contains(t, joined, "Heading")
 	assert.NotContains(t, joined, "# Heading", "the Markdown is rendered")
+	for _, l := range got[1:] {
+		if l != "" {
+			assert.True(t, strings.HasPrefix(l, "    "), "%q is four in", l)
+		}
+	}
+	assert.Contains(t, joined, "Heading")
 	assert.Contains(t, joined, "first step")
 
 	tr.Apply(event.PlanRequested{Token: 1, Plan: "# Heading\n\n- second step"})
-	joined = strings.Join(text()[1:], "\n")
+	joined = strings.Join(text(blockFolds{}), "\n")
 	assert.Contains(t, joined, "second step")
 	assert.NotContains(t, joined, "first step")
+
+	tr.Apply(event.ToolEnd{CallID: "p", Name: "ExitPlanMode", Summary: "revision requested", Body: "split step 2"})
+	closed := blockFolds{expanded: []bool{false}}
+	assert.Equal(t, []string{"• Plan approval", "  ↳ revision requested"}, text(closed))
+
+	opened := text(blockFolds{expanded: []bool{true}})
+	require.Greater(t, len(opened), 4)
+	assert.Equal(t, []string{"• Plan approval", "  ↳ revision requested", "    split step 2"}, opened[:3])
+	assert.Contains(t, strings.Join(opened[3:], "\n"), "second step", "the plan follows the feedback")
+
+	var bare transcript.Transcript
+	bare.Apply(event.ToolStart{CallID: "q", Name: "ExitPlanMode", Title: "Plan approval", Solo: true})
+	bare.Apply(event.PlanRequested{Token: 2, Plan: "# Heading\n\n- step"})
+	bare.Apply(event.ToolEnd{CallID: "q", Name: "ExitPlanMode", Summary: "approved"})
+	assert.Equal(t, hit{kind: hitOutput, id: "q"}, c.lines(bare.Blocks()[0], closed, nil, 40, mocha())[0].hit, "the plan alone makes the row open")
+}
+
+func TestPlanRowRewrapsWhenTheWidthChanges(t *testing.T) {
+	var tr transcript.Transcript
+	tr.Apply(event.ToolStart{CallID: "p", Name: "ExitPlanMode", Title: "Plan approval", Solo: true})
+	tr.Apply(event.PlanRequested{Token: 1, Plan: strings.Repeat("word ", 60)})
+	var c renderCache
+	planLines := func(width int) []string {
+		var out []string
+		for _, l := range c.lines(tr.Blocks()[0], blockFolds{}, nil, width, mocha())[1:] {
+			out = append(out, strings.TrimPrefix(l.text, "    "))
+		}
+		return out
+	}
+
+	narrow, wide := planLines(40), planLines(80)
+	assert.Less(t, len(wide), len(narrow))
+	for _, l := range wide {
+		assert.LessOrEqual(t, ansi.StringWidth(l), 76, "%q fits the width less the indent", l)
+	}
 }
 
 func TestOKRowShowsItsDoneForm(t *testing.T) {

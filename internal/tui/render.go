@@ -46,6 +46,8 @@ type renderCache struct {
 	th      theme
 	entries map[string]cached
 	md      *markdown
+	// planMD draws a plan four columns in; created on first use.
+	planMD *markdown
 }
 
 type cached struct {
@@ -57,7 +59,7 @@ type cached struct {
 func (c *renderCache) lines(b transcript.Block, f blockFolds, spans func(string) []app.Span, width int, th theme) []line {
 	if c.entries == nil || width != c.width || th != c.th {
 		c.entries, c.width, c.th = map[string]cached{}, width, th
-		c.md = newMarkdown(width, th)
+		c.md, c.planMD = newMarkdown(width, th), nil
 	}
 	if e, ok := c.entries[b.Key()]; ok && reflect.DeepEqual(e.block, b) && reflect.DeepEqual(e.folds, f) {
 		return e.lines
@@ -74,10 +76,17 @@ func (c *renderCache) render(b transcript.Block, f blockFolds, spans func(string
 		return plain(shadedBox("❯ ", shade(th), b.Text, spans, width, th))
 	case transcript.Assistant:
 		return plain(c.md.lines(b.Key(), b.Text))
-	case transcript.Plan:
-		return plain(append([]string{fg(th.muted).Render("Plan")}, c.md.lines(b.Key(), b.Text)...))
 	case transcript.Row:
-		return renderRow(b.Call, f, width, th)
+		out := renderRow(b.Call, f, width, th)
+		if b.Call.Plan != "" && (b.Call.State == transcript.Running || f.expanded[0]) {
+			if c.planMD == nil {
+				c.planMD = newMarkdown(max(1, width-4), th)
+			}
+			for _, s := range c.planMD.lines(b.Key(), b.Call.Plan) {
+				out = append(out, line{text: "    " + s})
+			}
+		}
+		return out
 	case transcript.Group:
 		return renderGroup(b, f, width, th)
 	case transcript.Notice:
@@ -183,10 +192,10 @@ func openHit(c transcript.Call) hit {
 	return hit{kind: hitOutput, id: c.ID}
 }
 
-// commandHit makes a refused or interrupted call's line toggle its command; a
-// call with none has nothing to toggle.
+// commandHit makes a refused or interrupted call's line toggle its command, or
+// its plan; a call with neither has nothing to toggle.
 func commandHit(c transcript.Call) hit {
-	if c.Command == "" {
+	if c.Command == "" && c.Plan == "" {
 		return hit{}
 	}
 	return hit{kind: hitOutput, id: c.ID}

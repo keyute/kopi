@@ -256,7 +256,7 @@ func TestSubagentTurnEndKeepsMainsQuestionAndPlan(t *testing.T) {
 	require.NotNil(t, questionOf(m))
 	assert.Contains(t, strings.Join(screen(m), "\n"), "Which db?")
 
-	send(m, event.QuestionEnded{Token: 7}, planRequest(8, "# Heading\n\nstep one"))
+	send(m, event.QuestionEnded{Token: 7}, planStart, planRequest(8, "# Heading\n\nstep one"))
 
 	send(m, sub("t1", event.TurnEnd{}))
 

@@ -197,7 +197,7 @@ Rejected, denied and interrupted rows have a warning-coloured bullet, a failed r
 - An agent's launch row opens to the prompt the main agent gave it, as a workflow's row opens to its script; a message row opens to the message.
 - An agent's end row opens to its final reply, and a failed one shows its reason under it. A shell's end row shows its reason (`exit code 1`) when it failed and opens to the last lines of its output that the model was sent.
 - A row that has nothing to add to its title and summary does not open: a command with no output, a file that is empty, a search with no match. A question's answers are on its row.
-- A plan revision you asked for opens to your feedback.
+- A plan decision opens to the plan as it was presented, under your feedback for a revision.
 - An opened result is the model's text, so it includes notices written to the model, such as `use offset=2001 to continue`.
 - An edit's lines show without surrounding context or line numbers.
 - Colour in command output is not kept.

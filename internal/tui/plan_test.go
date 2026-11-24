@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
@@ -24,17 +25,20 @@ func planRequest(token uint64, plan string) event.PlanRequested {
 	return event.PlanRequested{Token: token, Path: planPath, Plan: plan}
 }
 
+// planStart is the ExitPlanMode call whose row the plan is drawn in.
+var planStart = event.ToolStart{CallID: "p", Name: "ExitPlanMode", Title: "Plan approval", Solo: true}
+
 func openPlan(t *testing.T) (*model, *fakeController) {
 	t.Helper()
 	m, c := newTestModel(t, 70, 30)
-	send(m, planRequest(7, "# Heading\n\nstep one"))
+	send(m, planStart, planRequest(7, "# Heading\n\nstep one"))
 	require.NotNil(t, planOf(m))
 	return m, c
 }
 
 func TestPlanDialogShowsTitleRowsAndHints(t *testing.T) {
 	m, _ := newTestModel(t, 100, 30)
-	send(m, planRequest(7, "# Heading\n\nstep one"))
+	send(m, planStart, planRequest(7, "# Heading\n\nstep one"))
 	rows := screen(m)
 	rule := strings.Repeat("─", 100)
 
@@ -47,7 +51,7 @@ func TestPlanDialogShowsTitleRowsAndHints(t *testing.T) {
 		"  2. No (esc)  What should change?",
 		rule,
 	}, rows[len(rows)-8:len(rows)-1], "directly above the footer")
-	assert.Contains(t, strings.Join(rows, "\n"), "Heading", "the plan is in the transcript")
+	assert.Contains(t, strings.Join(rows, "\n"), "Heading", "the plan is under the row")
 }
 
 func TestPlanDialogKeepsRulesAndSelectionOnAShortTerminal(t *testing.T) {
@@ -219,10 +223,32 @@ func TestPlanEndedForAnotherTokenKeepsTheDialog(t *testing.T) {
 	assert.NotNil(t, planOf(m))
 }
 
-func TestPlanBlockStaysAfterTheDialogCloses(t *testing.T) {
-	m, _ := openPlan(t)
-	send(m, event.PlanEnded{Token: 7})
-	assert.Contains(t, strings.Join(body(m), "\n"), "step one")
+func TestPlanRowClosesToItsDecisionAndAClickOpensThePlanAgain(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := openPlan(t)
+		assert.Equal(t, []string{"", "• Plan approval", "    Heading", "", "    step one"}, body(m)[:5])
+
+		send(m, event.PlanEnded{Token: 7}, event.ToolEnd{CallID: "p", Name: "ExitPlanMode", Summary: "approved"})
+		assert.Equal(t, []string{"", "• Plan approval", "  ↳ approved"}, body(m))
+
+		clickText(t, m, "• Plan approval")
+		got := strings.Join(body(m), "\n")
+		assert.Contains(t, got, "  ↳ approved\n")
+		assert.Contains(t, got, "step one")
+	})
+}
+
+func TestPlanRowOfAnInterruptedPlanClosesAndAClickOpensThePlanAgain(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := openPlan(t)
+		send(m, event.PlanEnded{Token: 7}, event.ToolEnd{CallID: "p", Name: "ExitPlanMode", Kind: event.EndInterrupted, IsError: true, Summary: "interrupted"})
+		got := strings.Join(body(m), "\n")
+		assert.Contains(t, got, "• Plan approval")
+		assert.NotContains(t, got, "step one")
+
+		clickText(t, m, "• Plan approval")
+		assert.Contains(t, strings.Join(body(m), "\n"), "step one")
+	})
 }
 
 func TestPlanRequestShowsTheMainView(t *testing.T) {

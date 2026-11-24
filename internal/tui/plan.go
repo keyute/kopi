@@ -12,7 +12,7 @@ import (
 )
 
 // planDialog is the ExitPlanMode dialog, drawn in the composer's slot. The plan
-// itself is a transcript block above it.
+// itself is the body of the call's row above it.
 type planDialog struct {
 	token uint64
 	d     *dialog
