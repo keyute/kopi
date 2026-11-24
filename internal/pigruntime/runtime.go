@@ -175,7 +175,12 @@ type OpenOptions struct {
 	// Parent is the session this one works for; the transcript is saved beside the parent's, where Sessions does not list it.
 	Parent       *Session
 	SystemPrompt []PromptPart
-	Tools        []tool.Tool
+	// Later names the prompt parts that SetPromptPart gives after the open. A
+	// resumed or continued session keeps what its transcript has for each, a
+	// part or none, until then, whatever SystemPrompt says; a new session
+	// ignores it.
+	Later []string
+	Tools []tool.Tool
 	// Joining names the MCP servers whose tools AddTools may give the session
 	// after it opens. A session with a Parent takes none.
 	Joining   []string
@@ -318,6 +323,17 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	s := &Session{inner: sess, gate: gate, joining: &r.joining, parts: slices.Clone(o.SystemPrompt)}
 	if o.ResumeID != "" || o.Continue {
 		a := sess.Agent()
+		var stored ai.OrderedSections
+		if current := ai.GetCurrentSystemMessage(a.MessagesSnapshot()); current != nil {
+			stored = current.Sections
+		}
+		for _, name := range o.Later {
+			part := PromptPart{Name: name}
+			if i := slices.IndexFunc(stored, func(p ai.PromptSection) bool { return p.Name == name }); i >= 0 && stored[i].Value != nil {
+				part.Text = *stored[i].Value
+			}
+			s.SetPromptPart(part)
+		}
 		previous := a.PreparePromptHook()
 		a.SetPreparePrompt(func(ctx context.Context, messages []agent.AgentMessage) ([]agent.AgentMessage, error) {
 			if previous != nil {

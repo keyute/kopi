@@ -29,6 +29,7 @@
 - Servers start at startup, and each has 30 seconds to connect.
 - The fullscreen interface does not wait for them: the session opens at once, with "Connecting to MCP servers…" above the input until the last server has connected or failed.
   - A server joins the open session when it connects: its tools can be loaded from the agent's next request on, in a turn that is already running too.
+  - The system prompt's list of servers is updated once, when the last server has connected or failed. A resumed session keeps the list it had until then.
   - A prompt sent while servers are still connecting waits for them until 2 seconds after Kopi started, then runs with the servers that have connected.
   - A subagent or workflow agent has the servers that had connected when it started.
 - Print mode waits for the servers, at most 10 seconds, before it runs; a server that has not connected by then is left out.
@@ -54,7 +55,7 @@
 
 ## ToolSearch
 
-- The system prompt lists each connected server's tool names; a server that connects later is added to the list.
+- The system prompt lists each connected server's tool names; the list is updated once, when the last server has connected or failed.
 - `ToolSearch` is there whenever a server is configured. A search that finds nothing names the servers still connecting.
 - A tool's schema reaches the model only after the model loads it with `ToolSearch`, by keywords or by exact names, at most 20 per keyword search.
 - `ToolSearch` works in both modes and, with no rule matching, never asks.

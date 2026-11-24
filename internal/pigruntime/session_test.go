@@ -1305,3 +1305,97 @@ func TestResumedSessionTakesAPartSetAfterItOpened(t *testing.T) {
 		})
 	}
 }
+
+// systemUpdates counts the system messages that carry sections in a transcript.
+func systemUpdates(sess *Session) int {
+	n := 0
+	for _, m := range sess.inner.Agent().MessagesSnapshot() {
+		if m.System != nil && len(m.System.Sections) > 0 {
+			n++
+		}
+	}
+	return n
+}
+
+func TestResumedSessionKeepsALaterPartUntilItIsSet(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	servers := PromptPart{Name: "mcp-servers", Text: "MCP tools."}
+	saved, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: append(slices.Clone(kopiPrompt), servers), Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	faux.SetResponses([]ai.FauxResponseStep{reply("saved")})
+	_, err = saved.Send(t.Context(), Prompt{Text: "save"}, nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, saved.Close(t.Context()))
+
+	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, ResumeID: saved.ID(), SystemPrompt: kopiPrompt, Later: []string{"mcp-servers"}, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+	requests := make(chan []ai.Message, 1)
+	prompt := func() string {
+		faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "done")})
+		_, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
+		require.NoError(t, err)
+		return ai.GetCurrentSystemPrompt(<-requests)
+	}
+	stored := systemUpdates(sess)
+
+	assert.Equal(t, kopiText+"\n\nMCP tools.", prompt())
+	assert.Equal(t, stored, systemUpdates(sess), "keeping the stored part adds no system message")
+
+	sess.SetPromptPart(servers)
+	assert.Equal(t, kopiText+"\n\nMCP tools.", prompt())
+	assert.Equal(t, stored, systemUpdates(sess), "the same text adds none")
+
+	sess.SetPromptPart(PromptPart{Name: "mcp-servers", Text: "Other tools."})
+	assert.Equal(t, kopiText+"\n\nOther tools.", prompt())
+
+	sess.SetPromptPart(PromptPart{Name: "mcp-servers"})
+	assert.Equal(t, kopiText, prompt())
+
+	sess.SetPromptPart(PromptPart{Name: "mcp-servers"})
+	assert.Equal(t, kopiText, prompt(), "removing a part the session has not is a no-op")
+}
+
+func TestNewSessionIgnoresLaterParts(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: append(slices.Clone(kopiPrompt), PromptPart{Name: "mcp-servers", Text: "MCP tools."}), Later: []string{"mcp-servers"}, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "done")})
+	_, err = sess.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, kopiText+"\n\nMCP tools.", ai.GetCurrentSystemPrompt(<-requests))
+}
+
+func TestResumedSessionWithoutALaterPartDropsThePassedOne(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	saved := openTestSession(t, r)
+	faux.SetResponses([]ai.FauxResponseStep{reply("saved")})
+	_, err := saved.Send(t.Context(), Prompt{Text: "save"}, nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, saved.Close(t.Context()))
+
+	servers := PromptPart{Name: "mcp-servers", Text: "MCP tools."}
+	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, ResumeID: saved.ID(), SystemPrompt: append(slices.Clone(kopiPrompt), servers), Later: []string{"mcp-servers"}, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+	requests := make(chan []ai.Message, 1)
+	prompt := func() string {
+		faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "done")})
+		_, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
+		require.NoError(t, err)
+		return ai.GetCurrentSystemPrompt(<-requests)
+	}
+	stored := systemUpdates(sess)
+
+	assert.Equal(t, kopiText, prompt())
+	assert.Equal(t, stored, systemUpdates(sess))
+
+	sess.SetPromptPart(servers)
+	assert.Equal(t, kopiText+"\n\nMCP tools.", prompt())
+	assert.Equal(t, stored+1, systemUpdates(sess))
+}

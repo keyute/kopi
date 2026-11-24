@@ -373,9 +373,10 @@ func (c *Controller) serverToolsNow() []tool.Tool {
 	return c.serverTools
 }
 
-// serverSettled gives the tools of st's server, and what it says about itself,
-// to the sessions opened from now on and to the open main session. A subagent
-// or workflow agent keeps what it opened with.
+// serverSettled gives the tools of st's server to the sessions opened from now
+// on and to the open main session at once, and the servers part to the open
+// main session once the last server has settled. A subagent or workflow agent
+// keeps what it opened with.
 func (c *Controller) serverSettled(st pigruntime.ServerStatus) {
 	c.life.Lock()
 	defer c.life.Unlock()
@@ -391,7 +392,8 @@ func (c *Controller) serverSettled(st pigruntime.ServerStatus) {
 	}
 	i, _ := slices.BinarySearchFunc(c.settled, st.Name, func(s pigruntime.ServerStatus, name string) int { return strings.Compare(s.Name, name) })
 	c.settled = slices.Insert(c.settled, i, st)
-	if len(c.settled) == len(c.cfg.Servers.Names()) {
+	last := len(c.settled) == len(c.cfg.Servers.Names())
+	if last {
 		defer close(c.joined)
 	}
 	if closed {
@@ -408,7 +410,12 @@ func (c *Controller) serverSettled(st pigruntime.ServerStatus) {
 	if sess == nil {
 		c.startup = append(c.startup, events...)
 	} else {
-		if part := c.prompt[len(c.prompt)-1]; st.Err == nil && part.Name == serversPart {
+		if last {
+			// The part the session kept, if any, goes when no server has one.
+			part := pigruntime.PromptPart{Name: serversPart}
+			if p := c.prompt[len(c.prompt)-1]; p.Name == serversPart {
+				part = p
+			}
 			sess.SetPromptPart(part)
 		}
 		for _, ev := range events {
@@ -533,6 +540,9 @@ func (c *Controller) Start(ctx context.Context, req OpenRequest) error {
 	if err != nil {
 		if !c.canLoginFirst(ctx, err) {
 			return err
+		}
+		if c.cfg.Servers != nil {
+			c.showActivity()
 		}
 		return c.loginFirst(ctx, req, c.withLoginHint(err))
 	}
@@ -1182,6 +1192,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		SystemPrompt: c.prompt,
 		Tools:        c.tools,
 		Joining:      c.joining(),
+		Later:        c.later(),
 		Authority:    c.authority,
 		Rules:        c.cfg.Rules,
 		Approve:      c.approver(d, c.main),
@@ -1313,6 +1324,15 @@ func (c *Controller) joining() []string {
 		return nil
 	}
 	return c.cfg.Servers.Names()
+}
+
+// later names the prompt parts a session opened now is given after the open:
+// the servers part, while servers are still to settle. It runs with life held.
+func (c *Controller) later() []string {
+	if c.cfg.Servers == nil || len(c.settled) == len(c.cfg.Servers.Names()) {
+		return nil
+	}
+	return []string{serversPart}
 }
 
 // workflowOffered reports that the main session has the Workflow tool.

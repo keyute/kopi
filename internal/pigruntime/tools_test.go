@@ -421,12 +421,12 @@ func TestToolAddedToAResumedSessionIsNotCallableUntilLoadedAgain(t *testing.T) {
 	r, faux := newTestRuntime(t, sb)
 	requests := make(chan []ai.Message, 3)
 	var ran atomic.Bool
-	open := func(resume string) *Session {
+	open := func(r *Runtime, resume string) *Session {
 		sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, ResumeID: resume, SystemPrompt: kopiPrompt, Tools: []tool.Tool{joiningLoader()}, Joining: []string{"late"}, Authority: policy.NewAuthority()})
 		require.NoError(t, err)
 		return sess
 	}
-	sess := open("")
+	sess := open(r, "")
 	require.NoError(t, sess.AddTools([]tool.Tool{joiningTool(&ran)}))
 	faux.SetResponses([]ai.FauxResponseStep{callTool("Load", "call-1"), captureRequest(requests, "loaded")})
 	_, err := sess.Send(t.Context(), Prompt{Text: "load it"}, nil, nil)
@@ -434,9 +434,11 @@ func TestToolAddedToAResumedSessionIsNotCallableUntilLoadedAgain(t *testing.T) {
 	require.ElementsMatch(t, []string{"Load", joiningName}, declared(<-requests))
 	require.NoError(t, sess.Close(t.Context()))
 
-	// PiG keeps the tools a transcript last declared pending until they are
-	// registered (PiG v0.7.0 coding/session_tools.go restoreToolsFromTranscript).
-	resumed := open(sess.ID())
+	// A new process has a runtime whose extension holds no tool yet. PiG keeps
+	// the tools a transcript last declared pending until they are registered
+	// (PiG v0.7.0 coding/session_tools.go restoreToolsFromTranscript).
+	r, faux = newTestRuntime(t, sb)
+	resumed := open(r, sess.ID())
 	t.Cleanup(func() { assert.NoError(t, resumed.Close(context.Background())) })
 	require.NoError(t, resumed.AddTools([]tool.Tool{joiningTool(&ran)}))
 	assert.False(t, resumed.Callable(joiningName))

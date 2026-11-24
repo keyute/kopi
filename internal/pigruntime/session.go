@@ -164,12 +164,18 @@ func toAI(images []Image) []ai.ImageContent {
 func (s *Session) ID() string { return s.inner.ID() }
 
 // SetPromptPart replaces the part of the system prompt that has p's name, or
-// adds p after the others, from the session's next model request.
+// adds p after the others, from the session's next model request. A part with
+// empty text removes the part of that name; the session may have none.
 func (s *Session) SetPromptPart(p PromptPart) {
 	s.partsMu.Lock()
 	defer s.partsMu.Unlock()
 	i := slices.IndexFunc(s.parts, func(q PromptPart) bool { return q.Name == p.Name })
 	switch {
+	case p.Text == "":
+		if i < 0 {
+			return
+		}
+		s.parts = slices.Delete(s.parts, i, i+1)
 	case i < 0:
 		s.parts = append(s.parts, p)
 	case s.parts[i] == p:

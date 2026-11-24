@@ -374,6 +374,14 @@ func TestStartRunsFirstRunLoginThenOpens(t *testing.T) {
 	assert.Empty(t, ofType[event.Error](h.rec.all()))
 }
 
+func TestStartReportsConnectingServersWhileFirstRunLoginIsOpen(t *testing.T) {
+	h := firstRunHarness(t, Config{Servers: holdServers("s")})
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	require.NotNil(t, h.loginRun())
+	h.next(t, func(ev event.Event) bool { _, ok := ev.(event.LoginRequested); return ok })
+	assert.Contains(t, ofType[event.Activity](h.rec.all()), event.Activity{Text: "Connecting to MCP servers…"})
+}
+
 func TestFirstRunLoginCancelThenLoginOpens(t *testing.T) {
 	h := firstRunHarness(t, Config{})
 	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))

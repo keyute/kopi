@@ -2355,6 +2355,55 @@ func TestServerJoinsTheOpenSession(t *testing.T) {
 	assert.Equal(t, int32(1), called.Load())
 }
 
+func TestServersPartIsReplacedOnceTheLastServerSettles(t *testing.T) {
+	srv := holdServers("a", "b")
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Servers: srv})
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	close(srv.grace)
+	requests := make(chan pigruntimetest.Request, 1)
+	prompt := func() string {
+		h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "done")})
+		h.turn(t, "what can you use?")
+		return receive(t, requests).SystemPrompt
+	}
+
+	srv.settle(pigruntime.ServerStatus{Name: "a", Tools: []tool.Tool{serverTool("mcp__a__t")}})
+	assert.NotContains(t, prompt(), "MCP server a", "the part waits for the last server")
+
+	srv.settle(pigruntime.ServerStatus{Name: "b", Tools: []tool.Tool{serverTool("mcp__b__t")}})
+	got := prompt()
+	assert.Contains(t, got, "MCP server a tools: mcp__a__t.")
+	assert.Contains(t, got, "MCP server b tools: mcp__b__t.")
+}
+
+func TestResumedSessionKeepsItsServersPartWhileServersConnect(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	tools := []tool.Tool{serverTool("mcp__s__t")}
+	earlier := newHarness(t, sb, Config{Servers: servers(pigruntime.ServerStatus{Name: "s", Tools: tools})})
+	require.NoError(t, earlier.c.Open(t.Context(), OpenRequest{}))
+	earlier.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("done")})
+	earlier.turn(t, "earlier")
+	id := earlier.c.Status().SessionID
+	require.NoError(t, earlier.c.Close(t.Context()))
+
+	srv := holdServers("s")
+	h := newHarness(t, sb, Config{Servers: srv})
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{ResumeID: id}))
+	close(srv.grace)
+	requests := make(chan pigruntimetest.Request, 1)
+	prompt := func() string {
+		h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "done")})
+		h.turn(t, "what can you use?")
+		return receive(t, requests).SystemPrompt
+	}
+
+	before := prompt()
+	assert.Contains(t, before, "MCP server s tools: mcp__s__t.", "the stored part stays while the server connects")
+
+	srv.settle(pigruntime.ServerStatus{Name: "s", Tools: tools})
+	assert.Equal(t, before, prompt())
+}
+
 func TestPromptWaitsForServersStillConnecting(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	srv := holdServers("s")
