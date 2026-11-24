@@ -4,7 +4,7 @@
 
 - Sessions are in plan or execute mode. Only the user switches, with `/plan`, `/execute`, Shift+Tab or by approving a plan with [`ExitPlanMode`](#exitplanmode).
 - Plan mode allows:
-  - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `Agent`, `SendMessage`, `Workflow`, `TaskOutput`, `TaskStop`, `WebFetch`, `WebSearch`, `AskUserQuestion`, `ExitPlanMode`
+  - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `Agent`, `SendMessage`, `Workflow`, `TaskStop`, `WebFetch`, `WebSearch`, `AskUserQuestion`, `ExitPlanMode`
   - read-only MCP tools
   - `Write` and `Edit` on the session's [plan file](#exitplanmode) only
   - `Bash` only in the [sandbox](sandbox.md), where it cannot write the start directory
@@ -12,7 +12,10 @@
 - Sessions start and resume in the configured [`mode`](configuration.md#mode), including ones opened with `/new` and `/resume`.
 - `--mode` overrides the config file.
 - A mode switched to while the first session is opening is the mode it starts in.
-- The model is told the session's mode, and in plan mode in the fullscreen interface the plan file's path, in one hidden message sent with the first prompt of a session and with the first prompt after the mode changes. It is not part of the system prompt. No message follows an approved plan: the tool's result already tells the model the session is in execute mode.
+- The model is told the session's mode in one hidden message sent with the first prompt of a session and with the first prompt after the mode changes. It is not part of the system prompt.
+- In plan mode where [`ExitPlanMode`](#exitplanmode) is offered, that message also tells the model not to change the workspace and, when the request needs changes, to research it, write a plan to the plan file and call `ExitPlanMode` instead of ending its turn. Where `ExitPlanMode` is not offered (`kopi -p`, or a `deny` rule removed it) the message only states the mode, and the plan file's path when there is one.
+- No message follows an approved plan: the tool's result tells the model that the session is in execute mode and to carry out the plan.
+- After a [compaction](providers.md#models) the main session's model is told the mode again, as the summary may not carry it. In execute mode that message also names the plan file when it has content. For a compaction between the steps of a run it arrives after the model's next response; for one that retries a reply too long for the context window, before the retry.
 - [Rules](permissions.md#rules) decide which calls ask, run or are refused.
 
 ## File tools
@@ -45,8 +48,8 @@
 
 - Runs a command with `bash -c` (`/bin/sh` when `bash` is not on `PATH`) in the start directory, with Kopi's environment.
 - Every call is a fresh shell with no input; `cd` and variables do not carry over.
-- `timeout` is in milliseconds, default 120000, at most 600000.
-- A command still running at its timeout keeps running as a [background task](#background-tasks), as does one started with `run_in_background` or moved with the `background` key. The result names the task. The row reads `Started <command> in background` for a command started there, with nothing under it, and `Moved <command> to background` for one moved there (`↳ timed out` when its timeout moved it). Both rows end `· unsandboxed` when the call set `unsandboxed`.
+- `timeout` is in milliseconds, default 120000, at most 600000. The main agent is told to set it only for a command that needs longer than the default; a [subagent's](subagents.md) command is stopped at its timeout instead of moving to the background.
+- A command still running at its timeout keeps running as a [background task](#background-tasks), as does one started with `run_in_background` or moved with the `background` key. The result names the task and the [file its output is saved to](#saved-output). In the fullscreen interface it also tells the model that it is told when the command ends and not to poll the file; `kopi -p` starts no turn for a command's end, so its result names only the task and the file. The row reads `Started <command> in background` for a command started there, with nothing under it, and `Moved <command> to background` for one moved there, with the time the call waited under it when its timeout moved it (`↳ after 2m`). Both rows end `· unsandboxed` when the call set `unsandboxed`.
 - On interrupt a foreground command's whole process group is killed (on Windows, only the shell).
 - The row's title is the command's first line, at most 80 characters, ending ` …` when the command is longer or has more lines.
 - Returns stdout and stderr combined, keeping the first and last 15,000 bytes; when more was printed, the rest is [saved to a file](#saved-output).
@@ -57,19 +60,21 @@
 ## Saved output
 
 - `Bash`, background commands and MCP tool results keep the first and last 15,000 bytes. When the output is longer, the whole of it is also written to `outputs/<session id>/<random name>.txt` in Kopi's home, and the cut notice names the file and the line to continue from: `[… 70000 bytes cut; full output: /home/me/.kopi/outputs/<session id>/<name>.txt; use Read with offset=140 to continue …]`.
-- The file is created at the first write that would cut the output, so output that fits is never saved. It is mode `0600` in a `0700` folder, and holds at most 64 MiB; past that the notice reads `first <n> bytes of output` in place of `full output`, and the end of the output is only in the result. If the file cannot be created the notice is the plain `[… 70000 bytes cut …]`.
+- The file is created at the first write that would cut the output, so output that fits is never saved, except for a background command: its output is saved from the moment it starts in or moves to the background, however short, because the file is how the model reads it while the command runs. It is mode `0600` in a `0700` folder, and holds at most 64 MiB; past that the notice reads `first <n> bytes of output` in place of `full output`, and the end of the output is only in the result. If the file cannot be created the notice is the plain `[… 70000 bytes cut …]`.
 - `Read` reaches the file with `offset` and `limit`, and `Grep` searches it when `path` names it. Only the session's own files are reachable, one at a time, and read only: `Write` and `Edit` refuse them, and so does everything else in Kopi's home, including the `outputs/` folder itself. The root session, its [subagents](subagents.md) and [workflow agents](workflows.md#workflow-agents) share one folder, and its files show as `output <name>` in a row.
 - A resumed session keeps its folder; a new session gets a new one. Kopi removes files older than a week, and the folders left empty, when it starts, so a resumed session older than that names a file that is gone.
-- The end notice of a background command ends with `[Output saved to <path>]` when its output was saved.
+- The end notice of a background command ends with `[Output saved to <path>]`.
 
 ## Background tasks
 
 - Tasks are background commands, [subagents](subagents.md) and [workflows](workflows.md), numbered `t1`, `t2`, … per run in one sequence.
 - They have no time limit. A command keeps the sandbox profile of the mode it started in; a subagent follows the session's mode unless its definition pins plan mode.
+- `/tasks` lists the running tasks first, in the order they started, then the others under `Finished`, the last to end first. A row is a bullet in the colour of the task's status, the command's first line or `<agent> › <description>`, and at the right `failed` or `stopped` and how long the task has run or ran. The ids are not shown. Enter opens the selected task and Esc closes the list, or goes back to it from an open task.
 - `/tasks` shows an open task's output from its end and follows new output; PgUp/PgDn or the mouse wheel over the dialog scroll it when it does not fit, and scrolling back to the end follows again. Otherwise those keys scroll the transcript.
-- `TaskOutput` returns a task's status, a line naming it (`Agent: <name> › <description>`, `Workflow: <description>`, or `Command: <first line of the command>`, cut at 80 characters and ending ` …` like the row title) and its output so far, kept and [saved](#saved-output) like `Bash` output; for a subagent, its activity so far, and for a workflow, a line for each agent's start and end (the `/tasks` entry opens the progress dialog instead).
-- `TaskStop` kills a command task's process group (on Windows, only the shell), whichever mode it started in, and stops a subagent or a workflow. Its result has the same name line. For a task that was already over it says so (`Task t1 already completed (exit code 0).`, `already failed (exit code 1)` or `already stopped`, the last when you or an earlier `TaskStop` had stopped it) and stops nothing.
-- Rows for `TaskOutput`, `TaskStop` and `SendMessage` name the agent, shell or workflow from that line, not the task id: `Checked on researcher › survey peers`, `Stopped shell npm run dev`, `Checked on workflow › review`. A `TaskStop` on a task that was already over reads `TaskStop <name>` with `↳ already completed (exit code 0)`, `↳ already failed (exit code 1)` or `↳ already stopped`. While such a row runs, waits for approval, fails or is denied it shows the id (`TaskOutput t3`), and a session saved before the name line existed shows each as its tool does: `Checked task t3`, `Stopped task t3`, `TaskStop t3` for a task that was already over, or `Messaged t3`. See [Transcript](usage.md#transcript).
+- The model has no tool that reads a running task. A background command's output is in its [saved output](#saved-output) file, which `Read` and `Grep` reach while it runs; a subagent's and a workflow's result arrives when it ends. `/tasks` shows you a running task's output or activity.
+- `TaskStop` kills a command task's process group (on Windows, only the shell), whichever mode it started in, and stops a subagent or a workflow. Its result has a line naming the task (`Agent: <name> › <description>`, `Workflow: <description>`, or `Command: <first line of the command>`, cut at 80 characters and ending ` …` like the row title). For a task that was already over it says so (`Task t1 already completed (exit code 0).`, `already failed (exit code 1)` or `already stopped`, the last when you or an earlier `TaskStop` had stopped it) and stops nothing.
+- Rows for `TaskStop` and `SendMessage` name the agent, shell or workflow from that line, not the task id: `Stopped shell npm run dev`, `Messaged researcher › survey peers`. A `TaskStop` on a task that was already over reads `TaskStop <name>` with `↳ already completed (exit code 0)`, `↳ already failed (exit code 1)` or `↳ already stopped`. While such a row runs, waits for approval, fails or is denied it shows the id (`TaskStop t3`), and a session saved before the name line existed shows each as its tool does: `Stopped task t3`, `TaskStop t3` for a task that was already over, or `Messaged t3`. See [Transcript](usage.md#transcript).
+- A session saved while Kopi still had a `TaskOutput` tool shows its calls as `TaskOutput` with the result's line count.
 - When a task completes or fails, the model is told, for a command, its status and its last 20 non-empty output lines, for a subagent its final message, and for a workflow the value it returned or its error, at the next boundary of the running turn, or in a new turn when none runs. After an interrupt such notices wait for the next prompt; they never return to the input.
 - A task stopped from `/tasks` is reported to the model along with the next prompt or the next task notice, without starting a turn. One the model stops is not reported again.
 - A task that completes, fails or is stopped from `/tasks` adds a `• shell finished · <command> · 12s` row to the transcript (`failed` or `stopped` in place of `finished`), restored on resume. A failed shell's row shows its reason under it (`exit code 1`), and the row opens to the last output lines the model was sent.
@@ -78,7 +83,7 @@
 
 ## Agent and SendMessage
 
-- `Agent` starts a [subagent](subagents.md) on a prompt and returns its task id at once; the subagent runs in the background. Its row reads `explorer › <description>` and opens to the prompt.
+- `Agent` starts a [subagent](subagents.md) on a prompt and returns its task id at once; the subagent runs in the background, and the result tells the model that it is told when the subagent ends. Its row reads `explorer › <description>` and opens to the prompt.
 - `SendMessage` sends a further message to a subagent by task id. Its result has the name line `Agent: <name> › <description>`; its row reads `Messaged <name> › <description>` with `↳ queued`, and opens to the message. A running subagent reads it when its current step ends; one that has ended, or whose run is being stopped, starts again with its earlier context, and the call does not wait for the stopping run to end.
 - The notice the agent receives when a subagent's run completes or fails, or when you stop it, lists the messages queued for it that it never read as undelivered. When the agent stops a subagent with `TaskStop` it receives no notice, and those messages are dropped.
 - Both exist only when a subagent is defined.
@@ -124,11 +129,11 @@
 
 ## ExitPlanMode
 
-- Takes no arguments. Its row reads `Plan approval`, with `approved`, `revision requested` or `dismissed` under it, and never folds into a group; a revision opens to your feedback. In plan mode it shows you the plan from the session's plan file and asks `Approve this plan?` with `Yes` and `No`.
+- Takes no arguments. Its row reads `Plan approval`, with `approved`, `revision requested` or `dismissed` under it, and never folds into a group; once answered it opens to the plan as it was presented, under your feedback for a revision. In plan mode it shows you the plan from the session's plan file and asks `Approve this plan?` with `Yes` and `No`.
 - Each root session in the fullscreen interface has a plan file, `plans/<session id>.md` in Kopi's home. The model writes it with `Write` and `Edit`; `Read`, `Write` and `Edit` reach that one file in both modes without asking by default. [Rules](permissions.md#precedence) still apply to it.
 - A resumed session keeps its plan file; a new session gets a new one. Kopi never deletes plan files.
-- The plan is drawn in the main session's transcript as Markdown when it is presented, and that view opens if you were viewing a subagent. On resume only the tool's row is restored; the plan is in the file.
-- `Yes` switches the session to execute mode and the turn continues.
+- While the dialog is open the plan is drawn as Markdown under the `Plan approval` row in the main session's transcript, and that view opens if you were viewing a subagent. Once answered the row closes to your decision; a click on it or Ctrl+O opens the plan as it was presented. After a resume the row does not open to the plan; it is in the file.
+- `Yes` switches the session to execute mode and the turn continues: the result tells the model to carry out the plan.
 - `No` takes feedback typed on its row. The feedback goes to the model, which stays in plan mode and can revise the plan and ask again. A blank `No` or Esc dismisses the plan and stops the turn; the model sees that you dismissed it.
 - The call is an error when the session is not in plan mode or the plan file is missing or empty.
 - If you edited the plan file while the dialog was open, the model is told.
@@ -197,7 +202,7 @@
 - In an `AskUserQuestion` dialog Space, Left, Right and the number keys are fixed keys, not [`keys`](configuration.md#keys) entries.
 - A note on an option that is not chosen is dropped.
 - The plan file is matched by its absolute, cleaned path; a symlink, hard link or different-case spelling of it is treated like the rest of Kopi's home.
-- On resume the plan is not drawn again.
+- After a resume the `Plan approval` row does not open to the plan.
 - In an `ExitPlanMode` dialog the number keys are fixed keys, not [`keys`](configuration.md#keys) entries.
 - While a question is open PgUp and PgDn, and the mouse wheel over the dialog, scroll a cut preview or review, not the transcript, and do nothing when nothing is cut.
 

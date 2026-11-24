@@ -178,6 +178,7 @@ func (p *questionPage) closeNote(save bool) {
 }
 
 // binding is "<first key> to <verb>", empty when the binding has no keys.
+// hintRows finds the key by this form.
 func binding(b key.Binding, verb string) string {
 	if ks := b.Keys(); len(ks) > 0 {
 		return ks[0] + " to " + verb
@@ -402,9 +403,9 @@ func (q *questionDialog) fillReview(width int, th theme) {
 	}
 	q.reviewWidth, q.reviewTheme = width, th
 	d.body = nil
-	none, muted := lipgloss.NewStyle(), fg(th.muted)
+	muted := fg(th.muted)
 	for i, qu := range q.qs {
-		d.body = append(d.body, hang("", none, fmt.Sprintf("%d. %s", i+1, qu.Question), none.Bold(true), width-2)...)
+		d.body = append(d.body, hang("", muted, fmt.Sprintf("%d. %s", i+1, qu.Question), fg(th.text).Bold(true), width-2)...)
 		if !q.answered(i) {
 			d.body = append(d.body, hang("", fg(th.warning), "↳ Answer required", fg(th.warning), width-2)...)
 			continue

@@ -74,7 +74,7 @@ type Config struct {
 	// Agent or SendMessage tool.
 	Agents []subagent.Definition
 	// AgentTools are the tools a subagent may have, besides the MCP servers'
-	// tools; Agent, SendMessage, TaskOutput, TaskStop and ToolSearch are never
+	// tools; Agent, SendMessage, TaskStop, ToolSearch and Workflow are never
 	// given to one.
 	AgentTools []tool.Tool
 	// Plans is the root session's plan file; nil means there is none, and no
@@ -304,8 +304,8 @@ func (c *Controller) setup() {
 	if ask := tool.NewAskUserQuestion(c.askQuestion); !c.cfg.Unattended && !c.cfg.Rules.Removes(ask.Name) {
 		tools = append(tools, ask)
 	}
-	if exit := tool.NewExitPlanMode(c.cfg.Plans, c.reviewPlan); c.cfg.Plans != nil && !c.cfg.Unattended && !c.cfg.Rules.Removes(exit.Name) {
-		tools = append(tools, exit)
+	if c.planApproval() {
+		tools = append(tools, tool.NewExitPlanMode(c.cfg.Plans, c.reviewPlan))
 	}
 	if !c.cfg.Rules.Removes("WebSearch") {
 		c.search = []tool.Tool{tool.NewWebSearch(func(ctx context.Context, system, query string) (tool.SearchResult, error) {
@@ -1235,6 +1235,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		Rules:        c.cfg.Rules,
 		Approve:      c.approver(d, c.main),
 		Review:       c.reviewer(rec),
+		Recall:       c.recall,
 	})
 	if err != nil {
 		return err

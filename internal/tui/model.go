@@ -627,7 +627,7 @@ func (m *model) apply(ev event.Event) *view {
 		// A repeat after an edit keeps the dialog and what was typed in it.
 		if !m.owned(ev) {
 			m.open(promptPlan, newPlanDialog(ev, &m.keys, m.th))
-			// The plan is a block in the main transcript and the dialog takes every key.
+			// The plan is the body of a row in the main transcript and the dialog takes every key.
 			if m.shown != app.Main {
 				m.show(app.Main)
 			}

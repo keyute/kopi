@@ -48,9 +48,8 @@ func TestAgentDescribesItself(t *testing.T) {
 	assert.Equal(t, "Agent", tool.Name)
 	assert.Equal(t, "Agent", tool.Label)
 	assert.Equal(t, "A subagent is another agent with its own context, instructions and tools; it sees only the prompt it is given. "+
-		"A call returns at once with a task id while the subagent runs in the background. "+
-		"When it ends you are told, with its final message: within your turn, or in a new turn that its end starts if yours has ended. "+
-		"TaskOutput returns its activity so far, TaskStop stops it, and SendMessage sends it a further message. Subagents:\n"+
+		"A call returns at once with a task id while the subagent runs in the background; its end is reported to you with its final message. "+
+		"TaskStop stops it, and SendMessage sends it a further message. Subagents:\n"+
 		"explore: Finds things.\nreview: Reviews a change.", tool.Description)
 	assert.Equal(t, []string{"description", "prompt", "subagent_type"}, tool.Parameters["required"])
 	assert.Equal(t, false, tool.Parameters["additionalProperties"])
@@ -85,7 +84,7 @@ func TestAgentLaunches(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, admitted)
-	assert.Equal(t, "Agent t3 started.", out.Text)
+	assert.Equal(t, "Agent t3 started. You are told when it ends, in a new turn if yours has ended.", out.Text)
 	assert.Equal(t, [][3]string{{"explore", "look", "find it"}}, agents.launched)
 }
 
@@ -140,7 +139,8 @@ func TestAgentDisplay(t *testing.T) {
 
 	assert.Equal(t, "explore › look", tool.Display.Title(json.RawMessage(`{"description":"look","prompt":"p","subagent_type":"explore"}`)))
 	assert.Equal(t, "Agent", tool.Display.Title(json.RawMessage(`{`)))
-	assert.Equal(t, "launched", tool.Display.Summary("Agent t3 started."))
+	assert.Equal(t, "launched", tool.Display.Summary("Agent t3 started. You are told when it ends, in a new turn if yours has ended."))
+	assert.Equal(t, "launched", tool.Display.Summary("Agent t3 started."), "a session saved before the result said how the end arrives")
 	_, lines := tool.Display.Change(json.RawMessage(`{"description":"look","prompt":"a\nb","subagent_type":"explore"}`))
 	assert.Equal(t, []PreviewLine{{Kind: Context, Text: "a"}, {Kind: Context, Text: "b"}}, lines)
 	assert.Nil(t, tool.Display.Body)

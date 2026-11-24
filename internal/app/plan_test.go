@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"testing/synctest"
 
@@ -61,7 +62,7 @@ func TestPlanApprovalSwitchesToExecuteAndTurnContinues(t *testing.T) {
 	assert.Equal(t, event.PlanEnded{Token: req.Token}, receiveEvent(t, ended))
 	assert.Equal(t, []event.ModeChanged{{Mode: policy.Execute}}, ofType[event.ModeChanged](h.rec.all()))
 	assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
-	assert.Equal(t, []string{"The user approved the plan. The session is in execute mode."}, receive(t, requests).ToolResults)
+	assert.Equal(t, []string{"The user approved the plan. The session is in execute mode. Carry out the plan now."}, receive(t, requests).ToolResults)
 
 	h.turn(t, "go on")
 	assert.Equal(t, []string{"plan it", h.planLine(), "go on"}, receive(t, next).UserTexts, "no mode line follows an approved plan")
@@ -169,8 +170,80 @@ func TestRefreshPlanRepeatsTheRequestWithTheEditedText(t *testing.T) {
 
 	assert.True(t, h.c.AnswerPlan(req.Token, tool.PlanAnswer{Approved: true}))
 	wait(t, w.Done())
-	assert.Equal(t, []string{"The user approved the plan. The user edited the plan file before answering. The session is in execute mode."}, receive(t, requests).ToolResults)
+	assert.Equal(t, []string{"The user approved the plan. The user edited the plan file before answering. The session is in execute mode. Carry out the plan now."}, receive(t, requests).ToolResults)
 	assert.False(t, h.c.RefreshPlan(req.Token), "the answered plan is gone")
+}
+
+func TestModeLineSteersToThePlanOnlyWhereItCanBeApproved(t *testing.T) {
+	assert.Equal(t, "Plan mode is on: do not change the workspace. When the request needs changes, research it, write a plan to /plans/s.md"+
+		" (Read, Write and Edit work on that file in both modes) and call ExitPlanMode for the user's approval instead of ending your turn;"+
+		" a request that needs no changes is just answered.", modeLine(policy.Plan, "/plans/s.md", true))
+	assert.Equal(t, "The session is in plan mode. Its plan file is /plans/s.md; Read, Write and Edit work on that file in both modes.",
+		modeLine(policy.Plan, "/plans/s.md", false), "ExitPlanMode is not offered")
+	assert.Equal(t, "The session is in plan mode.", modeLine(policy.Plan, "", true))
+	assert.Equal(t, "The session is in execute mode.", modeLine(policy.Execute, "/plans/s.md", true))
+}
+
+func TestRecallNamesThePlanFileInExecuteModeOnceItHasContent(t *testing.T) {
+	h := modeHarness(t)
+	assert.Equal(t, h.planLine(), h.c.recall())
+
+	h.c.EnterExecute()
+	assert.Equal(t, "The session is in execute mode.", h.c.recall(), "no plan was written")
+	writePlan(t, h, " \n")
+	assert.Equal(t, "The session is in execute mode.", h.c.recall(), "the plan is blank")
+	writePlan(t, h, "# Plan\n")
+	assert.Equal(t, "The session is in execute mode. Its plan file is "+h.c.PlanFile()+".", h.c.recall())
+
+	h, _ = openHarness(t, Config{})
+	h.c.EnterExecute()
+	assert.Equal(t, "The session is in execute mode.", h.c.recall(), "the session has no plan file")
+}
+
+func TestCompactionRecallsTheModeLine(t *testing.T) {
+	const execLine = "The session is in execute mode."
+	for _, tc := range []struct {
+		name string
+		// between runs after the first prompt, before the compaction.
+		between func(h *harness)
+		want    func(h *harness) []string
+	}{
+		{"plan mode", func(*harness) {}, func(h *harness) []string { return []string{"kept prompt", h.planLine(), "next"} }},
+		{"execute mode with a plan", func(h *harness) {
+			h.c.EnterExecute()
+			writePlan(t, h, "# Plan\n")
+		}, func(h *harness) []string {
+			return []string{"kept prompt", execLine, execLine + " Its plan file is " + h.c.PlanFile() + ".", "next"}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := modeHarness(t)
+			// Together the two prompts pass PiG's compaction threshold on the faux
+			// model's window; the second alone is more than PiG keeps verbatim, so the
+			// first, and the mode line sent with it, is summarised.
+			old, kept := strings.Repeat("a", 240_000), strings.Repeat("b", 240_000)
+			requests := make(chan pigruntimetest.Request, 1)
+			h.faux.SetResponses([]ai.FauxResponseStep{
+				pigruntimetest.Text("first"), pigruntimetest.Text("second"), pigruntimetest.Text("the summary"), pigruntimetest.Capture(t, requests, "third"),
+			})
+
+			h.turn(t, old)
+			tc.between(h)
+			h.turn(t, kept)
+			h.turn(t, "next")
+
+			texts := receive(t, requests).UserTexts
+			require.NotEmpty(t, texts)
+			assert.Contains(t, texts[0], "the summary")
+			texts = texts[1:]
+			for i, text := range texts {
+				if text == kept {
+					texts[i] = "kept prompt"
+				}
+			}
+			assert.Equal(t, tc.want(h), texts)
+		})
+	}
 }
 
 func TestExitPlanModeToolIsAttendedOnlyAndNeverForAgents(t *testing.T) {

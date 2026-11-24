@@ -50,12 +50,12 @@ Report file paths and line numbers.
 - When a subagent ends, the agent is told with its final message and continues.
 - `SendMessage` sends a further message to a subagent by task id. A running subagent reads it when its current step ends; one that has ended, or whose run is being stopped, starts again with its earlier context and reports again. The call does not wait for the stopping run to end.
 - The notice the agent receives when a subagent's run completes or fails, or when you stop it, lists the messages queued for it that it never read as undelivered. When the agent stops a subagent with `TaskStop` it receives no notice, and those messages are dropped.
-- `TaskOutput` shows a subagent's activity so far and `TaskStop` stops it; their rows read `Checked on explorer › <description>` and `Stopped explorer › <description>`, and `SendMessage`'s reads `Messaged explorer › <description>` and opens to the message. `/tasks` lists subagents next to background commands, opens a subagent's view with Enter and stops the selected running subagent with `x` (`stop-agent`) from the list.
+- The agent has no tool that reads a running subagent: it is told when the subagent ends. `TaskStop` stops it; its row reads `Stopped explorer › <description>`, and `SendMessage`'s reads `Messaged explorer › <description>` and opens to the message. `/tasks` lists subagents next to background commands, opens a subagent's view with Enter and stops the selected running subagent with `x` (`stop-agent`) from the list.
 
 ## What a subagent gets
 
 - Its prompt is Kopi's own text, then the definition's body, then the instruction files (unless `instructions: false`), then what its MCP servers report.
-- Its tools are the session's tools, or the `tools` list, but never `Agent`, `SendMessage`, `Workflow`, `AskUserQuestion`, `ExitPlanMode`, `TaskOutput` or `TaskStop`, and it cannot reach the session's [plan file](tools.md#exitplanmode). Its `Read` and `Grep` do reach the session's [saved output](tools.md#saved-output), the root's and other subagents' alike, as its `Bash` output is saved there too.
+- Its tools are the session's tools, or the `tools` list, but never `Agent`, `SendMessage`, `Workflow`, `AskUserQuestion`, `ExitPlanMode` or `TaskStop`, and it cannot reach the session's [plan file](tools.md#exitplanmode). Its `Read` and `Grep` do reach the session's [saved output](tools.md#saved-output), the root's and other subagents' alike, as its `Bash` output is saved there too.
 - Its `Bash` runs in the foreground only, and a command still running at its timeout is stopped.
 
 ## Permissions

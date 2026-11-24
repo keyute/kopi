@@ -72,7 +72,7 @@ func TestWorkflowStarts(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, admitted)
-	assert.Equal(t, "Workflow t3 started.", out.Text)
+	assert.Equal(t, "Workflow t3 started. You are told when it ends, in a new turn if yours has ended.", out.Text)
 	assert.Equal(t, [][2]string{{"audit", "return 1"}}, w.started)
 }
 
@@ -121,6 +121,7 @@ func TestWorkflowDisplay(t *testing.T) {
 
 	assert.Equal(t, "Workflow › audit", tool.Display.Title(json.RawMessage(`{"description":"audit","script":"s"}`)))
 	assert.Equal(t, "Workflow", tool.Display.Title(json.RawMessage(`{`)))
+	assert.Equal(t, "launched", tool.Display.Summary("Workflow t3 started. You are told when it ends, in a new turn if yours has ended."))
 	assert.Equal(t, "launched", tool.Display.Summary("Workflow t3 started."))
 	assert.Empty(t, tool.Display.Summary("too many"))
 	assert.Nil(t, tool.Display.Done)

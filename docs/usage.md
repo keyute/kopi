@@ -65,13 +65,13 @@ The whole word `ultrathink`, in any case, in a prompt to the main agent raises i
   5h          ▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱  23%  resets 15:40
   wk          ▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱  52%  resets Thu 09:00
 
-  System prompt    1.9k    2%
-  Tools            8.1k   10%
-  Instructions     6.2k    7%
-  Skills           1.8k    2%
-  Agents           1.3k    2%
-  MCP              3.0k    4%
-  Messages        61.9k   74%
+  System prompt    1.9k    0.5%
+  Tools            8.1k    2.0%
+  Instructions     6.2k    1.6%
+  Skills           1.8k    0.5%
+  Agents           1.3k    0.3%
+  MCP              3.0k    0.8%
+  Messages        61.9k   15.5%
 
   openai-codex/gpt-5-codex     1.2m   $3.90
   openai-codex/gpt-5-mini    310.0k   $0.41
@@ -82,17 +82,19 @@ The whole word `ultrathink`, in any case, in a prompt to the main agent raises i
   Compaction  2 done · next at 383.6k
   Time        12m 40s model · 3m 5s tools
   Session     0195c2d4-7b1e-7c3a-9f2d-5e8a1b6c4d70 · 42 messages · 128 tool calls
+
+  esc to close
 ```
 
 - Esc closes it. It stays open while turns run and shows the new figures when a tool call or turn ends; a change of session closes it. PgUp/PgDn scroll it when it is taller than a third of the screen.
 - `Context` is the main session's context; it is absent while the context's size or the model's window is unknown, as before the first request and right after a compaction. `5h`, `wk` and the other plan windows are the share of the plan used, in the warning colour from 90%, with when each resets (as in [Plan limits](providers.md#plan-limits)). They show only for a provider Kopi reads plan limits from, and only when it is the main session's model's provider.
-- The rows under the bars are the main session's context by what holds it, each with its share of the context:
+- The rows under the bars are the main session's context by what holds it, each with its share of the model's window, so the shares add up to about `Context`'s (a share under a tenth of a percent shows as `<0.1%`):
   - `System prompt` is Kopi's own text, `Instructions` the [instruction files](trust.md), the home's and a trusted folder's.
   - `Tools` is the definitions of the tools the model can call, apart from the `Skill` tool's, which carries the skill list and is `Skills`, and the `Agent` tool's, which carries the subagent list and is `Agents`.
   - `MCP` is what MCP servers report about themselves and the definitions of their tools that have been loaded.
   - `Messages` is the rest: prompts, replies and tool results.
   - Every row but `Messages` is an estimate from the text's length; `Messages` is what they leave of the context the provider reports, so the rows add up to `Context`. Where the estimates come to more than that, they are scaled down to it.
-  - They are absent whenever the context's size is unknown, as before the first request and right after a compaction.
+  - They are absent whenever `Context` is.
 - Each model row is the tokens and the cost of the requests the provider answered as that model. The cost is an estimate from the model's listed price; on a subscription sign-in it is not what you are billed. `summaries` is what compaction's own requests cost.
 - The total covers the main session, its subagents, the workflow agents that have ended, and the classifier, `WebFetch`, `WebSearch` and title requests. `Tokens` is the same sum by kind.
 - `Cache` is the main session's. `hit` is the share of the last request's prompt read from the provider's cache. A miss is prompt that had been cached and was paid for again; its dollar figure is what that cost over the cache-read price. `warm until` or `expired` appears only when the main session's model made the last request and declares a cache lifetime, so it is gone after switching model until the new model's first request. It is judged by time alone, so compacting can still rebuild a cache shown as warm.
@@ -147,7 +149,8 @@ Each tool call is a row. It names the call by the tool while it runs, while it w
 - A run of successful calls folds into a group, `Read 3 files, ran 2 commands`; click it or press Ctrl+O to list its calls. A call that did not succeed, and the question and plan-approval rows below, are never in a group.
 - A group clause uses its rows' verb and a noun that covers every row in it: a `Read` of the plan and of a saved output file count as `read the plan` and `read 1 output file`, apart from `read 3 files`; a `Skill` call that reads a file of a skill (`Read skill <name> <file>`) counts as `read 1 skill file`.
 - Some clauses are not counted: `searched the web`, `searched tools`, `read the plan`, `wrote the plan`, `edited the plan`. Repeats read `searched the web 3 times`, `edited the plan 3 times`.
-- A background command counts as `started 1 shell`, a message to an agent as `messaged 1 agent`, a `TaskOutput` or `TaskStop` on an agent, shell or workflow as `checked on 2 agents`, `stopped 1 shell` (a `TaskStop` on a task that was already over counts as `checked on 1 agent`), and a `WebFetch` that only got a redirect as `hit 1 redirect`.
+- A clause counts a file, an agent, a shell or a workflow once however many calls touched it: seven edits of two files read `edited 2 files`, three messages to one agent `messaged 1 agent`. Commands, searches and launches count each call.
+- A background command counts as `started 1 shell`, a message to an agent as `messaged 1 agent`, a `TaskStop` on an agent, shell or workflow as `stopped 1 shell` (on a task that was already over as `checked on 1 agent`), and a `WebFetch` that only got a redirect as `hit 1 redirect`.
 - A group counts the commands that ran outside the [sandbox](sandbox.md#outside-the-sandbox): `ran 9 commands (1 unsandboxed)`. A succeeded command's own row ends `· unsandboxed`.
 - A question you answered (`Asked about …`) and a plan decision (`Plan approval`) stay visible, with your answer or decision on the line under them.
 
@@ -155,8 +158,6 @@ Rows for background work name the agent (`researcher › survey peers`), the she
 
 ```text
 • Started npm run dev in background
-• Checked on researcher › survey peers
-• Checked on shell npm run dev
 • Stopped shell npm run dev
 • Messaged researcher › survey peers
   ↳ queued
@@ -173,11 +174,11 @@ A row says what happened instead of the tool's usual verb when that verb would b
   ↳ redirected
 ```
 
-- `Moved <command> to background` is a command you moved with the `background` key, or that its timeout moved (`↳ timed out`).
+- `Moved <command> to background` is a command you moved with the `background` key, or that its timeout moved; the latter shows the time the call waited under it (`↳ after 2m`, or `↳ after 1s` when the model set a short timeout).
 - A `TaskStop` on a task that was already over keeps the tool's name and says how it ended: `↳ already completed (exit code 0)`, `↳ already failed (exit code 1)` or `↳ already stopped`.
 - A `WebFetch` that only got a redirect keeps the tool's name.
-- A task row that is running, waiting for approval, failed or denied shows the task id (`TaskOutput t3`).
-- A session saved before a task's name was recorded in its result shows each as its tool does: `Checked task t3`, `Stopped task t3`, `TaskStop t3` for a task that was already over, or `Messaged t3`.
+- A task row that is running, waiting for approval, failed or denied shows the task id (`TaskStop t3`).
+- A session saved before a task's name was recorded in its result shows each as its tool does: `Stopped task t3`, `TaskStop t3` for a task that was already over, or `Messaged t3`.
 
 A call that did not succeed is one of:
 
@@ -196,9 +197,8 @@ Rejected, denied and interrupted rows have a warning-coloured bullet, a failed r
 - Lines of an opened `Edit` or `Write` longer than 2000 characters end ` [line truncated]`.
 - An agent's launch row opens to the prompt the main agent gave it, as a workflow's row opens to its script; a message row opens to the message.
 - An agent's end row opens to its final reply, and a failed one shows its reason under it. A shell's end row shows its reason (`exit code 1`) when it failed and opens to the last lines of its output that the model was sent.
-- An opened `TaskOutput` starts at the output, without the status line.
 - A row that has nothing to add to its title and summary does not open: a command with no output, a file that is empty, a search with no match. A question's answers are on its row.
-- A plan revision you asked for opens to your feedback.
+- A plan decision opens to the plan as it was presented, under your feedback for a revision.
 - An opened result is the model's text, so it includes notices written to the model, such as `use offset=2001 to continue`.
 - An edit's lines show without surrounding context or line numbers.
 - Colour in command output is not kept.

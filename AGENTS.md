@@ -31,7 +31,7 @@
 
 - Every model-facing tool goes through `internal/policy`: `Gate.Before` in the pre-dispatch hook and `Gate.Admit` inside execution.
 - Skills load only from `$KOPI_HOME/skills`, `~/.agents/skills` and a trusted folder's `.agents/skills`; the `Skill` tool reads only a loaded skill's text and files inside the directory that skill was loaded from, and on every read refuses a file in Kopi's home outside `skills/`.
-- Subagent definitions load only from `$KOPI_HOME/agents`, once at startup. A subagent's session has its own gate over the same rules and shares the mode holder unless its definition pins plan mode. A subagent never gets `Agent`, `SendMessage`, `Workflow`, `AskUserQuestion`, `ExitPlanMode`, `TaskOutput` or `TaskStop`, never reaches the plan file, and its `Bash` never backgrounds.
+- Subagent definitions load only from `$KOPI_HOME/agents`, once at startup. A subagent's session has its own gate over the same rules and shares the mode holder unless its definition pins plan mode. A subagent never gets `Agent`, `SendMessage`, `Workflow`, `AskUserQuestion`, `ExitPlanMode` or `TaskStop`, never reaches the plan file, and its `Bash` never backgrounds.
 - `Workflow` is offered only in the fullscreen interface and becomes callable only when a human prompt in the main session contains `ultracode`. A workflow agent's session is opened as a subagent's is, from the same definitions, and never gets `Workflow`; the script reaches Kopi only through `agent()`.
 - Only human control input changes mode: `/plan`, `/execute`, Shift+Tab and Yes in the `ExitPlanMode` dialog. Sessions start and resume in the configured `mode` (default plan); `--mode` overrides the config file.
 - A session never waits for MCP servers. A server's tools join the root session when it settles, and what the servers say about themselves joins once the last has settled; a session opened later has them from the start, and a subagent or workflow agent keeps what it opened with. Only a prompt and print mode wait: a prompt sent while servers connect waits for them at most 2 seconds after start, print mode at most 10 seconds before its one turn. No state exists in which there is no session yet, except the first-run login.
@@ -44,7 +44,7 @@
 - Kopi reads and writes only under its home (`$KOPI_HOME`, default `~/.kopi`). Never read or write `~/.pi`, `~/.pig`, `~/.claude` or any other tool's store, in code or in tests. A shared place outside the project (see Built in or configured), such as `~/.agents/skills`, is not another tool's store; Kopi only reads it.
 - `trust.json` under Kopi's home holds trust decisions; the binary never writes `config.json`.
 - `plans/` under Kopi's home holds one plan file per root session; Kopi never deletes them.
-- `outputs/` under Kopi's home holds tool output too long to return whole, one folder per root session; Kopi removes files older than a week at startup.
+- `outputs/` under Kopi's home holds tool output too long to return whole and every background command's output, one folder per root session; Kopi removes files older than a week at startup.
 - Tests use `t.TempDir()`, synthetic credentials and no network, and synchronise on channels, never sleeps.
 
 ## Built in or configured
@@ -69,7 +69,7 @@
 
 ## Model-facing text
 
-- The text Kopi ships, which users can add to but not change, is minimal: it says what exists and how it works, enough for the agent to use it, and never how to behave. Preferences are the user's to state in their instruction files. For a subagent tool, say what subagents are and how a call works; do not say to delegate as much as possible.
+- The text Kopi ships, which users can add to but not change, is minimal: it says what exists and how it works, enough for the agent to use it. It steers only where one of Kopi's own mechanisms has a single intended use that a model gets wrong untold: plan mode ends in a plan presented for approval, an approved plan is carried out, a task whose end is reported is not polled, a timeout is not a yield. Such steering is one sentence in the narrowest place. Preferences are the user's to state in their instruction files. For a subagent tool, say what subagents are and how a call works; do not say to delegate as much as possible.
 - A shipped sentence is the same for every user, is one an agent with an empty Kopi home needs to operate, and sits in the narrowest place: the result it applies to, else the tool's description, else the preamble. A hint naming the tool's own way forward (`use offset=N to continue`) says how it works and stays.
 - The prompt of a model Kopi itself calls (the approval classifier, `WebFetch`, `WebSearch`) is part of that feature's implementation and the binary's; users add to the classifier's through `classifier.instructions`.
 - The system prompt is built once per process from named parts, ordered from what changes least to most: Kopi's text, `$KOPI_HOME/AGENTS.md`, a trusted folder's instruction files, what MCP servers report. Nothing in it depends on the time, git state, the mode or the turn. The last part is the only one replaced while a session is open, once, when the last server has settled; a session resumed before then keeps the part its transcript has; Kopi's own text never depends on what servers report, only on whether any is configured.
@@ -87,6 +87,8 @@
 - Which prompt is in front is decided only by `front()` in `internal/tui/prompt.go`: the open prompt of the earliest kind, the first to arrive among them. A covered prompt stays open. No other code tests a prompt's kind to decide what shows or takes input.
 - A prompt kind is one type implementing `prompt`, a `promptKind` and one `open` call. It fills a `dialog`'s slots and never cuts, windows or offsets rows: only `dialog.rows` decides height, scrolling and field areas.
 - A prompt keeps what it renders for a width and theme (a body, a preview); `dialog.rows` only slices it, so a frame's cost does not grow with the content.
+- A key hint is `<key> to <verb>`, from `binding` where a binding names the key, joined to the others with ` · ` in a dialog's `foot` or `keys`; only `hintRows` colours it, and a `note` is plain text. Every dialog names its way out.
+- Dialog text with no colour of its own is drawn in the theme's `text`.
 - A prompt for a request closes only on that request's own `…Ended` event, which `internal/app` sends once for every request. It never closes on `TurnEnd` or `SessionChanged`.
 
 ## Style

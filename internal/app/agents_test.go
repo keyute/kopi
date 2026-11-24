@@ -198,7 +198,7 @@ func TestAgentToolsAreResolvedPerDefinition(t *testing.T) {
 	read := readTool(t, sb)
 	agentTools := []tool.Tool{
 		read, execTool(new(atomic.Int32)), testTool("Gone", policy.Read, nil), testTool("Agent", policy.Read, nil),
-		testTool("SendMessage", policy.Read, nil), testTool("TaskOutput", policy.Read, nil), testTool("TaskStop", policy.Read, nil),
+		testTool("SendMessage", policy.Read, nil), testTool("TaskStop", policy.Read, nil),
 		tool.NewToolSearch(nil, nil, nil, nil),
 	}
 	specs := map[string]policy.ToolSpec{"Read": {}, "Exec": {}, "Gone": {}, "ToolSearch": {}}

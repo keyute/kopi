@@ -3,6 +3,7 @@ package tool
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -151,4 +152,37 @@ func TestTaskStopOutcome(t *testing.T) {
 			assert.Equal(t, tc.action, action)
 		})
 	}
+	assert.Equal(t, "t1", tool.Display.Subject(args, "Task t1 stopped. [named task]\nCommand: make"), "two tasks may share a name")
+}
+
+func TestTaskNameLine(t *testing.T) {
+	long := strings.Repeat("a", maxBashTitleRunes+5)
+	for _, tc := range []struct {
+		name       string
+		info       TaskInfo
+		line, kind string
+		read       string
+	}{
+		{"agent", TaskInfo{Agent: "explore", Command: "look"}, "Agent: explore › look", "Agent", "explore › look"},
+		{"shell", TaskInfo{Command: "make test"}, "Command: make test", "Command", "make test"},
+		{"multi-line shell", TaskInfo{Command: "cd a\nls"}, "Command: cd a …", "Command", "cd a …"},
+		{"long shell", TaskInfo{Command: long}, "Command: " + long[:maxBashTitleRunes] + " …", "Command", long[:maxBashTitleRunes] + " …"},
+		{"workflow", TaskInfo{Agent: WorkflowAgent, Command: "audit\nmore"}, "Workflow: audit", "Workflow", "audit"},
+		{"multi-line agent", TaskInfo{Agent: "explore", Command: "look\nmore"}, "Agent: explore › look", "Agent", "explore › look"},
+		{"agent with leading newline", TaskInfo{Agent: "explore", Command: "\nsurvey"}, "Agent: explore › survey", "Agent", "explore › survey"},
+		{"long agent", TaskInfo{Agent: "explore", Command: long}, "Agent: explore › " + long, "Agent", "explore › " + long},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.line, taskName(tc.info))
+
+			kind, name, ok := readTaskName("Task t1 completed. [named task]\n" + tc.line + "\nout")
+			assert.True(t, ok)
+			assert.Equal(t, tc.kind, kind)
+			assert.Equal(t, tc.read, name)
+		})
+	}
+	_, _, ok := readTaskName("Task t1 completed.\nhi\n")
+	assert.False(t, ok)
+	_, _, ok = readTaskName("Task t1 completed.")
+	assert.False(t, ok)
 }

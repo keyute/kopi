@@ -264,16 +264,15 @@ func TestWorkflowAgentModelRowSurvivesItsEnd(t *testing.T) {
 	priced := sb.PricedModel(t)
 	a := newAgentHarness(t, sb, Config{WorkflowModel: priced})
 	a.rootAcks(1)
+	ends := turnEnds(a.c)
 
 	id := a.startWorkflow(t, "audit", `return await agent("a")`)
 	a.untilStatus(t, id, tool.TaskCompleted)
+	receiveEnd(t, ends)
 
 	got := a.c.Usage()
-	require.Len(t, got.Models, 1)
-	assert.Equal(t, priced, got.Models[0].Model)
-	assert.Equal(t, pigruntimetest.PricedModelCost, got.Models[0].Cost)
-	assert.Positive(t, got.Tokens.Input, "the agent's tokens survive its end")
-	assert.Equal(t, a.c.Status().TotalCost, got.Models[0].Cost)
+	assert.Contains(t, got.Models, ModelUsage{Model: priced, Tokens: 1_000_000, Cost: pigruntimetest.PricedModelCost}, "the agent's row survives its end")
+	assert.Equal(t, a.c.Status().TotalCost, pigruntime.Usage{Models: got.Models}.Cost())
 }
 
 func TestWorkflowSchemaReturnsTheRecordedObject(t *testing.T) {
@@ -816,7 +815,7 @@ func TestWorkflowToolIsOfferedToTheMainSessionOnlyAndNotDescribedAsDeferredMCP(t
 }
 
 func TestNoChildSpecHasANeverChildToolWhateverItsDefinitionNames(t *testing.T) {
-	excluded := []string{"Agent", "SendMessage", "TaskOutput", "TaskStop", "Workflow"}
+	excluded := []string{"Agent", "SendMessage", "TaskStop", "Workflow"}
 	agentTools := []tool.Tool{testTool("Look", policy.Read, nil)}
 	for _, name := range excluded {
 		agentTools = append(agentTools, testTool(name, policy.Read, nil))

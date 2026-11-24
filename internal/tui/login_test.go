@@ -35,13 +35,15 @@ func TestLoginRowsListOptionsWithDescriptions(t *testing.T) {
 		"",
 		"❭ 1. Account - sign in with a browser",
 		"  2. API key",
+		"",
+		"  esc to cancel",
 		rule40,
 	}, plainLoginRows(ev, 0))
 }
 
 func TestLoginRowsShowATextFieldWithItsPlaceholder(t *testing.T) {
 	ev := event.LoginRequested{Message: "Paste the code", Placeholder: "code"}
-	assert.Equal(t, []string{rule40, "  Paste the code", "", "❭ code", rule40}, plainLoginRows(ev, 0))
+	assert.Equal(t, []string{rule40, "  Paste the code", "", "❭ code", "", "  esc to cancel", rule40}, plainLoginRows(ev, 0))
 }
 
 func TestLoginRowsMaskASecret(t *testing.T) {
@@ -133,7 +135,7 @@ func TestLoginRowsWindowIsContiguousAndCentredOnTheSelection(t *testing.T) {
 	d := l.d
 	d.move(20)
 
-	rows := plainRows(l.dialog(40, mocha()).rows(40, 9, 3, mocha()))
+	rows := plainRows(l.dialog(40, mocha()).rows(40, 11, 3, mocha()))
 
 	assert.Equal(t, []string{
 		rule40,
@@ -144,6 +146,8 @@ func TestLoginRowsWindowIsContiguousAndCentredOnTheSelection(t *testing.T) {
 		"❭ 21. Provider 21",
 		"  22. Provider 22",
 		"  21 of 40",
+		"",
+		"  esc to cancel",
 		rule40,
 	}, rows)
 }

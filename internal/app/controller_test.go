@@ -150,7 +150,7 @@ func buildHarness(t *testing.T, rt *pigruntime.Runtime, faux *ai.FauxProviderHan
 	mute := c.Subscribe(func(ev event.Event) {
 		if _, ok := ev.(event.SessionChanged); ok {
 			c.queue.Lock()
-			c.main.told = modeLine(c.mode(), c.cfg.Plans.Path())
+			c.main.told = modeLine(c.mode(), c.cfg.Plans.Path(), c.planApproval())
 			c.queue.Unlock()
 		}
 	})
@@ -327,19 +327,19 @@ func TestReadResultReachesNextRequest(t *testing.T) {
 	assert.Contains(t, req.ToolResults[0], "kopi fixture 42")
 }
 
-func TestResumeNamesTheTaskOfAHistoryTaskOutputRow(t *testing.T) {
+func TestResumeNamesTheTaskOfAHistoryTaskStopRow(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	tasks := tool.NewTasks()
 	task := tasks.StartAgent("explorer", "find it", nil)
 	task.End(tool.TaskCompleted, "", "found")
-	cfg := Config{Tools: []tool.Tool{tool.NewTaskOutput(tasks)}, Tasks: tasks, Mode: policy.Execute}
+	cfg := Config{Tools: []tool.Tool{tool.NewTaskStop(tasks)}, Tasks: tasks, Mode: policy.Execute}
 	h := newHarness(t, sb, cfg)
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
 	h.faux.SetResponses([]ai.FauxResponseStep{
-		pigruntimetest.ToolCalls(pigruntimetest.Call{Name: "TaskOutput", ID: "call-1", Args: map[string]any{"task_id": task.ID()}}),
+		pigruntimetest.ToolCalls(pigruntimetest.Call{Name: "TaskStop", ID: "call-1", Args: map[string]any{"task_id": task.ID()}}),
 		pigruntimetest.Text("done"),
 	})
-	h.turn(t, "check it")
+	h.turn(t, "stop it")
 	id := h.c.Status().SessionID
 	require.NoError(t, h.c.Close(t.Context()))
 
@@ -350,7 +350,7 @@ func TestResumeNamesTheTaskOfAHistoryTaskOutputRow(t *testing.T) {
 	require.Len(t, changed, 1)
 	ends := ofType[event.ToolEnd](changed[0].History)
 	require.Len(t, ends, 1)
-	assert.Equal(t, "Checked on explorer › find it", ends[0].Done)
+	assert.Equal(t, "TaskStop explorer › find it", ends[0].Done)
 	assert.Equal(t, tool.Action{Verb: "Checked on", One: "agent", Many: "agents"}, ends[0].Action)
 }
 
@@ -3567,7 +3567,9 @@ func modeHarness(t *testing.T) *harness {
 }
 
 func (h *harness) planLine() string {
-	return "The session is in plan mode. Its plan file is " + h.c.PlanFile() + "; Read, Write and Edit work on that file in both modes."
+	return "Plan mode is on: do not change the workspace. When the request needs changes, research it, write a plan to " + h.c.PlanFile() +
+		" (Read, Write and Edit work on that file in both modes) and call ExitPlanMode for the user's approval instead of ending your turn; " +
+		"a request that needs no changes is just answered."
 }
 
 // userTexts sends each prompt as its own turn and returns the user messages the
@@ -3645,10 +3647,21 @@ func TestHeadlessPromptCarriesTheModeLine(t *testing.T) {
 	assert.Equal(t, []string{"hi", h.planLine()}, receive(t, requests).UserTexts)
 }
 
+func TestUnattendedPlanModeLineDoesNotNameExitPlanMode(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	plans := tool.NewPlans(filepath.Join(sb.Home, "plans"))
+	h := newHarness(t, sb, Config{Plans: plans, Unattended: true})
+	h.showModeLine()
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+
+	line := "The session is in plan mode. Its plan file is " + h.c.PlanFile() + "; Read, Write and Edit work on that file in both modes."
+	assert.Equal(t, [][]string{{"hi", line}}, h.userTexts(t, "hi"))
+}
+
 func TestModeLineIsToldAgainWhenItsPromptWasNotDelivered(t *testing.T) {
 	c := &Controller{authority: policy.NewAuthority()}
 	c.main = &runner{c: c}
-	line := modeLine(policy.Plan, "")
+	line := modeLine(policy.Plan, "", false)
 	sent := c.main.tell([]pigruntime.Prompt{{Text: "a"}})
 	assert.Equal(t, line, sent[0].Mode)
 	assert.Empty(t, c.main.tell([]pigruntime.Prompt{{Text: "b"}})[0].Mode)

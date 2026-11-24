@@ -376,13 +376,12 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	var rules *policy.Rules
 	hidden := func(name string, root, t policy.Target) bool { return rules.Hides(name, root, t) }
 	shell, planShell := tool.NewShell(cwd, sb).WithOutputs(outputs), tool.NewShell(cwd, planSB).WithOutputs(outputs)
-	tools := rootTools(ws, plans, outputs, hidden, shell, planShell, tasks, resolved.Config.Sandbox.AllowUnsandboxed, answer)
+	tools := rootTools(ws, plans, outputs, hidden, shell, planShell, tasks, resolved.Config.Sandbox.AllowUnsandboxed, fullscreen, answer)
 	// A subagent can have every built-in the root can, whether or not this run
-	// offers it, except the tools of the shared task registry.
-	taskToolNames := []string{"TaskOutput", "TaskStop"}
+	// offers it, except the tool of the shared task registry.
 	var subagentTools []string
 	for _, t := range slices.Concat(tools, []tool.Tool{tool.NewWebSearch(nil), tool.NewSkill(nil, "")}) {
-		if !slices.Contains(taskToolNames, t.Name) {
+		if t.Name != "TaskStop" {
 			subagentTools = append(subagentTools, t.Name)
 		}
 	}
@@ -575,13 +574,13 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 
 // rootTools is the root session's built-in tools. Read and Grep reach saved
 // output; only the root's Read, Write and Edit reach the plan file.
-func rootTools(ws *tool.Workspace, plans *tool.Plans, outputs *tool.Outputs, hidden tool.Hidden, shell, planShell *tool.Shell, tasks *tool.Tasks, allowUnsandboxed bool, answer func(ctx context.Context, system, prompt string) (string, error)) []tool.Tool {
+func rootTools(ws *tool.Workspace, plans *tool.Plans, outputs *tool.Outputs, hidden tool.Hidden, shell, planShell *tool.Shell, tasks *tool.Tasks, allowUnsandboxed, wake bool, answer func(ctx context.Context, system, prompt string) (string, error)) []tool.Tool {
 	readWS := ws.WithOutputs(outputs)
 	rootWS := ws.WithPlans(plans)
 	return []tool.Tool{
 		tool.NewRead(rootWS.WithOutputs(outputs)), tool.NewGlob(ws, hidden), tool.NewGrep(readWS, hidden), tool.NewLS(ws, hidden),
-		tool.NewWrite(rootWS), tool.NewEdit(rootWS), tool.NewBash(shell, planShell, tasks, allowUnsandboxed),
-		tool.NewTaskOutput(tasks), tool.NewTaskStop(tasks),
+		tool.NewWrite(rootWS), tool.NewEdit(rootWS), tool.NewBash(shell, planShell, tasks, allowUnsandboxed, wake),
+		tool.NewTaskStop(tasks),
 		tool.NewWebFetch("Kopi/"+kopiVersion(), answer),
 	}
 }
@@ -595,7 +594,7 @@ func agentTools(tools []tool.Tool, ws *tool.Workspace, outputs *tool.Outputs, sh
 	for _, t := range tools {
 		switch t.Name {
 		case "Bash":
-			out = append(out, tool.NewBash(shell, planShell, nil, allowUnsandboxed))
+			out = append(out, tool.NewBash(shell, planShell, nil, allowUnsandboxed, false))
 		case "Read":
 			out = append(out, tool.NewRead(readWS))
 		case "Write":

@@ -71,6 +71,9 @@ func (d *display) apply(ev event.Event) event.Event {
 		if display.Outcome != nil {
 			e.Done, e.Action = display.Outcome(json.RawMessage(e.Args), e.Output)
 		}
+		if display.Subject != nil {
+			e.Subject = display.Subject(json.RawMessage(e.Args), e.Output)
+		}
 		switch {
 		case display.Summary != nil:
 			e.Summary = display.Summary(e.Output)

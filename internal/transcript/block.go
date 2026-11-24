@@ -23,15 +23,18 @@ const (
 
 // Call is one tool call. Title is the call's name until it succeeds, then its
 // done form; Preview is a successful file change's lines; Command is the
-// command when Title does not show all of it.
+// command when Title does not show all of it; Subject is what a successful
+// call acted on, when a group counts that thing rather than the call.
 type Call struct {
 	ID, Title, Summary, Body string
-	Command                  string
+	Command, Subject         string
 	Action                   tool.Action
 	State                    State
 	Preview                  []tool.PreviewLine
 	// Unsandboxed is a call that opted out of the OS sandbox.
 	Unsandboxed bool
+	// Plan is the plan an ExitPlanMode call presented.
+	Plan string
 	// solo is a call that records a human decision and never joins a group;
 	// done and change come from the start event and are spent at its end.
 	solo         bool
@@ -92,13 +95,6 @@ type Task struct {
 	Reason, Result string
 }
 
-// Plan is a plan presented for approval; a repeat of the same ExitPlanMode
-// call replaces Text.
-type Plan struct {
-	key  string
-	Text string
-}
-
 func (b User) Key() string      { return b.key }
 func (b Assistant) Key() string { return b.key }
 func (b Row) Key() string       { return "call:" + b.Call.ID }
@@ -107,7 +103,6 @@ func (b Notice) Key() string    { return b.key }
 func (b Error) Key() string     { return b.key }
 func (b Turn) Key() string      { return b.key }
 func (b Task) Key() string      { return b.key }
-func (b Plan) Key() string      { return b.key }
 
 func (t *Transcript) Blocks() []Block {
 	var (
@@ -142,8 +137,6 @@ func (t *Transcript) Blocks() []Block {
 			blocks = append(blocks, Error{key: key, Text: it.text})
 		case turnItem:
 			blocks = append(blocks, Turn{key: key, Outcome: it.outcome, Elapsed: it.elapsed})
-		case planItem:
-			blocks = append(blocks, Plan{key: key, Text: it.text})
 		case taskItem:
 			blocks = append(blocks, Task{key: key, ID: it.task.ID, Command: it.task.Command, Agent: it.task.Agent, Status: it.task.Status, Elapsed: it.task.Elapsed, Agents: it.task.Agents, Failed: it.task.Failed, Reason: it.task.Reason, Result: it.task.Result})
 		}

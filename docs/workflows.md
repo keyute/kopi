@@ -27,7 +27,7 @@ A workflow is a JavaScript script the main agent writes to start agents and comb
 
 - A workflow agent is not a [subagent](subagents.md). Each `agent()` call opens a session, sends it the one prompt, takes the reply and closes the session. It has no task of its own, no row in the main transcript and no agent row, cannot be sent a message, does not restart, and does not count towards the 20 running subagents.
 - Without `agentType` the agent has every tool a subagent can have, the instruction files and the default effort. With one, it has that [definition](subagents.md#format)'s effort, tools, `instructions` setting, `mode` and prompt. An unknown name makes `agent()` reject. Workflow agents work with no definitions.
-- An agent never gets `Workflow`, `Agent`, `SendMessage`, `AskUserQuestion`, `ExitPlanMode`, `TaskOutput` or `TaskStop`.
+- An agent never gets `Workflow`, `Agent`, `SendMessage`, `AskUserQuestion`, `ExitPlanMode` or `TaskStop`.
 - Its `Read` and `Grep` reach the session's [saved output](tools.md#saved-output), as a subagent's do.
 - Its model is the definition's `model`, else [`workflows.model`](configuration.md#workflows), else the session's model.
 - Its preamble says it is a workflow agent in place of the subagent sentence.
@@ -52,7 +52,7 @@ The 1000 calls and the memory limit are fixed.
 
 ## What you see
 
-- The call shows as `• Workflow › <description>` with `↳ launched`, and returns a task id such as `t3`. Opening the row shows the script. `TaskOutput` and `TaskStop` rows on it read `Checked on workflow › <description>` and `Stopped workflow › <description>`.
+- The call shows as `• Workflow › <description>` with `↳ launched`, and returns a task id such as `t3`. Opening the row shows the script. A `TaskStop` row on it reads `Stopped workflow › <description>`.
 - While the main agent is idle and a workflow runs, the row above the input reads `1 workflow still running`; the status line's `workflows` segment shows the count.
 - The end shows as `• workflow finished · <description> · 6m 3s` (`failed` or `stopped` in the error colour), followed by `↳ 9 agents · 1 failed` (the failed part only when non-zero). A failed workflow's row is followed by its reason in full. Opening a finished row shows the value the script returned.
 - `/tasks` lists the workflow next to other tasks as `workflow › <description>`, and stops it with `x` (`stop-agent`). Enter opens its progress dialog; dismissing it returns to the task list.

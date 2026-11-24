@@ -248,30 +248,70 @@ func TestTaskRowCutsALongCommand(t *testing.T) {
 	assert.Equal(t, []string{"", "• shell finished · " + strings.Repeat("x", 12) + "… · 1m 0s"}, body(m))
 }
 
-func TestPlanBlockDrawsAMutedTitleAndMarkdownAndRerendersWhenEdited(t *testing.T) {
+func TestPlanRowDrawsItsPlanWhileRunningAndOnlyWhenOpenedAfter(t *testing.T) {
 	var tr transcript.Transcript
+	tr.Apply(event.ToolStart{CallID: "p", Name: "ExitPlanMode", Title: "Plan approval", Solo: true})
 	tr.Apply(event.PlanRequested{Token: 1, Plan: "# Heading\n\n- first step"})
 	var c renderCache
-	text := func() []string {
+	text := func(f blockFolds) []string {
 		var out []string
-		for _, l := range c.lines(tr.Blocks()[0], blockFolds{}, nil, 40, mocha()) {
+		for _, l := range c.lines(tr.Blocks()[0], f, nil, 40, mocha()) {
 			out = append(out, strings.TrimRight(ansi.Strip(l.text), " "))
 		}
 		return out
 	}
 
-	got := text()
-	assert.Equal(t, "Plan", got[0])
-	assert.Equal(t, fg(mocha().muted).Render("Plan"), c.lines(tr.Blocks()[0], blockFolds{}, nil, 40, mocha())[0].text)
+	got := text(blockFolds{})
+	assert.Equal(t, "• Plan approval", got[0])
 	joined := strings.Join(got[1:], "\n")
-	assert.Contains(t, joined, "Heading")
 	assert.NotContains(t, joined, "# Heading", "the Markdown is rendered")
+	for _, l := range got[1:] {
+		if l != "" {
+			assert.True(t, strings.HasPrefix(l, "    "), "%q is four in", l)
+		}
+	}
+	assert.Contains(t, joined, "Heading")
 	assert.Contains(t, joined, "first step")
 
 	tr.Apply(event.PlanRequested{Token: 1, Plan: "# Heading\n\n- second step"})
-	joined = strings.Join(text()[1:], "\n")
+	joined = strings.Join(text(blockFolds{}), "\n")
 	assert.Contains(t, joined, "second step")
 	assert.NotContains(t, joined, "first step")
+
+	tr.Apply(event.ToolEnd{CallID: "p", Name: "ExitPlanMode", Summary: "revision requested", Body: "split step 2"})
+	closed := blockFolds{expanded: []bool{false}}
+	assert.Equal(t, []string{"• Plan approval", "  ↳ revision requested"}, text(closed))
+
+	opened := text(blockFolds{expanded: []bool{true}})
+	require.Greater(t, len(opened), 4)
+	assert.Equal(t, []string{"• Plan approval", "  ↳ revision requested", "    split step 2"}, opened[:3])
+	assert.Contains(t, strings.Join(opened[3:], "\n"), "second step", "the plan follows the feedback")
+
+	var bare transcript.Transcript
+	bare.Apply(event.ToolStart{CallID: "q", Name: "ExitPlanMode", Title: "Plan approval", Solo: true})
+	bare.Apply(event.PlanRequested{Token: 2, Plan: "# Heading\n\n- step"})
+	bare.Apply(event.ToolEnd{CallID: "q", Name: "ExitPlanMode", Summary: "approved"})
+	assert.Equal(t, hit{kind: hitOutput, id: "q"}, c.lines(bare.Blocks()[0], closed, nil, 40, mocha())[0].hit, "the plan alone makes the row open")
+}
+
+func TestPlanRowRewrapsWhenTheWidthChanges(t *testing.T) {
+	var tr transcript.Transcript
+	tr.Apply(event.ToolStart{CallID: "p", Name: "ExitPlanMode", Title: "Plan approval", Solo: true})
+	tr.Apply(event.PlanRequested{Token: 1, Plan: strings.Repeat("word ", 60)})
+	var c renderCache
+	planLines := func(width int) []string {
+		var out []string
+		for _, l := range c.lines(tr.Blocks()[0], blockFolds{}, nil, width, mocha())[1:] {
+			out = append(out, strings.TrimPrefix(l.text, "    "))
+		}
+		return out
+	}
+
+	narrow, wide := planLines(40), planLines(80)
+	assert.Less(t, len(wide), len(narrow))
+	for _, l := range wide {
+		assert.LessOrEqual(t, ansi.StringWidth(l), 76, "%q fits the width less the indent", l)
+	}
 }
 
 func TestOKRowShowsItsDoneForm(t *testing.T) {
@@ -302,7 +342,7 @@ func TestGroupSentenceFollowsItsRowsVerbs(t *testing.T) {
 	web := tool.Action{Verb: "Searched", One: "the web"}
 	shell := tool.Action{Verb: "Started", One: "shell", Many: "shells"}
 	agents := tool.Action{Verb: "Checked on", One: "agent", Many: "agents"}
-	task := tool.Action{Verb: "Checked", One: "task", Many: "tasks"}
+	task := tool.Action{Verb: "Stopped", One: "task", Many: "tasks"}
 	// The start carries the tool's static action; only the end's outcome names the shells and agents.
 	callAs := func(id, name, title string, static, outcome tool.Action) []event.Event {
 		return []event.Event{
@@ -322,13 +362,13 @@ func TestGroupSentenceFollowsItsRowsVerbs(t *testing.T) {
 		call("e", "WebSearch", "Searched the web for y", web),
 		call("f", "WebSearch", "Searched the web for z", web),
 		callAs("g", "Bash", "Started make in background", tool.Action{}, shell),
-		callAs("h", "TaskOutput", "Checked on researcher › survey peers", task, agents),
-		callAs("i", "TaskOutput", "Checked on explorer › map the repo", task, agents),
+		callAs("h", "TaskStop", "TaskStop researcher › survey peers", task, agents),
+		callAs("i", "TaskStop", "TaskStop explorer › map the repo", task, agents),
 	} {
 		events = append(events, c...)
 	}
 	sentence := "Read 2 files, read the plan, searched the web 3 times, started 1 shell, checked on 2 agents"
-	members := []string{"  ↳ a.go", "  ↳ b.go", "  ↳ Read the plan", "  ↳ Searched the web for x", "  ↳ Searched the web for y", "  ↳ Searched the web for z", "  ↳ Started make in background", "  ↳ Checked on researcher › survey peers", "  ↳ Checked on explorer › map the repo"}
+	members := []string{"  ↳ a.go", "  ↳ b.go", "  ↳ Read the plan", "  ↳ Searched the web for x", "  ↳ Searched the web for y", "  ↳ Searched the web for z", "  ↳ Started make in background", "  ↳ TaskStop researcher › survey peers", "  ↳ TaskStop explorer › map the repo"}
 	m, _ := newTestModel(t, 120, 30)
 	send(m, events...)
 	assert.Equal(t, append([]string{"", "• " + sentence}, members...), body(m))
@@ -337,11 +377,11 @@ func TestGroupSentenceFollowsItsRowsVerbs(t *testing.T) {
 	assert.Equal(t, []string{"", "▸ " + sentence, "", "Done."}, body(m))
 }
 
-func TestTaskOutputRowWithoutANameLineReadsAsATask(t *testing.T) {
+func TestTaskStopRowWithoutANameLineReadsAsATask(t *testing.T) {
 	m, _ := newTestModel(t, 60, 20)
-	send(m, event.ToolStart{CallID: "a", Name: "TaskOutput", Title: "TaskOutput t3", Done: "Checked task t3", Action: tool.Action{Verb: "Checked", One: "task", Many: "tasks"}},
-		event.ToolEnd{CallID: "a", Name: "TaskOutput", Summary: "completed (exit code 0)", Output: "Task t3 completed (exit code 0).\nout", Body: "out"})
-	assert.Equal(t, []string{"", "• Checked task t3", "  ↳ completed (exit code 0)"}, body(m))
+	send(m, event.ToolStart{CallID: "a", Name: "TaskStop", Title: "TaskStop t3", Done: "Stopped task t3", Action: tool.Action{Verb: "Stopped", One: "task", Many: "tasks"}},
+		event.ToolEnd{CallID: "a", Name: "TaskStop", Output: "Task t3 stopped."})
+	assert.Equal(t, []string{"", "• Stopped task t3"}, body(m))
 }
 
 func TestAgentRowOpensToItsPromptOnlyWithAPreview(t *testing.T) {

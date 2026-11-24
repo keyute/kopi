@@ -66,6 +66,7 @@ func NewWrite(ws *Workspace) Tool {
 			Preview: writePreview,
 			Action:  Action{Verb: "Wrote", One: "file", Many: "files"},
 			Outcome: ws.fileOutcome("Wrote"),
+			Subject: ws.fileSubject,
 		},
 	}
 }

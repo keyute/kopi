@@ -74,6 +74,9 @@ type ToolEnd struct {
 	Summary, Body        string
 	Done                 string
 	Action               tool.Action
+	// Subject is what a successful call acted on, "" when a group counts the
+	// call itself.
+	Subject string
 }
 
 // ApprovalRequested asks the human to approve one call; answer with

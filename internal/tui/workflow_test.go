@@ -188,7 +188,7 @@ func TestWorkflowDialogBulletsFollowTheState(t *testing.T) {
 		w := openFromRow(t, m)
 		th := m.th
 		for i, want := range []string{
-			fg(th.success).Render("•"), "•", fg(th.error).Render("•"), fg(th.dim).Render("•"),
+			fg(th.success).Render("•"), fg(th.text).Render("•"), fg(th.error).Render("•"), fg(th.dim).Render("•"),
 		} {
 			assert.Contains(t, w.d.options[i].drawn[len(w.d.options[i].drawn)-1], "    "+want+" ", "option %d", i)
 		}
@@ -242,7 +242,7 @@ func TestWorkflowDialogEnterWatchesARunningAgent(t *testing.T) {
 		assert.Equal(t, "s2", m.shown)
 		assert.Contains(t, body(m), "❯ review users.ts")
 		assert.Contains(t, statusText(m), "rev-1", "the status line is the agent's")
-		assert.Equal(t, []string{"", "  watching reviewer › users.ts · esc to go back"}, workflowBoxFoot(t, m))
+		assert.Equal(t, []string{"  watching reviewer › users.ts · esc to go back", ""}, workflowBoxFoot(t, m))
 	})
 }
 

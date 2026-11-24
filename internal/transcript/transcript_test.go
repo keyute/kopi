@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -159,19 +160,40 @@ func TestRunningIsTheLatestRunningCallsTitle(t *testing.T) {
 	assert.False(t, ok, "an unfinished call is not running")
 }
 
-func TestPlanRequestedAppendsABlockAndTheSameTokenReplacesItsText(t *testing.T) {
+func TestPlanRequestedLandsOnTheRunningSoloCallAndSurvivesItsEnd(t *testing.T) {
+	planStart := func(id string) event.ToolStart {
+		return event.ToolStart{CallID: id, Name: "ExitPlanMode", Title: "Plan approval", Solo: true}
+	}
+	plans := func(tr *Transcript) map[string]string {
+		out := map[string]string{}
+		for _, b := range tr.Blocks() {
+			if r, ok := b.(Row); ok {
+				out[r.Call.ID] = r.Call.Plan
+			}
+		}
+		return out
+	}
 	var tr Transcript
+	tr.Apply(planStart("p"))
 	tr.Apply(start("a"))
 	tr.Apply(event.PlanRequested{Token: 1, Plan: "# v1"})
-	tr.Apply(end("a"))
-	assert.Equal(t, []Block{row("a", OK), Plan{key: "item:1", Text: "# v1"}}, tr.Blocks(), "the tool row is an ordinary row")
+	assert.Equal(t, map[string]string{"a": "", "p": "# v1"}, plans(&tr), "a plain call does not take the plan")
 
 	tr.Apply(event.PlanRequested{Token: 1, Plan: "# v2"})
-	tr.Apply(event.PlanEnded{Token: 1})
-	assert.Equal(t, []Block{row("a", OK), Plan{key: "item:1", Text: "# v2"}}, tr.Blocks(), "the block outlives the dialog")
+	assert.Equal(t, "# v2", plans(&tr)["p"], "a repeat replaces the text")
 
+	tr.Apply(event.PlanEnded{Token: 1})
+	tr.Apply(end("p"))
+	tr.Apply(end("a"))
+	assert.Equal(t, "# v2", plans(&tr)["p"], "the plan outlives the call's end")
+
+	before := tr.Blocks()
+	tr.Apply(event.PlanRequested{Token: 2, Plan: "# stray"})
+	assert.Equal(t, before, tr.Blocks(), "a plan with no solo call running is dropped")
+
+	tr.Apply(planStart("q"))
 	tr.Apply(event.PlanRequested{Token: 2, Plan: "# next"})
-	assert.Equal(t, []Block{row("a", OK), Plan{key: "item:1", Text: "# v2"}, Plan{key: "item:2", Text: "# next"}}, tr.Blocks())
+	assert.Equal(t, map[string]string{"a": "", "p": "# v2", "q": "# next"}, plans(&tr))
 }
 
 func TestToolEndSwapsTitleOnSuccessOnly(t *testing.T) {
@@ -288,11 +310,37 @@ func TestRestoreMatchesApply(t *testing.T) {
 	assert.Equal(t, live.Blocks(), restored.Blocks())
 }
 
+func TestGroupCountsTheSubjectsOfItsCalls(t *testing.T) {
+	edited := tool.Action{Verb: "Edited", One: "file", Many: "files"}
+	events := []event.Event{event.TurnStart{Prompt: "go"}}
+	for i, subject := range []string{"a.go", "b.go", "a.go"} {
+		id := strconv.Itoa(i)
+		events = append(events,
+			event.ToolStart{CallID: id, Name: "Edit", Title: "Edit " + subject, Done: "Edited " + subject, Action: edited},
+			event.ToolEnd{CallID: id, Name: "Edit", Subject: subject})
+	}
+	var live, restored Transcript
+	for _, ev := range events {
+		live.Apply(ev)
+	}
+	restored.Restore(events)
+
+	for _, tr := range []Transcript{live, restored} {
+		var sentences []string
+		for _, b := range tr.Blocks() {
+			if g, ok := b.(Group); ok {
+				sentences = append(sentences, g.Sentence())
+			}
+		}
+		assert.Equal(t, []string{"Edited 2 files"}, sentences)
+	}
+}
+
 func TestRestoreMatchesApplyForOutcomeRows(t *testing.T) {
 	events := []event.Event{
 		event.TurnStart{Prompt: "go"},
-		event.ToolStart{CallID: "a", Name: "TaskOutput", Title: "TaskOutput t1", Done: "Checked task t1", Action: tool.Action{Verb: "Checked", One: "task", Many: "tasks"}},
-		event.ToolEnd{CallID: "a", Name: "TaskOutput", Done: "Checked on researcher › survey peers", Action: tool.Action{Verb: "Checked on", One: "agent", Many: "agents"}, Summary: "completed", Body: "found"},
+		event.ToolStart{CallID: "a", Name: "TaskStop", Title: "TaskStop t1", Done: "Stopped task t1", Action: tool.Action{Verb: "Stopped", One: "task", Many: "tasks"}},
+		event.ToolEnd{CallID: "a", Name: "TaskStop", Done: "TaskStop researcher › survey peers", Action: tool.Action{Verb: "Checked on", One: "agent", Many: "agents"}, Summary: "already completed"},
 		event.TextDelta{Text: "x"},
 		event.ToolStart{CallID: "b", Name: "Bash", Title: "Bash make", Done: "Ran make", Action: tool.Action{Verb: "Ran", One: "command", Many: "commands"}},
 		event.ToolEnd{CallID: "b", Name: "Bash", Done: "Moved make to background", Action: tool.Action{Verb: "Started", One: "shell", Many: "shells"}},
@@ -316,7 +364,7 @@ func TestRestoreMatchesApplyForOutcomeRows(t *testing.T) {
 			titles = append(titles, row.Call.Title)
 		}
 	}
-	assert.Equal(t, []string{"Checked on researcher › survey peers", "Moved make to background", "WebFetch example.com", "Edited the plan"}, titles)
+	assert.Equal(t, []string{"TaskStop researcher › survey peers", "Moved make to background", "WebFetch example.com", "Edited the plan"}, titles)
 }
 
 func TestWorkflowTaskEndedCarriesItsOutcome(t *testing.T) {

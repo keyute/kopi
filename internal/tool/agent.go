@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -78,7 +79,7 @@ func NewAgent(defs []subagent.Definition, agents Agents) Tool {
 			if err != nil {
 				return Result{}, err
 			}
-			return Result{Text: fmt.Sprintf("Agent %s started.", id)}, nil
+			return Result{Text: fmt.Sprintf("Agent %s started.", id) + launchTail}, nil
 		},
 		Display: Display{
 			// It runs before the arguments are validated, so it decodes leniently.
@@ -90,12 +91,7 @@ func NewAgent(defs []subagent.Definition, agents Agents) Tool {
 				}
 				return args.SubagentType + " › " + args.Description
 			},
-			Summary: func(output string) string {
-				if strings.HasSuffix(output, " started.") {
-					return "launched"
-				}
-				return ""
-			},
+			Summary: launchSummary,
 			Change: func(raw json.RawMessage) (string, []PreviewLine) {
 				var args agentArgs
 				_ = json.Unmarshal(raw, &args)
@@ -106,12 +102,25 @@ func NewAgent(defs []subagent.Definition, agents Agents) Tool {
 	}
 }
 
+// launchTail ends the result of a launch with how the task's end arrives.
+const launchTail = " You are told when it ends, in a new turn if yours has ended."
+
+// launchResult matches a launch's result with or without launchTail, which a
+// session saved before it existed lacks.
+var launchResult = regexp.MustCompile(`^(?:Agent|Workflow) t\d+ started\.`)
+
+func launchSummary(output string) string {
+	if launchResult.MatchString(output) {
+		return "launched"
+	}
+	return ""
+}
+
 // agentDescription lists the subagents in the order given.
 func agentDescription(defs []subagent.Definition) string {
 	desc := "A subagent is another agent with its own context, instructions and tools; it sees only the prompt it is given. " +
-		"A call returns at once with a task id while the subagent runs in the background. " +
-		"When it ends you are told, with its final message: within your turn, or in a new turn that its end starts if yours has ended. " +
-		"TaskOutput returns its activity so far, TaskStop stops it, and SendMessage sends it a further message."
+		"A call returns at once with a task id while the subagent runs in the background; its end is reported to you with its final message. " +
+		"TaskStop stops it, and SendMessage sends it a further message."
 	if len(defs) == 0 {
 		return desc
 	}

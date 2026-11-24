@@ -108,13 +108,13 @@ func TestUsageShowsEveryRow(t *testing.T) {
 			"  5h          ▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱  23%  resets " + resets,
 			"  wk          ▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱  52%  resets " + week,
 			"",
-			"  System prompt    1.9k    2%",
-			"  Tools            8.1k   10%",
-			"  Instructions     6.2k    7%",
-			"  Skills           1.8k    2%",
-			"  Agents           1.3k    2%",
-			"  MCP              3.0k    4%",
-			"  Messages        61.9k   74%",
+			"  System prompt    1.9k   0.2%",
+			"  Tools            8.1k   0.8%",
+			"  Instructions     6.2k   0.6%",
+			"  Skills           1.8k   0.2%",
+			"  Agents           1.3k   0.1%",
+			"  MCP              3.0k   0.3%",
+			"  Messages        61.9k   6.2%",
 			"",
 			"  openai-codex/gpt-5-codex     1.2m   $3.90",
 			"  openai-codex/gpt-5-mini    310.0k   $0.41",
@@ -126,6 +126,7 @@ func TestUsageShowsEveryRow(t *testing.T) {
 			"  Time        12m 40s model · 3m 5s tools",
 			"  Session     0195c2d4 · 42 messages · 128 tool calls",
 			"",
+			"  esc to close",
 			rule,
 		}, dialogRows(t, m))
 		assert.Empty(t, m.composer.value(), "the draft is accepted")
@@ -141,7 +142,7 @@ func TestUsageLeavesOutWhatItHasNothingFor(t *testing.T) {
 		change func(u *app.Usage)
 		absent []string
 	}{
-		"no context window":          {func(u *app.Usage) { u.ContextWindow = 0 }, []string{"Context"}},
+		"no context window":          {func(u *app.Usage) { u.ContextWindow = 0 }, []string{"Context", "System prompt", "Messages"}},
 		"limits of another provider": {func(u *app.Usage) { u.Limits.Provider = "xai" }, []string{"5h ", "wk "}},
 		"no models":                  {func(u *app.Usage) { u.Models = nil }, []string{"Total", "gpt-5"}},
 		"no tokens":                  {func(u *app.Usage) { u.Tokens = app.Tokens{} }, []string{"Tokens"}},
@@ -176,7 +177,7 @@ func TestUsageWithNothingUsedShowsTheSession(t *testing.T) {
 		m, _ := usageModel(t, 60, &app.Usage{SessionID: "0195c2d4", Model: "openai-codex/gpt-5-codex"})
 
 		rule := strings.Repeat("─", 60)
-		assert.Equal(t, []string{rule, "  Usage", "", "  Session  0195c2d4", "", rule}, openUsage(t, m))
+		assert.Equal(t, []string{rule, "  Usage", "", "  Session  0195c2d4", "", "  esc to close", rule}, openUsage(t, m))
 	})
 }
 
@@ -195,7 +196,7 @@ func TestUsageWithoutLimitsOrCacheLifetime(t *testing.T) {
 			"",
 			"  Context  ▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱   8%  84.2k / 1.0m",
 			"",
-			"  Messages   84.2k   100%",
+			"  Messages   84.2k   8.4%",
 			"",
 			"  mock/model-1       1.5k   $0.00",
 			"  summaries            20   $0.00",
@@ -205,6 +206,7 @@ func TestUsageWithoutLimitsOrCacheLifetime(t *testing.T) {
 			"  Cache    91% hit · 2 misses $0.42",
 			"  Session  0195c2d4 · 42 messages · 128 tool calls",
 			"",
+			"  esc to close",
 			rule,
 		}, openUsage(t, m))
 	})
@@ -218,6 +220,14 @@ func TestUsageWindowOmitsAnUnknownReset(t *testing.T) {
 
 		assert.Equal(t, "  5h          ▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱  23%", openUsage(t, m)[4])
 	})
+}
+
+func TestUsageContextShowsATinyShareAsUnderATenth(t *testing.T) {
+	u := app.Usage{ContextTokens: 84_200, ContextWindow: 1_000_000, Context: app.Context{Agents: 400, Messages: 83_800}}
+	rows := usageContext(u, 60, mocha())
+	require.Len(t, rows, 2)
+	assert.Equal(t, "Agents       400   <0.1%", ansi.Strip(rows[0]))
+	assert.Equal(t, "Messages   83.8k    8.4%", ansi.Strip(rows[1]))
 }
 
 func TestPercentBarWarnsWhenAsked(t *testing.T) {
@@ -432,7 +442,7 @@ func TestUsageCutsEveryRowToTheWidth(t *testing.T) {
 		for _, r := range rows {
 			assert.LessOrEqual(t, lipgloss.Width(r), 40, r)
 		}
-		assert.True(t, strings.HasSuffix(rows[len(rows)-3], "…"), "the session row is cut")
+		assert.True(t, strings.HasSuffix(rows[len(rows)-4], "…"), "the session row is cut")
 		assert.Contains(t, rows, "  openai-codex/gpt-5-c…     1.2m   $3.90")
 		assert.Contains(t, rows, "  Total (estimate)          1.5m   $4.31")
 	})

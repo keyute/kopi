@@ -468,7 +468,7 @@ func TestSubagentToolsNeverBackgroundOrDelegate(t *testing.T) {
 	}
 	require.NotNil(t, child.body, "the subagent made no request")
 	tools := toolNames(child)
-	for _, name := range []string{"Agent", "SendMessage", "TaskOutput", "TaskStop"} {
+	for _, name := range []string{"Agent", "SendMessage", "TaskStop"} {
 		assert.NotContains(t, tools, name)
 	}
 	require.Contains(t, tools, "Bash")
@@ -510,7 +510,7 @@ func TestAgentToolsHonourAllowUnsandboxed(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, ws.Close()) })
 	shell, planShell := tool.NewShell(dir, &sandbox.Sandbox{}), tool.NewShell(dir, &sandbox.Sandbox{})
-	root := []tool.Tool{tool.NewBash(shell, planShell, nil, true)}
+	root := []tool.Tool{tool.NewBash(shell, planShell, nil, true, true)}
 
 	for _, allow := range []bool{false, true} {
 		got := agentTools(root, ws, nil, shell, planShell, allow)
@@ -990,7 +990,7 @@ func TestRootStreamsTurnFromMockServer(t *testing.T) {
 	for _, tl := range req.body["tools"].([]any) {
 		tools = append(tools, tl.(map[string]any)["function"].(map[string]any)["name"].(string))
 	}
-	assert.Equal(t, []string{"Read", "Glob", "Grep", "LS", "Write", "Edit", "Bash", "TaskOutput", "TaskStop", "WebFetch"}, tools)
+	assert.Equal(t, []string{"Read", "Glob", "Grep", "LS", "Write", "Edit", "Bash", "TaskStop", "WebFetch"}, tools)
 	messages := req.body["messages"].([]any)
 	first := messages[0].(map[string]any)
 	assert.Contains(t, []string{"system", "developer"}, first["role"])
@@ -3197,7 +3197,7 @@ func TestSubagentReadAndGrepReachSavedOutputOnly(t *testing.T) {
 	}
 
 	shell, planShell := tool.NewShell(e.workspace, &sandbox.Sandbox{}), tool.NewShell(e.workspace, &sandbox.Sandbox{})
-	root := rootTools(ws, plans, outputs, nil, shell, planShell, tool.NewTasks(), true, nil)
+	root := rootTools(ws, plans, outputs, nil, shell, planShell, tool.NewTasks(), true, true, nil)
 	assert.NoError(t, run(root, "Read", map[string]any{"file_path": plan}))
 	for name, args := range argsFor {
 		err := run(root, name, args)

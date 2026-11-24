@@ -117,10 +117,10 @@ func newField(th theme, newline key.Binding, placeholder string) composer {
 }
 
 func (c *composer) fieldStyle(th theme) {
-	none := lipgloss.NewStyle()
+	none, text := lipgloss.NewStyle(), fg(th.text)
 	state := textarea.StyleState{
-		Text:        none,
-		CursorLine:  none,
+		Text:        text,
+		CursorLine:  text,
 		EndOfBuffer: none,
 		Placeholder: fg(th.dim),
 		Prompt:      none,
