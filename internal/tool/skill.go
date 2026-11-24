@@ -16,6 +16,9 @@ import (
 	"github.com/keyute/kopi/internal/skill"
 )
 
+// skillOpen starts the output of a loaded skill's text.
+const skillOpen = "<skill "
+
 type skillArgs struct {
 	Name   string `json:"name"`
 	File   string `json:"file"`
@@ -115,13 +118,13 @@ func NewSkill(skills []skill.Skill, home string) Tool {
 				return "Read skill " + args.Name + " " + args.File
 			},
 			Summary: func(output string) string {
-				if strings.HasPrefix(output, "<skill ") {
+				if strings.HasPrefix(output, skillOpen) {
 					return "loaded"
 				}
 				return readSummary(output)
 			},
 			Body: func(output string) string {
-				if strings.HasPrefix(output, "<skill ") {
+				if strings.HasPrefix(output, skillOpen) {
 					return output
 				}
 				return readBody(output)

@@ -152,14 +152,16 @@ func readBody(output string) string {
 		return ""
 	}
 	lines := strings.Split(output, "\n")
+	matches := make([][]string, len(lines))
 	width := 0
-	for _, l := range lines {
+	for i, l := range lines {
 		if m := numberedLine.FindStringSubmatch(l); m != nil {
+			matches[i] = m
 			width = max(width, len(m[1]))
 		}
 	}
-	for i, l := range lines {
-		if m := numberedLine.FindStringSubmatch(l); m != nil {
+	for i, m := range matches {
+		if m != nil {
 			lines[i] = fmt.Sprintf("%*s  %s", width, m[1], m[2])
 		}
 	}

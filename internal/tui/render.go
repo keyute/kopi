@@ -163,17 +163,38 @@ func renderRow(c transcript.Call, f blockFolds, width int, th theme) []line {
 	if c.State == transcript.Running {
 		return plain(hang("• ", bullet, c.Title, title, width))
 	}
-	text := bodyText(c.Body)
-	var head, tail []string
-	omitted := 0
 	h := commandHit(c)
+	var rest []line
 	switch c.State {
 	case transcript.OK:
 		h = openHit(c)
+		if f.expanded[0] {
+			rest = opened(c, 0, width, th)
+		}
 	case transcript.Failed:
-		head, tail, omitted = capBody(text)
+		text := bodyText(c.Body)
+		head, tail, omitted := capBody(text)
 		if omitted > 0 {
 			h = hit{kind: hitOutput, id: c.ID}
+		}
+		if f.expanded[0] {
+			rest = commandLines(c, 0, width, th)
+		}
+		switch {
+		case text == "":
+		case omitted == 0 || f.expanded[0]:
+			rest = append(rest, bodyLines(text, 0, width, th)...)
+		default:
+			rest = append(rest, bodyLines(strings.Join(head, "\n"), 0, width, th)...)
+			rest = append(rest, plain(hang(bodyPad(0), fg(th.dim), fmt.Sprintf("… %d more lines", omitted), fg(th.dim), width))...)
+			rest = append(rest, bodyLines(strings.Join(tail, "\n"), 0, width, th)...)
+		}
+	default:
+		if f.expanded[0] {
+			rest = commandLines(c, 0, width, th)
+		}
+		if c.State == transcript.Rejected {
+			rest = append(rest, bodyLines(bodyText(c.Body), 0, width, th)...)
 		}
 	}
 	out := withHit(h, hang("• ", bullet, c.Title, title, width))
@@ -182,35 +203,9 @@ func renderRow(c transcript.Call, f blockFolds, width int, th theme) []line {
 		summary = "interrupted"
 	}
 	if summary != "" {
-		out = append(out, plain(under(0, summary, lineStyle, width))...)
+		out = append(out, plain(under(summary, lineStyle, width))...)
 	}
-	switch c.State {
-	case transcript.OK:
-		if f.expanded[0] {
-			out = append(out, opened(c, 0, width, th)...)
-		}
-	case transcript.Failed:
-		if f.expanded[0] {
-			out = append(out, commandLines(c, 0, width, th)...)
-		}
-		switch {
-		case text == "":
-		case omitted == 0 || f.expanded[0]:
-			out = append(out, bodyLines(text, 0, width, th)...)
-		default:
-			out = append(out, bodyLines(strings.Join(head, "\n"), 0, width, th)...)
-			out = append(out, plain(hang(bodyPad(0), fg(th.dim), fmt.Sprintf("… %d more lines", omitted), fg(th.dim), width))...)
-			out = append(out, bodyLines(strings.Join(tail, "\n"), 0, width, th)...)
-		}
-	default:
-		if f.expanded[0] {
-			out = append(out, commandLines(c, 0, width, th)...)
-		}
-		if c.State == transcript.Rejected {
-			out = append(out, bodyLines(text, 0, width, th)...)
-		}
-	}
-	return out
+	return append(out, rest...)
 }
 
 // renderGroup draws a live group, or a sealed one closed behind ▸ or open
@@ -231,7 +226,7 @@ func renderGroup(g transcript.Group, f blockFolds, width int, th theme) []line {
 		if c.Summary != "" {
 			label += " · " + c.Summary
 		}
-		out = append(out, withHit(openHit(c), under(0, label, fg(th.dim), width))...)
+		out = append(out, withHit(openHit(c), under(label, fg(th.dim), width))...)
 		if f.expanded[i] {
 			out = append(out, opened(c, memberIndent, width, th)...)
 		}
@@ -260,10 +255,10 @@ func commandHit(c transcript.Call) hit {
 // bodyPad is the columns before an opened body of a row that starts in columns in.
 func bodyPad(in int) string { return strings.Repeat(" ", in+bodyIndent) }
 
-// under is the line below a row that starts in columns in: its arrow sits
-// memberIndent further in, and wrapped text hangs under the text.
-func under(in int, text string, style lipgloss.Style, width int) []string {
-	return hang(strings.Repeat(" ", in+memberIndent)+"↳ ", style, text, style, width)
+// under is the line below a row: its arrow sits memberIndent in, and wrapped
+// text hangs under the text.
+func under(text string, style lipgloss.Style, width int) []string {
+	return hang(strings.Repeat(" ", memberIndent)+"↳ ", style, text, style, width)
 }
 
 // opened is what a successful call opens to: its command when the title cut
@@ -383,7 +378,7 @@ func renderTask(t transcript.Task, expanded bool, width int, th theme) []line {
 		parts = append(parts, t.Reason)
 	}
 	if len(parts) > 0 {
-		out = append(out, plain(under(0, strings.Join(parts, " · "), lineStyle, width))...)
+		out = append(out, plain(under(strings.Join(parts, " · "), lineStyle, width))...)
 	}
 	if expanded {
 		out = append(out, bodyLines(result, 0, width, th)...)

@@ -150,6 +150,24 @@ func TestMemberBodyDiffersFromLoneBodyOnlyByMemberIndent(t *testing.T) {
 		full := renderGroup(transcript.Group{Sealed: true, Calls: []transcript.Call{c, c}}, blockFolds{open: true, expanded: []bool{true, false}}, 40, th)
 		assert.Equal(t, member, full[2:2+len(member)], name)
 	}
+
+	// A line wider than the member's body column wraps differently from the lone
+	// row's, so these only check the width and the column.
+	long := strings.Repeat("word ", 10)
+	for name, c := range map[string]transcript.Call{
+		"output":  {ID: "a", State: transcript.OK, Title: "Bash ls", Summary: "1 line", Body: long},
+		"preview": {ID: "a", State: transcript.OK, Title: "Edit a.go", Summary: "+1", Preview: []tool.PreviewLine{{Kind: tool.Added, Text: long}}},
+	} {
+		member := opened(c, memberIndent, 40, th)
+		require.Greater(t, len(member), 1, name)
+		for _, l := range member {
+			assert.LessOrEqual(t, ansi.StringWidth(l.text), 40, name)
+			assert.True(t, strings.HasPrefix(ansi.Strip(l.text), strings.Repeat(" ", 8)), "%q starts eight in", l.text)
+		}
+		for _, l := range renderGroup(transcript.Group{Sealed: true, Calls: []transcript.Call{c, c}}, blockFolds{open: true, expanded: []bool{true, false}}, 40, th) {
+			assert.LessOrEqual(t, ansi.StringWidth(l.text), 40, name)
+		}
+	}
 }
 
 func TestTaskRow(t *testing.T) {
@@ -251,6 +269,26 @@ func TestWorkflowEndRowShowsItsAgents(t *testing.T) {
 	ls := renderTask(transcript.Task{Status: "failed", Agents: 1, Reason: "why"}, false, 40, th)
 	require.Len(t, ls, 2)
 	assert.Equal(t, fg(th.error).Render("  ↳ ")+fg(th.error).Render("1 agent · why"), ls[1].text)
+}
+
+func TestTaskEndRowLineColours(t *testing.T) {
+	th := mocha()
+	for name, tc := range map[string]struct {
+		task  transcript.Task
+		style lipgloss.Style
+		line  string
+	}{
+		"stopped workflow":     {transcript.Task{Agent: "workflow", Status: "stopped", Agents: 3, Failed: 3}, fg(th.warning), "3 agents · 3 failed"},
+		"workflow w/ failures": {transcript.Task{Agent: "workflow", Status: "completed", Agents: 9, Failed: 1}, fg(th.dim), "9 agents · 1 failed"},
+	} {
+		ls := renderTask(tc.task, false, 60, th)
+		require.Len(t, ls, 2, name)
+		assert.Equal(t, tc.style.Render("  ↳ ")+tc.style.Render(tc.line), ls[1].text, name)
+	}
+
+	ls := renderTask(transcript.Task{Agent: "explorer", Status: "failed", Reason: "boom"}, false, 60, th)
+	require.Len(t, ls, 2)
+	assert.Equal(t, "  ↳ boom", ansi.Strip(ls[1].text))
 }
 
 func TestTaskWithAResultOpensToItVerbatim(t *testing.T) {
@@ -367,6 +405,35 @@ func TestPlanRowDrawsItsPlanWhileRunningAndOnlyWhenOpenedAfter(t *testing.T) {
 	bare.Apply(event.PlanRequested{Token: 2, Plan: "# Heading\n\n- step"})
 	bare.Apply(event.ToolEnd{CallID: "q", Name: "ExitPlanMode", Summary: "approved"})
 	assert.Equal(t, hit{kind: hitOutput, id: "q"}, c.lines(bare.Blocks()[0], closed, nil, 40, mocha())[0].hit, "the plan alone makes the row open")
+}
+
+func TestDismissedPlanRowReadsDismissedAndOpensToItsPlan(t *testing.T) {
+	th := mocha()
+	var tr transcript.Transcript
+	tr.Apply(event.ToolStart{CallID: "p", Name: "ExitPlanMode", Title: "Plan approval", Solo: true})
+	tr.Apply(event.PlanRequested{Token: 1, Plan: "# Heading\n\n- first step"})
+	tr.Apply(event.ToolEnd{CallID: "p", Name: "ExitPlanMode", Kind: event.EndRejected, Summary: "dismissed"})
+	var c renderCache
+	text := func(f blockFolds) []string {
+		var out []string
+		for _, l := range c.lines(tr.Blocks()[0], f, nil, 40, th) {
+			out = append(out, strings.TrimRight(ansi.Strip(l.text), " "))
+		}
+		return out
+	}
+
+	closed := blockFolds{expanded: []bool{false}}
+	assert.Equal(t, []string{"• Plan approval", "  ↳ dismissed"}, text(closed))
+	assert.Equal(t, hit{kind: hitOutput, id: "p"}, c.lines(tr.Blocks()[0], closed, nil, 40, th)[0].hit)
+
+	opened := text(blockFolds{expanded: []bool{true}})
+	require.Greater(t, len(opened), 2)
+	assert.Equal(t, []string{"• Plan approval", "  ↳ dismissed"}, opened[:2])
+	for _, l := range opened[2:] {
+		if l != "" {
+			assert.True(t, strings.HasPrefix(l, "      ") && !strings.HasPrefix(l, "       "), "%q starts at column six", l)
+		}
+	}
 }
 
 func TestAgentPromptIsFlushAtTheBodyColumn(t *testing.T) {
@@ -501,6 +568,18 @@ func TestRejectedRowShowsFeedbackInFull(t *testing.T) {
 	m, _ = newTestModel(t, 60, 20)
 	send(m, start("a"), event.ToolEnd{CallID: "a", IsError: true, Kind: event.EndRejected, Summary: "rejected"})
 	assert.Equal(t, []string{"", "• a.go", "  ↳ rejected"}, body(m))
+}
+
+func TestDismissedQuestionRowIsWarningColoured(t *testing.T) {
+	th := mocha()
+	var tr transcript.Transcript
+	tr.Apply(event.ToolStart{CallID: "a", Name: "AskUserQuestion", Title: "AskUserQuestion"})
+	tr.Apply(event.ToolEnd{CallID: "a", Name: "AskUserQuestion", Kind: event.EndRejected, Summary: "dismissed", Done: "Asked"})
+	var c renderCache
+	got := c.lines(tr.Blocks()[0], blockFolds{expanded: []bool{false}}, nil, 40, th)
+	require.Len(t, got, 2)
+	assert.Equal(t, fg(th.warning).Render("• ")+fg(th.text).Render("AskUserQuestion"), got[0].text)
+	assert.Equal(t, fg(th.warning).Render("  ↳ ")+fg(th.warning).Render("dismissed"), got[1].text)
 }
 
 func TestDeniedRowHasNoBodyAndNoHit(t *testing.T) {

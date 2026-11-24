@@ -54,7 +54,7 @@ The 1000 calls and the memory limit are fixed.
 
 - The call shows as `• Workflow › <description>` with `↳ launched`, and returns a task id such as `t3`. Opening the row shows the script. A `TaskStop` row on it reads `Stopped workflow › <description>`.
 - While the main agent is idle and a workflow runs, the row above the input reads `1 workflow still running`; the status line's `workflows` segment shows the count.
-- The end shows as `• workflow finished · <description> · 6m 3s` (the bullet is red when it failed and yellow when it was stopped), followed by `↳ 9 agents · 1 failed` (the failed part only when non-zero). A failed workflow's reason joins the count on that line: `↳ 2 agents · 2 failed · <reason>`. Opening a finished row shows the value the script returned.
+- The end shows as `• workflow finished · <description> · 6m 3s` (`failed` or `stopped` in place of `finished`; the bullet is red when it failed and yellow when it was stopped), followed by `↳ 9 agents · 1 failed` (the failed part only when non-zero). A failed workflow's reason joins the count on that line: `↳ 2 agents · 2 failed · <reason>`. Opening a finished row shows the value the script returned.
 - `/tasks` lists the workflow next to other tasks as `workflow › <description>`, and stops it with `x` (`stop-agent`). Enter opens its progress dialog; dismissing it returns to the task list.
 - When the workflow completes or fails, the agent is told with the value or the error, and a new turn starts if none runs, as for a subagent. `TaskStop` by the agent gives no notice; a stop from `/tasks` is reported with the next prompt without starting a turn.
 - The agents' cost shows only in the status line's `total`, added as each agent ends.
