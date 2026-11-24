@@ -9,6 +9,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1251,4 +1252,97 @@ func TestSendEffortContinuation(t *testing.T) {
 			assert.Equal(t, "low", sess.Effort())
 		})
 	}
+}
+
+// Two prompts of this size pass PiG's compaction threshold on the faux model's
+// window, and one alone is more than PiG keeps verbatim, so a compaction
+// summarises the first and keeps the second.
+var (
+	oldPrompt  = strings.Repeat("a", 240_000)
+	keptPrompt = strings.Repeat("b", 240_000)
+)
+
+// afterSummary names the user messages a request carries after the compaction
+// summary, which must be its first.
+func afterSummary(t *testing.T, msgs []ai.Message, summary string) []string {
+	t.Helper()
+	texts := userTexts(msgs)
+	require.NotEmpty(t, texts)
+	require.Contains(t, texts[0], summary)
+	for i, text := range texts {
+		if text == keptPrompt {
+			texts[i] = "kept prompt"
+		}
+	}
+	return texts[1:]
+}
+
+func recordNotices(t *testing.T, sess *Session) <-chan event.Event {
+	t.Helper()
+	evs := make(chan event.Event, 32)
+	t.Cleanup(sess.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.Notice); ok {
+			evs <- ev
+		}
+	}))
+	return evs
+}
+
+var compacted = []event.Event{event.Notice{Text: "Compacting context (threshold)"}, event.Notice{Text: "Compaction done"}}
+
+func TestRecallFollowsCompactionWithoutAnotherRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		recall func() string
+		want   []string
+	}{
+		{"recall", func() string { return "recalled" }, []string{"kept prompt", "recalled", "next"}},
+		{"empty recall", func() string { return "" }, []string{"kept prompt", "next"}},
+		{"no recall", nil, []string{"kept prompt", "next"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, faux := newTestRuntime(t, newSandbox(t))
+			requests := make(chan []ai.Message, 1)
+			faux.SetResponses([]ai.FauxResponseStep{reply("first"), reply("second"), reply("the summary"), captureRequest(requests, "third")})
+			sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority(), Recall: tc.recall})
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+			notices := recordNotices(t, sess)
+
+			for _, prompt := range []string{oldPrompt, keptPrompt} {
+				_, err = sess.Send(t.Context(), Prompt{Text: prompt}, nil, nil)
+				require.NoError(t, err)
+			}
+			assert.Equal(t, compacted, drain(notices))
+			assert.Equal(t, 3, faux.CallCount(), "two replies and the summary: the recalled line starts no request")
+
+			_, err = sess.Send(t.Context(), Prompt{Text: "next"}, nil, nil)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, afterSummary(t, <-requests, "the summary"))
+		})
+	}
+}
+
+func TestRecallFollowsCompactionInsideRun(t *testing.T) {
+	r, faux := newTestRuntime(t, newSandbox(t))
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{reply("first"), callProbe(), reply("the summary"), reply("second"), captureRequest(requests, "third")})
+	sess, err := r.Open(t.Context(), OpenOptions{
+		Model: fauxModel, SystemPrompt: kopiPrompt, Tools: []tool.Tool{probeTool(okProbe)}, Authority: policy.NewAuthority(),
+		Recall: func() string { return "recalled" },
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+	notices := recordNotices(t, sess)
+
+	for _, prompt := range []string{oldPrompt, keptPrompt} {
+		_, err = sess.Send(t.Context(), Prompt{Text: prompt}, nil, nil)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, compacted, drain(notices), "between the tool result and the run's next request")
+	assert.Equal(t, 4, faux.CallCount())
+
+	_, err = sess.Send(t.Context(), Prompt{Text: "next"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"kept prompt", "recalled", "next"}, afterSummary(t, <-requests, "the summary"))
 }

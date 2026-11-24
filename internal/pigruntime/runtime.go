@@ -172,6 +172,9 @@ type OpenOptions struct {
 	Approve policy.Approver
 	// Review nil means a call needing approval goes straight to Approve.
 	Review policy.Reviewer
+	// Recall returns what the model is told again once its context has been
+	// compacted; nil or "" tells it nothing. It runs on PiG's event executor.
+	Recall func() string
 }
 
 // PromptPart is one named piece of the system prompt. Parts are sent in
@@ -344,6 +347,9 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 		})
 	}
 	s := &Session{inner: sess}
+	if o.Recall != nil {
+		s.recallAfterCompaction(o.Recall)
+	}
 	// On resume asked is PiG's restored level, already clamped to the model the
 	// session is reopened on, so a more capable model later keeps that level.
 	switch {

@@ -15,6 +15,7 @@
 - The model is told the session's mode in one hidden message sent with the first prompt of a session and with the first prompt after the mode changes. It is not part of the system prompt.
 - In plan mode where [`ExitPlanMode`](#exitplanmode) is offered, that message also tells the model not to change the workspace and, when the request needs changes, to research it, write a plan to the plan file and call `ExitPlanMode` instead of ending its turn. Where `ExitPlanMode` is not offered (`kopi -p`, or a `deny` rule removed it) the message only states the mode, and the plan file's path when there is one.
 - No message follows an approved plan: the tool's result tells the model that the session is in execute mode and to carry out the plan.
+- After a [compaction](providers.md#models) the main session's model is told the mode again, as the summary may not carry it. In execute mode that message also names the plan file when it has content. For a compaction in the middle of a run it arrives after the model's next response.
 - [Rules](permissions.md#rules) decide which calls ask, run or are refused.
 
 ## File tools

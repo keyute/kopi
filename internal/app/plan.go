@@ -87,6 +87,21 @@ func modeLine(mode policy.Mode, planPath string, approval bool) string {
 		"a request that needs no changes is just answered."
 }
 
+// recall is what the main session's model is told again after a compaction,
+// which may have summarised the mode line away: that line, and in execute mode
+// the plan file when it has content. It does not count as told.
+func (c *Controller) recall() string {
+	mode, path := c.mode(), c.cfg.Plans.Path()
+	line := modeLine(mode, path, c.planApproval())
+	if mode != policy.Execute || path == "" {
+		return line
+	}
+	if plan, err := c.cfg.Plans.Read(); err != nil || strings.TrimSpace(plan) == "" {
+		return line
+	}
+	return line + " Its plan file is " + path + "."
+}
+
 // planApproval reports whether the session offers ExitPlanMode.
 func (c *Controller) planApproval() bool {
 	return c.cfg.Plans != nil && !c.cfg.Unattended && !c.cfg.Rules.Removes("ExitPlanMode")

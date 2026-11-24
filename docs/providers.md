@@ -52,6 +52,8 @@
 ```
 
 - The context window is where Kopi compacts: the conversation is summarised once it passes `contextWindow` less 16384 tokens, and a reply whose input exceeded `contextWindow` is compacted too. The value is not checked against what the provider accepts.
+- A compaction changes only what the model reads: a summary written by the session model, then the most recent messages. The transcript shows it as two notices and keeps the earlier conversation, also in a resumed session. The summary is not shown.
+- After a compaction the main session's model is [told the mode again](tools.md#modes).
 - With no `model` set, the default model for a provider still follows the Kopi build.
 
 ## Identity
@@ -103,3 +105,7 @@
 - A command to refresh the model lists on demand.
 - A key for the four-hour window.
 - A setting for where compaction starts apart from the context window.
+- Compacting on demand (`/compact`).
+- Showing the summary a compaction wrote.
+- A compaction that depends on the mode or the plan, such as a handoff to the approved plan.
+- Putting read files or loaded skills back after a compaction.

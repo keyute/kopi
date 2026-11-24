@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"testing/synctest"
 
@@ -181,6 +182,44 @@ func TestModeLineSteersToThePlanOnlyWhereItCanBeApproved(t *testing.T) {
 		modeLine(policy.Plan, "/plans/s.md", false), "ExitPlanMode is not offered")
 	assert.Equal(t, "The session is in plan mode.", modeLine(policy.Plan, "", true))
 	assert.Equal(t, "The session is in execute mode.", modeLine(policy.Execute, "/plans/s.md", true))
+}
+
+func TestRecallNamesThePlanFileInExecuteModeOnceItHasContent(t *testing.T) {
+	h := modeHarness(t)
+	assert.Equal(t, h.planLine(), h.c.recall())
+
+	h.c.EnterExecute()
+	assert.Equal(t, "The session is in execute mode.", h.c.recall(), "no plan was written")
+	writePlan(t, h, " \n")
+	assert.Equal(t, "The session is in execute mode.", h.c.recall(), "the plan is blank")
+	writePlan(t, h, "# Plan\n")
+	assert.Equal(t, "The session is in execute mode. Its plan file is "+h.c.PlanFile()+".", h.c.recall())
+
+	h, _ = openHarness(t, Config{})
+	h.c.EnterExecute()
+	assert.Equal(t, "The session is in execute mode.", h.c.recall(), "the session has no plan file")
+}
+
+func TestCompactionRecallsTheModeLine(t *testing.T) {
+	h := modeHarness(t)
+	// Together the two prompts pass PiG's compaction threshold on the faux
+	// model's window; the second alone is more than PiG keeps verbatim, so the
+	// first, and the mode line sent with it, is summarised.
+	old, kept := strings.Repeat("a", 240_000), strings.Repeat("b", 240_000)
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.Text("first"), pigruntimetest.Text("second"), pigruntimetest.Text("the summary"), pigruntimetest.Capture(t, requests, "third"),
+	})
+
+	h.turn(t, old)
+	h.turn(t, kept)
+	h.turn(t, "next")
+
+	texts := receive(t, requests).UserTexts
+	require.Len(t, texts, 4)
+	assert.Contains(t, texts[0], "the summary")
+	assert.True(t, texts[1] == kept, "the kept prompt")
+	assert.Equal(t, []string{h.planLine(), "next"}, texts[2:])
 }
 
 func TestExitPlanModeToolIsAttendedOnlyAndNeverForAgents(t *testing.T) {
