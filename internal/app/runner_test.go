@@ -60,7 +60,7 @@ func TestSettle(t *testing.T) {
 func TestPullHandsNothingToCancelledSend(t *testing.T) {
 	a := pigruntime.Prompt{Text: "a"}
 	c := &Controller{authority: policy.NewAuthority()}
-	r := &runner{c: c, pending: []pigruntime.Prompt{a}, told: modeLine(policy.Plan, "")}
+	r := &runner{c: c, pending: []pigruntime.Prompt{a}, told: modeLine(policy.Plan, "", false)}
 	c.main = r
 	emit := func(event.Event) {}
 

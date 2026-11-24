@@ -33,8 +33,9 @@ type TaskInfo struct {
 	// Result is the final message of a completed agent run.
 	Result string
 	Output string
-	// OutputFile is where a command's output is saved in full once it is too
-	// long to keep; "" when nothing was saved.
+	// OutputFile is where a command's output is saved in full: always for a
+	// background command, else once it is too long to keep; "" when nothing
+	// was saved.
 	OutputFile string
 }
 
@@ -57,6 +58,8 @@ func (i TaskInfo) StatusText() string {
 type Moved struct {
 	ID       string
 	TimedOut bool
+	// OutputFile is the background task's TaskInfo.OutputFile.
+	OutputFile string
 }
 
 // Tasks runs commands in the foreground, moves them to the background at a
@@ -160,6 +163,8 @@ func (m *Tasks) Start(ctx context.Context, sh *Shell, command string) (TaskInfo,
 	f := m.onChange
 	close(t.ready)
 	m.mu.Unlock()
+	p.out.keep()
+	info.OutputFile = p.out.file()
 	if f != nil {
 		f(info)
 	}
@@ -216,6 +221,8 @@ func (m *Tasks) Run(ctx context.Context, sh *Shell, command string, timeout time
 	f = m.onForeground
 	m.mu.Unlock()
 	if info.ID != "" {
+		p.out.keep()
+		info.OutputFile = p.out.file()
 		if f != nil {
 			f()
 		}
@@ -223,7 +230,7 @@ func (m *Tasks) Run(ctx context.Context, sh *Shell, command string, timeout time
 			change(info)
 		}
 		go m.watch(t)
-		return "", Moved{ID: info.ID, TimedOut: !detach}, nil
+		return "", Moved{ID: info.ID, TimedOut: !detach, OutputFile: info.OutputFile}, nil
 	}
 	if canceled {
 		p.stop(ctx.Err())

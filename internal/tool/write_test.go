@@ -93,6 +93,7 @@ func TestWriteDisplayDone(t *testing.T) {
 	assert.Equal(t, "Wrote cmd/root.go", tool.Display.Done(json.RawMessage(`{"file_path":"cmd/root.go"}`)))
 	assert.Equal(t, "Wrote", tool.Display.Done(json.RawMessage(`{"file_path":`)))
 	assert.Nil(t, tool.Display.Summary)
+	assert.Equal(t, "cmd/root.go", tool.Display.Subject(json.RawMessage(`{"file_path":"cmd/root.go"}`), ""))
 }
 
 func TestWriteDisplayChange(t *testing.T) {

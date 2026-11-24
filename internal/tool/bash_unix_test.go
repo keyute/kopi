@@ -64,7 +64,7 @@ func newTaskBash(t *testing.T, dir string) (Tool, *Tasks) {
 	t.Helper()
 	tasks := NewTasks()
 	t.Cleanup(tasks.StopAll)
-	return NewBash(NewShell(dir, nil), NewShell(dir, nil), tasks, true), tasks
+	return NewBash(NewShell(dir, nil), NewShell(dir, nil), tasks, true, true), tasks
 }
 
 func TestBashRunInBackgroundStartsTask(t *testing.T) {
@@ -77,7 +77,7 @@ func TestBashRunInBackgroundStartsTask(t *testing.T) {
 	out, err := tool.Run(t.Context(), args, allowTarget)
 
 	require.NoError(t, err)
-	assert.Equal(t, "Background task t1 started.", out.Text)
+	assert.Equal(t, "Background task t1 started. You are told when it ends.", out.Text)
 	waitFor(t, started, "the command to start")
 	list := tasks.List()
 	require.Len(t, list, 1)
@@ -90,14 +90,14 @@ func TestBashRunInBackgroundUsesTheShellOfTheAdmittedMode(t *testing.T) {
 	tasks := NewTasks()
 	t.Cleanup(tasks.StopAll)
 	changes := taskChanges(tasks)
-	tool := NewBash(NewShell(execDir, &sandbox.Sandbox{}), NewShell(planDir, &sandbox.Sandbox{}), tasks, true)
+	tool := NewBash(NewShell(execDir, &sandbox.Sandbox{}), NewShell(planDir, &sandbox.Sandbox{}), tasks, true, true)
 
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"command":"touch plan","run_in_background":true}`), func(policy.Target) (policy.Mode, error) {
 		return policy.Plan, nil
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, "Background task t1 started.", out.Text)
+	assert.Equal(t, "Background task t1 started. You are told when it ends.", out.Text)
 	assert.Equal(t, TaskRunning, waitChange(t, changes).Status)
 	assert.Equal(t, TaskCompleted, waitChange(t, changes).Status)
 	assert.Equal(t, []string{"plan"}, listDir(t, planDir))
@@ -111,14 +111,14 @@ func TestBashUnsandboxedBackgroundUsesTheUnsandboxedShell(t *testing.T) {
 	changes := taskChanges(tasks)
 	sh := NewShell(dir, &sandbox.Sandbox{})
 	sh.shell = filepath.Join(dir, "missing-shell")
-	tool := NewBash(sh, NewShell(dir, &sandbox.Sandbox{}), tasks, true)
+	tool := NewBash(sh, NewShell(dir, &sandbox.Sandbox{}), tasks, true, true)
 
 	out, err := tool.Run(t.Context(), json.RawMessage(`{"command":"touch outside","unsandboxed":true,"run_in_background":true}`), func(policy.Target) (policy.Mode, error) {
 		return policy.Execute, nil
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, "Background task t1 started.", out.Text)
+	assert.Equal(t, "Background task t1 started. You are told when it ends.", out.Text)
 	assert.Equal(t, TaskRunning, waitChange(t, changes).Status)
 	assert.Equal(t, TaskCompleted, waitChange(t, changes).Status)
 	assert.Equal(t, []string{"outside"}, listDir(t, dir))
@@ -131,7 +131,7 @@ func TestBashUnsandboxedTimeoutMovesCommandToBackground(t *testing.T) {
 	changes := taskChanges(tasks)
 	sh := NewShell(dir, &sandbox.Sandbox{})
 	sh.shell = filepath.Join(dir, "missing-shell")
-	tool := NewBash(sh, NewShell(dir, &sandbox.Sandbox{}), tasks, true)
+	tool := NewBash(sh, NewShell(dir, &sandbox.Sandbox{}), tasks, true, true)
 	gate := mkfifo(t, dir, "gate")
 	args, err := json.Marshal(map[string]any{"command": "read x <'" + gate + "'; touch outside", "timeout": 1, "unsandboxed": true})
 	require.NoError(t, err)
@@ -139,7 +139,7 @@ func TestBashUnsandboxedTimeoutMovesCommandToBackground(t *testing.T) {
 	out, err := tool.Run(t.Context(), args, func(policy.Target) (policy.Mode, error) { return policy.Execute, nil })
 
 	require.NoError(t, err)
-	assert.Equal(t, "Background task t1: this command did not finish within its 1ms timeout and keeps running in the background.", out.Text)
+	assert.Equal(t, "Background task t1: this command did not finish within its 1ms timeout and keeps running in the background. You are told when it ends.", out.Text)
 	assert.Equal(t, TaskRunning, waitChange(t, changes).Status)
 	require.NoError(t, os.WriteFile(gate, []byte("go\n"), 0o600))
 	assert.Equal(t, TaskCompleted, waitChange(t, changes).Status)
@@ -157,7 +157,7 @@ func TestBashTimeoutMovesCommandToBackground(t *testing.T) {
 	out, err := tool.Run(t.Context(), args, allowTarget)
 
 	require.NoError(t, err)
-	assert.Equal(t, "Background task t1: this command did not finish within its 1ms timeout and keeps running in the background.", out.Text)
+	assert.Equal(t, "Background task t1: this command did not finish within its 1ms timeout and keeps running in the background. You are told when it ends.", out.Text)
 	running := waitChange(t, changes)
 	assert.Equal(t, "t1", running.ID)
 	assert.Equal(t, TaskRunning, running.Status)
@@ -166,6 +166,66 @@ func TestBashTimeoutMovesCommandToBackground(t *testing.T) {
 	ended := waitChange(t, changes)
 	assert.Equal(t, "t1", ended.ID)
 	assert.Equal(t, TaskCompleted, ended.Status)
+}
+
+func TestBashBackgroundResultNamesTheOutputFile(t *testing.T) {
+	outputs, saved := newSavedOutputs(t)
+	dir := t.TempDir()
+	tasks := NewTasks()
+	t.Cleanup(tasks.StopAll)
+	changes := taskChanges(tasks)
+	sh := NewShell(dir, nil).WithOutputs(outputs)
+	tool := NewBash(sh, sh, tasks, true, true)
+	gate := mkfifo(t, dir, "gate")
+	wait := "echo before; read x <'" + gate + "'; echo after"
+
+	for _, tc := range []struct {
+		name, lead string
+		args       map[string]any
+	}{
+		{"started", "Background task t1 started", map[string]any{"command": wait, "run_in_background": true}},
+		{"moved at its timeout", "Background task t2: this command did not finish within its 1ms timeout and keeps running in the background", map[string]any{"command": wait, "timeout": 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args, err := json.Marshal(tc.args)
+			require.NoError(t, err)
+
+			out, err := tool.Run(t.Context(), args, allowTarget)
+
+			require.NoError(t, err)
+			running := waitChange(t, changes)
+			assert.Equal(t, saved, filepath.Dir(running.OutputFile))
+			assert.Equal(t, tc.lead+", writing its output to "+running.OutputFile+". You are told when it ends: do not poll the file.", out.Text)
+			assert.Empty(t, tool.Display.Body(out.Text), "the row reads it as a background result")
+			// Opening blocks until the shell reads the FIFO.
+			require.NoError(t, os.WriteFile(gate, []byte("go\n"), 0o600))
+			ended := waitChange(t, changes)
+			assert.Equal(t, running.OutputFile, ended.OutputFile)
+			data, err := os.ReadFile(ended.OutputFile)
+			require.NoError(t, err)
+			assert.Equal(t, "before\nafter\n", string(data))
+		})
+	}
+}
+
+func TestBashBackgroundResultWithoutWakePromisesNoReport(t *testing.T) {
+	outputs, _ := newSavedOutputs(t)
+	dir := t.TempDir()
+	tasks := NewTasks()
+	t.Cleanup(tasks.StopAll)
+	changes := taskChanges(tasks)
+	sh := NewShell(dir, nil).WithOutputs(outputs)
+	tool := NewBash(sh, sh, tasks, true, false)
+	command, started, _ := holdFIFO(t, dir)
+	args, err := json.Marshal(map[string]any{"command": command, "run_in_background": true})
+	require.NoError(t, err)
+
+	out, err := tool.Run(t.Context(), args, allowTarget)
+
+	require.NoError(t, err)
+	running := waitChange(t, changes)
+	assert.Equal(t, "Background task t1 started, writing its output to "+running.OutputFile+".", out.Text)
+	waitFor(t, started, "the command to start")
 }
 
 func TestBashDetachMovesCommandToBackground(t *testing.T) {
@@ -181,7 +241,7 @@ func TestBashDetachMovesCommandToBackground(t *testing.T) {
 
 	r := waitBash(t, result)
 	require.NoError(t, r.err)
-	assert.Equal(t, "Background task t1: the user moved this command to the background, where it keeps running.", r.out)
+	assert.Equal(t, "Background task t1: the user moved this command to the background, where it keeps running. You are told when it ends.", r.out)
 	list := tasks.List()
 	require.Len(t, list, 1)
 	assert.Equal(t, TaskRunning, list[0].Status)
@@ -208,7 +268,7 @@ func TestBashCancelKillsForegroundCommand(t *testing.T) {
 
 func TestForegroundBashStopsCommandAtTimeout(t *testing.T) {
 	dir := t.TempDir()
-	tool := NewBash(NewShell(dir, nil), NewShell(dir, nil), nil, true)
+	tool := NewBash(NewShell(dir, nil), NewShell(dir, nil), nil, true, true)
 	command, started, dead := holdFIFO(t, dir)
 	args, err := json.Marshal(map[string]any{"command": "echo partial; " + command, "timeout": 500})
 	require.NoError(t, err)
@@ -224,7 +284,7 @@ func TestForegroundBashStopsCommandAtTimeout(t *testing.T) {
 
 func TestForegroundBashCancelKillsCommand(t *testing.T) {
 	dir := t.TempDir()
-	tool := NewBash(NewShell(dir, nil), NewShell(dir, nil), nil, true)
+	tool := NewBash(NewShell(dir, nil), NewShell(dir, nil), nil, true, true)
 	command, started, dead := holdFIFO(t, dir)
 	args, err := json.Marshal(map[string]any{"command": command})
 	require.NoError(t, err)
@@ -243,7 +303,7 @@ func TestForegroundBashCancelKillsCommand(t *testing.T) {
 func TestBashDescribesTheProxy(t *testing.T) {
 	sh := proxyShell(t, t.TempDir())
 
-	tool := NewBash(sh, sh, nil, false)
+	tool := NewBash(sh, sh, nil, false, true)
 
 	assert.Contains(t, tool.Description, "may instead appear empty. The network is reachable only through the HTTP proxy named in HTTP_PROXY and HTTPS_PROXY, "+
 		"and only for hosts the user listed; the command's output then ends with the hosts the proxy refused.")

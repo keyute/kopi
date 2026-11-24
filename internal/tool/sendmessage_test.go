@@ -105,6 +105,7 @@ func TestSendMessageOutcome(t *testing.T) {
 	done, action := tool.Display.Outcome(args, "Agent t3 continued. [named task]\nAgent: explore › look")
 	assert.Equal(t, "Messaged explore › look", done)
 	assert.Equal(t, Action{Verb: "Messaged", One: "agent", Many: "agents"}, action)
+	assert.Equal(t, "t3", tool.Display.Subject(args, "Agent t3 continued. [named task]\nAgent: explore › look"))
 
 	done, action = tool.Display.Outcome(args, "Message queued for t3.")
 	assert.Empty(t, done)

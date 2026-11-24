@@ -30,7 +30,7 @@
 
 - Every model-facing tool goes through `internal/policy`: `Gate.Before` in the pre-dispatch hook and `Gate.Admit` inside execution.
 - Skills load only from `$KOPI_HOME/skills`, `~/.agents/skills` and a trusted folder's `.agents/skills`; the `Skill` tool reads only a loaded skill's text and files inside the directory that skill was loaded from, and on every read refuses a file in Kopi's home outside `skills/`.
-- Subagent definitions load only from `$KOPI_HOME/agents`, once at startup. A subagent's session has its own gate over the same rules and shares the mode holder unless its definition pins plan mode. A subagent never gets `Agent`, `SendMessage`, `Workflow`, `AskUserQuestion`, `ExitPlanMode`, `TaskOutput` or `TaskStop`, never reaches the plan file, and its `Bash` never backgrounds.
+- Subagent definitions load only from `$KOPI_HOME/agents`, once at startup. A subagent's session has its own gate over the same rules and shares the mode holder unless its definition pins plan mode. A subagent never gets `Agent`, `SendMessage`, `Workflow`, `AskUserQuestion`, `ExitPlanMode` or `TaskStop`, never reaches the plan file, and its `Bash` never backgrounds.
 - `Workflow` is offered only in the fullscreen interface and becomes callable only when a human prompt in the main session contains `ultracode`. A workflow agent's session is opened as a subagent's is, from the same definitions, and never gets `Workflow`; the script reaches Kopi only through `agent()`.
 - Only human control input changes mode: `/plan`, `/execute`, Shift+Tab and Yes in the `ExitPlanMode` dialog. Sessions start and resume in the configured `mode` (default plan); `--mode` overrides the config file.
 - MCP servers start only from `mcpServers` in `config.json` and from a trusted folder's `.mcp.json`. Every MCP tool call asks unless a rule allows it or the opt-in classifier reviews an unmatched call; deny rules take precedence, and explicit and built-in ask rules always ask the human. A tool is Read only when its server marks it read-only.
@@ -42,7 +42,7 @@
 - Kopi reads and writes only under its home (`$KOPI_HOME`, default `~/.kopi`). Never read or write `~/.pi`, `~/.pig`, `~/.claude` or any other tool's store, in code or in tests. A shared place outside the project (see Built in or configured), such as `~/.agents/skills`, is not another tool's store; Kopi only reads it.
 - `trust.json` under Kopi's home holds trust decisions; the binary never writes `config.json`.
 - `plans/` under Kopi's home holds one plan file per root session; Kopi never deletes them.
-- `outputs/` under Kopi's home holds tool output too long to return whole, one folder per root session; Kopi removes files older than a week at startup.
+- `outputs/` under Kopi's home holds tool output too long to return whole and every background command's output, one folder per root session; Kopi removes files older than a week at startup.
 - Tests use `t.TempDir()`, synthetic credentials and no network, and synchronise on channels, never sleeps.
 
 ## Built in or configured
@@ -67,7 +67,7 @@
 
 ## Model-facing text
 
-- The text Kopi ships, which users can add to but not change, is minimal: it says what exists and how it works, enough for the agent to use it, and never how to behave. Preferences are the user's to state in their instruction files. For a subagent tool, say what subagents are and how a call works; do not say to delegate as much as possible.
+- The text Kopi ships, which users can add to but not change, is minimal: it says what exists and how it works, enough for the agent to use it. It steers only where one of Kopi's own mechanisms has a single intended use that a model gets wrong untold: plan mode ends in a plan presented for approval, an approved plan is carried out, a task whose end is reported is not polled, a timeout is not a yield. Such steering is one sentence in the narrowest place. Preferences are the user's to state in their instruction files. For a subagent tool, say what subagents are and how a call works; do not say to delegate as much as possible.
 - A shipped sentence is the same for every user, is one an agent with an empty Kopi home needs to operate, and sits in the narrowest place: the result it applies to, else the tool's description, else the preamble. A hint naming the tool's own way forward (`use offset=N to continue`) says how it works and stays.
 - The prompt of a model Kopi itself calls (the approval classifier, `WebFetch`, `WebSearch`) is part of that feature's implementation and the binary's; users add to the classifier's through `classifier.instructions`.
 - The system prompt is built once per process from named parts, ordered from what changes least to most: Kopi's text, `$KOPI_HOME/AGENTS.md`, a trusted folder's instruction files, what MCP servers report. Nothing in it depends on the time, git state, the mode or the turn.

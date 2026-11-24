@@ -34,12 +34,14 @@ func TestDisplayOutcomeOnSuccessOnly(t *testing.T) {
 	hooked.Display.Outcome = func(args json.RawMessage, output string) (string, tool.Action) {
 		return "Done " + string(args) + " " + output, action
 	}
+	hooked.Display.Subject = func(args json.RawMessage, output string) string { return string(args) + "|" + output }
 	plain := testTool("Plain", policy.Read, nil)
 	d := newDisplay([]tool.Tool{hooked, plain})
 
 	ok := d.apply(event.ToolEnd{Name: "Hooked", Args: `{"x":1}`, Output: "out"}).(event.ToolEnd)
 	assert.Equal(t, `Done {"x":1} out`, ok.Done)
 	assert.Equal(t, action, ok.Action)
+	assert.Equal(t, `{"x":1}|out`, ok.Subject)
 
 	for name, end := range map[string]event.ToolEnd{
 		"failed":      {Name: "Hooked", Args: "{}", Output: "boom", IsError: true},
@@ -49,6 +51,7 @@ func TestDisplayOutcomeOnSuccessOnly(t *testing.T) {
 		got := d.apply(end).(event.ToolEnd)
 		assert.Empty(t, got.Done, name)
 		assert.Zero(t, got.Action, name)
+		assert.Empty(t, got.Subject, name)
 	}
 }
 
@@ -225,23 +228,21 @@ func TestDisplayApprovalCopiesReview(t *testing.T) {
 }
 
 func TestDisplayTaskResultEnvelopes(t *testing.T) {
-	d := newDisplay([]tool.Tool{tool.NewTaskOutput(nil), tool.NewTaskStop(nil)})
-	for _, body := range []string{"Command: make\nx\n", "Agent: explore › look\nx\n", "Workflow: audit\nx\n", "ordinary output\nx\n"} {
+	d := newDisplay([]tool.Tool{tool.NewTaskStop(nil)})
+	for _, body := range []string{"Command: make", "Agent: explore › look", "Workflow: audit", "ordinary output"} {
 		t.Run(body, func(t *testing.T) {
-			start := d.apply(event.ToolStart{Name: "TaskOutput", Args: `{"task_id":"t1"}`}).(event.ToolStart)
-			assert.Equal(t, "Checked task t1", start.Done)
-			assert.Equal(t, tool.Action{Verb: "Checked", One: "task", Many: "tasks"}, start.Action)
-			end := d.apply(event.ToolEnd{Name: "TaskOutput", Args: `{"task_id":"t1"}`, Output: "Task t1 completed.\n" + body}).(event.ToolEnd)
-			assert.Equal(t, body, end.Body)
-			assert.Equal(t, "completed", end.Summary)
-			assert.Empty(t, end.Done)
+			start := d.apply(event.ToolStart{Name: "TaskStop", Args: `{"task_id":"t1"}`}).(event.ToolStart)
+			assert.Equal(t, "Stopped task t1", start.Done)
+			assert.Equal(t, tool.Action{Verb: "Stopped", One: "task", Many: "tasks"}, start.Action)
+			end := d.apply(event.ToolEnd{Name: "TaskStop", Args: `{"task_id":"t1"}`, Output: "Task t1 stopped.\n" + body}).(event.ToolEnd)
+			assert.Empty(t, end.Summary)
+			assert.Empty(t, end.Done, "a line that only looks like a name is not one")
 			assert.Zero(t, end.Action)
 		})
 	}
 	for _, tc := range []struct {
 		name, output, done, summary, body string
 	}{
-		{"TaskOutput", "Task t1 completed. [named task]\nCommand: make\nCommand: actual output\n", "Checked on shell make", "completed", "Command: actual output\n"},
 		{"TaskStop", "Task t1 stopped. [named task]\nCommand: make", "Stopped shell make", "", ""},
 		{"TaskStop", "Task t1 already completed. [named task]\nCommand: make", "TaskStop shell make", "already completed", ""},
 	} {

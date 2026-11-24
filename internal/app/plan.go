@@ -40,7 +40,7 @@ func (c *Controller) AnswerPlan(token uint64, a tool.PlanAnswer) bool {
 	return resolve(c, &c.plan, token, a, dismissed, func() {
 		if a.Approved {
 			// The call's result tells the model the mode, so no mode line follows.
-			c.main.told = modeLine(policy.Execute, "")
+			c.main.told = modeLine(policy.Execute, "", false)
 			c.EnterExecute()
 		}
 	})
@@ -73,12 +73,23 @@ func (c *Controller) PlanFile() string {
 	return c.cfg.Plans.Path()
 }
 
-// modeLine is what the model is told about the session's mode.
-func modeLine(mode policy.Mode, planPath string) string {
-	if mode == policy.Plan && planPath != "" {
+// modeLine is what the model is told about the session's mode. Plan mode with
+// a plan file says how the mode is left: with approval, through ExitPlanMode.
+func modeLine(mode policy.Mode, planPath string, approval bool) string {
+	switch {
+	case mode != policy.Plan || planPath == "":
+		return "The session is in " + mode.String() + " mode."
+	case !approval:
 		return "The session is in plan mode. Its plan file is " + planPath + "; Read, Write and Edit work on that file in both modes."
 	}
-	return "The session is in " + mode.String() + " mode."
+	return "Plan mode is on: do not change the workspace. When the request needs changes, research it, write a plan to " + planPath +
+		" (Read, Write and Edit work on that file in both modes) and call ExitPlanMode for the user's approval instead of ending your turn; " +
+		"a request that needs no changes is just answered."
+}
+
+// planApproval reports whether the session offers ExitPlanMode.
+func (c *Controller) planApproval() bool {
+	return c.cfg.Plans != nil && !c.cfg.Unattended && !c.cfg.Rules.Removes("ExitPlanMode")
 }
 
 // tell attaches the current mode line to the last of ps unless the model
@@ -97,7 +108,7 @@ func (r *runner) tell(ps []pigruntime.Prompt) []pigruntime.Prompt {
 	for i := range ps {
 		ps[i].Mode = ""
 	}
-	if line := modeLine(r.c.mode(), r.c.cfg.Plans.Path()); line != r.told {
+	if line := modeLine(r.c.mode(), r.c.cfg.Plans.Path(), r.c.planApproval()); line != r.told {
 		ps[len(ps)-1].Mode = line
 		r.told = line
 	}

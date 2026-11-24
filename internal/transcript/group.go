@@ -10,19 +10,31 @@ import (
 )
 
 // Sentence counts the calls per action in first-appearance order, e.g.
-// "Read 3 files, ran 2 tools".
+// "Read 3 files, ran 2 tools". Calls of a counted action on one subject count
+// once: seven edits of two files read "edited 2 files".
 func (g Group) Sentence() string {
+	type thing struct {
+		action  tool.Action
+		subject string
+	}
 	var order []tool.Action
 	counts := map[tool.Action]int{}
 	unsandboxed := map[tool.Action]int{}
+	seen := map[thing]bool{}
 	for _, c := range g.Calls {
 		if counts[c.Action] == 0 {
 			order = append(order, c.Action)
 		}
-		counts[c.Action]++
 		if c.Unsandboxed {
 			unsandboxed[c.Action]++
 		}
+		if t := (thing{c.Action, c.Subject}); c.Subject != "" && c.Action.Many != "" {
+			if seen[t] {
+				continue
+			}
+			seen[t] = true
+		}
+		counts[c.Action]++
 	}
 	clauses := make([]string, len(order))
 	for i, a := range order {
