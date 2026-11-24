@@ -729,6 +729,27 @@ func TestSendHandsOverEntriesInOrder(t *testing.T) {
 	assert.Equal(t, []event.Event{first.Shown, event.UserMessage{Text: "x"}, last.Shown}, drain(evs))
 }
 
+func TestSendUndeliversEntriesAfterNoticeFails(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), reply("done")})
+	sess := openTestSession(t, r, probeTool(okProbe))
+	evs := recordDelivered(t, sess)
+	failing, last := testCommand("ls"), testNotice("t1")
+	handed, _ := handEntries(Entry{Notice: &failing}, Entry{Prompt: Prompt{Text: "x"}}, Entry{Notice: &last})
+	// Closing the session is the only way a notice fails to queue; it ends the run.
+	more := func() []Entry {
+		require.NoError(t, sess.inner.Close())
+		return handed()
+	}
+
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
+	_ = err
+	assert.Equal(t, []Prompt{{Text: "x"}}, res.Undelivered)
+	assert.Equal(t, []Notice{failing, last}, res.UndeliveredNotices)
+	assert.Empty(t, drain(evs))
+}
+
 func TestRecordNoticesAddsWithoutRequest(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)
@@ -751,6 +772,24 @@ func TestRecordNoticesStopsAtFailureWithoutNotifying(t *testing.T) {
 	err := sess.RecordNotices([]Notice{testCommand("ls"), testNotice("t1")})
 	require.Error(t, err)
 	assert.Empty(t, drain(evs))
+}
+
+func TestRecordNoticesStopsPartWayAtFailure(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	sess := openTestSession(t, r)
+	evs := recordDelivered(t, sess)
+	first := testCommand("ls")
+	// The session closes once the first notice is recorded, so the second fails.
+	t.Cleanup(sess.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.UserCommand); ok {
+			assert.NoError(t, sess.inner.Close())
+		}
+	}))
+
+	err := sess.RecordNotices([]Notice{first, testNotice("t1"), testNotice("t2")})
+	require.Error(t, err)
+	assert.Equal(t, []event.Event{first.Shown}, drain(evs))
 }
 
 func TestRecordNoticesThenSendReadsThemBeforePrompt(t *testing.T) {

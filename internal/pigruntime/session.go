@@ -184,27 +184,20 @@ type commandDetails struct {
 }
 
 func (n Notice) message() extension.CustomMessageRef {
+	customType, details := noticeType, any(nil)
 	if c, ok := n.Shown.(event.UserCommand); ok {
-		return extension.CustomMessageRef{
-			CustomType: commandType,
-			Content:    n.Text,
-			Display:    true,
-			Details: commandDetails{
-				Command: c.Command, State: string(c.State), Exit: c.Exit, Failed: c.Failed,
-				ElapsedMs: c.Elapsed.Milliseconds(), Task: c.TaskID, Output: c.Output,
-			},
+		customType, details = commandType, commandDetails{
+			Command: c.Command, State: string(c.State), Exit: c.Exit, Failed: c.Failed,
+			ElapsedMs: c.Elapsed.Milliseconds(), Task: c.TaskID, Output: c.Output,
 		}
-	}
-	t, _ := n.Shown.(event.TaskEnded)
-	return extension.CustomMessageRef{
-		CustomType: noticeType,
-		Content:    n.Text,
-		Display:    true,
-		Details: noticeDetails{
+	} else {
+		t, _ := n.Shown.(event.TaskEnded)
+		details = noticeDetails{
 			ID: t.ID, Command: t.Command, Agent: t.Agent, Status: t.Status, ElapsedMs: t.Elapsed.Milliseconds(),
 			Agents: t.Agents, Failed: t.Failed, Reason: t.Reason, Result: t.Result,
-		},
+		}
 	}
+	return extension.CustomMessageRef{CustomType: customType, Content: n.Text, Display: true, Details: details}
 }
 
 // label names the notice in logs.

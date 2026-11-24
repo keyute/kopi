@@ -94,21 +94,17 @@ func branchMessages(entries []coding.SessionEntry) ([]agent.AgentMessage, error)
 			// Only history reads the message, so it carries details decoded.
 			switch record.CustomType {
 			case noticeType:
-				var stored struct {
-					Details noticeDetails `json:"details"`
-				}
-				if err := json.Unmarshal(entry.Raw(), &stored); err != nil {
+				details, err := storedDetails[noticeDetails](entry)
+				if err != nil {
 					return msgs, fmt.Errorf("failed to decode history notice %s: %w", entry.Base().ID, err)
 				}
-				msgs = append(msgs, agent.AgentMessage{Custom: map[string]any{"role": agent.RoleCustom, "customType": noticeType, "details": stored.Details}})
+				msgs = append(msgs, agent.AgentMessage{Custom: map[string]any{"role": agent.RoleCustom, "customType": noticeType, "details": details}})
 			case commandType:
-				var stored struct {
-					Details commandDetails `json:"details"`
+				details, err := storedDetails[commandDetails](entry)
+				if err != nil {
+					return msgs, fmt.Errorf("failed to decode history command %s: %w", entry.Base().ID, err)
 				}
-				if err := json.Unmarshal(entry.Raw(), &stored); err != nil {
-					return msgs, fmt.Errorf("failed to decode history notice %s: %w", entry.Base().ID, err)
-				}
-				msgs = append(msgs, agent.AgentMessage{Custom: map[string]any{"role": agent.RoleCustom, "customType": commandType, "details": stored.Details}})
+				msgs = append(msgs, agent.AgentMessage{Custom: map[string]any{"role": agent.RoleCustom, "customType": commandType, "details": details}})
 			}
 			continue
 		}
@@ -124,6 +120,14 @@ func branchMessages(entries []coding.SessionEntry) ([]agent.AgentMessage, error)
 		msgs = append(msgs, record.Message)
 	}
 	return msgs, nil
+}
+
+func storedDetails[T any](entry coding.SessionEntry) (T, error) {
+	var stored struct {
+		Details T `json:"details"`
+	}
+	err := json.Unmarshal(entry.Raw(), &stored)
+	return stored.Details, err
 }
 
 // history skips system messages and custom messages other than notices and user commands; the

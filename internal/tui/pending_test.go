@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"image/color"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -369,12 +370,15 @@ func TestPendingCapEndsWithMoreLines(t *testing.T) {
 	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: q})
 
 	rows := pendingText(m)
-	require.Len(t, rows, 10+2+2+1, "a third of the height, its two shaded rows, the note and the trailing row")
+	require.Len(t, rows, 10+2+2, "a third of the height, its two shaded rows, the note and the trailing row, less the row the cut gives up so it is not left on the next command's opening row")
 	s := strings.Join(rows, "\n")
 	assert.NotContains(t, s, "line 7", "exited commands lose their output lines before any row is cut")
 	assert.Contains(t, s, "❯ tail prompt")
 	assert.Contains(t, s, "queued · ctrl+enter to send now · up to edit")
 	assert.Regexp(t, `… \d+ more lines`, s)
+	more := slices.IndexFunc(rows, func(r string) bool { return strings.Contains(r, "more lines") })
+	require.Positive(t, more)
+	assert.Equal(t, []string{"      … 8 earlier lines", ""}, rows[more-2:more], "only the gap follows the output; the next command's opening row is cut with it")
 	assert.Empty(t, rows[len(rows)-1])
 	assert.Len(t, screen(m), 30)
 	assert.Equal(t, "❯", screen(m)[m.composerTop()])
@@ -445,4 +449,76 @@ func TestPendingCapInsideLastBoxAfterCommandsStaysInBudget(t *testing.T) {
 	assert.Contains(t, s, "❯ line 0")
 	assert.Equal(t, []string{"", "", "  ↳ queued · ctrl+enter to send now · up to edit", ""}, rows[len(rows)-4:])
 	assert.Len(t, screen(m), 30)
+}
+
+func TestPendingStopHintYieldsToAnOpenMenu(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newMenuModel(t, 60, 30)
+		running := queuedCommand("make", event.CommandRunning)
+		running.Command.Started = time.Now()
+		send(m, event.QueueChanged{Pending: []event.Queued{running}})
+		require.Contains(t, strings.Join(pendingText(m), "\n"), "esc to stop")
+
+		keys(m, "/")
+
+		require.Positive(t, m.menuHeight())
+		assert.NotContains(t, strings.Join(pendingText(m), "\n"), "esc to stop")
+	})
+}
+
+func TestPendingRunningCommandWithoutOutputDrawsNoTail(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTestModel(t, 60, 30)
+		c.commandOutput = noOutputNotice
+		running := queuedCommand("sleep 30", event.CommandRunning)
+		running.Command.Started = time.Now()
+		send(m, event.QueueChanged{Pending: []event.Queued{running}})
+
+		assert.NotContains(t, strings.Join(pendingText(m), "\n"), "no output")
+		assert.False(t, m.pendingCache.tailed)
+	})
+}
+
+// cutRows draws the queue in a cache of its own, trimmed.
+func cutRows(m *model, q []event.Queued, maxContent, maxRows int) []string {
+	var c pendingCache
+	var out []string
+	for _, r := range c.rows(q, app.Main, nil, &m.keys, 60, maxContent, maxRows, m.th) {
+		out = append(out, strings.TrimRight(ansi.Strip(r), " "))
+	}
+	return out
+}
+
+func TestPendingCapNeverEndsOnACommandsOpeningRow(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	q := []event.Queued{queuedCommand("a", event.CommandQueued), queuedCommand("b", event.CommandQueued)}
+
+	assert.Equal(t, []string{
+		"", "! a", "", "", "  ↳ queued", "", "  … 5 more lines", "",
+	}, cutRows(m, q, 6, 9), "the next command's opening row is cut with it")
+}
+
+func TestPendingCapCountsRowsAfterTheNoteBelowIt(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	q := []event.Queued{{Text: "my prompt"}, queuedCommand("make", event.CommandExited)}
+	q[1].Command.Output = linesOf(8)
+
+	assert.Equal(t, []string{
+		"", "❯ my prompt", "", "", "  ↳ queued · ctrl+enter to send now · up to edit", "  … 7 more lines", "",
+	}, cutRows(m, q, 6, 9), "typing order holds: the command's rows are counted under the note")
+}
+
+func TestQueueEditTakesPromptsAndKeepsCommands(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	c.queued = []event.Input{{Text: "a"}, {Text: "b"}}
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []event.Queued{
+		{Text: "a"}, queuedCommand("ls", event.CommandQueued), {Text: "b"},
+	}})
+
+	press(m, up)
+
+	assert.Equal(t, 1, c.takes)
+	assert.Equal(t, "a\n\nb", m.composer.value())
+	require.Len(t, m.view().queued, 1)
+	assert.Equal(t, "ls", m.view().queued[0].Command.Command)
 }

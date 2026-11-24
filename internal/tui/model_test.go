@@ -738,6 +738,16 @@ func TestSubmitSendsOnlyAVisibleCommandAsOne(t *testing.T) {
 	}
 }
 
+func TestSendNowSendsACollapsedBangPasteAsAPrompt(t *testing.T) {
+	m, c := newTestModel(t, 40, 20)
+	pasteText(m, "!"+linesOf(11))
+	require.False(t, m.composer.shell())
+
+	press(m, ctrlEnter)
+
+	assert.Equal(t, []string{" !" + linesOf(11)}, c.sentNow)
+}
+
 func TestBlankEnterDoesNothing(t *testing.T) {
 	m, _ := newTestModel(t, 30, 20)
 	typeText(m, "  ")
@@ -1148,6 +1158,18 @@ func TestUnsentEventReturnsInputs(t *testing.T) {
 	send(m, event.Unsent{Inputs: []event.Input{{Text: "a"}, {Text: "b"}}})
 
 	assert.Equal(t, "a\n\nb\n\ndraft", m.composer.value())
+}
+
+func TestUnsentEventWhileMainIsHiddenReturnsOnShowingMain(t *testing.T) {
+	m, _ := agentsModel(t)
+	display(m, "t1")
+
+	send(m, event.Unsent{Inputs: []event.Input{{Text: "a"}, {Text: "b"}}})
+	require.Empty(t, m.composer.value())
+
+	m.show(app.Main)
+
+	assert.Equal(t, "a\n\nb", m.composer.value())
 }
 
 func TestUnsentDroppedCommandsFlash(t *testing.T) {

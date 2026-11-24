@@ -12,6 +12,10 @@ import (
 	"github.com/keyute/kopi/internal/event"
 )
 
+// noOutputNotice is what a command's output reads before any byte arrives
+// (internal/tool); a running command shows no output rather than the notice.
+const noOutputNotice = "(no output)"
+
 // pendingCache keeps the full rendered queue independent of the current
 // composer height and the space left for it. A queue holding a running command
 // is drawn anew each time: its elapsed time and output tail change.
@@ -24,6 +28,8 @@ type pendingCache struct {
 	// the row ranges of its shaded prompt boxes.
 	box   []string
 	boxes [][2]int
+	// opens are the rows where a user command's shaded box opens.
+	opens []int
 	// note is nil when no prompt is queued.
 	note []string
 
@@ -55,14 +61,12 @@ func (c *pendingCache) rows(queued []event.Queued, session string, spans func(st
 		c.queued, c.box, c.boxes, c.note = nil, nil, nil, nil
 		return nil
 	}
-	running := slices.ContainsFunc(queued, func(q event.Queued) bool {
-		return q.Command != nil && q.Command.State == event.CommandRunning
-	})
+	running := hasRunning(queued)
 	changed := c.box == nil || width != c.width || th != c.th || session != c.session || !slices.EqualFunc(queued, c.queued, sameQueued)
 	if running || changed || c.refit(c.fit(maxContent, maxRows)) {
 		c.queued, c.session, c.width, c.th = nil, session, width, th
 		if !running {
-			c.queued = cloneQueued(queued)
+			c.queued = slices.Clone(queued)
 		}
 		// The output tails shrink, down to none, before any row of the queue is cut.
 		for c.lines = 5; ; c.lines-- {
@@ -106,7 +110,7 @@ func (c *pendingCache) fit(maxContent, maxRows int) int {
 }
 
 func (c *pendingCache) build(queued []event.Queued, spans func(string) []app.Span, km *keyMap) {
-	c.box, c.boxes, c.note, c.tailed = nil, nil, nil, false
+	c.box, c.boxes, c.opens, c.note, c.tailed = nil, nil, nil, nil, false
 	var texts []string
 	gap := func() {
 		if len(c.box) > 0 {
@@ -130,6 +134,7 @@ func (c *pendingCache) build(queued []event.Queued, spans func(string) []app.Spa
 		}
 		flush()
 		gap()
+		c.opens = append(c.opens, len(c.box))
 		cmd := c.command(*q.Command)
 		c.tailed = c.tailed || bodyText(cmd.Output) != ""
 		for _, l := range commandRows(cmd, c.options(*q.Command, km), c.width, c.th) {
@@ -150,12 +155,20 @@ func (c *pendingCache) build(queued []event.Queued, spans func(string) []app.Spa
 	c.note = under(note, fg(c.th.dim), c.width)
 	end := c.boxes[len(c.boxes)-1][1]
 	c.box = slices.Insert(c.box, end, append([]string{""}, c.note...)...)
+	for i, o := range c.opens {
+		if o >= end {
+			c.opens[i] += 1 + len(c.note)
+		}
+	}
 }
 
 // command is the command as drawn: a running one shows its live tail.
 func (c *pendingCache) command(cmd event.UserCommand) event.UserCommand {
 	if cmd.State == event.CommandRunning && c.tail != nil {
 		cmd.Output = c.tail()
+		if cmd.Output == noOutputNotice {
+			cmd.Output = ""
+		}
 	}
 	return cmd
 }
@@ -185,13 +198,25 @@ func (c *pendingCache) cut(total, noteRows int) []string {
 	if noteRows > 0 {
 		last := c.boxes[len(c.boxes)-1]
 		noteEnd := last[1] + noteRows
-		// Rows after the note are hidden and counted with the rest.
+		// Rows after the note are hidden and counted in a row below it.
 		after := len(c.box) - noteEnd
 		if keep := total - 2 - noteRows; keep > last[0] && keep < last[1] {
 			return append(c.head(len(c.box)-noteRows, total-noteRows), c.box[last[1]:noteEnd]...)
 		}
-		if head := total - (noteEnd - last[0]); head >= 2 {
-			return append(c.head(last[0]+after, min(head, last[0]+1)), c.box[last[0]:noteEnd]...)
+		head := total - (noteEnd - last[0])
+		if after > 0 {
+			head--
+		}
+		if head >= 2 || last[0] == 0 && head >= 0 {
+			var out []string
+			if last[0] > 0 {
+				out = c.head(last[0], min(head, last[0]+1))
+			}
+			out = append(out, c.box[last[0]:noteEnd]...)
+			if after > 0 {
+				out = append(out, c.more(after))
+			}
+			return out
 		}
 		if keep := last[0] + total - 3 - noteRows; keep > last[0] {
 			out := append([]string{c.more(last[0])}, c.shadedCut(last[0], keep, last, len(c.box)-noteRows-keep-1)...)
@@ -211,7 +236,7 @@ func (c *pendingCache) head(end, n int) []string {
 	}
 	kept := n - 1
 	// A box's opening shaded row cannot be the last one shown.
-	if slices.ContainsFunc(c.boxes, func(b [2]int) bool { return b[0] == kept-1 }) {
+	if slices.ContainsFunc(c.boxes, func(b [2]int) bool { return b[0] == kept-1 }) || slices.Contains(c.opens, kept-1) {
 		kept--
 	}
 	return append(slices.Clone(c.box[:kept]), c.more(end-kept))
@@ -238,15 +263,9 @@ func sameQueued(a, b event.Queued) bool {
 	return a.Command == nil || *a.Command == *b.Command
 }
 
-// cloneQueued copies the commands too, so a change to one the Controller
-// handed out is seen.
-func cloneQueued(queued []event.Queued) []event.Queued {
-	out := slices.Clone(queued)
-	for i, q := range out {
-		if q.Command != nil {
-			cmd := *q.Command
-			out[i].Command = &cmd
-		}
-	}
-	return out
+// hasRunning reports whether the queue holds a running user command.
+func hasRunning(queued []event.Queued) bool {
+	return slices.ContainsFunc(queued, func(q event.Queued) bool {
+		return q.Command != nil && q.Command.State == event.CommandRunning
+	})
 }
