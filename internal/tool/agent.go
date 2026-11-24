@@ -115,7 +115,8 @@ func NewAgent(defs []subagent.Definition, agents Agents) Tool {
 	}
 }
 
-// launchTail ends the result of a launch with how the task's end arrives.
+// launchTail ends the result of a launch with how the task's end arrives and
+// that the model does not redo the task meanwhile.
 const launchTail = " You are told when it ends, in a new turn if yours has ended: do not do its task yourself meanwhile."
 
 // launchResult matches a launch's result with or without launchTail, which a

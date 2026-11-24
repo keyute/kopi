@@ -132,7 +132,7 @@ func (s *subagentRole) begin(w *Work) error {
 		return ErrTooManyAgents
 	}
 	c.live++
-	s.r.unread = false
+	s.r.unread = event.TaskEnded{}
 	if !s.task.Run(s.r.stopper(w)) {
 		c.live--
 		return tool.ErrUnknownTask
@@ -345,7 +345,7 @@ func (c *Controller) message(ctx context.Context, id, message string) (tool.Mess
 	if r == nil {
 		return 0, fmt.Errorf("failed to find task %q: %w", id, tool.ErrUnknownTask)
 	}
-	if r.unread {
+	if r.unread != (event.TaskEnded{}) {
 		return tool.MessageEnded, nil
 	}
 	w, err := r.submitLocked(ctx, pigruntime.Prompt{Text: message, FromAgent: true}, false)
@@ -376,8 +376,9 @@ func (s *subagentRole) reportEnd(info tool.TaskInfo, byHuman bool, unread []stri
 	}
 	switch {
 	case info.Status == tool.TaskCompleted || info.Status == tool.TaskFailed:
-		s.r.unread = true
-		c.main.queueNoticeLocked(agentNotice(info, unread))
+		n := agentNotice(info, unread)
+		s.r.unread = n.Shown.(event.TaskEnded)
+		c.main.queueNoticeLocked(n)
 	case info.Status == tool.TaskStopped && byHuman:
 		c.main.queueNoticeLocked(withUndelivered(pigruntime.Notice{Text: agentStoppedHead(info), Shown: taskEnded(info)}, unread))
 	}

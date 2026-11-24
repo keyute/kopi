@@ -116,7 +116,7 @@ func (a *agentHarness) untilRead(t *testing.T, id string) {
 func (a *agentHarness) unread(id string) bool {
 	a.c.queue.Lock()
 	defer a.c.queue.Unlock()
-	return a.c.children[id].unread
+	return a.c.children[id].unread != (event.TaskEnded{})
 }
 
 func (a *agentHarness) untilStatus(t *testing.T, id string, status tool.TaskStatus) {
@@ -585,6 +585,23 @@ func TestSendMessageResultNamesTheAgent(t *testing.T) {
 	assert.Equal(t, fmt.Sprintf("Agent %s continued. [named task]\nAgent: explorer › find it", id), result.Text)
 }
 
+func TestSendMessageResultNamesTheAgentWhoseReportIsUnread(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first")})
+	a.rootAcks(1)
+	a.holdNotices()
+	id := a.launch(t, "explorer", "find it", "go")
+	a.untilStatus(t, id, tool.TaskCompleted)
+	a.until(t, func() bool { return a.live() == 0 })
+
+	admit := func(policy.Target) (policy.Mode, error) { return policy.Execute, nil }
+	raw := json.RawMessage(fmt.Sprintf(`{"to":%q,"message":"again"}`, id))
+	result, err := tool.NewSendMessage(agentLauncher{a.c}).Run(t.Context(), raw, admit)
+	require.NoError(t, err)
+
+	assert.Equal(t, fmt.Sprintf("Agent %s has ended; this message was not delivered. Its report follows. [named task]\nAgent: explorer › find it", id), result.Text)
+}
+
 func TestSendMessageResultNamesARunningAgentAsQueued(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{releaseTool(started, release)}}, agentDef("explorer"))
@@ -1004,7 +1021,7 @@ func TestEndNoticeIsNotQueuedIntoTheNextSession(t *testing.T) {
 
 	assert.Empty(t, a.queuedNotices())
 	a.c.queue.Lock()
-	assert.False(t, ch.unread, "a notice for another session leaves the child accepting messages")
+	assert.Zero(t, ch.unread, "a notice for another session leaves the child accepting messages")
 	a.c.queue.Unlock()
 	assert.True(t, a.idle(), "nothing woke the new session")
 }
@@ -1809,6 +1826,67 @@ func TestMessageToAnEndedChildWhoseNoticeIsUnreadStartsNoRunUntilTheModelReadsIt
 	require.NoError(t, err)
 	assert.Equal(t, tool.MessageResumed, outcome)
 	assert.Equal(t, []string{"go", "again"}, receive(t, childRequests).UserTexts)
+}
+
+func TestMessageToAFailedChildWhoseNoticeIsUnreadStartsNoRunUntilTheModelReadsIt(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
+	childRequests := make(chan pigruntimetest.Request, 2)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ProviderError("boom"), pigruntimetest.Capture(t, childRequests, "second")})
+	a.rootAcks(1)
+	a.holdNotices()
+	id := a.launch(t, "explorer", "find it", "go")
+	a.untilStatus(t, id, tool.TaskFailed)
+	a.until(t, func() bool { return a.live() == 0 })
+	require.True(t, a.unread(id))
+	calls := a.child.CallCount()
+
+	outcome, err := a.c.message(t.Context(), id, "driver ran the tests")
+	require.NoError(t, err)
+
+	assert.Equal(t, tool.MessageEnded, outcome)
+	assert.Equal(t, calls, a.child.CallCount(), "the failed child did not run")
+	assert.Len(t, a.queuedNotices(), 1, "nothing was queued for the child and its notice still waits")
+
+	w, err := a.c.Submit(t.Context(), Main, "continue")
+	require.NoError(t, err)
+	wait(t, w.Done())
+	a.untilRead(t, id)
+	outcome, err = a.c.message(t.Context(), id, "again")
+	require.NoError(t, err)
+	assert.Equal(t, tool.MessageResumed, outcome)
+}
+
+func TestReadingAnEarlierRunsNoticeLeavesALaterRunsUnread(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first"), pigruntimetest.Text("second"), pigruntimetest.Text("third")})
+	a.rootAcks(1)
+	a.holdNotices()
+	id := a.launch(t, "explorer", "find it", "go")
+	a.untilStatus(t, id, tool.TaskCompleted)
+	a.until(t, func() bool { return a.live() == 0 })
+	w, err := a.c.Submit(t.Context(), id, "again")
+	require.NoError(t, err)
+	wait(t, w.Done())
+	a.until(t, func() bool { return a.live() == 0 && len(a.queuedNotices()) == 2 })
+	notices := a.queuedNotices()
+	first, second := notices[0].Shown.(event.TaskEnded), notices[1].Shown.(event.TaskEnded)
+	require.NotEqual(t, first, second)
+	a.c.mu.Lock()
+	sess := a.c.main.sess
+	a.c.mu.Unlock()
+	read := a.c.main.reading(sess, func(event.Event) {})
+
+	read(first)
+
+	outcome, err := a.c.message(t.Context(), id, "too early")
+	require.NoError(t, err)
+	assert.Equal(t, tool.MessageEnded, outcome, "the second run's report is still unread")
+
+	read(second)
+
+	outcome, err = a.c.message(t.Context(), id, "now")
+	require.NoError(t, err)
+	assert.Equal(t, tool.MessageResumed, outcome)
 }
 
 func TestMessageToAChildTheModelStoppedResumesAtOnce(t *testing.T) {

@@ -46,7 +46,7 @@ func NewGrep(ws *Workspace, hidden Hidden) Tool {
 		Name:  "Grep",
 		Label: "Grep",
 		Description: "Searches file contents inside the workspace with a regular expression (RE2 syntax). " +
-			"Skips .git directories, files .gitignore ignores, binary files and symlinks.",
+			"Skips .git directories below path, files .gitignore ignores, binary files and symlinks.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

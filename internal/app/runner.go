@@ -62,11 +62,12 @@ type runner struct {
 	// wakeDue is set when a wake was refused because a record was in flight; the
 	// record's end advances with it.
 	wakeDue bool
-	// unread is set on a subagent's runner from the moment its completion or
-	// failure notice is queued until the main session's model reads that notice
-	// or the subagent runs again; guarded by Controller.queue like the fields
-	// above.
-	unread bool
+	// unread is, on a subagent's runner, the Shown event of its completion or
+	// failure notice from the moment that notice is queued until the main
+	// session's model reads it or the subagent runs again; zero when none is
+	// pending. A read of an earlier run's notice, still queued when the subagent
+	// ran again, does not clear it.
+	unread event.TaskEnded
 	// told is the last mode line delivered to the model in the current session;
 	// "" when none was, or when one was not delivered. Only the main session's
 	// is used.
@@ -223,26 +224,25 @@ func (r *runner) dropHanded(emit func(event.Event)) {
 // handed prompt, which is the UserMessage Send reports, or a handed command,
 // which is its UserCommand, removes its entry from the queue and reports the new
 // queue just ahead of it, in one queue section so a frontend sees the two back
-// to back. Other events pass untouched. It does nothing for a session that is no
-// longer r's, so a straggler of a replaced session never pops the new one's
-// queue.
+// to back. A TaskEnded also marks that subagent's end notice read. It does
+// nothing for a session that is no longer r's, so a straggler of a replaced
+// session never pops the new one's queue.
 func (r *runner) reading(sess *pigruntime.Session, emit func(event.Event)) func(event.Event) {
 	return func(ev event.Event) {
 		var command bool
-		switch e := ev.(type) {
-		case event.UserMessage:
-		case event.UserCommand:
-			command = true
-		case event.TaskEnded:
+		if e, ok := ev.(event.TaskEnded); ok {
 			// The notice of a subagent's end is now read; it is the main session's
 			// event, so a child's own subscriber never sees one.
 			r.c.queue.Lock()
-			if child := r.c.children[e.ID]; child != nil {
-				child.unread = false
+			if child := r.c.children[e.ID]; child != nil && child.unread == e {
+				child.unread = event.TaskEnded{}
 			}
 			r.c.queue.Unlock()
-			emit(ev)
-			return
+		}
+		switch ev.(type) {
+		case event.UserMessage:
+		case event.UserCommand:
+			command = true
 		default:
 			emit(ev)
 			return

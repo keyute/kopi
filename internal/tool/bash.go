@@ -45,20 +45,22 @@ var (
 
 // resultPattern matches the text format produces, with the task id as the
 // first group and any further verbs matching args, then one of BackgroundTail's
-// tails; a result saved before those existed ends like the shortest of them.
+// tails, including the no-wake one that says to use Read; a result saved before
+// those existed ends like the shortest of them.
 func resultPattern(format string, args ...string) *regexp.Regexp {
 	verbs := append([]any{`(t\d+)`}, make([]any, len(args))...)
 	for i, a := range args {
 		verbs[i+1] = a
 	}
-	tail := "(?:" + fmt.Sprintf(regexp.QuoteMeta(backgroundFile), `[^\n]+`) + ")?" +
+	tail := "(?:" + fmt.Sprintf(regexp.QuoteMeta(backgroundFile), `[^\n]+`) + "(?:" + regexp.QuoteMeta(backgroundRead) + ")?)?" +
 		`(?:\.|` + regexp.QuoteMeta(backgroundTold) + "|" + regexp.QuoteMeta(backgroundPoll) + ")"
 	return regexp.MustCompile("^" + fmt.Sprintf(regexp.QuoteMeta(format), verbs...) + tail + "$")
 }
 
 // BackgroundTail ends a background result with where the command's output is
 // saved, when it is, and, when the command's end reaches the model whatever
-// its turn does, that it need not read the file to wait.
+// its turn does, that it need not read the file to wait; when it does not, that
+// the file is read with Read.
 func BackgroundTail(file string, wakes bool) string {
 	var tail string
 	if file != "" {

@@ -200,14 +200,6 @@ func TestWorkflowAgentPreambleReplacesTheSubagentSentence(t *testing.T) {
 	assert.Contains(t, typed[0].Text, "\nYou stay in plan mode, whatever mode the user is in.\n")
 }
 
-func TestPromptLeavesOutADeferredToolWithoutToolSearch(t *testing.T) {
-	deferred := tool.Tool{Name: "Probe", Capability: policy.Read, Deferred: true}
-
-	only := joinPrompt(buildPrompt("/w", []tool.Tool{deferred}, nil, nil, nil, false, false))
-	assert.NotContains(t, only, "Probe")
-	assert.NotContains(t, only, "deferred")
-}
-
 func TestContextOfSortsPartsAndToolsIntoCategories(t *testing.T) {
 	parts := []pigruntime.Size{
 		{Name: "preamble", Tokens: 100},

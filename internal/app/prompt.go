@@ -30,8 +30,8 @@ type mcpServer struct {
 
 // buildPrompt builds the parts, from what changes least to most: Kopi's own
 // text, the instruction groups, then what the MCP servers report. The
-// preamble does not list tools; the read-only and execute-mode sentence still
-// counts the deferred ones, which the model can load and call.
+// read-only and execute-mode sentence counts deferred tools too, which the
+// model can load and call.
 //
 // def is nil for the root session and for the default workflow agent; a
 // subagent's or a workflow agent's preamble says who it is, and a definition's

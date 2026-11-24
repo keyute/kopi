@@ -24,7 +24,7 @@ func NewGlob(ws *Workspace, hidden Hidden) Tool {
 		Label: "Glob",
 		Description: "Finds files inside the workspace whose path matches a glob, such as **/*.go or src/**/*.ts; " +
 			"a pattern without / matches file names at any depth. " +
-			"Skips .git directories, files .gitignore ignores and symlinks. " +
+			"Skips .git directories below path, files .gitignore ignores and symlinks. " +
 			"Returns up to 100 paths, most recently modified first.",
 		Parameters: map[string]any{
 			"type": "object",
