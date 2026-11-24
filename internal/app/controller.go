@@ -1108,6 +1108,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		Rules:        c.cfg.Rules,
 		Approve:      c.approver(d, c.main),
 		Review:       c.reviewer(rec),
+		Recall:       c.recall,
 	})
 	if err != nil {
 		return err

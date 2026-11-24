@@ -104,6 +104,30 @@ func modeMessage(text string) extension.CustomMessageRef {
 	return extension.CustomMessageRef{CustomType: modeType, Content: text, Display: false}
 }
 
+// recallAfterCompaction sends text() as a mode line after every compaction that
+// succeeded, for the session's lifetime.
+//
+// The message does not trigger a turn: PiG appends such a message at the end of
+// the turn in progress, before an overflow retry, or at once when no run is
+// active. A steered one would count as queued input after a final reply and
+// make PiG request the model again.
+func (s *Session) recallAfterCompaction(text func() string) {
+	passive := false
+	s.inner.Subscribe(func(ev agent.AgentEvent) {
+		end, ok := ev.(agent.CompactionEndEvent)
+		if !ok || end.Aborted || end.ErrorMessage != "" {
+			return
+		}
+		line := text()
+		if line == "" {
+			return
+		}
+		if err := s.inner.SendCustomMessage(context.Background(), modeMessage(line), &extension.SendMessageOptions{TriggerTurn: &passive}); err != nil {
+			slog.Warn("failed to recall after compaction", "error", err)
+		}
+	})
+}
+
 // Notice is input Kopi gives the model on its own behalf, not the human's. The
 // model reads Text as user input; the transcript draws Shown where the model
 // reads it, live and on resume.
