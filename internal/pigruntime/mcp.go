@@ -58,7 +58,7 @@ type Servers struct {
 	servers []*server // sorted by name
 	wg      sync.WaitGroup
 	started time.Time
-	// wait and grace are startupWait and serverGrace.
+	// Fields rather than the constants so a test can shorten them.
 	wait, grace time.Duration
 	settled     chan struct{} // closed once every server has settled
 

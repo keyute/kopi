@@ -703,7 +703,7 @@ func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome
 func waitServers(ctx context.Context, servers *pigruntime.Servers) ([]pigruntime.ServerStatus, error) {
 	statuses := servers.Wait(ctx)
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("failed to start MCP servers: startup was interrupted: %w", err)
+		return nil, fmt.Errorf("%w: %w", app.ErrStartupInterrupted, err)
 	}
 	return statuses, nil
 }

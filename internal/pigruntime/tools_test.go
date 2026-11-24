@@ -393,6 +393,71 @@ func TestAddedToolIsCallableOnceLoadedAndRunsThroughTheGate(t *testing.T) {
 	assert.Equal(t, joiningName, (<-asked).Tool)
 }
 
+func TestAddedExecToolIsRefusedInPlanMode(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 4)
+	sess, err := r.Open(t.Context(), OpenOptions{
+		Model: fauxModel, SystemPrompt: kopiPrompt, Tools: []tool.Tool{joiningLoader()}, Joining: []string{"late"}, Authority: policy.NewAuthority(),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+
+	var ran atomic.Bool
+	joining := joiningTool(&ran)
+	joining.Capability = policy.Exec
+	require.NoError(t, sess.AddTools([]tool.Tool{joining}))
+
+	faux.SetResponses([]ai.FauxResponseStep{
+		captureAndCall(requests, "Load", "call-1"),
+		captureAndCall(requests, joiningName, "call-2"),
+		captureRequest(requests, "done"),
+	})
+	_, err = sess.Send(t.Context(), Prompt{Text: "load it and call it"}, nil, nil)
+	require.NoError(t, err)
+	<-requests
+	assert.ElementsMatch(t, []string{"Load", joiningName}, declared(<-requests))
+	assert.Contains(t, lastToolResult(t, <-requests), "needs execute mode")
+	assert.False(t, ran.Load())
+}
+
+func TestAddToolsFailsOnAChildSession(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	root := openTestSession(t, r)
+	child, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, Parent: root, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, child.Close(context.Background())) })
+
+	var ran atomic.Bool
+	assert.ErrorIs(t, child.AddTools([]tool.Tool{joiningTool(&ran)}), ErrNoJoining)
+}
+
+func TestChildSessionLoadsAndCallsItsDeferredTool(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 3)
+	root := openTestSession(t, r)
+	var ran atomic.Bool
+	child, err := r.Open(t.Context(), OpenOptions{
+		Model: fauxModel, Parent: root, SystemPrompt: kopiPrompt, Tools: []tool.Tool{loaderTool(), deferredTool(&ran)}, Authority: policy.NewAuthority(),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, child.Close(context.Background())) })
+
+	faux.SetResponses([]ai.FauxResponseStep{
+		captureAndCall(requests, "Load", "call-1"),
+		captureAndCall(requests, "Deferred", "call-2"),
+		captureRequest(requests, "done"),
+	})
+	_, err = child.Send(t.Context(), Prompt{Text: "load it and call it"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Load"}, declared(<-requests))
+	assert.ElementsMatch(t, []string{"Load", "Deferred"}, declared(<-requests))
+	assert.Equal(t, deferredOutput, lastToolResult(t, <-requests))
+	assert.True(t, ran.Load())
+}
+
 func TestAddToolsLeavesTheOtherToolsAsTheyWere(t *testing.T) {
 	sb := newSandbox(t)
 	r, _ := newTestRuntime(t, sb)

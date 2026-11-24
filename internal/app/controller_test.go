@@ -2367,13 +2367,88 @@ func TestServersPartIsReplacedOnceTheLastServerSettles(t *testing.T) {
 		return receive(t, requests).SystemPrompt
 	}
 
+	before := prompt()
 	srv.settle(pigruntime.ServerStatus{Name: "a", Tools: []tool.Tool{serverTool("mcp__a__t")}})
-	assert.NotContains(t, prompt(), "MCP server a", "the part waits for the last server")
+	assert.Equal(t, before, prompt(), "the part waits for the last server")
 
 	srv.settle(pigruntime.ServerStatus{Name: "b", Tools: []tool.Tool{serverTool("mcp__b__t")}})
 	got := prompt()
 	assert.Contains(t, got, "MCP server a tools: mcp__a__t.")
 	assert.Contains(t, got, "MCP server b tools: mcp__b__t.")
+	assert.Equal(t, before, strings.Replace(got, "\n\nMCP server a tools: mcp__a__t.\nMCP server b tools: mcp__b__t.", "", 1), "only the servers' part changed")
+}
+
+func TestServerJoiningMidTurnIsFoundAndCalled(t *testing.T) {
+	var called atomic.Int32
+	mcp := testTool("mcp__s__t", policy.Read, func(context.Context, json.RawMessage) (string, error) {
+		called.Add(1)
+		return "from the server", nil
+	})
+	mcp.Deferred = true
+	srv := holdServers("s")
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Servers: srv})
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	close(srv.grace)
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		ai.FauxFactoryStep(func(ai.TranscriptContext, ai.StreamOptions, *ai.FauxProviderState, *ai.Model) (ai.AssistantMessage, error) {
+			srv.settle(pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{mcp}})
+			return pigruntimetest.ToolCalls(pigruntimetest.Call{Name: "ToolSearch", Args: map[string]any{"query": mcp.Name}}).(ai.AssistantMessage), nil
+		}),
+		pigruntimetest.ToolCalls(pigruntimetest.Call{Name: mcp.Name, Args: map[string]any{}}),
+		pigruntimetest.Text("used it"),
+	})
+
+	assert.Equal(t, event.Outcome{Status: event.Completed}, h.turn(t, "use the server").Outcome())
+	assert.Equal(t, int32(1), called.Load())
+}
+
+func TestServerSettlingDuringAFailedSwitchReachesTheSessionThatStayed(t *testing.T) {
+	srv := holdServers("s")
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Servers: srv})
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	close(srv.grace)
+	req := OpenRequest{ResumeID: "no-such-session"}
+	op, err := h.c.beginSwitch(false)
+	require.NoError(t, err)
+
+	srv.settle(pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{serverTool("mcp__s__t")}, Skipped: []string{"odd"}})
+	assert.Empty(t, ofType[event.Notice](h.rec.all()), "the pending switch would wipe it")
+
+	h.c.life.Lock()
+	h.c.finishSwitch(t.Context(), req, op)
+	h.c.life.Unlock()
+
+	assert.Len(t, ofType[event.Error](h.rec.all()), 1, "the switch failed")
+	assert.Equal(t, []event.Notice{{Text: "MCP server s: skipped tool odd"}}, ofType[event.Notice](h.rec.all()))
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "done")})
+	h.turn(t, "what can you use?")
+	assert.Contains(t, receive(t, requests).SystemPrompt, "MCP server s tools: mcp__s__t.")
+}
+
+func TestToolSearchNamesServersUntilTheyJoin(t *testing.T) {
+	srv := holdServers("s")
+	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Servers: srv})
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{}))
+	close(srv.grace)
+	requests := make(chan pigruntimetest.Request, 1)
+	var tell func()
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		ai.FauxFactoryStep(func(ai.TranscriptContext, ai.StreamOptions, *ai.FauxProviderState, *ai.Model) (ai.AssistantMessage, error) {
+			// The server has settled, and the Controller has not been told yet.
+			tell = srv.settleUntold(pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{serverTool("mcp__s__t")}})
+			return pigruntimetest.ToolCalls(pigruntimetest.Call{Name: "ToolSearch", Args: map[string]any{"query": "mcp__s__t"}}).(ai.AssistantMessage), nil
+		}),
+		pigruntimetest.Capture(t, requests, "done"),
+	})
+
+	h.turn(t, "find it")
+
+	assert.Equal(t, []string{"s"}, h.c.connectingNow())
+	assert.Contains(t, receive(t, requests).ToolResults[0], "MCP servers still connecting, whose tools cannot be found yet: s.")
+	tell()
+	assert.Empty(t, h.c.connectingNow())
+	assert.Len(t, h.c.serverToolsNow(), 1)
 }
 
 func TestResumedSessionKeepsItsServersPartWhileServersConnect(t *testing.T) {
@@ -2402,6 +2477,41 @@ func TestResumedSessionKeepsItsServersPartWhileServersConnect(t *testing.T) {
 
 	srv.settle(pigruntime.ServerStatus{Name: "s", Tools: tools})
 	assert.Equal(t, before, prompt())
+}
+
+func TestResumedSessionServersPartFollowsTheLastServer(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	earlier := newHarness(t, sb, Config{Servers: servers(pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{serverTool("mcp__s__t")}})})
+	require.NoError(t, earlier.c.Open(t.Context(), OpenRequest{}))
+	earlier.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("done")})
+	earlier.turn(t, "earlier")
+	id := earlier.c.Status().SessionID
+	require.NoError(t, earlier.c.Close(t.Context()))
+
+	for name, st := range map[string]pigruntime.ServerStatus{
+		"another tool": {Name: "s", Tools: []tool.Tool{serverTool("mcp__s__u")}},
+		"failure":      {Name: "s", Err: errors.New("boom")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := holdServers("s")
+			h := newHarness(t, sb, Config{Servers: srv})
+			require.NoError(t, h.c.Start(t.Context(), OpenRequest{ResumeID: id}))
+			close(srv.grace)
+			requests := make(chan pigruntimetest.Request, 1)
+			h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "done")})
+
+			srv.settle(st)
+			h.turn(t, "what can you use?")
+
+			got := receive(t, requests).SystemPrompt
+			assert.NotContains(t, got, "mcp__s__t", "the stored part is replaced")
+			if st.Err == nil {
+				assert.Contains(t, got, "MCP server s tools: mcp__s__u.")
+			} else {
+				assert.NotContains(t, got, "MCP server s")
+			}
+		})
+	}
 }
 
 func TestPromptWaitsForServersStillConnecting(t *testing.T) {

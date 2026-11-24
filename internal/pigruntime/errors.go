@@ -19,6 +19,7 @@ var (
 	ErrNoSearch        = errors.New("model has no web search")
 	ErrUnknownEffort   = errors.New("unknown effort")
 	ErrParentResume    = errors.New("a session with a parent cannot resume or continue")
+	ErrNoJoining       = errors.New("a session with a parent takes no tools after it opens")
 	ErrScript          = errors.New("script failed")
 	ErrNotSaved        = errors.New("session has no saved transcript")
 

@@ -320,7 +320,10 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	// InitialActiveToolNames says, and a resumed session restores the tools
 	// its transcript last declared, so deferred tools are deactivated here.
 	sess.SetActiveToolsByName(names)
-	s := &Session{inner: sess, gate: gate, joining: &r.joining, parts: slices.Clone(o.SystemPrompt)}
+	s := &Session{inner: sess, gate: gate, parts: slices.Clone(o.SystemPrompt)}
+	if o.Parent == nil {
+		s.joining = &r.joining
+	}
 	if o.ResumeID != "" || o.Continue {
 		a := sess.Agent()
 		var stored ai.OrderedSections

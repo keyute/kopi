@@ -31,6 +31,9 @@ func (s *Session) AddTools(tools []tool.Tool) error {
 	if len(tools) == 0 {
 		return nil
 	}
+	if s.joining == nil {
+		return fmt.Errorf("failed to add tools: %w", ErrNoJoining)
+	}
 	s.gate.Add(tool.Specs(tools))
 	if err := register(s.joining, tools); err != nil {
 		return fmt.Errorf("failed to add tools: %w", err)
