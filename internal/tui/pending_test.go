@@ -410,3 +410,39 @@ func TestPendingCapInsideLastBoxKeepsTheNote(t *testing.T) {
 	require.Len(t, rows, 10+2+2+1)
 	assert.Equal(t, []string{"  … 27 more lines", "", "", "  ↳ queued · ctrl+enter to send now · up to edit", ""}, rows[len(rows)-5:])
 }
+
+func TestPendingCapWithACommandAfterTheLastBoxDrawsTheBoxOnce(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	q := []event.Queued{{Text: "hello"}}
+	for range 3 {
+		ls := queuedCommand("ls", event.CommandExited)
+		ls.Command.Output = linesOf(8)
+		q = append(q, ls)
+	}
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: q})
+
+	rows := pendingText(m)
+	assert.LessOrEqual(t, len(rows), 10+2+2+1)
+	assert.Equal(t, 1, strings.Count(strings.Join(rows, "\n"), "❯ hello"))
+	assert.Len(t, screen(m), 30)
+}
+
+func TestPendingCapInsideLastBoxAfterCommandsStaysInBudget(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	var q []event.Queued
+	for range 4 {
+		ls := queuedCommand("ls", event.CommandExited)
+		ls.Command.Output = linesOf(8)
+		q = append(q, ls)
+	}
+	q = append(q, event.Queued{Text: linesOf(30)})
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: q})
+
+	rows := pendingText(m)
+	require.Len(t, rows, 10+2+2+1)
+	s := strings.Join(rows, "\n")
+	assert.NotContains(t, s, "! ls", "the commands before the last box are counted, not drawn")
+	assert.Contains(t, s, "❯ line 0")
+	assert.Equal(t, []string{"", "", "  ↳ queued · ctrl+enter to send now · up to edit", ""}, rows[len(rows)-4:])
+	assert.Len(t, screen(m), 30)
+}

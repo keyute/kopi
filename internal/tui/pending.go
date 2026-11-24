@@ -191,10 +191,10 @@ func (c *pendingCache) cut(total, noteRows int) []string {
 			return append(c.head(len(c.box)-noteRows, total-noteRows), c.box[last[1]:noteEnd]...)
 		}
 		if head := total - (noteEnd - last[0]); head >= 2 {
-			return append(c.head(last[0]+after, head), c.box[last[0]:noteEnd]...)
+			return append(c.head(last[0]+after, min(head, last[0]+1)), c.box[last[0]:noteEnd]...)
 		}
 		if keep := last[0] + total - 3 - noteRows; keep > last[0] {
-			out := append([]string{c.more(last[0])}, c.shadedCut(keep, last, len(c.box)-noteRows-keep-1)...)
+			out := append([]string{c.more(last[0])}, c.shadedCut(last[0], keep, last, len(c.box)-noteRows-keep-1)...)
 			return append(out, c.box[last[1]:noteEnd]...)
 		}
 	}
@@ -206,7 +206,7 @@ func (c *pendingCache) cut(total, noteRows int) []string {
 func (c *pendingCache) head(end, n int) []string {
 	for _, b := range c.boxes {
 		if keep := n - 2; keep > b[0] && keep < b[1] {
-			return c.shadedCut(keep, b, end-keep-1)
+			return c.shadedCut(0, keep, b, end-keep-1)
 		}
 	}
 	kept := n - 1
@@ -221,12 +221,12 @@ func (c *pendingCache) more(hidden int) string {
 	return fg(c.th.dim).Render(fmt.Sprintf("  … %d more lines", hidden))
 }
 
-// shadedCut keeps the rows before keep, then a shaded row counting hidden and
-// the box's closing row.
-func (c *pendingCache) shadedCut(keep int, b [2]int, hidden int) []string {
+// shadedCut keeps the rows from start up to keep, then a shaded row counting
+// hidden and the box's closing row.
+func (c *pendingCache) shadedCut(start, keep int, b [2]int, hidden int) []string {
 	more := fmt.Sprintf("  … %d more lines", hidden)
 	pad := strings.Repeat(" ", max(0, c.width-lipgloss.Width(more)))
-	out := slices.Clone(c.box[:keep])
+	out := slices.Clone(c.box[start:keep])
 	return append(out, shade(c.th).Foreground(c.th.dim).Render(more+pad), c.box[b[1]-1])
 }
 

@@ -352,6 +352,56 @@ func TestPromptWhileASilentRecordIsInFlightWaitsForItsEnd(t *testing.T) {
 	assert.Equal(t, 1, u.faux.CallCount(), "one turn")
 }
 
+func TestCommandFinishingWhileASilentRecordIsInFlightGetsAReply(t *testing.T) {
+	u := newUserHarness(t, Config{})
+	a, b := u.cmd("a", "out-a"), u.cmd("b", "out-b")
+	gate := make(chan struct{})
+	u.faux.SetResponses([]ai.FauxResponseStep{
+		ai.FauxFactoryStep(func(ai.TranscriptContext, ai.StreamOptions, *ai.FauxProviderState, *ai.Model) (ai.AssistantMessage, error) {
+			<-gate
+			return ai.FauxAssistantMessage(ai.FauxContentString(""), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonError), ErrorMessage: "boom"}), nil
+		}),
+		pigruntimetest.Capture(t, u.requests, "ack"),
+	})
+	ends := turnEnds(u.c)
+
+	// Holds the silent record of a, which the failed turn's end starts, open.
+	reached, release := make(chan struct{}), make(chan struct{})
+	u.c.mu.Lock()
+	sess := u.c.main.sess
+	u.c.mu.Unlock()
+	var once sync.Once
+	sess.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.UserCommand); ok {
+			once.Do(func() {
+				close(reached)
+				<-release
+			})
+		}
+	})
+
+	u.submit(t, "go")
+	u.run(t, a)
+	wait(t, a.started)
+	a.release()
+	u.untilShape(t, "!a:exited")
+	u.run(t, b)
+	wait(t, b.started)
+	close(gate)
+	assert.Equal(t, event.Failed, receiveEnd(t, ends).Outcome.Status)
+	wait(t, reached)
+
+	b.release()
+	u.untilShape(t, "!b:exited")
+	close(release)
+
+	assert.Equal(t, event.Completed, receiveEnd(t, ends).Outcome.Status)
+	texts := receive(t, u.requests).UserTexts
+	require.NotEmpty(t, texts)
+	wantNotice(t, texts[len(texts)-1], b, exited)
+	assert.Equal(t, 2, u.faux.CallCount())
+}
+
 func TestEscapeMidTurnKeepsTheCommandsAndSilencesThem(t *testing.T) {
 	started := make(chan struct{})
 	u := newUserHarness(t, Config{Tools: []tool.Tool{blockTool(started)}})

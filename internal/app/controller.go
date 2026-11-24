@@ -1355,6 +1355,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	if old != nil {
 		c.main.notices = nil
 		c.main.hold = false
+		c.main.wakeDue = false
 		cleared = len(c.main.queued) > 0
 		stopCommand = c.main.clearQueueLocked()
 	}

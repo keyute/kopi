@@ -59,6 +59,9 @@ type runner struct {
 	// handed while the session is still inside RecordNotices, which refuses a
 	// send.
 	recording bool
+	// wakeDue is set when a wake was refused because a record was in flight; the
+	// record's end advances with it.
+	wakeDue bool
 	// told is the last mode line delivered to the model in the current session;
 	// "" when none was, or when one was not delivered. Only the main session's
 	// is used.
@@ -756,6 +759,9 @@ func (r *runner) advanceLocked(wake bool) {
 	// A login holds the main session's wakes and silent records; a subagent's run
 	// is independent of it.
 	if c.closed || r.sess == nil || r.work != nil || c.switching != nil || r.changingModel() || r == c.main && c.login != nil || r.anyHanded() || r.recording {
+		if r.recording && wake {
+			r.wakeDue = true
+		}
 		c.mu.Unlock()
 		return
 	}
@@ -788,17 +794,19 @@ func (r *runner) recordSilently(prefix []*entry, wake bool) {
 		c.queue.Lock()
 		defer c.queue.Unlock()
 		r.recording = false
+		due := r.wakeDue
+		r.wakeDue = false
 		r.unhand(prefix)
 		// An entry still queued was not read, as a session that has been replaced
 		// does not report to the queue.
 		if err != nil {
 			emit(event.Error{Err: err})
-			// A prompt typed while the record was in flight waits behind it and has no
-			// other turn to start it; advancing with none waiting would record the same
-			// commands again.
-			if hasPrompt(r.ready()) {
+			// A prompt typed, or a wake refused, while the record was in flight has no
+			// other turn to start it; advancing when neither opens a turn would record
+			// the same commands again.
+			if hasPrompt(r.ready()) || due && r.opens(r.ready(), true) {
 				c.mu.Lock()
-				r.advanceLocked(false)
+				r.advanceLocked(due)
 			}
 			return
 		}
@@ -806,7 +814,7 @@ func (r *runner) recordSilently(prefix []*entry, wake bool) {
 			return
 		}
 		c.mu.Lock()
-		r.advanceLocked(wake)
+		r.advanceLocked(wake || due)
 	})
 }
 
