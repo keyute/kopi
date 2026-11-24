@@ -238,6 +238,19 @@ func TestPlanRowClosesToItsDecisionAndAClickOpensThePlanAgain(t *testing.T) {
 	})
 }
 
+func TestPlanRowOfAnInterruptedPlanClosesAndAClickOpensThePlanAgain(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := openPlan(t)
+		send(m, event.PlanEnded{Token: 7}, event.ToolEnd{CallID: "p", Name: "ExitPlanMode", Kind: event.EndInterrupted, IsError: true, Summary: "interrupted"})
+		got := strings.Join(body(m), "\n")
+		assert.Contains(t, got, "• Plan approval")
+		assert.NotContains(t, got, "step one")
+
+		clickText(t, m, "• Plan approval")
+		assert.Contains(t, strings.Join(body(m), "\n"), "step one")
+	})
+}
+
 func TestPlanRequestShowsTheMainView(t *testing.T) {
 	m, _ := agentsModel(t)
 	display(m, "t1")

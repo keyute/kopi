@@ -287,7 +287,31 @@ func TestPlanRowDrawsItsPlanWhileRunningAndOnlyWhenOpenedAfter(t *testing.T) {
 	assert.Equal(t, []string{"• Plan approval", "  ↳ revision requested", "    split step 2"}, opened[:3])
 	assert.Contains(t, strings.Join(opened[3:], "\n"), "second step", "the plan follows the feedback")
 
-	assert.Equal(t, hit{kind: hitOutput, id: "p"}, c.lines(tr.Blocks()[0], closed, nil, 40, mocha())[0].hit)
+	var bare transcript.Transcript
+	bare.Apply(event.ToolStart{CallID: "q", Name: "ExitPlanMode", Title: "Plan approval", Solo: true})
+	bare.Apply(event.PlanRequested{Token: 2, Plan: "# Heading\n\n- step"})
+	bare.Apply(event.ToolEnd{CallID: "q", Name: "ExitPlanMode", Summary: "approved"})
+	assert.Equal(t, hit{kind: hitOutput, id: "q"}, c.lines(bare.Blocks()[0], closed, nil, 40, mocha())[0].hit, "the plan alone makes the row open")
+}
+
+func TestPlanRowRewrapsWhenTheWidthChanges(t *testing.T) {
+	var tr transcript.Transcript
+	tr.Apply(event.ToolStart{CallID: "p", Name: "ExitPlanMode", Title: "Plan approval", Solo: true})
+	tr.Apply(event.PlanRequested{Token: 1, Plan: strings.Repeat("word ", 60)})
+	var c renderCache
+	planLines := func(width int) []string {
+		var out []string
+		for _, l := range c.lines(tr.Blocks()[0], blockFolds{}, nil, width, mocha())[1:] {
+			out = append(out, strings.TrimPrefix(l.text, "    "))
+		}
+		return out
+	}
+
+	narrow, wide := planLines(40), planLines(80)
+	assert.Less(t, len(wide), len(narrow))
+	for _, l := range wide {
+		assert.LessOrEqual(t, ansi.StringWidth(l), 76, "%q fits the width less the indent", l)
+	}
 }
 
 func TestOKRowShowsItsDoneForm(t *testing.T) {

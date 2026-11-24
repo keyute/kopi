@@ -174,8 +174,8 @@ func TestPlanRequestedLandsOnTheRunningSoloCallAndSurvivesItsEnd(t *testing.T) {
 		return out
 	}
 	var tr Transcript
-	tr.Apply(start("a"))
 	tr.Apply(planStart("p"))
+	tr.Apply(start("a"))
 	tr.Apply(event.PlanRequested{Token: 1, Plan: "# v1"})
 	assert.Equal(t, map[string]string{"a": "", "p": "# v1"}, plans(&tr), "a plain call does not take the plan")
 
@@ -186,6 +186,10 @@ func TestPlanRequestedLandsOnTheRunningSoloCallAndSurvivesItsEnd(t *testing.T) {
 	tr.Apply(end("p"))
 	tr.Apply(end("a"))
 	assert.Equal(t, "# v2", plans(&tr)["p"], "the plan outlives the call's end")
+
+	before := tr.Blocks()
+	tr.Apply(event.PlanRequested{Token: 2, Plan: "# stray"})
+	assert.Equal(t, before, tr.Blocks(), "a plan with no solo call running is dropped")
 
 	tr.Apply(planStart("q"))
 	tr.Apply(event.PlanRequested{Token: 2, Plan: "# next"})
