@@ -832,7 +832,7 @@ func TestQuestionRowsMarkTheChosenOptionAndCustomAnswer(t *testing.T) {
 	rows := q.dialog(60, th).rows(60, 100, 6, th)
 	assert.Equal(t, "❭ 1. A ✔", plainRows(rows)[3])
 	assert.Equal(t, fg(th.accent).Render("❭ ")+fg(th.accent).Bold(true).Render("1. A ✔"), rows[3], "chosen and focused: bold accent")
-	assert.Equal(t, fg(th.accent).Render("  ")+"2. B", rows[5], "an unchosen option stays plain")
+	assert.Equal(t, fg(th.accent).Render("  ")+fg(th.text).Render("2. B"), rows[5], "an unchosen option is in the text colour")
 
 	p.custom().ta.SetValue("mine")
 	p.chosen = 2

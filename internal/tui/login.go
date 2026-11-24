@@ -19,7 +19,7 @@ const secretMark = "•"
 // provider as the note. Options become one numbered choice each; otherwise
 // the one option is an unlabelled text field, masked when ev asks for a secret.
 func newLoginDialog(ev event.LoginRequested, km *keyMap, th theme) *loginDialog {
-	d := &dialog{title: ev.Message, note: ev.Provider}
+	d := &dialog{title: ev.Message, note: ev.Provider, foot: binding(km.dismiss, "cancel")}
 	l := &loginDialog{req: &ev, d: d}
 	if len(ev.Options) > 0 {
 		for _, o := range ev.Options {
@@ -95,5 +95,5 @@ func secretRow(f *composer, width int, th theme) string {
 		return fg(th.dim).Render(ansi.Truncate(f.ta.Placeholder, max(0, width), ""))
 	}
 	n := utf8.RuneCountInString(strings.ReplaceAll(f.value(), "\n", ""))
-	return strings.Repeat(secretMark, min(n, max(0, width)))
+	return fg(th.text).Render(strings.Repeat(secretMark, min(n, max(0, width))))
 }

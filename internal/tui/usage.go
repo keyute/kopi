@@ -81,7 +81,7 @@ func (u *usageDialog) dialog(width int, th theme) *dialog {
 	if u.bodyWidth != width || u.bodyTheme != th || u.expired != expired {
 		u.body, u.bodyWidth, u.bodyTheme, u.expired = usageBody(u.u, width-2, th, now), width, th, expired
 	}
-	u.d.body, u.d.hint = u.body, scrollHint(u.km)
+	u.d.body, u.d.hint, u.d.foot = u.body, scrollHint(u.km), binding(u.km.dismiss, "close")
 	return u.d
 }
 
@@ -99,12 +99,13 @@ func usageBody(u app.Usage, width int, th theme, now time.Time) []string {
 	}
 	col += 2
 	label := func(s string) string { return fg(th.muted).Render(s) + strings.Repeat(" ", col-lipgloss.Width(s)) }
+	text := fg(th.text)
 
 	var bar, fact []string
 	for _, b := range bars {
 		row := label(b.label) + percentBar(b.pct, b.warn, th)
 		if b.tail != "" {
-			row += "  " + b.tail
+			row += "  " + text.Render(b.tail)
 		}
 		bar = append(bar, row)
 	}
@@ -112,7 +113,7 @@ func usageBody(u app.Usage, width int, th theme, now time.Time) []string {
 		fact = append(fact, label(f.label)+f.value)
 	}
 	body := []string{""}
-	for _, group := range [][]string{bar, usageContext(u, width, th), usageModels(u, width), fact} {
+	for _, group := range [][]string{bar, usageContext(u, width, th), usageModels(u, width, th), fact} {
 		if len(group) == 0 {
 			continue
 		}
@@ -171,9 +172,9 @@ func percentBar(pct float64, warn bool, th theme) string {
 }
 
 // usageContext is a row for each category that holds some of the context, with
-// its tokens and its share of the context.
+// its tokens and its share of the model's window.
 func usageContext(u app.Usage, width int, th theme) []string {
-	if u.ContextTokens <= 0 {
+	if u.ContextTokens <= 0 || u.ContextWindow <= 0 {
 		return nil
 	}
 	c := u.Context
@@ -193,13 +194,17 @@ func usageContext(u app.Usage, width int, th theme) []string {
 		if part.tokens <= 0 {
 			continue
 		}
-		rows = append(rows, [3]string{part.name, compactCount(part.tokens), fmt.Sprintf("%.0f%%", float64(part.tokens)*100/float64(u.ContextTokens))})
+		share := fmt.Sprintf("%.1f%%", float64(part.tokens)*100/float64(u.ContextWindow))
+		if share == "0.0%" {
+			share = "<0.1%"
+		}
+		rows = append(rows, [3]string{part.name, compactCount(part.tokens), share})
 	}
-	return usageColumns(rows, width, func(s string) string { return fg(th.muted).Render(s) })
+	return usageColumns(rows, width, fg(th.muted), th)
 }
 
 // usageModels is a row for each model and the total.
-func usageModels(u app.Usage, width int) []string {
+func usageModels(u app.Usage, width int, th theme) []string {
 	if len(u.Models) == 0 {
 		return nil
 	}
@@ -215,22 +220,22 @@ func usageModels(u app.Usage, width int) []string {
 		rows = append(rows, [3]string{name, compactCount(m.Tokens), fmt.Sprintf("$%.2f", m.Cost)})
 	}
 	rows = append(rows, [3]string{"Total (estimate)", compactCount(total), fmt.Sprintf("$%.2f", totalCost)})
-	return usageColumns(rows, width, func(s string) string { return s })
+	return usageColumns(rows, width, fg(th.text), th)
 }
 
 // usageColumns aligns rows of a name and two right-aligned figures, cutting the
-// names to leave the figures whole within width; style renders a name.
-func usageColumns(rows [][3]string, width int, style func(string) string) []string {
-	var name, a, b int
+// names to leave the figures whole within width; name styles a name.
+func usageColumns(rows [][3]string, width int, name lipgloss.Style, th theme) []string {
+	var w, a, b int
 	for _, r := range rows {
-		name, a, b = max(name, lipgloss.Width(r[0])), max(a, len(r[1])), max(b, len(r[2]))
+		w, a, b = max(w, lipgloss.Width(r[0])), max(a, len(r[1])), max(b, len(r[2]))
 	}
-	name = min(name, max(1, width-a-b-6))
+	w = min(w, max(1, width-a-b-6))
 	out := make([]string, 0, len(rows))
 	for _, r := range rows {
-		n := cut(r[0], name)
-		out = append(out, style(n)+strings.Repeat(" ", name-lipgloss.Width(n))+"   "+
-			fmt.Sprintf("%*s", a, r[1])+"   "+fmt.Sprintf("%*s", b, r[2]))
+		n := cut(r[0], w)
+		out = append(out, name.Render(n)+strings.Repeat(" ", w-lipgloss.Width(n))+
+			fg(th.text).Render("   "+fmt.Sprintf("%*s", a, r[1])+"   "+fmt.Sprintf("%*s", b, r[2])))
 	}
 	return out
 }
@@ -240,21 +245,31 @@ type usageFact struct{ label, value string }
 // usageFacts is the Tokens, Cache, Compaction, Time and Session rows that have
 // something to say.
 func usageFacts(u app.Usage, th theme, now time.Time) []usageFact {
-	sep := fg(th.muted).Render(" · ")
+	sep, text := fg(th.muted).Render(" · "), fg(th.text)
+	join := func(parts []string) string {
+		var b strings.Builder
+		for i, p := range parts {
+			if i > 0 {
+				b.WriteString(sep)
+			}
+			b.WriteString(text.Render(p))
+		}
+		return b.String()
+	}
 	var facts []usageFact
 	if t := u.Tokens; t != (app.Tokens{}) {
-		facts = append(facts, usageFact{"Tokens", strings.Join([]string{
+		facts = append(facts, usageFact{"Tokens", join([]string{
 			compactCount(t.Input) + " in", compactCount(t.Output) + " out", compactCount(t.CacheRead) + " read", compactCount(t.CacheWrite) + " write",
-		}, sep)})
+		})})
 	}
 	var cache []string
 	c := u.Cache
 	if c.Reported {
-		cache = append(cache, fmt.Sprintf("%.0f%% hit", c.Hit))
+		cache = append(cache, text.Render(fmt.Sprintf("%.0f%% hit", c.Hit)))
 	}
 	if !c.Expires.IsZero() {
 		if now.Before(c.Expires) {
-			cache = append(cache, "warm until "+clockText(c.Expires, now))
+			cache = append(cache, text.Render("warm until "+clockText(c.Expires, now)))
 		} else {
 			cache = append(cache, fg(th.warning).Render("expired "+clockText(c.Expires, now)))
 		}
@@ -264,7 +279,7 @@ func usageFacts(u app.Usage, th theme, now time.Time) []usageFact {
 		if c.Misses == 1 {
 			noun = "miss"
 		}
-		cache = append(cache, fmt.Sprintf("%d %s $%.2f", c.Misses, noun, c.MissedCost))
+		cache = append(cache, text.Render(fmt.Sprintf("%d %s $%.2f", c.Misses, noun, c.MissedCost)))
 	}
 	if len(cache) > 0 {
 		facts = append(facts, usageFact{"Cache", strings.Join(cache, sep)})
@@ -277,7 +292,7 @@ func usageFacts(u app.Usage, th theme, now time.Time) []usageFact {
 		compaction = append(compaction, "next at "+compactCount(u.CompactAt))
 	}
 	if len(compaction) > 0 {
-		facts = append(facts, usageFact{"Compaction", strings.Join(compaction, sep)})
+		facts = append(facts, usageFact{"Compaction", join(compaction)})
 	}
 	var spent []string
 	if u.ModelTime >= time.Second {
@@ -287,7 +302,7 @@ func usageFacts(u app.Usage, th theme, now time.Time) []usageFact {
 		spent = append(spent, formatDuration(u.ToolTime)+" tools")
 	}
 	if len(spent) > 0 {
-		facts = append(facts, usageFact{"Time", strings.Join(spent, sep)})
+		facts = append(facts, usageFact{"Time", join(spent)})
 	}
 	var session []string
 	if u.SessionID != "" {
@@ -300,7 +315,7 @@ func usageFacts(u app.Usage, th theme, now time.Time) []usageFact {
 		session = append(session, countText(u.ToolCalls, "tool call"))
 	}
 	if len(session) > 0 {
-		facts = append(facts, usageFact{"Session", strings.Join(session, sep)})
+		facts = append(facts, usageFact{"Session", join(session)})
 	}
 	return facts
 }

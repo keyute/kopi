@@ -175,8 +175,8 @@ func (w *workflowDialog) dialog(width int, th theme) *dialog {
 		}
 		if width != w.hintWidth {
 			w.hintWidth = width
-			back := " · " + binding(w.m.keys.dismiss, "go back")
-			w.hint.foot = cut("watching "+w.watchWhat, width-2-lipgloss.Width(back)) + back
+			back := binding(w.m.keys.dismiss, "go back")
+			w.hint.note, w.hint.keys = cut("watching "+w.watchWhat, width-2-lipgloss.Width(" · "+back)), back
 		}
 		return w.hint
 	}
@@ -300,9 +300,9 @@ func (w *workflowDialog) build() {
 // ended if it failed or was stopped, and the elapsed time.
 func (w *workflowDialog) header() {
 	run := w.run
-	bold := lipgloss.NewStyle().Bold(true)
-	w.head[0] = "  " + bold.Render(cut("Workflow › "+oneLine(run.Description), w.width-2))
-	parts := []string{workflowCounts(run)}
+	text := fg(w.th.text)
+	w.head[0] = "  " + text.Bold(true).Render(cut("Workflow › "+oneLine(run.Description), w.width-2))
+	parts := []string{text.Render(workflowCounts(run))}
 	if run.State == tool.TaskFailed || run.State == tool.TaskStopped {
 		parts = append(parts, fg(w.th.error).Render(string(run.State)))
 	}
@@ -310,12 +310,12 @@ func (w *workflowDialog) header() {
 	if end.IsZero() {
 		end = w.at
 	}
-	parts = append(parts, formatDuration(max(0, end.Sub(run.Started))))
-	w.head[1] = ansi.Truncate("  "+progressBar(run, w.th)+"  "+strings.Join(parts, " · "), w.width, "")
+	parts = append(parts, text.Render(formatDuration(max(0, end.Sub(run.Started)))))
+	w.head[1] = ansi.Truncate("  "+progressBar(run, w.th)+"  "+strings.Join(parts, text.Render(" · ")), w.width, "")
 }
 
 func (w *workflowDialog) heading(phase string, done, total int) string {
-	row := "  " + lipgloss.NewStyle().Bold(true).Render(oneLine(phase)) + fg(w.th.muted).Render(fmt.Sprintf(" · %d/%d", done, total))
+	row := "  " + fg(w.th.text).Bold(true).Render(oneLine(phase)) + fg(w.th.muted).Render(fmt.Sprintf(" · %d/%d", done, total))
 	return ansi.Truncate(row, w.width, "…")
 }
 
@@ -328,21 +328,39 @@ func agentWhat(a app.WorkflowAgent) string {
 	return name + " #" + strconv.Itoa(a.N)
 }
 
+// stateBullet is the bullet of a list row in the colour of state.
+func stateBullet(state tool.TaskStatus, th theme) string {
+	c := th.text
+	switch state {
+	case tool.TaskCompleted:
+		c = th.success
+	case tool.TaskFailed, tool.TaskStopped:
+		c = th.error
+	case app.WorkflowQueued:
+		c = th.dim
+	}
+	return fg(c).Render("•")
+}
+
+// stateRow is a list row of width cells: lead, what the row is, cut to leave
+// meta whole, and meta flush right in the muted colour.
+func stateRow(lead, what, meta string, width int, th theme) string {
+	text := fg(th.text)
+	if meta == "" {
+		return lead + text.Render(cut(what, width-lipgloss.Width(lead)))
+	}
+	room := width - lipgloss.Width(lead) - lipgloss.Width(meta)
+	what = cut(what, room-2)
+	gap := max(2, room-lipgloss.Width(what))
+	return ansi.Truncate(lead+text.Render(what)+strings.Repeat(" ", gap)+fg(th.muted).Render(meta), width, "")
+}
+
 // drawAgent is agent a's row: its bullet in the colour of its state, what it
 // is, and flush right its state, elapsed time and context.
 func (w *workflowDialog) drawAgent(a app.WorkflowAgent) string {
 	indent := 2
 	if a.Phase != "" {
 		indent = 4
-	}
-	bullet := "•"
-	switch a.State {
-	case tool.TaskCompleted:
-		bullet = fg(w.th.success).Render(bullet)
-	case tool.TaskFailed, tool.TaskStopped:
-		bullet = fg(w.th.error).Render(bullet)
-	case app.WorkflowQueued:
-		bullet = fg(w.th.dim).Render(bullet)
 	}
 	what := agentWhat(a)
 	var meta []string
@@ -359,14 +377,8 @@ func (w *workflowDialog) drawAgent(a app.WorkflowAgent) string {
 	if a.ContextTokens > 0 {
 		meta = append(meta, compactCount(a.ContextTokens))
 	}
-	lead := strings.Repeat(" ", indent) + bullet + " "
-	if len(meta) == 0 {
-		return ansi.Truncate(lead+what, w.width, "…")
-	}
-	text := strings.Join(meta, " · ")
-	what = cut(what, w.width-indent-2-lipgloss.Width(text)-2)
-	gap := max(2, w.width-indent-2-lipgloss.Width(what)-lipgloss.Width(text))
-	return ansi.Truncate(lead+what+strings.Repeat(" ", gap)+fg(w.th.muted).Render(text), w.width, "")
+	lead := strings.Repeat(" ", indent) + stateBullet(a.State, w.th) + " "
+	return stateRow(lead, what, strings.Join(meta, " · "), w.width, w.th)
 }
 
 // selected is the selected agent, false without agents.

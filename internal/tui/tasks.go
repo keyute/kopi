@@ -1,14 +1,12 @@
 package tui
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/event"
@@ -18,11 +16,17 @@ import (
 // taskDialog is the /tasks dialog, drawn in the composer's slot: the
 // background tasks, or one task's output while open names it.
 type taskDialog struct {
-	d    *dialog
-	km   *keyMap
+	d  *dialog
+	km *keyMap
+	// list is in the order of its rows.
 	list []tool.TaskInfo
 	open string
 	info tool.TaskInfo
+	// width, th and at are what the title and options were drawn for; at is the
+	// displayed second.
+	width int
+	th    theme
+	at    time.Time
 	// out is info's output as body rows for outWidth and outTheme, kept
 	// across renders.
 	out      []string
@@ -37,10 +41,27 @@ func (m *model) showTasks() tea.Cmd {
 	if len(list) == 0 {
 		return m.flash("no background tasks")
 	}
-	t := &taskDialog{d: &dialog{}, km: &m.keys, list: list}
-	t.setOptions(m.width)
+	t := &taskDialog{d: &dialog{}, km: &m.keys, list: listed(list), width: m.width, th: m.th}
+	t.setOptions()
 	m.open(promptTasks, t)
 	return nil
+}
+
+// listed is tasks in the order of the list: the running ones as they started,
+// then the others, the last to end first.
+func listed(tasks []tool.TaskInfo) []tool.TaskInfo {
+	return slices.SortedStableFunc(slices.Values(tasks), func(a, b tool.TaskInfo) int {
+		ra, rb := a.Status == tool.TaskRunning, b.Status == tool.TaskRunning
+		switch {
+		case ra && rb:
+			return 0
+		case ra:
+			return -1
+		case rb:
+			return 1
+		}
+		return b.Ended.Compare(a.Ended)
+	})
 }
 
 // key goes to the dialog: dismiss leaves the task for the list and the list
@@ -114,21 +135,21 @@ func (t *taskDialog) openTask(m *model, id string) bool {
 		t.d.sel, t.d.scroll = 0, scroller{}
 	}
 	t.open, t.info, t.out = id, info, nil
-	t.setOptions(m.width)
+	t.setOptions()
 	return true
 }
 
 // taskList shows the list with task id selected. It reports whether the dialog
 // stays open: with no tasks it does not.
 func (t *taskDialog) taskList(m *model, id string) bool {
-	list := m.c.Tasks()
+	list := listed(m.c.Tasks())
 	if len(list) == 0 {
 		return false
 	}
 	sel := slices.IndexFunc(list, func(i tool.TaskInfo) bool { return i.ID == id })
 	t.list, t.open, t.d.sel = list, "", max(0, sel)
 	t.d.scroll = scroller{}
-	t.setOptions(m.width)
+	t.setOptions()
 	return true
 }
 
@@ -139,25 +160,29 @@ func (m *model) showError(err error) {
 
 func (t *taskDialog) stoppable() bool { return t.info.Status == tool.TaskRunning }
 
-// setOptions sets the title and options for width, the labels cut to one row.
-func (t *taskDialog) setOptions(width int) {
+// setOptions draws the title and options for the dialog's width and theme at
+// this second: the list's rows, running tasks first and the others under a
+// heading, or an open task's choices.
+func (t *taskDialog) setOptions() {
 	d := t.d
-	d.options = nil
-	label := func(text string) {
-		n := len(d.options) + 1
-		d.options = append(d.options, option{label: cut(text, width-lipgloss.Width(fmt.Sprintf("  %d. ", n)))})
-	}
-	if t.open == "" {
-		d.title = "Background tasks"
-		for _, info := range t.list {
-			label(taskLine(info))
-		}
-	} else {
-		d.title = cut(taskLine(t.info), width-2)
+	d.options = d.options[:0]
+	t.at = time.Now().Truncate(time.Second)
+	if t.open != "" {
+		d.title = cut(taskLine(t.info, t.at), t.width-2)
 		if t.stoppable() {
-			label("Stop")
+			d.options = append(d.options, option{label: "Stop"})
 		}
-		label("Back")
+		d.options = append(d.options, option{label: "Back"})
+	} else {
+		d.title = "Background tasks"
+		for i, info := range t.list {
+			var rows []string
+			running := info.Status == tool.TaskRunning
+			if !running && (i == 0 || t.list[i-1].Status == tool.TaskRunning) {
+				rows = append(rows, "  "+fg(t.th.muted).Render("Finished"))
+			}
+			d.options = append(d.options, option{drawn: append(rows, taskRow(info, t.at, t.width, t.th))})
+		}
 	}
 	d.sel = min(d.sel, len(d.options)-1)
 }
@@ -165,17 +190,21 @@ func (t *taskDialog) setOptions(width int) {
 // dialog is the task list or, for an open task, its output, which fills what
 // the other rows leave, from its end until it is scrolled.
 func (t *taskDialog) dialog(width int, th theme) *dialog {
-	t.setOptions(width)
-	t.d.note = ""
-	if t.open == "" {
-		if info := t.list[t.d.sel]; info.Agent != "" && info.Status == tool.TaskRunning {
-			t.d.note = binding(t.km.stopAgent, "stop agent")
-		}
+	if width != t.width || th != t.th || !time.Now().Truncate(time.Second).Equal(t.at) {
+		t.width, t.th = width, th
+		t.setOptions()
 	}
 	t.d.body, t.d.tail, t.d.hint = nil, t.open != "", scrollHint(t.km)
 	if t.open != "" {
-		t.d.body = t.wrapped(width-2, th)
+		t.d.body, t.d.foot = t.wrapped(width-2, th), binding(t.km.dismiss, "go back")
+		return t.d
 	}
+	parts := []string{binding(t.km.submit, "view")}
+	if info := t.list[t.d.sel]; info.Agent != "" && info.Status == tool.TaskRunning {
+		parts = append(parts, binding(t.km.stopAgent, "stop agent"))
+	}
+	parts = append(parts, binding(t.km.dismiss, "close"))
+	t.d.foot = strings.Join(slices.DeleteFunc(parts, isEmpty), " · ")
 	return t.d
 }
 
@@ -188,20 +217,39 @@ func (t *taskDialog) wrapped(width int, th theme) []string {
 	return t.out
 }
 
-// taskLine is "t1 · running · 1m 2s · <command's first line>", an agent's
-// command shown as "<agent> › <description>": the time is since the start
-// while running, else the whole run.
-func taskLine(info tool.TaskInfo) string {
-	end := info.Ended
-	if info.Status == tool.TaskRunning {
-		end = time.Now()
-	}
+// taskWhat is what a task is: its command's first line, an agent's shown as
+// "<agent> › <description>".
+func taskWhat(info tool.TaskInfo) string {
 	command, _, _ := strings.Cut(info.Command, "\n")
 	what := oneLine(command)
 	if info.Agent != "" {
 		what = oneLine(info.Agent) + " › " + what
 	}
-	return oneLine(info.ID) + " · " + string(info.Status) + " · " + formatDuration(end.Sub(info.Started)) + " · " + what
+	return what
+}
+
+// taskTime is how long a task has run at now, or ran.
+func taskTime(info tool.TaskInfo, now time.Time) string {
+	end := info.Ended
+	if info.Status == tool.TaskRunning {
+		end = now
+	}
+	return formatDuration(end.Sub(info.Started))
+}
+
+// taskLine is an open task's title: "running · 1m 2s · <what it is>".
+func taskLine(info tool.TaskInfo, now time.Time) string {
+	return string(info.Status) + " · " + taskTime(info, now) + " · " + taskWhat(info)
+}
+
+// taskRow is a task's row in the list: its bullet in the colour of its status,
+// what it is, and flush right how it ended, unless it completed, and its time.
+func taskRow(info tool.TaskInfo, now time.Time, width int, th theme) string {
+	meta := taskTime(info, now)
+	if info.Status == tool.TaskFailed || info.Status == tool.TaskStopped {
+		meta = string(info.Status) + " · " + meta
+	}
+	return stateRow("  "+stateBullet(info.Status, th)+" ", taskWhat(info), meta, width, th)
 }
 
 func cut(s string, width int) string { return ansi.Truncate(s, max(1, width), "…") }

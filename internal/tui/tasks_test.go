@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -49,6 +50,16 @@ func dialogRows(t *testing.T, m *model) []string {
 	return s[top : len(s)-1]
 }
 
+// listRow is a /tasks list row as plain text: what the task is and, flush right
+// at width, meta.
+func listRow(cursor bool, what, meta string, width int) string {
+	lead := "  • "
+	if cursor {
+		lead = "❭ • "
+	}
+	return lead + what + strings.Repeat(" ", width-lipgloss.Width(lead+what+meta)) + meta
+}
+
 func TestTasksWithNoTasksFlashesAndOpensNothing(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, c := newTestModel(t, 60, 30)
@@ -74,8 +85,11 @@ func TestTasksOpensTheListAboveTheStatusLine(t *testing.T) {
 			rule,
 			"  Background tasks",
 			"",
-			"❭ 1. t1 · running · 1m 2s · sleep 30",
-			"  2. t2 · completed · 5s · make build",
+			listRow(true, "sleep 30", "1m 2s", 60),
+			"  Finished",
+			listRow(false, "make build", "5s", 60),
+			"",
+			"  enter to view · esc to close",
 			rule,
 		}, dialogRows(t, m))
 		assert.Empty(t, m.composer.value(), "the draft is accepted")
@@ -92,8 +106,8 @@ func TestTasksListCutsLongCommands(t *testing.T) {
 		c.tasks[1].Command = strings.Repeat("x", 100)
 		submitText(m, "/tasks")
 
-		row := dialogRows(t, m)[4]
-		assert.Equal(t, "  2. t2 · completed · 5s · "+strings.Repeat("x", 32)+"…", row)
+		row := dialogRows(t, m)[5]
+		assert.Equal(t, "  • "+strings.Repeat("x", 51)+"…  5s", row)
 		assert.Len(t, []rune(row), 60)
 	})
 }
@@ -106,8 +120,8 @@ func TestTasksListNamesAnAgentTask(t *testing.T) {
 		submitText(m, "/tasks")
 
 		rows := dialogRows(t, m)
-		assert.Equal(t, "❭ 1. t1 · running · 1m 2s · sleep 30", rows[3])
-		assert.Equal(t, "  2. t2 · completed · 5s · explore › look around", rows[4])
+		assert.Equal(t, listRow(true, "sleep 30", "1m 2s", 60), rows[3])
+		assert.Equal(t, listRow(false, "explore › look around", "5s", 60), rows[5])
 	})
 }
 
@@ -121,7 +135,7 @@ func TestTasksOpenAgentWithoutASessionShowsItsOutputAndOptions(t *testing.T) {
 		press(m, enter)
 
 		rule := strings.Repeat("─", 60)
-		want := []string{rule, "  t1 · running · 1m 2s · explore › look around", "    one", "    two", "", "❭ 1. Stop", "  2. Back", rule}
+		want := []string{rule, "  running · 1m 2s · explore › look around", "    one", "    two", "", "❭ 1. Stop", "  2. Back", "", "  esc to go back", rule}
 		assert.Equal(t, want, dialogRows(t, m))
 	})
 }
@@ -243,11 +257,11 @@ func TestTasksOpenShowsTheOutputTail(t *testing.T) {
 		press(m, enter)
 
 		rule := strings.Repeat("─", 60)
-		want := []string{rule, "  t1 · running · 1m 2s · sleep 30", "  … 16 earlier lines"}
+		want := []string{rule, "  running · 1m 2s · sleep 30", "  … 16 earlier lines"}
 		for i := 17; i <= 25; i++ {
 			want = append(want, fmt.Sprintf("    line %d", i))
 		}
-		want = append(want, "  "+scrollHint(&m.keys), "", "❭ 1. Stop", "  2. Back", rule)
+		want = append(want, "", "❭ 1. Stop", "  2. Back", "", "  "+scrollHint(&m.keys)+" · esc to go back", rule)
 		assert.Equal(t, want, dialogRows(t, m))
 		assert.Len(t, screen(m), 30)
 	})
@@ -258,10 +272,11 @@ func TestTasksOpenFitsWholeOutput(t *testing.T) {
 		m, _ := tasksModel(t)
 		submitText(m, "/tasks")
 
-		press(m, digit('2'))
+		press(m, down)
+		press(m, enter)
 
 		rule := strings.Repeat("─", 60)
-		assert.Equal(t, []string{rule, "  t2 · completed · 5s · make build", "    built", "", "❭ 1. Back", rule}, dialogRows(t, m), "an ended task has no Stop")
+		assert.Equal(t, []string{rule, "  completed · 5s · make build", "    built", "", "❭ 1. Back", "", "  esc to go back", rule}, dialogRows(t, m), "an ended task has no Stop")
 	})
 }
 
@@ -275,8 +290,8 @@ func TestTasksStopStaysOnTheStoppedTask(t *testing.T) {
 
 		assert.Equal(t, []string{"t1"}, c.stops)
 		rows := dialogRows(t, m)
-		assert.Equal(t, "  t1 · stopped · 1m 2s · sleep 30", rows[1])
-		assert.Equal(t, []string{"❭ 1. Back", strings.Repeat("─", 60)}, rows[len(rows)-2:])
+		assert.Equal(t, "  stopped · 1m 2s · sleep 30", rows[1])
+		assert.Equal(t, []string{"❭ 1. Back", "", "  esc to go back", strings.Repeat("─", 60)}, rows[len(rows)-4:])
 	})
 }
 
@@ -287,11 +302,12 @@ func TestTasksBackAndInterruptNavigate(t *testing.T) {
 
 		press(m, down)
 		press(m, enter)
-		assert.Equal(t, "  t2 · completed · 5s · make build", dialogRows(t, m)[1])
+		assert.Equal(t, "  completed · 5s · make build", dialogRows(t, m)[1])
 		press(m, enter)
-		assert.Equal(t, "❭ 2. t2 · completed · 5s · make build", dialogRows(t, m)[4], "Back returns with the task selected")
+		assert.Equal(t, listRow(true, "make build", "5s", 60), dialogRows(t, m)[5], "Back returns with the task selected")
 
-		press(m, digit('1'))
+		press(m, up)
+		press(m, enter)
 		press(m, down)
 		press(m, enter)
 		assert.Equal(t, "  Background tasks", dialogRows(t, m)[1], "Back is the second option for a running task")
@@ -299,7 +315,7 @@ func TestTasksBackAndInterruptNavigate(t *testing.T) {
 
 		press(m, enter)
 		press(m, escape)
-		assert.Equal(t, "❭ 1. t1 · running · 1m 2s · sleep 30", dialogRows(t, m)[3], "interrupt goes back to the list")
+		assert.Equal(t, listRow(true, "sleep 30", "1m 2s", 60), dialogRows(t, m)[3], "interrupt goes back to the list")
 
 		press(m, escape)
 		assert.Nil(t, tasksOf(m))
@@ -390,7 +406,63 @@ func TestTasksChangedRefreshesKeepingTheSelection(t *testing.T) {
 		send(m, event.TasksChanged{})
 
 		rows := dialogRows(t, m)
-		assert.Equal(t, []string{"  1. t0 · failed · 0s · true", "  2. t1 · running · 1m 2s · sleep 30", "❭ 3. t2 · completed · 5s · make build"}, rows[3:6])
+		assert.Equal(t, []string{
+			listRow(false, "sleep 30", "1m 2s", 60),
+			"  Finished",
+			listRow(false, "true", "failed · 0s", 60),
+			listRow(true, "make build", "5s", 60),
+		}, rows[3:7], "the last to end is first under the heading")
+	})
+}
+
+func TestTasksListKeepsTheCursorOnATaskThatEnds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		submitText(m, "/tasks")
+
+		c.tasks[0].Status, c.tasks[0].Ended = tool.TaskCompleted, time.Now()
+		send(m, event.TasksChanged{})
+
+		assert.Equal(t, []string{
+			"  Finished",
+			listRow(true, "sleep 30", "1m 2s", 60),
+			listRow(false, "make build", "5s", 60),
+		}, dialogRows(t, m)[3:6])
+	})
+}
+
+func TestTasksListBulletsFollowTheStatus(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := tasksModel(t)
+		c.tasks = append(c.tasks,
+			tool.TaskInfo{ID: "t3", Command: "false", Started: time.Now(), Ended: time.Now(), Status: tool.TaskFailed},
+			tool.TaskInfo{ID: "t4", Command: "yes", Started: time.Now(), Ended: time.Now(), Status: tool.TaskStopped},
+		)
+		submitText(m, "/tasks")
+
+		th := m.th
+		for i, want := range []string{fg(th.text).Render("•"), fg(th.error).Render("•"), fg(th.error).Render("•"), fg(th.success).Render("•")} {
+			drawn := tasksOf(m).d.options[i].drawn
+			assert.Contains(t, drawn[len(drawn)-1], "  "+want+" ", "option %d", i)
+		}
+		assert.Equal(t, listRow(false, "yes", "stopped · 0s", 60), dialogRows(t, m)[6])
+	})
+}
+
+func TestTasksRunningTimesAdvanceEachSecond(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := tasksModel(t)
+		submitText(m, "/tasks")
+		assert.Equal(t, listRow(true, "sleep 30", "1m 2s", 60), dialogRows(t, m)[3])
+
+		time.Sleep(time.Second)
+		m.arrange()
+		assert.Equal(t, listRow(true, "sleep 30", "1m 3s", 60), dialogRows(t, m)[3], "in the list")
+
+		press(m, enter)
+		time.Sleep(time.Second)
+		m.arrange()
+		assert.Equal(t, "  running · 1m 4s · sleep 30", dialogRows(t, m)[1], "in an open task's title")
 	})
 }
 
@@ -407,7 +479,7 @@ func TestTasksChangedWhileCoveredRefreshesTheListBehindThePrompt(t *testing.T) {
 
 		require.NotNil(t, m.front())
 		assert.Equal(t, promptTasks, m.front().kind)
-		assert.Equal(t, []string{"❭ 1. t2 · completed · 5s · make build"}, dialogRows(t, m)[3:4])
+		assert.Equal(t, []string{"  Finished", listRow(true, "make build", "5s", 60)}, dialogRows(t, m)[3:5])
 	})
 }
 
@@ -432,7 +504,7 @@ func TestTasksOverflowKeepsTheSelectedOptionVisible(t *testing.T) {
 				m, c := tasksModel(t)
 				c.tasks = nil
 				for i := 1; i <= 40; i++ {
-					c.tasks = append(c.tasks, tool.TaskInfo{ID: fmt.Sprintf("t%d", i), Command: "true", Started: time.Now(), Ended: time.Now(), Status: tool.TaskCompleted})
+					c.tasks = append(c.tasks, tool.TaskInfo{ID: fmt.Sprintf("t%d", i), Command: fmt.Sprintf("job %d", i), Started: time.Now(), Ended: time.Now(), Status: tool.TaskCompleted})
 				}
 				m.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
 				submitText(m, "/tasks")
@@ -444,15 +516,15 @@ func TestTasksOverflowKeepsTheSelectedOptionVisible(t *testing.T) {
 					assert.Equal(t, rule, rows[0])
 					assert.Equal(t, "  Background tasks", rows[1])
 					assert.Equal(t, rule, rows[len(rows)-1])
-					assert.Contains(t, rows, fmt.Sprintf("❭ %d. t%d · completed · 0s · true", number, number))
+					assert.Contains(t, rows, listRow(true, fmt.Sprintf("job %d", number), "0s", m.width))
 					s := screen(m)
 					assert.Len(t, s, m.height)
 					assert.Contains(t, s[len(s)-1], "plan")
 					return rows
 				}
 				rows := check(1)
-				assert.Equal(t, "❭ 1. t1 · completed · 0s · true", rows[3])
-				assert.NotContains(t, rows, "  40. t40 · completed · 0s · true")
+				assert.Equal(t, []string{"  Finished", listRow(true, "job 1", "0s", m.width)}, rows[3:5])
+				assert.NotContains(t, rows, listRow(false, "job 40", "0s", m.width))
 
 				for i := 2; i <= 40; i++ {
 					press(m, down)
@@ -474,12 +546,12 @@ func TestTasksOverflowKeepsTheSelectedOptionVisible(t *testing.T) {
 				c.tasks = append([]tool.TaskInfo{{ID: "t0", Command: "true", Started: time.Now(), Ended: time.Now(), Status: tool.TaskCompleted}}, c.tasks...)
 				send(m, event.TasksChanged{})
 				assert.Equal(t, "t20", tasksOf(m).list[tasksOf(m).d.sel].ID)
-				assert.Contains(t, dialogRows(t, m), "❭ 21. t20 · completed · 0s · true")
+				assert.Contains(t, dialogRows(t, m), listRow(true, "job 20", "0s", m.width))
 				for _, height := range []int{10, 30, 15} {
 					m.Update(tea.WindowSizeMsg{Width: size.width, Height: height})
 					assert.Equal(t, 20, tasksOf(m).d.sel)
 					rows := dialogRows(t, m)
-					assert.Contains(t, rows, "❭ 21. t20 · completed · 0s · true")
+					assert.Contains(t, rows, listRow(true, "job 20", "0s", m.width))
 					assert.Equal(t, strings.Repeat("─", m.width), rows[0])
 					assert.Equal(t, "  Background tasks", rows[1])
 					assert.Equal(t, rows[0], rows[len(rows)-1])
@@ -488,7 +560,7 @@ func TestTasksOverflowKeepsTheSelectedOptionVisible(t *testing.T) {
 				}
 
 				press(m, digit('2'))
-				assert.Equal(t, "t1", tasksOf(m).open, "digits still pick global options, not visible row numbers")
+				assert.Empty(t, tasksOf(m).open, "a digit picks no row")
 			})
 		})
 	}
@@ -505,7 +577,7 @@ func TestTasksChangedRefreshesTheOpenTask(t *testing.T) {
 		send(m, event.TasksChanged{})
 
 		rows := dialogRows(t, m)
-		assert.Equal(t, []string{"  t1 · failed · 1m 2s · sleep 30", "    boom", "", "❭ 1. Back"}, rows[1:5])
+		assert.Equal(t, []string{"  failed · 1m 2s · sleep 30", "    boom", "", "❭ 1. Back"}, rows[1:5])
 	})
 }
 
@@ -523,17 +595,19 @@ func TestTasksPageKeysScrollACutOutput(t *testing.T) {
 		c.outputs["t1"] = numberedOutput(25)
 		submitText(m, "/tasks")
 		press(m, enter)
-		hint := "  " + scrollHint(&m.keys)
+		foot := "  " + scrollHint(&m.keys) + " · esc to go back"
 
 		press(m, pgUp)
 		rows := dialogRows(t, m)
 		assert.Equal(t, []string{"  … 8 earlier lines", "    line 9"}, rows[2:4])
-		assert.Equal(t, []string{"    line 16", "  … 9 more lines", hint}, rows[10:13])
+		assert.Equal(t, []string{"    line 16", "  … 9 more lines"}, rows[10:12])
+		assert.Equal(t, foot, rows[len(rows)-2])
 
 		press(m, pgDown)
 		rows = dialogRows(t, m)
 		assert.Equal(t, []string{"  … 16 earlier lines", "    line 17"}, rows[2:4])
-		assert.Equal(t, []string{"    line 25", hint}, rows[11:13])
+		assert.Equal(t, "    line 25", rows[11])
+		assert.Equal(t, foot, rows[len(rows)-2])
 		assert.Zero(t, tasksOf(m).d.scroll.below, "back at the end it follows again")
 	})
 }
