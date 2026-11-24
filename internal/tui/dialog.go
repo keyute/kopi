@@ -49,7 +49,9 @@ type dialog struct {
 	title string
 	body  []string // rendered at width-2; rows indents them
 	note  string
-	// hint joins the foot, else the note, while the body or pane is cut.
+	// keys is key hints drawn after the note, on its rows.
+	keys string
+	// hint joins the foot, else the keys, while the body or pane is cut.
 	hint    string
 	options []option
 	sel     int
@@ -87,7 +89,7 @@ type pane struct {
 // and pane's, at most limit; with none left, the selected option's field still
 // shows one row and a field below an unselected label shows none, so it never
 // pushes the selected row out. The body or pane takes what is left, at most
-// limit, and a hint joins the foot, else the note, while it is cut.
+// limit, and a hint joins the foot, else the keys, while it is cut.
 //
 // When even the fixed rows do not fit, the body and pane go first, then fields
 // shrink to those rules. If the options still fit they all stay, and the rows
@@ -111,11 +113,11 @@ func (d *dialog) rows(width, maxRows, limit int, th theme) []string {
 		s.col = d.pane.list
 	}
 	if d.title != "" {
-		s.title = hang("  ", none, d.title, none.Bold(true), width)
+		s.title = hang("  ", none, d.title, fg(th.text).Bold(true), width)
 	}
 	s.opts = d.blocks(s.col, th)
-	scroll, note, foot := d.scroll, d.note, d.foot
-	rows, cut := d.fit(s, note, foot, maxRows, limit, th)
+	scroll, keys, foot := d.scroll, d.keys, d.foot
+	rows, cut := d.fit(s, keys, foot, maxRows, limit, th)
 	if !cut || d.hint == "" {
 		return rows
 	}
@@ -124,9 +126,9 @@ func (d *dialog) rows(width, maxRows, limit int, th theme) []string {
 	if foot != "" {
 		foot = strings.Join([]string{d.hint, foot}, " · ")
 	} else {
-		note = strings.Join(slices.DeleteFunc([]string{note, d.hint}, isEmpty), " · ")
+		keys = strings.Join(slices.DeleteFunc([]string{keys, d.hint}, isEmpty), " · ")
 	}
-	rows, cut = d.fit(s, note, foot, maxRows, limit, th)
+	rows, cut = d.fit(s, keys, foot, maxRows, limit, th)
 	if !cut {
 		// The hint cost the body or pane its last row, so it would advertise
 		// nothing.
@@ -152,10 +154,9 @@ type optionBlock struct {
 
 // blocks renders the options for col cells.
 func (d *dialog) blocks(col int, th theme) []optionBlock {
-	none := lipgloss.NewStyle()
 	opts := make([]optionBlock, len(d.options))
 	for i, o := range d.options {
-		prefix, st := "  ", none
+		prefix, st := "  ", fg(th.text)
 		if i == d.sel {
 			prefix, st = cursorMark, fg(th.accent)
 		}
@@ -210,22 +211,22 @@ func (d *dialog) blocks(col int, th theme) []optionBlock {
 	return opts
 }
 
-// fit draws d within maxRows with the given note and foot, reporting whether
+// fit draws d within maxRows with the given keys and foot, reporting whether
 // the body or pane is cut.
-func (d *dialog) fit(s *shape, note, foot string, maxRows, limit int, th theme) ([]string, bool) {
+func (d *dialog) fit(s *shape, keys, foot string, maxRows, limit int, th theme) ([]string, bool) {
 	none := lipgloss.NewStyle()
 	d.areas, d.optionStarts = nil, make([]int, 0, len(s.opts)+1)
 	var noteRows, footRows []string
 	// gap is 1 when a blank row separates the options from the foot.
 	gap := 0
-	if note != "" {
-		noteRows = hang("  ", none, note, fg(th.dim), s.width)
+	if d.note != "" || keys != "" {
+		noteRows = hintRows(d.note, keys, s.width, th)
 	}
 	switch {
 	case d.warn != "":
 		footRows = hang("  ", none, d.warn, fg(th.warning), s.width)
 	case foot != "":
-		footRows = hang("  ", none, foot, fg(th.dim), s.width)
+		footRows = hintRows("", foot, s.width, th)
 	}
 	// Without options the blank row after the body already separates the foot.
 	if len(footRows) > 0 && len(s.opts) > 0 {
@@ -310,6 +311,31 @@ func (d *dialog) fit(s *shape, note, foot string, maxRows, limit int, th theme) 
 		d.optionStarts = append(d.optionStarts, first+at)
 	}
 	return rows, cut
+}
+
+// hintRows wraps text and the key hints after it for width, two columns in.
+// All of it is dim but the key of each hint, written "<key> to <verb>" as
+// binding writes it, which is muted.
+func hintRows(text, keys string, width int, th theme) []string {
+	dim, muted := fg(th.dim), fg(th.muted)
+	var parts []string
+	if text = clean(text); text != "" {
+		parts = append(parts, dim.Render(text))
+	}
+	if keys = clean(keys); keys != "" {
+		for part := range strings.SplitSeq(keys, " · ") {
+			if k, rest, ok := strings.Cut(part, " "); ok && strings.HasPrefix(rest, "to ") {
+				parts = append(parts, muted.Render(k)+dim.Render(" "+rest))
+			} else {
+				parts = append(parts, dim.Render(part))
+			}
+		}
+	}
+	rows := strings.Split(lipgloss.Wrap(strings.Join(parts, dim.Render(" · ")), max(1, width-2), ""), "\n")
+	for i := range rows {
+		rows[i] = "  " + rows[i]
+	}
+	return rows
 }
 
 // expand is the options' rows with each field's, a field at most room rows;
@@ -477,7 +503,7 @@ func (s fieldSlot) rows(width, fieldMax int, th theme) []string {
 	}
 	rows := strings.Split(s.f.ta.View(), "\n")
 	if s.tail != "" {
-		bold := lipgloss.NewStyle().Bold(true)
+		bold := fg(th.text).Bold(true)
 		for i := range rows {
 			rows[i] = bold.Render(strings.TrimRight(ansi.Strip(rows[i]), " "))
 		}

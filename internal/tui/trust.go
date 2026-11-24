@@ -10,7 +10,6 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 	"golang.org/x/term"
 )
 
@@ -154,22 +153,22 @@ func (m *trustModel) hint() string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return fg(m.th.dim).Render(ansi.Truncate("  "+strings.Join(parts, " · "), m.width, "…"))
+	return hintRows("", cut(strings.Join(parts, " · "), m.width-2), m.width, m.th)[0]
 }
 
 func (m *trustModel) rows() []string {
 	if m.body == nil || m.bodyWidth != m.width || m.bodyTheme != m.th {
-		none, width := lipgloss.NewStyle(), m.width-2
+		text, width := fg(m.th.text), m.width-2
 		lines := func(prefix, text string, st lipgloss.Style) []string {
-			return hang(prefix, none, oneLine(text), st, width)
+			return hang(prefix, st, oneLine(text), st, width)
 		}
-		m.body = lines("", m.req.Folder, none.Bold(true))
+		m.body = lines("", m.req.Folder, text.Bold(true))
 		list := func(head string, entries []string) {
 			if len(entries) == 0 {
 				return
 			}
 			m.body = append(m.body, "")
-			m.body = append(m.body, hang("", none, head, none, width)...)
+			m.body = append(m.body, hang("", text, head, text, width)...)
 			for _, e := range entries {
 				m.body = append(m.body, lines("  ", e, fg(m.th.muted))...)
 			}

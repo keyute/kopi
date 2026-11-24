@@ -23,8 +23,8 @@ func newPlanDialog(ev event.PlanRequested, km *keyMap, th theme) *planDialog {
 		{label: "Yes"},
 		{label: rejectLabel(km), field: newFeedbackField(km, th)},
 	}}
-	parts := []string{ev.Path, binding(km.editPlan, "edit"), scrollHint(km), binding(km.interrupt, "dismiss")}
-	d.note = strings.Join(slices.DeleteFunc(parts, isEmpty), " · ")
+	parts := []string{binding(km.editPlan, "edit"), scrollHint(km), binding(km.interrupt, "dismiss")}
+	d.note, d.keys = ev.Path, strings.Join(slices.DeleteFunc(parts, isEmpty), " · ")
 	return &planDialog{token: ev.Token, d: d}
 }
 
