@@ -1920,7 +1920,7 @@ func TestBareDenyRemovesTool(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read", "AskUserQuestion"}, req.ToolNames)
-	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil)}, nil, nil, false, nil, false, false)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil)}, nil, nil, nil, false, false)), req.SystemPrompt)
 	assert.NotContains(t, req.SystemPrompt, "Exec")
 }
 
@@ -2254,9 +2254,9 @@ func TestOpenWaitsForServersAndAddsTheirTools(t *testing.T) {
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read", "AskUserQuestion", "ToolSearch"}, req.ToolNames)
 	search := tool.NewToolSearch(nil, nil, nil, nil)
-	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil), search, mcp}, nil, []mcpServer{{name: "s", instructions: "use t wisely", tools: []string{mcp.Name}}}, false, nil, false, true)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil), search, mcp}, nil, []mcpServer{{name: "s", instructions: "use t wisely", tools: []string{mcp.Name}}}, nil, false, true)), req.SystemPrompt)
 	assert.Contains(t, req.SystemPrompt, "use t wisely")
-	assert.Contains(t, req.SystemPrompt, "MCP server s tools: mcp__s__t.")
+	assert.Contains(t, req.SystemPrompt, "MCP server s tools, loaded by ToolSearch: mcp__s__t.")
 
 	require.NoError(t, h.c.NewSession(t.Context()))
 	h.turn(t, "and now?")
@@ -2280,7 +2280,7 @@ func TestOpenWaitsUntilTheServersHaveSettled(t *testing.T) {
 	requests := make(chan pigruntimetest.Request, 1)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "done")})
 	h.turn(t, "what can you use?")
-	assert.Contains(t, receive(t, requests).SystemPrompt, "MCP server s tools: mcp__s__t.")
+	assert.Contains(t, receive(t, requests).SystemPrompt, "MCP server s tools, loaded by ToolSearch: mcp__s__t.")
 }
 
 func TestOpenReportsServerFailuresAsErrors(t *testing.T) {
@@ -2397,7 +2397,7 @@ func TestServerJoinsTheOpenSession(t *testing.T) {
 	assert.Equal(t, event.Outcome{Status: event.Completed}, h.turn(t, "and now?").Outcome())
 
 	after := receive(t, requests)
-	assert.Equal(t, strings.Replace(after.SystemPrompt, "\n\nMCP server s tools: mcp__s__t.\nInstructions from MCP server s:\nuse t wisely", "", 1), before.SystemPrompt, "only the servers' part was added")
+	assert.Equal(t, strings.Replace(after.SystemPrompt, "\n\nMCP server s tools, loaded by ToolSearch: mcp__s__t.\nInstructions from MCP server s:\nuse t wisely", "", 1), before.SystemPrompt, "only the servers' part was added")
 	assert.Contains(t, after.ToolNames, mcp.Name)
 	assert.Equal(t, int32(1), called.Load())
 }
@@ -2420,9 +2420,9 @@ func TestServersPartIsReplacedOnceTheLastServerSettles(t *testing.T) {
 
 	srv.settle(pigruntime.ServerStatus{Name: "b", Tools: []tool.Tool{serverTool("mcp__b__t")}})
 	got := prompt()
-	assert.Contains(t, got, "MCP server a tools: mcp__a__t.")
-	assert.Contains(t, got, "MCP server b tools: mcp__b__t.")
-	assert.Equal(t, before, strings.Replace(got, "\n\nMCP server a tools: mcp__a__t.\nMCP server b tools: mcp__b__t.", "", 1), "only the servers' part changed")
+	assert.Contains(t, got, "MCP server a tools, loaded by ToolSearch: mcp__a__t.")
+	assert.Contains(t, got, "MCP server b tools, loaded by ToolSearch: mcp__b__t.")
+	assert.Equal(t, before, strings.Replace(got, "\n\nMCP server a tools, loaded by ToolSearch: mcp__a__t.\nMCP server b tools, loaded by ToolSearch: mcp__b__t.", "", 1), "only the servers' part changed")
 }
 
 func TestServerJoiningMidTurnIsFoundAndCalled(t *testing.T) {
@@ -2470,7 +2470,7 @@ func TestServerSettlingDuringAFailedSwitchReachesTheSessionThatStayed(t *testing
 	requests := make(chan pigruntimetest.Request, 1)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "done")})
 	h.turn(t, "what can you use?")
-	assert.Contains(t, receive(t, requests).SystemPrompt, "MCP server s tools: mcp__s__t.")
+	assert.Contains(t, receive(t, requests).SystemPrompt, "MCP server s tools, loaded by ToolSearch: mcp__s__t.")
 }
 
 func TestToolSearchNamesServersUntilTheyJoin(t *testing.T) {
@@ -2520,7 +2520,7 @@ func TestResumedSessionKeepsItsServersPartWhileServersConnect(t *testing.T) {
 	}
 
 	before := prompt()
-	assert.Contains(t, before, "MCP server s tools: mcp__s__t.", "the stored part stays while the server connects")
+	assert.Contains(t, before, "MCP server s tools, loaded by ToolSearch: mcp__s__t.", "the stored part stays while the server connects")
 
 	srv.settle(pigruntime.ServerStatus{Name: "s", Tools: tools})
 	assert.Equal(t, before, prompt())
@@ -2553,7 +2553,7 @@ func TestResumedSessionServersPartFollowsTheLastServer(t *testing.T) {
 			got := receive(t, requests).SystemPrompt
 			assert.NotContains(t, got, "mcp__s__t", "the stored part is replaced")
 			if st.Err == nil {
-				assert.Contains(t, got, "MCP server s tools: mcp__s__u.")
+				assert.Contains(t, got, "MCP server s tools, loaded by ToolSearch: mcp__s__u.")
 			} else {
 				assert.NotContains(t, got, "MCP server s")
 			}
@@ -2577,7 +2577,7 @@ func TestPromptWaitsForServersStillConnecting(t *testing.T) {
 
 	srv.settle(pigruntime.ServerStatus{Name: "s", Tools: []tool.Tool{serverTool("mcp__s__t")}})
 	wait(t, w.Done())
-	assert.Contains(t, receive(t, requests).SystemPrompt, "MCP server s tools: mcp__s__t.")
+	assert.Contains(t, receive(t, requests).SystemPrompt, "MCP server s tools, loaded by ToolSearch: mcp__s__t.")
 }
 
 func TestPromptWaitsForASettledServerToJoin(t *testing.T) {
@@ -2597,7 +2597,7 @@ func TestPromptWaitsForASettledServerToJoin(t *testing.T) {
 	tell()
 
 	wait(t, w.Done())
-	assert.Contains(t, receive(t, requests).SystemPrompt, "MCP server s tools: mcp__s__t.")
+	assert.Contains(t, receive(t, requests).SystemPrompt, "MCP server s tools, loaded by ToolSearch: mcp__s__t.")
 }
 
 func TestSwitchCommandsWorkWhileServersConnect(t *testing.T) {
@@ -2617,7 +2617,7 @@ func TestSwitchCommandsWorkWhileServersConnect(t *testing.T) {
 	requests := make(chan pigruntimetest.Request, 1)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "done")})
 	h.turn(t, "what can you use?")
-	assert.Contains(t, receive(t, requests).SystemPrompt, "MCP server s tools: mcp__s__t.", "the server joins the session that is open when it settles")
+	assert.Contains(t, receive(t, requests).SystemPrompt, "MCP server s tools, loaded by ToolSearch: mcp__s__t.", "the server joins the session that is open when it settles")
 }
 
 func TestServerSettlingAfterCloseChangesNothing(t *testing.T) {
@@ -2816,7 +2816,6 @@ func TestToolSearchIsThereOnlyWhenAServerIsConfigured(t *testing.T) {
 	h := newHarness(t, sb, Config{Tools: []tool.Tool{read}})
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
 	assert.Equal(t, []string{"Read", "AskUserQuestion", "WebSearch", "Workflow"}, toolNames(h.c.tools))
-	assert.Contains(t, joinPrompt(h.c.prompt), "\nTools available: Read, AskUserQuestion.\n")
 	assert.NotContains(t, joinPrompt(h.c.prompt), "deferred")
 
 	denySB := pigruntimetest.NewSandbox(t)
@@ -2832,7 +2831,7 @@ func TestToolSearchIsThereOnlyWhenAServerIsConfigured(t *testing.T) {
 	// What a server will offer is not known when a session opens, so
 	// ToolSearch is there whenever a server is configured.
 	assert.Equal(t, []string{"Read", "AskUserQuestion", "WebSearch", "ToolSearch", "Workflow"}, toolNames(h.c.tools))
-	assert.Contains(t, joinPrompt(h.c.prompt), "\nTools available: Read, AskUserQuestion, ToolSearch.\n")
+	assert.NotContains(t, joinPrompt(h.c.prompt), " available: ")
 	assert.NotContains(t, joinPrompt(h.c.prompt), "MCP server s tools")
 }
 
@@ -3077,7 +3076,7 @@ func TestTurnUsesNoAmbientState(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read", "AskUserQuestion"}, req.ToolNames)
-	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, append(tools, tool.NewAskUserQuestion(nil)), nil, nil, false, nil, false, false)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, append(tools, tool.NewAskUserQuestion(nil)), nil, nil, nil, false, false)), req.SystemPrompt)
 	for _, marker := range pigruntimetest.DecoyMarkers {
 		assert.NotContains(t, req.Raw, marker)
 	}
@@ -3096,7 +3095,7 @@ func TestTurnSendsConfiguredInstructions(t *testing.T) {
 	h.turn(t, "hello")
 
 	req := receive(t, requests)
-	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{tool.NewAskUserQuestion(nil)}, []instruction.Group{global, project}, nil, false, nil, false, false)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{tool.NewAskUserQuestion(nil)}, []instruction.Group{global, project}, nil, nil, false, false)), req.SystemPrompt)
 	g, p := strings.Index(req.SystemPrompt, "GLOBAL_RULE"), strings.Index(req.SystemPrompt, "PROJECT_RULE")
 	require.GreaterOrEqual(t, g, 0)
 	assert.Greater(t, p, g, "the global group comes before the project's")

@@ -62,6 +62,11 @@ type runner struct {
 	// wakeDue is set when a wake was refused because a record was in flight; the
 	// record's end advances with it.
 	wakeDue bool
+	// unread is set on a subagent's runner from the moment its completion or
+	// failure notice is queued until the main session's model reads that notice
+	// or the subagent runs again; guarded by Controller.queue like the fields
+	// above.
+	unread bool
 	// told is the last mode line delivered to the model in the current session;
 	// "" when none was, or when one was not delivered. Only the main session's
 	// is used.
@@ -224,10 +229,20 @@ func (r *runner) dropHanded(emit func(event.Event)) {
 func (r *runner) reading(sess *pigruntime.Session, emit func(event.Event)) func(event.Event) {
 	return func(ev event.Event) {
 		var command bool
-		switch ev.(type) {
+		switch e := ev.(type) {
 		case event.UserMessage:
 		case event.UserCommand:
 			command = true
+		case event.TaskEnded:
+			// The notice of a subagent's end is now read; it is the main session's
+			// event, so a child's own subscriber never sees one.
+			r.c.queue.Lock()
+			if child := r.c.children[e.ID]; child != nil {
+				child.unread = false
+			}
+			r.c.queue.Unlock()
+			emit(ev)
+			return
 		default:
 			emit(ev)
 			return

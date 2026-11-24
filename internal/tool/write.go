@@ -17,10 +17,9 @@ type writeArgs struct {
 
 func NewWrite(ws *Workspace) Tool {
 	return Tool{
-		Name:  "Write",
-		Label: "Write",
-		Description: "Writes a file inside the workspace, creating it or replacing its whole content. " +
-			"file_path is absolute or relative to the workspace.",
+		Name:        "Write",
+		Label:       "Write",
+		Description: "Writes a file inside the workspace, creating it or replacing its whole content.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

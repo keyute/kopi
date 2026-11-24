@@ -900,7 +900,7 @@ func TestClassifierDoesNotReviewUnruledEdits(t *testing.T) {
 	assert.Equal(t, "beta\n", fileText(t, sb, "a.txt"))
 	assert.Empty(t, ofType[event.ApprovalRequested](h.rec.all()))
 	assert.Empty(t, prompts)
-	assert.Contains(t, receive(t, requests).SystemPrompt, "and that no permission rule decides are first reviewed by a classifier model")
+	assert.NotContains(t, receive(t, requests).SystemPrompt, "classifier")
 }
 
 // askingChildren opens a harness whose subagents ask about every Probe call.

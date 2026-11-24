@@ -27,7 +27,7 @@ func NewEdit(ws *Workspace) Tool {
 	return Tool{
 		Name:  "Edit",
 		Label: "Edit",
-		Description: "Replaces old_string with new_string in a text file inside the workspace. file_path is absolute or relative to the workspace. " +
+		Description: "Replaces old_string with new_string in a text file inside the workspace. " +
 			"old_string must match exactly once unless replace_all is set.",
 		Parameters: map[string]any{
 			"type": "object",

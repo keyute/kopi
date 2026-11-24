@@ -31,8 +31,7 @@ func TestToolSearchDescribesItself(t *testing.T) {
 	assert.Equal(t, "ToolSearch", tool.Name)
 	assert.Equal(t, "ToolSearch", tool.Label)
 	assert.Equal(t, "Loads deferred tools, such as the MCP server tools the system prompt lists by name, so that they can be called. "+
-		"query is keywords for what you need, or exact tool names separated by spaces to load just those. "+
-		"Returns the name and description of each tool it loaded; call them in your next response.", tool.Description)
+		"Returns the name and description of each tool it loaded; they can be called in your next response, not in this one.", tool.Description)
 	assert.Equal(t, []string{"query"}, tool.Parameters["required"])
 	assert.Equal(t, policy.Read, tool.Capability)
 	assert.False(t, tool.Ask)

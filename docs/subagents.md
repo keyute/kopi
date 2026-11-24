@@ -13,7 +13,7 @@ A subagent is another agent that the main agent starts for one task. It has its 
 name: explorer
 description: Searches the codebase and reports what it finds
 effort: low
-tools: [Read, Glob, Grep, LS]
+tools: [Read, Glob, Grep]
 mode: plan
 ---
 
@@ -48,7 +48,7 @@ Report file paths and line numbers.
 - The agent starts a subagent with the `Agent` tool: a short description, the prompt and the subagent's name.
 - Every subagent runs in the background. The call returns at once with a task id such as `t3`; the agent can go on working or start more subagents.
 - When a subagent ends, the agent is told with its final message and continues.
-- `SendMessage` sends a further message to a subagent by task id. A running subagent reads it when its current step ends; one that has ended, or whose run is being stopped, starts again with its earlier context and reports again. The call does not wait for the stopping run to end.
+- `SendMessage` sends a further message to a subagent by task id. A running subagent reads it when its current step ends; one that has ended, or whose run is being stopped, starts again with its earlier context and reports again. The call does not wait for the stopping run to end. While the agent has not yet read a subagent's completion or failure notice, a message to that subagent is not delivered: the result says the subagent has ended and that its report follows, and the subagent does not run. A subagent stopped by you or by the agent's `TaskStop` starts again at once, and one you restart from its view accepts messages again.
 - The notice the agent receives when a subagent's run completes or fails, or when you stop it, lists the messages queued for it that it never read as undelivered. When the agent stops a subagent with `TaskStop` it receives no notice, and those messages are dropped.
 - The agent has no tool that reads a running subagent: it is told when the subagent ends. `TaskStop` stops it; its row reads `Stopped explorer › <description>`, and `SendMessage`'s reads `Messaged explorer › <description>` and opens to the message. `/tasks` lists subagents next to background commands, opens a subagent's view with Enter and stops the selected running subagent with `x` (`stop-agent`) from the list.
 

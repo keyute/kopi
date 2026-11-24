@@ -50,13 +50,16 @@ func NewSendMessage(agents Agents) Tool {
 			if _, err := admit(policy.Target{}); err != nil {
 				return Result{}, err
 			}
-			to, resumed, err := agents.Message(ctx, args.To, args.Message)
+			to, outcome, err := agents.Message(ctx, args.To, args.Message)
 			if err != nil {
 				return Result{}, err
 			}
 			text := fmt.Sprintf("Message queued for %s.", args.To)
-			if resumed {
+			switch outcome {
+			case MessageResumed:
 				text = fmt.Sprintf("Agent %s continued.", args.To)
+			case MessageEnded:
+				text = fmt.Sprintf("Agent %s has ended; this message was not delivered. Its report follows.", args.To)
 			}
 			if to.ID != "" {
 				text += namedTaskResult + "\n" + taskName(to)
@@ -67,9 +70,11 @@ func NewSendMessage(agents Agents) Tool {
 			Title: sendMessageTitle("SendMessage"),
 			Done:  sendMessageTitle("Messaged"),
 			Summary: func(output string) string {
-				first, _, _ := strings.Cut(output, "\n")
-				if strings.HasSuffix(strings.TrimSuffix(first, namedTaskResult), " continued.") {
+				switch sendMessageOutcome(output) {
+				case MessageResumed:
 					return "continued"
+				case MessageEnded:
+					return "ended"
 				}
 				return "queued"
 			},
@@ -80,7 +85,15 @@ func NewSendMessage(agents Agents) Tool {
 			},
 			Action: Action{Verb: "Messaged", One: "agent", Many: "agents"},
 			Outcome: func(_ json.RawMessage, output string) (string, Action) {
-				return taskOutcome("Messaged", output)
+				if sendMessageOutcome(output) != MessageEnded {
+					return taskOutcome("Messaged", output)
+				}
+				// Nothing was delivered, so the row keeps the call's name.
+				subject, noun, ok := taskSubject(output)
+				if !ok {
+					return "", Action{}
+				}
+				return "SendMessage " + subject, Action{Verb: "Tried to message", One: noun, Many: noun + "s"}
 			},
 			Subject: func(raw json.RawMessage, _ string) string {
 				var args sendMessageArgs
@@ -89,6 +102,19 @@ func NewSendMessage(agents Agents) Tool {
 			},
 		},
 	}
+}
+
+// sendMessageOutcome reads which result the first line of output is.
+func sendMessageOutcome(output string) MessageOutcome {
+	first, _, _ := strings.Cut(output, "\n")
+	first = strings.TrimSuffix(first, namedTaskResult)
+	switch {
+	case strings.HasSuffix(first, " continued."):
+		return MessageResumed
+	case strings.HasSuffix(first, " Its report follows."):
+		return MessageEnded
+	}
+	return MessageQueued
 }
 
 // sendMessageTitle runs before the arguments are validated, so it decodes leniently.

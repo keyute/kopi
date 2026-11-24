@@ -16,7 +16,7 @@ import (
 type fakeAgents struct {
 	launched [][3]string
 	messages [][2]string
-	resumed  bool
+	outcome  MessageOutcome
 	to       TaskInfo
 	err      error
 }
@@ -29,12 +29,12 @@ func (f *fakeAgents) Launch(_ context.Context, agent, description, prompt string
 	return "t3", nil
 }
 
-func (f *fakeAgents) Message(_ context.Context, id, message string) (TaskInfo, bool, error) {
+func (f *fakeAgents) Message(_ context.Context, id, message string) (TaskInfo, MessageOutcome, error) {
 	if f.err != nil {
-		return TaskInfo{}, false, f.err
+		return TaskInfo{}, 0, f.err
 	}
 	f.messages = append(f.messages, [2]string{id, message})
-	return f.to, f.resumed, nil
+	return f.to, f.outcome, nil
 }
 
 var testDefs = []subagent.Definition{
@@ -84,7 +84,7 @@ func TestAgentLaunches(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, admitted)
-	assert.Equal(t, "Agent t3 started. You are told when it ends, in a new turn if yours has ended.", out.Text)
+	assert.Equal(t, "Agent t3 started. You are told when it ends, in a new turn if yours has ended: do not do its task yourself meanwhile.", out.Text)
 	assert.Equal(t, [][3]string{{"explore", "look", "find it"}}, agents.launched)
 }
 
@@ -139,7 +139,7 @@ func TestAgentDisplay(t *testing.T) {
 
 	assert.Equal(t, "explore › look", tool.Display.Title(json.RawMessage(`{"description":"look","prompt":"p","subagent_type":"explore"}`)))
 	assert.Equal(t, "Agent", tool.Display.Title(json.RawMessage(`{`)))
-	assert.Equal(t, "launched", tool.Display.Summary("Agent t3 started. You are told when it ends, in a new turn if yours has ended."))
+	assert.Equal(t, "launched", tool.Display.Summary("Agent t3 started. You are told when it ends, in a new turn if yours has ended: do not do its task yourself meanwhile."))
 	assert.Equal(t, "launched", tool.Display.Summary("Agent t3 started."), "a session saved before the result said how the end arrives")
 	_, lines := tool.Display.Change(json.RawMessage(`{"description":"look","prompt":"a\nb","subagent_type":"explore"}`))
 	assert.Equal(t, []PreviewLine{{Kind: Context, Text: "a"}, {Kind: Context, Text: "b"}}, lines)

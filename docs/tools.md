@@ -4,7 +4,7 @@
 
 - Sessions are in plan or execute mode. Only the user switches, with `/plan`, `/execute`, Shift+Tab or by approving a plan with [`ExitPlanMode`](#exitplanmode).
 - Plan mode allows:
-  - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `Agent`, `SendMessage`, `Workflow`, `TaskStop`, `WebFetch`, `WebSearch`, `AskUserQuestion`, `ExitPlanMode`
+  - `Read`, `Glob`, `Grep`, `Skill`, `ToolSearch`, `Agent`, `SendMessage`, `Workflow`, `TaskStop`, `WebFetch`, `WebSearch`, `AskUserQuestion`, `ExitPlanMode`
   - read-only MCP tools
   - `Write` and `Edit` on the session's [plan file](#exitplanmode) only
   - `Bash` only in the [sandbox](sandbox.md), where it cannot write the start directory
@@ -29,20 +29,19 @@
   - `limit` is 100 by default, at most 1000.
   - `glob` filters the files searched; `case_insensitive` ignores case.
   - Content output is capped at 100 KiB, like `Read`'s.
-- `LS` lists one directory, not recursively, sorted by name with directories ending in `/`, up to 500 entries, including hidden and gitignored entries and `.git/`.
 - `Glob` and `Grep` skip:
   - `.git` directories below the searched path
   - anything a `.gitignore` in the start directory or below ignores
   - symlinks
   - for `Grep`, binary files
 - A `path` inside `.git` or inside an ignored directory is searched.
-- None of `Glob`, `Grep` and `LS` follows a symlink it finds while searching or listing (`LS` lists them, except one whose destination cannot be resolved). A `path` that is itself a symlink is resolved, as for `Read`.
+- Neither `Glob` nor `Grep` follows a symlink it finds while searching. A `path` that is itself a symlink is resolved, as for `Read`.
 - `Write` creates a file or replaces its whole content.
 - A file tool's row shows its path relative to the start directory, `plan` for the session's [plan file](#exitplanmode), `output <name>` for a [saved output file](#saved-output), and the path as written outside the start directory. `Read` adds the lines it was asked for (`Read a.go:40-89`), `Write` its line count (`+40`) and `Edit` the lines removed and added (`+3 -1`, with `· 2 occurrences` when `replace_all` replaced several). See [Transcript](usage.md#transcript).
 - `Edit` replaces a string that must match exactly once unless `replace_all` is set, in a text file of up to 10 MiB.
 - `Write` and `Edit` work inside the start directory, replace the file atomically and keep its mode.
 - `Read`, `Write` and `Edit` refuse Kopi's home, including paths there that do not exist yet, except the session's [plan file](#exitplanmode); `Read` also reaches the session's [saved output](#saved-output).
-- `Glob`, `Grep` and `LS` refuse a path there and leave Kopi's home out of what they search or list; `Grep` also searches one saved output file when `path` names it.
+- `Glob` and `Grep` refuse a path there and leave Kopi's home out of what they search; `Grep` also searches one saved output file when `path` names it.
 
 ## Bash
 
@@ -85,14 +84,14 @@
 
 ## Agent and SendMessage
 
-- `Agent` starts a [subagent](subagents.md) on a prompt and returns its task id at once; the subagent runs in the background, and the result tells the model that it is told when the subagent ends. Its row reads `explorer › <description>` and opens to the prompt.
-- `SendMessage` sends a further message to a subagent by task id. Its result has the name line `Agent: <name> › <description>`; its row reads `Messaged <name> › <description>` with `↳ queued`, and opens to the message. A running subagent reads it when its current step ends; one that has ended, or whose run is being stopped, starts again with its earlier context, and the call does not wait for the stopping run to end.
+- `Agent` starts a [subagent](subagents.md) on a prompt and returns its task id at once; the subagent runs in the background, and the result tells the model that it is told when the subagent ends, in a new turn if its own has ended, and not to do the subagent's task itself meanwhile. Its row reads `explorer › <description>` and opens to the prompt.
+- `SendMessage` sends a further message to a subagent by task id. Its result has the name line `Agent: <name> › <description>`; its row reads `Messaged <name> › <description>` with `↳ queued`, and opens to the message. A running subagent reads it when its current step ends; one that has ended, or whose run is being stopped, starts again with its earlier context, and the call does not wait for the stopping run to end. Until the agent has read a subagent's completion or failure notice, a message to that subagent is not delivered and the subagent does not run: the result says it has ended and that its report follows, and the row reads `SendMessage <name> › <description>` with `↳ ended`. A subagent stopped by you or by the agent's `TaskStop` starts again at once, and one you restart from its view accepts messages again.
 - The notice the agent receives when a subagent's run completes or fails, or when you stop it, lists the messages queued for it that it never read as undelivered. When the agent stops a subagent with `TaskStop` it receives no notice, and those messages are dropped.
 - Both exist only when a subagent is defined.
 
 ## Workflow
 
-- `Workflow` runs a JavaScript script that starts agents and combines their results, and returns a task id at once; the script runs in the background as a [workflow](workflows.md).
+- `Workflow` runs a JavaScript script that starts agents and combines their results, and returns a task id at once; the script runs in the background as a [workflow](workflows.md); the result says the same of its end as `Agent`'s does.
 - It is offered only in the fullscreen interface and becomes callable when a prompt you type in the main session contains `ultracode`.
 - It only reads, so it works in plan mode and does not ask by default; a bare `Workflow` rule in `deny` removes it.
 
@@ -221,5 +220,5 @@
 - A tool that lets the model enter plan mode.
 - Plan approval in print mode.
 - Deleting old plan files.
-- `Glob` and `LS` on saved output, and searching the `outputs/` folder as a whole; paths come from the notices.
+- `Glob` on saved output, and searching the `outputs/` folder as a whole; paths come from the notices.
 - A configurable plans directory.

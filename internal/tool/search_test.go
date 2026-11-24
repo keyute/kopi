@@ -69,7 +69,6 @@ func TestSearchToolsRefuseKopiHomeWithoutAdmitting(t *testing.T) {
 	}{
 		{NewGlob(ws, nil), fmt.Sprintf(`{"pattern":"*","path":%q}`, kopiHome)},
 		{NewGrep(ws, nil), fmt.Sprintf(`{"pattern":"x","path":%q}`, kopiHome)},
-		{NewLS(ws, nil), fmt.Sprintf(`{"path":%q}`, kopiHome)},
 	} {
 		t.Run(tc.tool.Name, func(t *testing.T) {
 			admitted := false
@@ -266,7 +265,7 @@ func TestOpenWalkedRefusesSameInodeSymlinkSwap(t *testing.T) {
 }
 
 func TestSearchToolsRefuseSameInodeDirectorySwapDuringAdmission(t *testing.T) {
-	for _, name := range []string{"Glob", "Grep", "LS"} {
+	for _, name := range []string{"Glob", "Grep"} {
 		for _, parent := range []bool{false, true} {
 			for _, protected := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/parent=%t/protected=%t", name, parent, protected), func(t *testing.T) {
@@ -293,8 +292,6 @@ func TestSearchToolsRefuseSameInodeDirectorySwapDuringAdmission(t *testing.T) {
 					case "Grep":
 						tool = NewGrep(ws, nil)
 						args = fmt.Sprintf(`{"path":%q,"pattern":"needle","output_mode":"content"}`, p)
-					case "LS":
-						tool = NewLS(ws, nil)
 					}
 					res, err := tool.Run(t.Context(), json.RawMessage(args), func(policy.Target) (policy.Mode, error) {
 						require.NoError(t, os.Rename(filepath.Join(dir, "allowed"), filepath.Join(dir, moved)))
@@ -310,7 +307,7 @@ func TestSearchToolsRefuseSameInodeDirectorySwapDuringAdmission(t *testing.T) {
 }
 
 func TestSearchToolsOpenResolvedSymlinkRoot(t *testing.T) {
-	for _, name := range []string{"Glob", "Grep", "LS"} {
+	for _, name := range []string{"Glob", "Grep"} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			writeFile(t, filepath.Join(dir, "real", "file.txt"), "needle")
@@ -323,8 +320,6 @@ func TestSearchToolsOpenResolvedSymlinkRoot(t *testing.T) {
 				tool, args = NewGlob(ws, nil), `{"path":"link","pattern":"*"}`
 			case "Grep":
 				tool, args = NewGrep(ws, nil), `{"path":"link","pattern":"needle"}`
-			case "LS":
-				tool = NewLS(ws, nil)
 			}
 			res, err := tool.Run(t.Context(), json.RawMessage(args), allowTarget)
 			require.NoError(t, err)

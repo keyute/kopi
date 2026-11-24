@@ -33,9 +33,10 @@ func TestBashDescribesItself(t *testing.T) {
 	assert.False(t, tool.Sandboxed)
 	assert.False(t, tool.PlanSandboxed)
 	assert.NotContains(t, tool.Description, "sandbox")
-	for _, s := range []string{"run_in_background", "the file its output is saved to", "TaskStop"} {
+	for _, s := range []string{"the file its output is saved to", "TaskStop"} {
 		assert.Contains(t, tool.Description, s)
 	}
+	assert.NotContains(t, tool.Description, "run_in_background")
 	assert.Equal(t, []string{"command"}, tool.Parameters["required"])
 	assert.Equal(t, false, tool.Parameters["additionalProperties"])
 	properties, ok := tool.Parameters["properties"].(map[string]any)
@@ -419,8 +420,8 @@ func TestBashOffersUnsandboxedOnlyWhenSandboxed(t *testing.T) {
 				assert.Nil(t, tool.Unsandboxed)
 				return
 			}
-			assert.Equal(t, map[string]any{"type": "boolean", "description": "Run this command outside the OS sandbox; plan mode refuses such a call."}, properties["unsandboxed"])
-			assert.Contains(t, tool.Description, "unsandboxed runs one command outside it; that call asks for approval unless a rule allows it.")
+			assert.Equal(t, map[string]any{"type": "boolean", "description": "Run this command outside the OS sandbox, which asks for approval unless a rule allows it; plan mode refuses such a call."}, properties["unsandboxed"])
+			assert.NotContains(t, tool.Description, "unsandboxed")
 			require.NotNil(t, tool.Unsandboxed)
 			_, err := json.Marshal(tool.Parameters)
 			require.NoError(t, err)

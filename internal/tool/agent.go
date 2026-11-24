@@ -17,9 +17,22 @@ type Agents interface {
 	// Launch starts agent on prompt in the background and returns its task id.
 	Launch(ctx context.Context, agent, description, prompt string) (id string, err error)
 	// Message delivers message to the subagent task id; to is that task, zero when it cannot be read,
-	// and resumed reports that the subagent had ended and runs again.
-	Message(ctx context.Context, id, message string) (to TaskInfo, resumed bool, err error)
+	// and outcome says what became of the message.
+	Message(ctx context.Context, id, message string) (to TaskInfo, outcome MessageOutcome, err error)
 }
+
+// MessageOutcome is what became of a message to a subagent.
+type MessageOutcome int
+
+const (
+	// MessageQueued: the subagent was running and reads it at its next step.
+	MessageQueued MessageOutcome = iota
+	// MessageResumed: the subagent had ended and runs again with it.
+	MessageResumed
+	// MessageEnded: the subagent ended and its end notice has not been read yet;
+	// the message was not delivered.
+	MessageEnded
+)
 
 type agentArgs struct {
 	Description  string `json:"description"`
@@ -103,7 +116,7 @@ func NewAgent(defs []subagent.Definition, agents Agents) Tool {
 }
 
 // launchTail ends the result of a launch with how the task's end arrives.
-const launchTail = " You are told when it ends, in a new turn if yours has ended."
+const launchTail = " You are told when it ends, in a new turn if yours has ended: do not do its task yourself meanwhile."
 
 // launchResult matches a launch's result with or without launchTail, which a
 // session saved before it existed lacks.

@@ -36,6 +36,8 @@ type agentHarness struct {
 	tasks *tool.Tasks
 	// changed holds one pending TasksChanged, however many arrived.
 	changed chan struct{}
+	// delivered holds one pending delivery of an end notice to the main model.
+	delivered chan struct{}
 }
 
 func agentDef(name string) subagent.Definition {
@@ -52,13 +54,21 @@ func newAgentHarness(t *testing.T, sb pigruntimetest.Sandbox, cfg Config, defs .
 	h := newHarness(t, sb, cfg)
 	child := ai.NewFauxProvider(ai.FauxConfig{ProviderID: childProvider, Models: []ai.FauxModelDefinition{{ID: "faux-1", Reasoning: true}}})
 	require.NoError(t, h.c.rt.RegisterProvider(child.Provider()))
-	a := &agentHarness{harness: h, child: child, tasks: tasks, changed: make(chan struct{}, 1)}
+	a := &agentHarness{harness: h, child: child, tasks: tasks, changed: make(chan struct{}, 1), delivered: make(chan struct{}, 1)}
 	h.c.Subscribe(func(ev event.Event) {
-		if _, ok := ev.(event.TasksChanged); ok {
-			select {
-			case a.changed <- struct{}{}:
-			default:
-			}
+		var ch chan struct{}
+		switch ev.(type) {
+		case event.TasksChanged:
+			ch = a.changed
+		case event.TaskEnded:
+			ch = a.delivered
+		}
+		if ch == nil {
+			return
+		}
+		select {
+		case ch <- struct{}{}:
+		default:
 		}
 	})
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
@@ -89,6 +99,24 @@ func (a *agentHarness) until(t *testing.T, cond func() bool) {
 			t.Fatal("timed out waiting for the tasks to change")
 		}
 	}
+}
+
+// untilRead waits until the main model has read the end notice of the child id.
+func (a *agentHarness) untilRead(t *testing.T, id string) {
+	t.Helper()
+	for a.unread(id) {
+		select {
+		case <-a.delivered:
+		case <-time.After(waitLimit):
+			t.Fatal("timed out waiting for the end notice to be read")
+		}
+	}
+}
+
+func (a *agentHarness) unread(id string) bool {
+	a.c.queue.Lock()
+	defer a.c.queue.Unlock()
+	return a.c.children[id].unread
 }
 
 func (a *agentHarness) untilStatus(t *testing.T, id string, status tool.TaskStatus) {
@@ -165,7 +193,7 @@ func TestNoDefinitionsMeansNoAgentTools(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read", "AskUserQuestion"}, req.ToolNames)
-	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil)}, nil, nil, false, nil, false, false)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil)}, nil, nil, nil, false, false)), req.SystemPrompt)
 }
 
 func TestDefinitionsAddAgentAndSendMessageUnlessRuleRemovesThem(t *testing.T) {
@@ -223,9 +251,9 @@ func TestAgentToolsAreResolvedPerDefinition(t *testing.T) {
 		assert.Equal(t, []string{"Read"}, toolNames(a.c.agents[2].tools))
 
 		assert.Equal(t, []string{"preamble", "mcp-servers"}, partNames(a.c.agents[0].prompt))
-		assert.Contains(t, a.c.agents[0].prompt[1].Text, "MCP server t tools: mcp__t__c.")
+		assert.Contains(t, a.c.agents[0].prompt[1].Text, "MCP server t tools, loaded by ToolSearch: mcp__t__c.")
 		assert.Equal(t, []string{"preamble", "mcp-servers"}, partNames(a.c.agents[1].prompt))
-		assert.Equal(t, "MCP server s tools: mcp__s__a.\nInstructions from MCP server s:\nuse s", a.c.agents[1].prompt[1].Text)
+		assert.Equal(t, "MCP server s tools, loaded by ToolSearch: mcp__s__a.\nInstructions from MCP server s:\nuse s", a.c.agents[1].prompt[1].Text)
 		assert.Equal(t, []string{"preamble"}, partNames(a.c.agents[2].prompt))
 	})
 
@@ -425,6 +453,7 @@ func TestLaunchAndRerunRefuseOverTheCap(t *testing.T) {
 	id := a.launch(t, "explorer", "find it", "go")
 	a.untilStatus(t, id, tool.TaskCompleted)
 	a.until(t, func() bool { return a.live() == 0 })
+	a.untilRead(t, id)
 	a.c.queue.Lock()
 	a.c.live = maxAgents
 	a.c.queue.Unlock()
@@ -446,9 +475,9 @@ func TestMessageToRunningChildArrivesAtItsNextTurnBoundary(t *testing.T) {
 	id := a.launch(t, "explorer", "find it", "go")
 	wait(t, started)
 
-	resumed, err := a.c.message(t.Context(), id, "also check b")
+	outcome, err := a.c.message(t.Context(), id, "also check b")
 	require.NoError(t, err)
-	assert.False(t, resumed)
+	assert.Equal(t, tool.MessageQueued, outcome)
 	close(release)
 	a.untilStatus(t, id, tool.TaskCompleted)
 
@@ -501,9 +530,9 @@ func TestFailedTurnReportsAMessageQueuedMeanwhileAsUndelivered(t *testing.T) {
 	id := a.launch(t, "explorer", "find it", "go")
 	wait(t, started)
 
-	resumed, err := a.c.message(t.Context(), id, "also check b")
+	outcome, err := a.c.message(t.Context(), id, "also check b")
 	require.NoError(t, err)
-	assert.False(t, resumed)
+	assert.Equal(t, tool.MessageQueued, outcome)
 	close(gate)
 	a.untilStatus(t, id, tool.TaskFailed)
 	a.until(t, func() bool { return a.live() == 0 })
@@ -525,9 +554,9 @@ func TestMessageToFinishedChildContinuesItsContextUnderTheSameID(t *testing.T) {
 	a.untilStatus(t, id, tool.TaskCompleted)
 	first := receive(t, rootRequests)
 
-	resumed, err := a.c.message(t.Context(), id, "again")
+	outcome, err := a.c.message(t.Context(), id, "again")
 	require.NoError(t, err)
-	assert.True(t, resumed)
+	assert.Equal(t, tool.MessageResumed, outcome)
 	a.untilStatus(t, id, tool.TaskCompleted)
 
 	assert.Equal(t, []string{"go", "again"}, receive(t, childRequests).UserTexts, "the context is kept")
@@ -548,6 +577,7 @@ func TestSendMessageResultNamesTheAgent(t *testing.T) {
 
 	admit := func(policy.Target) (policy.Mode, error) { return policy.Execute, nil }
 	raw := json.RawMessage(fmt.Sprintf(`{"to":%q,"message":"again"}`, id))
+	a.untilRead(t, id)
 	result, err := tool.NewSendMessage(agentLauncher{a.c}).Run(t.Context(), raw, admit)
 	require.NoError(t, err)
 	a.untilStatus(t, id, tool.TaskCompleted)
@@ -627,9 +657,9 @@ func TestHumanStopOfAStoppingChildReportsAMessageTheModelSent(t *testing.T) {
 		stopped <- err
 	}()
 	wait(t, sendDone)
-	resumed, err := a.c.message(t.Context(), id, "b")
+	outcome, err := a.c.message(t.Context(), id, "b")
 	require.NoError(t, err)
-	assert.True(t, resumed)
+	assert.Equal(t, tool.MessageResumed, outcome)
 	require.True(t, a.c.Interrupt(id))
 	close(release)
 	require.NoError(t, receiveError(t, stopped))
@@ -973,6 +1003,9 @@ func TestEndNoticeIsNotQueuedIntoTheNextSession(t *testing.T) {
 	}
 
 	assert.Empty(t, a.queuedNotices())
+	a.c.queue.Lock()
+	assert.False(t, ch.unread, "a notice for another session leaves the child accepting messages")
+	a.c.queue.Unlock()
 	assert.True(t, a.idle(), "nothing woke the new session")
 }
 
@@ -993,12 +1026,12 @@ func TestMessageToACancelledRunIsNotLost(t *testing.T) {
 	// The run is stopping, so the messages wait for the next run, which they start together.
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
-	resumed, err := a.c.message(cancelled, id, "lost?")
+	outcome, err := a.c.message(cancelled, id, "lost?")
 	require.NoError(t, err)
-	assert.True(t, resumed)
-	resumed, err = a.c.message(t.Context(), id, "more work")
+	assert.Equal(t, tool.MessageResumed, outcome)
+	outcome, err = a.c.message(t.Context(), id, "more work")
 	require.NoError(t, err)
-	assert.True(t, resumed)
+	assert.Equal(t, tool.MessageResumed, outcome)
 	close(release)
 	a.untilStatus(t, id, tool.TaskCompleted)
 
@@ -1048,9 +1081,9 @@ func TestMessageToARunBeingStoppedStartsTheNextRunWithIt(t *testing.T) {
 	ch.stop(first, ch.emit)
 	a.c.queue.Unlock()
 
-	resumed, err := a.c.message(t.Context(), id, "instead, check b")
+	outcome, err := a.c.message(t.Context(), id, "instead, check b")
 	require.NoError(t, err)
-	assert.True(t, resumed, "the message starts the next run once this one has ended")
+	assert.Equal(t, tool.MessageResumed, outcome, "the message starts the next run once this one has ended")
 	close(release)
 	wait(t, first.Done())
 	a.untilStatus(t, id, tool.TaskCompleted)
@@ -1105,9 +1138,9 @@ func TestRunStoppedByTheHumanListsAnAgentMessageItNeverReadAsUndelivered(t *test
 	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(probeCall("p1", 1)), pigruntimetest.Text("unreached")})
 	id := a.launch(t, "worker", "probe it", "go")
 	req := receiveEvent(t, approvals)
-	resumed, err := a.c.message(t.Context(), id, "also check b")
+	outcome, err := a.c.message(t.Context(), id, "also check b")
 	require.NoError(t, err)
-	assert.False(t, resumed)
+	assert.Equal(t, tool.MessageQueued, outcome)
 
 	assert.True(t, a.c.Answer(req.Token, policy.Decision{Answer: policy.Reject}))
 	a.untilStatus(t, id, tool.TaskStopped)
@@ -1125,9 +1158,9 @@ func TestStopTaskOnAChildQueuesOneNoticeListingItsUnreadMessages(t *testing.T) {
 	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1"))})
 	id := a.launch(t, "explorer", "find it", "go")
 	wait(t, started)
-	resumed, err := a.c.message(t.Context(), id, "also check b")
+	outcome, err := a.c.message(t.Context(), id, "also check b")
 	require.NoError(t, err)
-	assert.False(t, resumed)
+	assert.Equal(t, tool.MessageQueued, outcome)
 
 	require.NoError(t, a.c.StopTask(id))
 	a.until(t, func() bool { return a.live() == 0 })
@@ -1229,9 +1262,10 @@ func TestDelayedChildStopDoesNotCancelReplacement(t *testing.T) {
 	selectedStop := ch.stopper(a.workOf(ch))
 	close(firstGate)
 	a.until(t, func() bool { return a.live() == 0 })
-	resumed, err := a.c.message(t.Context(), id, "again")
+	a.untilRead(t, id)
+	outcome, err := a.c.message(t.Context(), id, "again")
 	require.NoError(t, err)
-	require.True(t, resumed)
+	require.Equal(t, tool.MessageResumed, outcome)
 	receiveChild(t, requests)
 	selectedStop()
 	second := a.workOf(ch)
@@ -1468,9 +1502,9 @@ func TestStoppedChildNoticeExcludesDeliveredHumanInputButKeepsUnreadAgentMessage
 
 	_, err = a.c.Submit(t.Context(), id, unread)
 	require.NoError(t, err)
-	resumed, err := a.c.message(t.Context(), id, "unread agent message")
+	outcome, err := a.c.message(t.Context(), id, "unread agent message")
 	require.NoError(t, err)
-	assert.False(t, resumed)
+	assert.Equal(t, tool.MessageQueued, outcome)
 	require.NoError(t, a.c.StopTask(id))
 	wait(t, w.Done())
 
@@ -1738,4 +1772,114 @@ func TestAgentsListsMainThenEverySubagentInTaskOrder(t *testing.T) {
 		got[i].Effort, got[i].ToolCalls, got[i].Cost = "", 0, 0
 		assert.Equal(t, want, got[i])
 	}
+}
+
+// holdNotices keeps the main model from being woken by a notice, so a child's
+// end stays unread until a prompt is submitted.
+func (a *agentHarness) holdNotices() {
+	a.c.queue.Lock()
+	defer a.c.queue.Unlock()
+	a.c.main.hold = true
+}
+
+func TestMessageToAnEndedChildWhoseNoticeIsUnreadStartsNoRunUntilTheModelReadsIt(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
+	childRequests := make(chan pigruntimetest.Request, 2)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first"), pigruntimetest.Capture(t, childRequests, "second")})
+	a.rootAcks(1)
+	a.holdNotices()
+	id := a.launch(t, "explorer", "find it", "go")
+	a.untilStatus(t, id, tool.TaskCompleted)
+	a.until(t, func() bool { return a.live() == 0 })
+
+	outcome, err := a.c.message(t.Context(), id, "driver ran the tests")
+	require.NoError(t, err)
+
+	assert.Equal(t, tool.MessageEnded, outcome)
+	assert.Equal(t, 1, a.child.CallCount(), "the ended child did not run")
+	assert.Zero(t, a.live())
+	assert.Equal(t, tool.TaskCompleted, a.info(t, id).Status)
+	assert.Len(t, a.queuedNotices(), 1, "nothing was queued for the child and its notice still waits")
+
+	w, err := a.c.Submit(t.Context(), Main, "continue")
+	require.NoError(t, err)
+	wait(t, w.Done())
+	a.untilRead(t, id)
+	outcome, err = a.c.message(t.Context(), id, "again")
+	require.NoError(t, err)
+	assert.Equal(t, tool.MessageResumed, outcome)
+	assert.Equal(t, []string{"go", "again"}, receive(t, childRequests).UserTexts)
+}
+
+func TestMessageToAChildTheModelStoppedResumesAtOnce(t *testing.T) {
+	started := make(chan struct{}, 2)
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{blockingTool(started)}}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1")), pigruntimetest.ToolCalls(call("Block", "c2"))})
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, started)
+	_, _, err := a.tasks.Stop(id)
+	require.NoError(t, err)
+	a.until(t, func() bool { return a.live() == 0 })
+
+	outcome, err := a.c.message(t.Context(), id, "again")
+	require.NoError(t, err)
+
+	assert.Equal(t, tool.MessageResumed, outcome)
+	wait(t, started)
+}
+
+func TestAChildWhoseNoticeWasDroppedDoesNotRefuseMessages(t *testing.T) {
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first")})
+	a.rootAcks(1)
+	a.holdNotices()
+	id := a.launch(t, "explorer", "find it", "go")
+	a.untilStatus(t, id, tool.TaskCompleted)
+	a.until(t, func() bool { return a.live() == 0 })
+	require.True(t, a.unread(id))
+
+	require.NoError(t, a.c.NewSession(t.Context()))
+
+	_, err := a.c.message(t.Context(), id, "again")
+	assert.ErrorIs(t, err, tool.ErrUnknownTask, "the child went with its session, not stuck refusing")
+}
+
+func TestMessageToAChildTheHumanStoppedResumesWhileItsNoticeWaits(t *testing.T) {
+	started := make(chan struct{}, 2)
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{blockingTool(started)}}, agentDef("explorer"))
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Block", "c1")), pigruntimetest.ToolCalls(call("Block", "c2"))})
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, started)
+	require.NoError(t, a.c.StopTask(id))
+	a.until(t, func() bool { return a.live() == 0 })
+	require.Len(t, a.queuedNotices(), 1, "the notice waits and never wakes")
+
+	outcome, err := a.c.message(t.Context(), id, "again")
+	require.NoError(t, err)
+
+	assert.Equal(t, tool.MessageResumed, outcome)
+	wait(t, started)
+}
+
+func TestMessageToAChildTheHumanRestartedQueuesWhileItsNoticeWasUnread(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{releaseTool(started, release)}}, agentDef("explorer"))
+	requests := make(chan pigruntimetest.Request, 1)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("first"), pigruntimetest.ToolCalls(call("Hold", "c1")), pigruntimetest.Capture(t, requests, "second")})
+	a.rootAcks(2)
+	a.holdNotices()
+	id := a.launch(t, "explorer", "find it", "go")
+	a.untilStatus(t, id, tool.TaskCompleted)
+	a.until(t, func() bool { return a.live() == 0 })
+	require.True(t, a.unread(id))
+
+	_, err := a.c.Submit(t.Context(), id, "again")
+	require.NoError(t, err)
+	wait(t, started)
+	outcome, err := a.c.message(t.Context(), id, "note")
+	require.NoError(t, err)
+	close(release)
+
+	assert.Equal(t, tool.MessageQueued, outcome)
+	assert.Contains(t, receive(t, requests).UserTexts, "note")
 }

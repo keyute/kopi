@@ -46,18 +46,14 @@ func NewGrep(ws *Workspace, hidden Hidden) Tool {
 		Name:  "Grep",
 		Label: "Grep",
 		Description: "Searches file contents inside the workspace with a regular expression (RE2 syntax). " +
-			"path is a file or directory, absolute or relative to the workspace (default the workspace). " +
-			"Skips .git directories below path, files .gitignore ignores, binary files and symlinks. " +
-			"output_mode is files_with_matches (paths, most recently modified first; the default), " +
-			"content (lines as path:line:text, with path-line-text for context) " +
-			"or count (path:count, most recently modified first). " +
-			"Returns at most limit results, 100 by default.",
+			"Skips .git directories, files .gitignore ignores, binary files and symlinks. " +
+			"Returns at most limit results.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"pattern": map[string]any{
 					"type":        "string",
-					"description": "Regular expression to search for (RE2 syntax).",
+					"description": "Regular expression to search for.",
 				},
 				"path": map[string]any{
 					"type":        "string",
@@ -70,7 +66,7 @@ func NewGrep(ws *Workspace, hidden Hidden) Tool {
 				"output_mode": map[string]any{
 					"type":        "string",
 					"enum":        []string{grepFiles, grepContent, grepCount},
-					"description": "What to return; default files_with_matches.",
+					"description": "files_with_matches (paths, most recently modified first; the default), content (lines as path:line:text, context lines as path-line-text) or count (path:count, most recently modified first).",
 				},
 				"case_insensitive": map[string]any{
 					"type":        "boolean",

@@ -305,6 +305,6 @@ func TestBashDescribesTheProxy(t *testing.T) {
 
 	tool := NewBash(sh, sh, nil, false, true)
 
-	assert.Contains(t, tool.Description, "may instead appear empty. The network is reachable only through the HTTP proxy named in HTTP_PROXY and HTTPS_PROXY, "+
+	assert.Contains(t, tool.Description, "may appear empty. The network is reachable only through the HTTP proxy named in HTTP_PROXY and HTTPS_PROXY, "+
 		"and only for hosts the user listed; the command's output then ends with the hosts the proxy refused.")
 }

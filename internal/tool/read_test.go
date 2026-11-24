@@ -353,9 +353,8 @@ func TestToolsDoNotReadContentBeforeAdmission(t *testing.T) {
 		"Edit": `{"file_path":"binary","old_string":"secret","new_string":"new"}`,
 		"Glob": `{"pattern":"*"}`,
 		"Grep": `{"pattern":"secret"}`,
-		"LS":   `{}`,
 	}
-	for _, tool := range []Tool{NewRead(ws), NewEdit(ws), NewGlob(ws, nil), NewGrep(ws, nil), NewLS(ws, nil)} {
+	for _, tool := range []Tool{NewRead(ws), NewEdit(ws), NewGlob(ws, nil), NewGrep(ws, nil)} {
 		t.Run(tool.Name, func(t *testing.T) {
 			out, err := tool.Run(t.Context(), json.RawMessage(args[tool.Name]), func(policy.Target) (policy.Mode, error) { return policy.Plan, policy.ErrDenied })
 			require.ErrorIs(t, err, policy.ErrDenied)
@@ -369,13 +368,12 @@ func TestWalkingToolsListOnlyAfterAdmission(t *testing.T) {
 	args := map[string]string{
 		"Glob": `{"pattern":"*"}`,
 		"Grep": `{"pattern":"needle"}`,
-		"LS":   `{}`,
 	}
-	for _, name := range []string{"Glob", "Grep", "LS"} {
+	for _, name := range []string{"Glob", "Grep"} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			ws := newWorkspace(t, dir, nil)
-			tools := map[string]Tool{"Glob": NewGlob(ws, nil), "Grep": NewGrep(ws, nil), "LS": NewLS(ws, nil)}
+			tools := map[string]Tool{"Glob": NewGlob(ws, nil), "Grep": NewGrep(ws, nil)}
 			out, err := tools[name].Run(t.Context(), json.RawMessage(args[name]), func(policy.Target) (policy.Mode, error) {
 				writeFile(t, filepath.Join(dir, "late.txt"), "needle\n")
 				return policy.Execute, nil

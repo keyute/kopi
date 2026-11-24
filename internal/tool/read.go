@@ -56,9 +56,7 @@ func NewRead(ws *Workspace) Tool {
 		Name:  "Read",
 		Label: "Read",
 		Description: "Reads a text file or an image (PNG, JPEG, GIF or WebP) inside the workspace. " +
-			"file_path is absolute or relative to the workspace. " +
-			"A text file returns numbered lines, up to 2000 lines by default; use offset and limit to read other ranges. " +
-			"An image is returned whole; offset and limit do not apply.",
+			"A text file returns numbered lines, 2000 at most per call; an image is returned whole, and offset and limit do not apply to it.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

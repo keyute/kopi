@@ -55,7 +55,7 @@
 
 ## ToolSearch
 
-- The system prompt lists each connected server's tool names; the list is updated once, when the last server has connected or failed.
+- The system prompt lists each connected server's tool names, as `MCP server <name> tools, loaded by ToolSearch: …` when `ToolSearch` is among the session's tools; the list is updated once, when the last server has connected or failed. It does not explain deferral: `ToolSearch`'s description does.
 - `ToolSearch` is there whenever a server is configured. A search that finds nothing names the servers still connecting.
 - A tool's schema reaches the model only after the model loads it with `ToolSearch`, by keywords or by exact names, at most 20 per keyword search.
 - `ToolSearch` works in both modes and, with no rule matching, never asks.

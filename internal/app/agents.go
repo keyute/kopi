@@ -88,10 +88,9 @@ func (c *Controller) buildSpecs(base, serverTools []tool.Tool, servers []mcpServ
 		}
 	}
 	spec.tools = tools
-	classified := c.cfg.Classifier != nil
 	child := spec
-	child.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, classified, def, false, false)
-	spec.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, classified, def, true, false)
+	child.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, def, false, false)
+	spec.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, def, true, false)
 	return [2]agentSpec{child, spec}
 }
 
@@ -102,13 +101,13 @@ func (l agentLauncher) Launch(ctx context.Context, agent, description, prompt st
 	return l.c.launch(ctx, agent, description, prompt)
 }
 
-func (l agentLauncher) Message(ctx context.Context, id, message string) (tool.TaskInfo, bool, error) {
-	resumed, err := l.c.message(ctx, id, message)
+func (l agentLauncher) Message(ctx context.Context, id, message string) (tool.TaskInfo, tool.MessageOutcome, error) {
+	outcome, err := l.c.message(ctx, id, message)
 	if err != nil {
-		return tool.TaskInfo{}, false, err
+		return tool.TaskInfo{}, 0, err
 	}
 	to, _ := l.c.cfg.Tasks.Output(id)
-	return to, resumed, nil
+	return to, outcome, nil
 }
 
 // subagentRole is the role of a subagent's session. The session lives until
@@ -133,6 +132,7 @@ func (s *subagentRole) begin(w *Work) error {
 		return ErrTooManyAgents
 	}
 	c.live++
+	s.r.unread = false
 	if !s.task.Run(s.r.stopper(w)) {
 		c.live--
 		return tool.ErrUnknownTask
@@ -335,22 +335,30 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 
 // message delivers message to the subagent task id: it joins the running run
 // at its next boundary, or starts the next run, which follows a run that is
-// being stopped. It reports whether the subagent runs again because of it.
-func (c *Controller) message(ctx context.Context, id, message string) (bool, error) {
+// being stopped. It reports whether the message was queued, started the next
+// run, or was refused because the subagent ended and the model has not read its
+// end notice yet.
+func (c *Controller) message(ctx context.Context, id, message string) (tool.MessageOutcome, error) {
 	c.queue.Lock()
 	defer c.queue.Unlock()
 	r := c.children[id]
 	if r == nil {
-		return false, fmt.Errorf("failed to find task %q: %w", id, tool.ErrUnknownTask)
+		return 0, fmt.Errorf("failed to find task %q: %w", id, tool.ErrUnknownTask)
+	}
+	if r.unread {
+		return tool.MessageEnded, nil
 	}
 	w, err := r.submitLocked(ctx, pigruntime.Prompt{Text: message, FromAgent: true}, false)
 	if err != nil {
-		return false, fmt.Errorf("failed to message subagent %s: %w", id, err)
+		return 0, fmt.Errorf("failed to message subagent %s: %w", id, err)
 	}
 	c.mu.Lock()
 	running := r.work
 	c.mu.Unlock()
-	return w != nil || running != nil && running.stopped, nil
+	if w != nil || running != nil && running.stopped {
+		return tool.MessageResumed, nil
+	}
+	return tool.MessageQueued, nil
 }
 
 // reportEnd receives the end of a run the task registry reported: the task as
@@ -368,6 +376,7 @@ func (s *subagentRole) reportEnd(info tool.TaskInfo, byHuman bool, unread []stri
 	}
 	switch {
 	case info.Status == tool.TaskCompleted || info.Status == tool.TaskFailed:
+		s.r.unread = true
 		c.main.queueNoticeLocked(agentNotice(info, unread))
 	case info.Status == tool.TaskStopped && byHuman:
 		c.main.queueNoticeLocked(withUndelivered(pigruntime.Notice{Text: agentStoppedHead(info), Shown: taskEnded(info)}, unread))

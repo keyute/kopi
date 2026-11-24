@@ -45,7 +45,7 @@ func TestWebFetchDescribesItself(t *testing.T) {
 
 	assert.Equal(t, "WebFetch", tool.Name)
 	assert.Equal(t, "WebFetch", tool.Label)
-	assert.Contains(t, tool.Description, "any other redirect is returned instead of followed")
+	assert.Contains(t, tool.Description, "A redirect to another host is returned instead of followed")
 	assert.Equal(t, []string{"url", "prompt"}, tool.Parameters["required"])
 	assert.Equal(t, false, tool.Parameters["additionalProperties"])
 	assert.Equal(t, policy.Read, tool.Capability)
