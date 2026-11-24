@@ -1325,8 +1325,8 @@ func TestRecallFollowsCompactionWithoutAnotherRequest(t *testing.T) {
 
 func TestRecallFollowsCompactionInsideRun(t *testing.T) {
 	r, faux := newTestRuntime(t, newSandbox(t))
-	requests := make(chan []ai.Message, 1)
-	faux.SetResponses([]ai.FauxResponseStep{reply("first"), callProbe(), reply("the summary"), reply("second"), captureRequest(requests, "third")})
+	requests := make(chan []ai.Message, 2)
+	faux.SetResponses([]ai.FauxResponseStep{reply("first"), callProbe(), reply("the summary"), captureRequest(requests, "second"), captureRequest(requests, "third")})
 	sess, err := r.Open(t.Context(), OpenOptions{
 		Model: fauxModel, SystemPrompt: kopiPrompt, Tools: []tool.Tool{probeTool(okProbe)}, Authority: policy.NewAuthority(),
 		Recall: func() string { return "recalled" },
@@ -1339,10 +1339,37 @@ func TestRecallFollowsCompactionInsideRun(t *testing.T) {
 		_, err = sess.Send(t.Context(), Prompt{Text: prompt}, nil, nil)
 		require.NoError(t, err)
 	}
-	assert.Equal(t, compacted, drain(notices), "between the tool result and the run's next request")
+	assert.Equal(t, compacted, drain(notices))
 	assert.Equal(t, 4, faux.CallCount())
+	assert.Equal(t, []string{"kept prompt"}, afterSummary(t, <-requests, "the summary"), "the run's next request follows the compaction without the recalled line")
 
 	_, err = sess.Send(t.Context(), Prompt{Text: "next"}, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"kept prompt", "recalled", "next"}, afterSummary(t, <-requests, "the summary"))
+}
+
+func TestRecallSkipsFailedCompaction(t *testing.T) {
+	r, faux := newTestRuntime(t, newSandbox(t))
+	faux.SetResponses([]ai.FauxResponseStep{
+		reply("first"), reply("second"),
+		ai.FauxAssistantMessage(ai.FauxContentString(""), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonError), ErrorMessage: "invalid request: bad thing"}),
+	})
+	var recalls atomic.Int32
+	sess, err := r.Open(t.Context(), OpenOptions{
+		Model: fauxModel, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority(),
+		Recall: func() string { recalls.Add(1); return "recalled" },
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+	notices := recordNotices(t, sess)
+
+	for _, prompt := range []string{oldPrompt, keptPrompt} {
+		_, err = sess.Send(t.Context(), Prompt{Text: prompt}, nil, nil)
+		require.NoError(t, err)
+	}
+	evs := drain(notices)
+	require.Len(t, evs, 2)
+	assert.Equal(t, compacted[0], evs[0])
+	assert.Contains(t, evs[1].(event.Notice).Text, "Compaction failed")
+	assert.Zero(t, recalls.Load())
 }

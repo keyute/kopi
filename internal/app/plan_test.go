@@ -201,25 +201,49 @@ func TestRecallNamesThePlanFileInExecuteModeOnceItHasContent(t *testing.T) {
 }
 
 func TestCompactionRecallsTheModeLine(t *testing.T) {
-	h := modeHarness(t)
-	// Together the two prompts pass PiG's compaction threshold on the faux
-	// model's window; the second alone is more than PiG keeps verbatim, so the
-	// first, and the mode line sent with it, is summarised.
-	old, kept := strings.Repeat("a", 240_000), strings.Repeat("b", 240_000)
-	requests := make(chan pigruntimetest.Request, 1)
-	h.faux.SetResponses([]ai.FauxResponseStep{
-		pigruntimetest.Text("first"), pigruntimetest.Text("second"), pigruntimetest.Text("the summary"), pigruntimetest.Capture(t, requests, "third"),
-	})
+	const execLine = "The session is in execute mode."
+	for _, tc := range []struct {
+		name string
+		// between runs after the first prompt, before the compaction.
+		between func(h *harness)
+		want    func(h *harness) []string
+	}{
+		{"plan mode", func(*harness) {}, func(h *harness) []string { return []string{"kept prompt", h.planLine(), "next"} }},
+		{"execute mode with a plan", func(h *harness) {
+			h.c.EnterExecute()
+			writePlan(t, h, "# Plan\n")
+		}, func(h *harness) []string {
+			return []string{"kept prompt", execLine, execLine + " Its plan file is " + h.c.PlanFile() + ".", "next"}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := modeHarness(t)
+			// Together the two prompts pass PiG's compaction threshold on the faux
+			// model's window; the second alone is more than PiG keeps verbatim, so the
+			// first, and the mode line sent with it, is summarised.
+			old, kept := strings.Repeat("a", 240_000), strings.Repeat("b", 240_000)
+			requests := make(chan pigruntimetest.Request, 1)
+			h.faux.SetResponses([]ai.FauxResponseStep{
+				pigruntimetest.Text("first"), pigruntimetest.Text("second"), pigruntimetest.Text("the summary"), pigruntimetest.Capture(t, requests, "third"),
+			})
 
-	h.turn(t, old)
-	h.turn(t, kept)
-	h.turn(t, "next")
+			h.turn(t, old)
+			tc.between(h)
+			h.turn(t, kept)
+			h.turn(t, "next")
 
-	texts := receive(t, requests).UserTexts
-	require.Len(t, texts, 4)
-	assert.Contains(t, texts[0], "the summary")
-	assert.True(t, texts[1] == kept, "the kept prompt")
-	assert.Equal(t, []string{h.planLine(), "next"}, texts[2:])
+			texts := receive(t, requests).UserTexts
+			require.NotEmpty(t, texts)
+			assert.Contains(t, texts[0], "the summary")
+			texts = texts[1:]
+			for i, text := range texts {
+				if text == kept {
+					texts[i] = "kept prompt"
+				}
+			}
+			assert.Equal(t, tc.want(h), texts)
+		})
+	}
 }
 
 func TestExitPlanModeToolIsAttendedOnlyAndNeverForAgents(t *testing.T) {
