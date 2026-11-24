@@ -107,6 +107,40 @@ func TestHistoryReplaysStoredTurnAsLiveEvents(t *testing.T) {
 	assert.Contains(t, got, event.Event(event.ToolStart{CallID: "call-1", Name: "Probe", Args: `{"n":2,"path":"a b"}`}))
 }
 
+func TestStoredHistoryIsWhatTheResumedSessionReplays(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{reply("first answer"), reply("second answer")})
+	var ids []string
+	for _, prompt := range []string{"first", "second"} {
+		sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+		require.NoError(t, err)
+		_, err = sess.Send(t.Context(), Prompt{Text: prompt}, nil, nil)
+		require.NoError(t, err)
+		require.NoError(t, sess.Close(t.Context()))
+		ids = append(ids, sess.ID())
+	}
+
+	id, stored, err := r.StoredHistory(OpenOptions{Continue: true})
+	require.NoError(t, err)
+	assert.Equal(t, ids[1], id)
+	assert.Equal(t, event.TurnStart{Prompt: "second"}, stored[0])
+	continued, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, Continue: true, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+	require.NoError(t, err)
+	assert.Equal(t, continued.ID(), id)
+	assert.Equal(t, continued.History(), stored)
+	require.NoError(t, continued.Close(t.Context()))
+
+	id, stored, err = r.StoredHistory(OpenOptions{ResumeID: ids[0]})
+	require.NoError(t, err)
+	assert.Equal(t, ids[0], id)
+	assert.Equal(t, event.TurnStart{Prompt: "first"}, stored[0])
+	assert.Equal(t, resume(t, r, ids[0]).History(), stored)
+
+	_, _, err = r.StoredHistory(OpenOptions{ResumeID: "missing"})
+	assert.ErrorIs(t, err, ErrSessionNotFound)
+}
+
 func TestHistoryReplaysTextAroundToolCallsAsLiveEvents(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

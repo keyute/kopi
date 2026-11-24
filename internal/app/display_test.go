@@ -76,6 +76,18 @@ func TestDisplayFallbacks(t *testing.T) {
 	}
 }
 
+func TestDisplayReadsAnMCPCallWithoutItsTool(t *testing.T) {
+	d := newDisplay(nil)
+
+	start := d.apply(event.ToolStart{CallID: "c1", Name: "mcp__gh__get_issue", Args: `{"n":1}`}).(event.ToolStart)
+	end := d.apply(event.ToolEnd{CallID: "c1", Name: "mcp__gh__get_issue", Output: "one\ntwo\n"}).(event.ToolEnd)
+
+	assert.Equal(t, `gh/get_issue {"n":1}`, start.Title)
+	assert.Equal(t, `Called gh/get_issue {"n":1}`, start.Done)
+	assert.Equal(t, tool.Action{Verb: "Called", One: "MCP tool", Many: "MCP tools"}, start.Action)
+	assert.Equal(t, "2 lines", end.Summary)
+}
+
 func TestDisplayFailedCall(t *testing.T) {
 	failing := testTool("Fail", policy.Exec, nil)
 	failing.Display.Failure = func(output string) (string, string) { return "exit 1", "tail of " + output }

@@ -627,6 +627,26 @@ func TestSessionChangedRestoresHistory(t *testing.T) {
 	assert.Equal(t, "        ▄ ▄", screen(m)[0], "the header stays first")
 }
 
+func TestSessionPreviewStandsWhenItsSessionOpens(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 40, 12)
+		send(m, event.Notice{Text: "old"})
+
+		send(m, event.SessionPreview{History: append([]event.Event{event.TurnStart{Prompt: "earlier"}}, sealedGroup()...)})
+		require.Equal(t, []string{"", "", "❯ earlier", "", "", "▸ Read 2 files", "", "Done."}, body(m))
+		clickText(t, m, "▸ Read 2 files")
+		m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+		opened, shown := body(m), screen(m)
+		require.Contains(t, opened, "▾ Read 2 files")
+		require.False(t, m.view().follow)
+
+		send(m, event.SessionChanged{SessionID: "s1", Resumed: true, Previewed: true})
+
+		assert.Equal(t, opened, body(m))
+		assert.Equal(t, shown, screen(m))
+	})
+}
+
 func TestSessionChangedClearsTranscript(t *testing.T) {
 	m, _ := newTestModel(t, 30, 20)
 	send(m, event.Notice{Text: "old"})

@@ -2242,6 +2242,59 @@ func TestStartEmitsConnectingActivityBeforeTheSession(t *testing.T) {
 	assert.Empty(t, ofType[event.Activity](bare.rec.all()), "without servers there is nothing to connect to")
 }
 
+func TestStartPreviewsAResumedSessionWhileServersConnect(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	earlier := newHarness(t, sb, Config{})
+	require.NoError(t, earlier.c.Open(t.Context(), OpenRequest{}))
+	earlier.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("done")})
+	earlier.turn(t, "earlier")
+	id := earlier.c.Status().SessionID
+	require.NoError(t, earlier.c.Close(t.Context()))
+
+	srv := holdServers()
+	h := newHarness(t, sb, Config{Servers: srv.wait})
+	previews := subscribeTo[event.SessionPreview](h.c)
+	changes := subscribeTo[event.SessionChanged](h.c)
+	require.NoError(t, h.c.Start(t.Context(), OpenRequest{ResumeID: id}))
+	preview := receiveEvent(t, previews)
+	require.NotEmpty(t, preview.History)
+	assert.Equal(t, event.TurnStart{Prompt: "earlier"}, preview.History[0])
+	assert.Empty(t, ofType[event.SessionChanged](h.rec.all()))
+
+	close(srv.release)
+	changed := receiveEvent(t, changes)
+	assertSwitchDone(t, h)
+	assert.Equal(t, id, changed.SessionID)
+	assert.True(t, changed.Previewed)
+	assert.Nil(t, changed.History)
+	require.NoError(t, h.c.Close(t.Context()))
+
+	for name, tc := range map[string]struct {
+		servers bool
+		req     OpenRequest
+	}{
+		"new session":            {servers: true},
+		"resume without servers": {req: OpenRequest{ResumeID: id}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := Config{}
+			if tc.servers {
+				released := holdServers()
+				close(released.release)
+				cfg.Servers = released.wait
+			}
+			h := newHarness(t, sb, cfg)
+			changes := subscribeTo[event.SessionChanged](h.c)
+			require.NoError(t, h.c.Start(t.Context(), tc.req))
+			changed := receiveEvent(t, changes)
+			assertSwitchDone(t, h)
+			assert.False(t, changed.Previewed)
+			assert.Equal(t, tc.req.ResumeID != "", len(changed.History) > 0)
+			assert.Empty(t, ofType[event.SessionPreview](h.rec.all()))
+		})
+	}
+}
+
 func TestModeChosenWhileStartingCarriesIntoTheSession(t *testing.T) {
 	srv := holdServers()
 	h := newHarness(t, pigruntimetest.NewSandbox(t), Config{Mode: policy.Plan, Servers: srv.wait})

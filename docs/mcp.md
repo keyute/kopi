@@ -27,7 +27,7 @@
 ## Startup
 
 - Servers start at startup.
-- The fullscreen interface shows at once with "Connecting to MCP servers…", and the session opens when the servers have settled or after 10 seconds. A prompt sent before then is queued and sent when the session opens.
+- The fullscreen interface shows at once with "Connecting to MCP servers…", and the session opens when the servers have settled or after 10 seconds. A prompt sent before then is queued and sent when the session opens. With `-c` or `-r` the earlier conversation is drawn at once, before the servers have settled.
 - Print mode waits for the servers before it runs.
 - A server that fails or is late is reported and its tools are absent for the run. The fullscreen interface shows the reasons in the transcript, print mode on stderr.
 - Server instructions are added to the system prompt, at most 2 KB each.
@@ -36,6 +36,7 @@
 ## Tool names
 
 - A server's tools are named `mcp__<server>__<tool>`, with characters outside `A-Z`, `a-z`, `0-9`, `_` and `-` turned into `_`.
+- A call's row and its approval read `<server>/<tool>` with the names spelled as in the tool's name, whether or not the server is connected.
 - The normalized server component must be nonempty, must not contain `__`, and must not end in `_`, so a whole-server permission prefix cannot match another server.
 - Invalid server names fail before connecting.
 - A name over 64 characters, or one that two tools share, is skipped and reported.

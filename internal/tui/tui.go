@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -160,5 +159,5 @@ func exitHint(s app.Status) string {
 	if s.MessageCount == 0 {
 		return ""
 	}
-	return "Resume with: kopi -r " + s.SessionID + " --model '" + strings.ReplaceAll(s.Model, "'", "'\"'\"'") + "'"
+	return "Resume with: kopi -r " + s.SessionID
 }

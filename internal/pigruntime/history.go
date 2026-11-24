@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -44,6 +45,27 @@ func (r *Runtime) SavedHistory(sv Saved) ([]event.Event, error) {
 		return nil, fmt.Errorf("failed to read saved transcript: %w", reword(err))
 	}
 	return historyEntries(manager.GetBranch()), nil
+}
+
+// StoredHistory is the id and the conversation of the session o resumes, as
+// History replays it once open, without opening it. For Continue it is the
+// newest session Sessions lists, which Open can differ from: PiG continues the
+// file changed last.
+func (r *Runtime) StoredHistory(o OpenOptions) (string, []event.Event, error) {
+	// PiG has no public lookup of a session's file by id; its listing has both.
+	infos, err := r.rt.ListSessions()
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to read stored session: %w", err)
+	}
+	i := 0
+	if o.ResumeID != "" {
+		i = slices.IndexFunc(infos, func(info coding.SessionInfo) bool { return info.ID == o.ResumeID })
+	}
+	if i < 0 || i >= len(infos) {
+		return "", nil, fmt.Errorf("failed to read stored session: %w", ErrSessionNotFound)
+	}
+	events, err := r.SavedHistory(Saved{path: infos[i].Path})
+	return infos[i].ID, events, err
 }
 
 func historyEntries(entries []coding.SessionEntry) []event.Event {

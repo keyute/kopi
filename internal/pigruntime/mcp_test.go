@@ -136,7 +136,7 @@ func TestServersSkipLongAndDuplicateNames(t *testing.T) {
 		fmt.Sprintf("%s: name longer than 64 characters", long),
 		"a_b: same name as a.b",
 	}, st.Skipped)
-	assert.Equal(t, "srv/a.b", st.Tools[0].Label)
+	assert.Equal(t, "Tool a.b of MCP server srv.", st.Tools[0].Description)
 }
 
 func TestServersErrorResult(t *testing.T) {

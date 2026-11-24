@@ -226,6 +226,8 @@ type sessionSwitch struct {
 	// prompts are queued rather than refused; Close calls it to end the wait
 	// for the servers.
 	cancelWait context.CancelFunc
+	// previewed is the session whose conversation preview sent.
+	previewed string
 }
 
 func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
@@ -404,7 +406,8 @@ func (c *Controller) Open(ctx context.Context, req OpenRequest) error {
 // returns at once and opens the session in the background, reporting failure
 // as an Error event. Prompts given until the session opens are queued and
 // start its first turn; /new and /resume are refused with ErrBusy meanwhile.
-// The wait for the servers runs without life, so Close can end it.
+// The wait for the servers runs without life, so Close can end it. A resumed
+// session's stored conversation is sent as a SessionPreview ahead of that wait.
 //
 // When the check fails only because the model's provider has no credential,
 // an attended Start instead returns nil and runs that provider's login, as
@@ -437,6 +440,9 @@ func (c *Controller) startFirst(ctx context.Context, req OpenRequest, notices []
 	}
 	go func() {
 		defer cancel()
+		if c.cfg.Servers != nil && (req.ResumeID != "" || req.Continue) {
+			c.preview(req, op)
+		}
 		statuses, err := c.servers(ctx)
 		if c.cfg.Servers != nil {
 			c.relay.emit(event.Activity{})
@@ -461,6 +467,29 @@ func (c *Controller) startFirst(ctx context.Context, req OpenRequest, notices []
 		}
 	}()
 	return nil
+}
+
+// preview sends the conversation req resumes ahead of the wait for the
+// servers and records its session on op. A failed read sends nothing: the open
+// reports it.
+func (c *Controller) preview(req OpenRequest, op *sessionSwitch) {
+	// Held so that it cannot touch the runtime after Close.
+	c.life.Lock()
+	defer c.life.Unlock()
+	if c.isClosed() {
+		return
+	}
+	id, history, err := c.rt.StoredHistory(pigruntime.OpenOptions{ResumeID: req.ResumeID, Continue: req.Continue})
+	if err != nil {
+		return
+	}
+	// ToolSearch joins the tools only once the servers have settled.
+	d := newDisplay(append(slices.Clone(c.tools), tool.NewToolSearch(nil, nil, nil)))
+	for i, ev := range history {
+		history[i] = d.apply(ev)
+	}
+	op.previewed = id
+	c.relay.emit(event.SessionPreview{History: history})
 }
 
 // check resolves the model, then checks that req can be opened; it returns the
@@ -1193,9 +1222,13 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		Name:         sess.Name(),
 	}
 	if changed.Resumed {
+		// PiG can continue another session than the one previewed.
+		changed.Previewed = op.previewed == id
 		for _, ev := range sess.History() {
 			rec.Observe(ev)
-			changed.History = append(changed.History, d.apply(ev))
+			if !changed.Previewed {
+				changed.History = append(changed.History, d.apply(ev))
+			}
 		}
 	}
 	c.relay.emit(changed)

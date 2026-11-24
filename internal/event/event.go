@@ -204,7 +204,14 @@ type SessionChanged struct {
 	// History replays a resumed session's stored conversation, in order;
 	// nil for a new session.
 	History []Event
+	// Previewed reports that a SessionPreview already carried the conversation,
+	// so History is nil and what the frontend drew of it stands.
+	Previewed bool
 }
+
+// SessionPreview replays the stored conversation of the session being resumed,
+// before it opens. The SessionChanged of that session is Previewed.
+type SessionPreview struct{ History []Event }
 
 // SessionNamed reports the name the main session was just given.
 type SessionNamed struct{ Name string }
@@ -258,6 +265,7 @@ func (ToolsChanged) isEvent()        {}
 func (ModeChanged) isEvent()         {}
 func (ModelChanged) isEvent()        {}
 func (SessionChanged) isEvent()      {}
+func (SessionPreview) isEvent()      {}
 func (SessionNamed) isEvent()        {}
 func (StatusCommandResult) isEvent() {}
 func (Changes) isEvent()             {}
