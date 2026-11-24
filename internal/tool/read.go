@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -139,12 +140,30 @@ func readTitle(ws *Workspace) func(json.RawMessage) string {
 	}
 }
 
-// readBody is the output, except for the notices that replace file lines.
+// numberedLine matches a file line of read's output: its number, a tab, the text.
+var numberedLine = regexp.MustCompile(`^ *(\d+)\t(.*)$`)
+
+// readBody is the output with each line's number right-aligned to the widest
+// number, two spaces before the text, except for the notices that replace file
+// lines, which have no body. Other lines, such as the continuation notice, pass
+// through.
 func readBody(output string) string {
 	if output == emptyFileNotice || strings.HasPrefix(output, pastEndNotice) || strings.HasPrefix(output, imageNotice) {
 		return ""
 	}
-	return output
+	lines := strings.Split(output, "\n")
+	width := 0
+	for _, l := range lines {
+		if m := numberedLine.FindStringSubmatch(l); m != nil {
+			width = max(width, len(m[1]))
+		}
+	}
+	for i, l := range lines {
+		if m := numberedLine.FindStringSubmatch(l); m != nil {
+			lines[i] = fmt.Sprintf("%*s  %s", width, m[1], m[2])
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // readSummary relies on read's output shape: every file line and the

@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"slices"
+
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
@@ -113,7 +115,7 @@ func (a *approvalDialog) seen(_ *model, msg tea.Msg) bool {
 	return !ended || ev.Token != a.req.Token
 }
 
-// approvalPreview is the shown approval's preview rendered by previewLine for
+// approvalPreview is the shown approval's preview rendered by previewRows for
 // width and th, kept across renders.
 type approvalPreview struct {
 	rows  []string
@@ -123,20 +125,30 @@ type approvalPreview struct {
 
 func (p *approvalPreview) lines(preview []tool.PreviewLine, width int, th theme) []string {
 	if p.rows == nil || p.width != width || p.th != th {
-		p.rows, p.width, p.th = make([]string, 0, len(preview)), width, th
-		for _, l := range preview {
-			p.rows = append(p.rows, previewLine(l, width, th)...)
-		}
+		p.rows, p.width, p.th = previewRows(preview, width, th), width, th
 	}
 	return p.rows
 }
 
-func previewLine(l tool.PreviewLine, width int, th theme) []string {
-	switch l.Kind {
-	case tool.Removed:
-		return hang("- ", fg(th.error), l.Text, fg(th.error), width)
-	case tool.Added:
-		return hang("+ ", fg(th.success), l.Text, fg(th.success), width)
+// previewRows draws a preview flush left in the muted colour; when any line is
+// added or removed, each line takes a sign column instead: "+ " and "- " in
+// the success and error colours, two spaces and dim for context.
+func previewRows(preview []tool.PreviewLine, width int, th theme) []string {
+	signed := slices.ContainsFunc(preview, func(l tool.PreviewLine) bool { return l.Kind != tool.Context })
+	rows := make([]string, 0, len(preview))
+	for _, l := range preview {
+		switch {
+		case !signed:
+			for _, s := range wrap(l.Text, width) {
+				rows = append(rows, fg(th.muted).Render(s))
+			}
+		case l.Kind == tool.Removed:
+			rows = append(rows, hang("- ", fg(th.error), l.Text, fg(th.error), width)...)
+		case l.Kind == tool.Added:
+			rows = append(rows, hang("+ ", fg(th.success), l.Text, fg(th.success), width)...)
+		default:
+			rows = append(rows, hang("  ", fg(th.dim), l.Text, fg(th.dim), width)...)
+		}
 	}
-	return hang("  ", fg(th.dim), l.Text, fg(th.dim), width)
+	return rows
 }

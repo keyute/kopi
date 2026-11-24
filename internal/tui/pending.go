@@ -45,7 +45,7 @@ func (c *pendingCache) rows(queued []string, session string, spans func(string) 
 		if ks := km.queueEdit.Keys(); len(ks) > 0 {
 			note += " · " + ks[0] + " to edit"
 		}
-		c.note = hang("  ↳ ", fg(th.dim), note, fg(th.dim), width)
+		c.note = under(0, note, fg(th.dim), width)
 	}
 	maxContent = min(maxContent, maxRows-4-len(c.note))
 	if maxContent < 1 {

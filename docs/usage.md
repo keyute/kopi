@@ -146,6 +146,28 @@ Each tool call is a row. It names the call by the tool while it runs, while it w
   ↳ 50 lines
 ```
 
+- A row's bullet is at the left edge and its title two columns in. The `↳` line starts two columns in, with its text four in, and an opened body is six columns in. A call in a group is a `↳` line two columns in, and its opened body is eight columns in. Wrapped lines hang under their text.
+
+```text
+• Ran ls
+  ↳ 2 lines
+      a.go
+      b.go
+▾ Read 1 file, ran 1 command
+  ↳ Read a.go:98-101 · 4 lines
+         98  func a() {
+         99      b()
+        100  }
+        101
+  ↳ Ran ls · 2 lines
+        a.go
+        b.go
+• Edited a.go
+  ↳ +1 -1
+      - old line
+      + new line
+```
+
 - A run of successful calls folds into a group, `Read 3 files, ran 2 commands`; click it or press Ctrl+O to list its calls. A call that did not succeed, and the question and plan-approval rows below, are never in a group.
 - A group clause uses its rows' verb and a noun that covers every row in it: a `Read` of the plan and of a saved output file count as `read the plan` and `read 1 output file`, apart from `read 3 files`; a `Skill` call that reads a file of a skill (`Read skill <name> <file>`) counts as `read 1 skill file`.
 - Some clauses are not counted: `searched the web`, `searched tools`, `read the plan`, `wrote the plan`, `edited the plan`. Repeats read `searched the web 3 times`, `edited the plan 3 times`.
@@ -189,17 +211,18 @@ A call that did not succeed is one of:
 | Interrupted | `↳ interrupted` | The turn was interrupted while it ran |
 | Failed | `↳ exit code 1 · 84 lines` | It ran and returned an error; a one-line error shows itself, any other shows `failed` |
 
-Rejected, denied and interrupted rows have a warning-coloured bullet, a failed row the error colour.
+The bullet is green for a call that succeeded, yellow for one you or a rule refused, interrupted or stopped, and red for one that failed. A row that did not succeed colours its `↳` line like its bullet; a successful row's `↳` line is dim.
 
 - A failed command's output shows under its line: in full up to 5 lines, otherwise its first two and last two lines around `… N more lines`. Click the row or press Ctrl+O for all of it.
 - A successful row opens to the result as the model received it, except where this list says otherwise. An `Edit` or `Write` row shows `+3 -1` or `+40` and opens to its removed lines and its added lines.
 - A `Bash` row whose title cut the command (a second line, or more than 80 characters) opens to the whole command after `$ `, above its output, whatever the outcome; a rejected, denied or interrupted row opens to it under its summary, and a cut command with no output still opens.
 - Lines of an opened `Edit` or `Write` longer than 2000 characters end ` [line truncated]`.
 - An agent's launch row opens to the prompt the main agent gave it, as a workflow's row opens to its script; a message row opens to the message.
-- An agent's end row opens to its final reply, and a failed one shows its reason under it. A shell's end row shows its reason (`exit code 1`) when it failed and opens to the last lines of its output that the model was sent.
+- An agent's end row opens to its final reply, and a failed one shows its reason on the `↳` line, after the agent count of a workflow (`↳ 2 agents · 2 failed · <reason>`). A shell's end row shows its reason (`exit code 1`) when it failed and opens to the last lines of its output that the model was sent.
 - A row that has nothing to add to its title and summary does not open: a command with no output, a file that is empty, a search with no match. A question's answers are on its row.
 - A plan decision opens to the plan as it was presented, under your feedback for a revision.
-- An opened result is the model's text, so it includes notices written to the model, such as `use offset=2001 to continue`.
+- A plan you sent back or dismissed and a question you dismissed read as rows that did not succeed: a yellow bullet and `↳` line, the tool's title (`Plan approval`, `AskUserQuestion`), and your feedback shown under the plan row without opening it.
+- An opened result is the model's text, so it includes notices written to the model, such as `use offset=2001 to continue`. A `Read` row shows its line numbers right-aligned to the widest, without the padding the model receives.
 - An edit's lines show without surrounding context or line numbers.
 - Colour in command output is not kept.
 - Only the row's title line opens and closes it; scroll up to close a long body.

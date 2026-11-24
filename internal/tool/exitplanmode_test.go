@@ -183,6 +183,14 @@ func TestExitPlanModeBody(t *testing.T) {
 	assert.Empty(t, body(planResult(PlanAnswer{}, policy.Plan, false)))
 }
 
+func TestExitPlanModeRefused(t *testing.T) {
+	refused := NewExitPlanMode(nil, nil).Display.Refused
+
+	assert.True(t, refused(planResult(PlanAnswer{Feedback: "x"}, policy.Plan, false)))
+	assert.True(t, refused(planResult(PlanAnswer{}, policy.Plan, true)))
+	assert.False(t, refused(planResult(PlanAnswer{Approved: true}, policy.Execute, false)))
+}
+
 func TestExitPlanModeSummary(t *testing.T) {
 	summary := NewExitPlanMode(nil, nil).Display.Summary
 

@@ -363,7 +363,7 @@ func TestRowStates(t *testing.T) {
 		{
 			"failed",
 			[]event.Event{start("a"), event.ToolEnd{CallID: "a", IsError: true, Summary: "failed", Output: "boom\nbang\n", Body: "boom\nbang\n"}},
-			[]string{"", "• a.go", "  ↳ failed", "    boom", "    bang"},
+			[]string{"", "• a.go", "  ↳ failed", "      boom", "      bang"},
 		},
 		{
 			"unfinished",
@@ -620,7 +620,7 @@ func TestSessionChangedRestoresHistory(t *testing.T) {
 		"", "", "❯ earlier", "",
 		"", "▸ Read 2 files",
 		"", "reply",
-		"", "• c.go", "    nope",
+		"", "• c.go", "      nope",
 		"", "κ Worked for 5s",
 		"", "• Read 2 files", "  ↳ d.go · 2 lines", "  ↳ e.go · 4 lines",
 	}, body(m))

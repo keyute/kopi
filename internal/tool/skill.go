@@ -120,6 +120,12 @@ func NewSkill(skills []skill.Skill, home string) Tool {
 				}
 				return readSummary(output)
 			},
+			Body: func(output string) string {
+				if strings.HasPrefix(output, "<skill ") {
+					return output
+				}
+				return readBody(output)
+			},
 			Action: Action{Verb: "Loaded", One: "skill", Many: "skills"},
 			Outcome: func(raw json.RawMessage, _ string) (string, Action) {
 				var args skillArgs

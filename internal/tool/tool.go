@@ -67,8 +67,12 @@ type Display struct {
 	// Summary is the line under a successfully finished call: "212 lines".
 	Summary func(output string) string
 	// Body is what an opened row shows of a successful result; nil is the
-	// output, "" means the row does not open.
+	// output, "" means the row does not open. Its text starts at column 0: the
+	// row indents it.
 	Body func(output string) string
+	// Refused reports that a successful result records the human declining; the
+	// row then reads as a rejected call's, with Summary and Body as for a success.
+	Refused func(output string) bool
 	// Change is, for a file change, the line under the row ("+3 -1") and the
 	// full removed and added lines an opened row shows; another call may give
 	// context lines, such as the script a Workflow launches.

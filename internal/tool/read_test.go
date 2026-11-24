@@ -232,10 +232,25 @@ func TestReadDisplaySummary(t *testing.T) {
 func TestReadDisplayBody(t *testing.T) {
 	tool, _ := newReadTool(t)
 
-	assert.Equal(t, "     1\tx\n", tool.Display.Body("     1\tx\n"))
+	assert.Equal(t, "1  x\n", tool.Display.Body("     1\tx\n"))
 	assert.Empty(t, tool.Display.Body(emptyFileNotice))
 	assert.Empty(t, tool.Display.Body("(offset 11 is past the end of the file, which has 10 lines)"))
 	assert.Empty(t, tool.Display.Body("(image/png, 20 bytes)"))
+}
+
+func TestReadBodyAlignsNumbersToTheWidest(t *testing.T) {
+	for name, tc := range map[string]struct{ output, want string }{
+		"one digit":    {"     1\ta\n     2\tb\n", "1  a\n2  b\n"},
+		"two digits":   {"     9\ta\n    10\tb\n", " 9  a\n10  b\n"},
+		"three digits": {"    99\ta\n   100\tb\n", " 99  a\n100  b\n"},
+		"four digits":  {"   999\ta\n  1000\tb\n", " 999  a\n1000  b\n"},
+		"notice":       {"    98\ta\n    99\t\n   100\tc\n[Showing lines 98-100. More lines remain; use offset=101 to continue.]\n", " 98  a\n 99  \n100  c\n[Showing lines 98-100. More lines remain; use offset=101 to continue.]\n"},
+		"cut marker":   {"     1\t" + strings.Repeat("x", 3) + lineCutMarker + "\n", "1  xxx" + lineCutMarker + "\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, readBody(tc.output))
+		})
+	}
 }
 
 func TestReadSummaryOmittedImageIsNotAnImage(t *testing.T) {
