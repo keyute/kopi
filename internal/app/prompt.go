@@ -82,14 +82,10 @@ func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group
 		parts = append(parts, pigruntime.PromptPart{Name: "instructions " + scope + " " + g.Dir, Text: strings.Join(texts, "\n\n")})
 	}
 	var serverLines []string
-	listed := "tools: "
-	if slices.ContainsFunc(tools, func(t tool.Tool) bool { return t.Name == "ToolSearch" }) {
-		listed = "tools, loaded by ToolSearch: "
-	}
 	servers = slices.SortedFunc(slices.Values(servers), func(a, b mcpServer) int { return strings.Compare(a.name, b.name) })
 	for _, s := range servers {
 		if len(s.tools) > 0 {
-			serverLines = append(serverLines, "MCP server "+s.name+" "+listed+strings.Join(s.tools, ", ")+".")
+			serverLines = append(serverLines, "MCP server "+s.name+" tools, loaded by ToolSearch: "+strings.Join(s.tools, ", ")+".")
 		}
 		if text := strings.TrimSpace(s.instructions); text != "" {
 			serverLines = append(serverLines, "Instructions from MCP server "+s.name+":", truncate(text, maxServerInstructions))

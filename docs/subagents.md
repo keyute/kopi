@@ -13,7 +13,7 @@ A subagent is another agent that the main agent starts for one task. It has its 
 name: explorer
 description: Searches the codebase and reports what it finds
 effort: low
-tools: [Read, Glob, Grep]
+tools: [Read, Glob, Grep, LS]
 mode: plan
 ---
 

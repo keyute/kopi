@@ -32,6 +32,7 @@ const (
 	timeoutFormat = "Background task %s: this command did not finish within its %v timeout and keeps running in the background"
 
 	backgroundFile = ", writing its output to %s"
+	backgroundRead = "; use Read to read it"
 	backgroundTold = ". You are told when it ends."
 	backgroundPoll = ". You are told when it ends: do not poll the file."
 )
@@ -65,6 +66,9 @@ func BackgroundTail(file string, wakes bool) string {
 	}
 	switch {
 	case !wakes:
+		if file != "" {
+			tail += backgroundRead
+		}
 		return tail + "."
 	case file == "":
 		return tail + backgroundTold
@@ -109,7 +113,7 @@ func backgroundTask(output string) (started, ok bool) {
 // background result promises no report of the end.
 func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed, wakes bool) Tool {
 	description := "Runs a shell command (bash, else sh) in the workspace and returns its combined stdout and stderr. " +
-		"Every call starts a fresh shell in the workspace with no input: cd and variables do not carry over. "
+		"Every call starts a fresh shell with no input: cd and variables do not carry over. "
 	timeoutText := "Milliseconds before the command is stopped; default 120000, at most 600000."
 	properties := map[string]any{
 		"command": map[string]any{

@@ -95,9 +95,6 @@ func TestPromptListsDeferredServerToolsByServer(t *testing.T) {
 	assert.NotContains(t, plain[0].Text, "deferred")
 	assert.NotContains(t, plain[0].Text, "MCP server")
 	assert.NotContains(t, plain[0].Text, "ToolSearch")
-
-	withoutSearch := buildPrompt("/w", []tool.Tool{read, zt}, nil, []mcpServer{{name: "zeta", tools: []string{zt.Name}}}, nil, false, false)
-	assert.Equal(t, "MCP server zeta tools: mcp__zeta__t.", withoutSearch[1].Text, "without ToolSearch nothing is loaded by it")
 }
 
 func TestPromptInstructionNamesAreScopedAndStable(t *testing.T) {

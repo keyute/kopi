@@ -231,6 +231,8 @@ func TestBashDisplayBackgroundNotifications(t *testing.T) {
 		{"timeout moved without a file", "Background task t123: this command did not finish within its 1m30s timeout and keeps running in the background" + BackgroundTail("", true), "after 1m 30s"},
 		{"millisecond timeout", "Background task t1: this command did not finish within its 1ms timeout and keeps running in the background" + BackgroundTail("", true), "after 1ms"},
 		{"fractional timeout", "Background task t1: this command did not finish within its 1.001s timeout and keeps running in the background" + BackgroundTail("", true), "after 1.001s"},
+		{"started, saved before the read hint", "Background task t1 started, writing its output to /outputs/s1/a.txt.", ""},
+		{"timeout moved, saved before the read hint", "Background task t2: this command did not finish within its 10s timeout and keeps running in the background, writing its output to /outputs/s1/a.txt.", "after 10s"},
 		{"started, saved before the tail", "Background task t1 started.", ""},
 		{"user moved, saved before the tail", "Background task t12: the user moved this command to the background, where it keeps running.", ""},
 		{"timeout moved, saved before the tail", "Background task t123: this command did not finish within its 2m0s timeout and keeps running in the background.", "after 2m"},
@@ -250,7 +252,7 @@ func TestBashDisplayBackgroundNotifications(t *testing.T) {
 func TestBackgroundTailPromisesAReportOnlyWhereTheEndWakes(t *testing.T) {
 	assert.Equal(t, ", writing its output to /o/a.txt. You are told when it ends: do not poll the file.", BackgroundTail("/o/a.txt", true))
 	assert.Equal(t, ". You are told when it ends.", BackgroundTail("", true))
-	assert.Equal(t, ", writing its output to /o/a.txt.", BackgroundTail("/o/a.txt", false))
+	assert.Equal(t, ", writing its output to /o/a.txt; use Read to read it.", BackgroundTail("/o/a.txt", false))
 	assert.Equal(t, ".", BackgroundTail("", false))
 }
 

@@ -3613,9 +3613,9 @@ func modeHarness(t *testing.T) *harness {
 }
 
 func (h *harness) planLine() string {
-	return "Plan mode is on: do not change the workspace. When the request needs changes, research it, write a plan to " + h.c.PlanFile() +
-		" (Read, Write and Edit work on that file in both modes) and call ExitPlanMode for the user's approval instead of ending your turn; " +
-		"a request that needs no changes is just answered."
+	return "Plan mode is on: do not change the workspace. Research the request; if you end with changes to propose, asked for or not, write them as a plan to " + h.c.PlanFile() +
+		" (Read, Write and Edit work on that file in both modes) and call ExitPlanMode for the user's approval instead of ending your turn. " +
+		"With no changes to propose, just answer."
 }
 
 // userTexts sends each prompt as its own turn and returns the user messages the

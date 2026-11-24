@@ -224,7 +224,7 @@ func TestBashBackgroundResultWithoutWakePromisesNoReport(t *testing.T) {
 
 	require.NoError(t, err)
 	running := waitChange(t, changes)
-	assert.Equal(t, "Background task t1 started, writing its output to "+running.OutputFile+".", out.Text)
+	assert.Equal(t, "Background task t1 started, writing its output to "+running.OutputFile+"; use Read to read it.", out.Text)
 	waitFor(t, started, "the command to start")
 }
 

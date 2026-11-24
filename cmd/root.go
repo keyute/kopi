@@ -579,7 +579,7 @@ func rootTools(ws *tool.Workspace, plans *tool.Plans, outputs *tool.Outputs, hid
 	readWS := ws.WithOutputs(outputs)
 	rootWS := ws.WithPlans(plans)
 	return []tool.Tool{
-		tool.NewRead(rootWS.WithOutputs(outputs)), tool.NewGlob(ws, hidden), tool.NewGrep(readWS, hidden),
+		tool.NewRead(rootWS.WithOutputs(outputs)), tool.NewGlob(ws, hidden), tool.NewGrep(readWS, hidden), tool.NewLS(ws, hidden),
 		tool.NewWrite(rootWS), tool.NewEdit(rootWS), tool.NewBash(shell, planShell, tasks, allowUnsandboxed, wake),
 		tool.NewTaskStop(tasks),
 		tool.NewWebFetch("Kopi/"+kopiVersion(), answer),

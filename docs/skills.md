@@ -35,7 +35,7 @@
 
 ## Limitations
 
-- `Read`, `Glob` and `Grep` cannot reach a skill's files outside the start directory; the `Skill` tool's `file` can.
+- `Read`, `Glob`, `Grep` and `LS` cannot reach a skill's files outside the start directory; the `Skill` tool's `file` can.
 - The `Skill` tool ties a skill to the directory found at start.
   - A process that swaps that directory while Kopi starts can tie it to another directory, whose files `Skill` then reads (files in Kopi's home outside `skills/` stay refused on every read).
   - Like `Read`, its protection of Kopi's home is by file identity, so a hard link into Kopi's home is readable.

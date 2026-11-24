@@ -175,9 +175,9 @@ func TestRefreshPlanRepeatsTheRequestWithTheEditedText(t *testing.T) {
 }
 
 func TestModeLineSteersToThePlanOnlyWhereItCanBeApproved(t *testing.T) {
-	assert.Equal(t, "Plan mode is on: do not change the workspace. When the request needs changes, research it, write a plan to /plans/s.md"+
-		" (Read, Write and Edit work on that file in both modes) and call ExitPlanMode for the user's approval instead of ending your turn;"+
-		" a request that needs no changes is just answered.", modeLine(policy.Plan, "/plans/s.md", true))
+	assert.Equal(t, "Plan mode is on: do not change the workspace. Research the request; if you end with changes to propose, asked for or not, write them as a plan to /plans/s.md"+
+		" (Read, Write and Edit work on that file in both modes) and call ExitPlanMode for the user's approval instead of ending your turn."+
+		" With no changes to propose, just answer.", modeLine(policy.Plan, "/plans/s.md", true))
 	assert.Equal(t, "The session is in plan mode. Its plan file is /plans/s.md; Read, Write and Edit work on that file in both modes.",
 		modeLine(policy.Plan, "/plans/s.md", false), "ExitPlanMode is not offered")
 	assert.Equal(t, "The session is in plan mode.", modeLine(policy.Plan, "", true))
