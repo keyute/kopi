@@ -160,19 +160,36 @@ func TestRunningIsTheLatestRunningCallsTitle(t *testing.T) {
 	assert.False(t, ok, "an unfinished call is not running")
 }
 
-func TestPlanRequestedAppendsABlockAndTheSameTokenReplacesItsText(t *testing.T) {
+func TestPlanRequestedLandsOnTheRunningSoloCallAndSurvivesItsEnd(t *testing.T) {
+	planStart := func(id string) event.ToolStart {
+		return event.ToolStart{CallID: id, Name: "ExitPlanMode", Title: "Plan approval", Solo: true}
+	}
+	plans := func(tr *Transcript) map[string]string {
+		out := map[string]string{}
+		for _, b := range tr.Blocks() {
+			if r, ok := b.(Row); ok {
+				out[r.Call.ID] = r.Call.Plan
+			}
+		}
+		return out
+	}
 	var tr Transcript
 	tr.Apply(start("a"))
+	tr.Apply(planStart("p"))
 	tr.Apply(event.PlanRequested{Token: 1, Plan: "# v1"})
-	tr.Apply(end("a"))
-	assert.Equal(t, []Block{row("a", OK), Plan{key: "item:1", Text: "# v1"}}, tr.Blocks(), "the tool row is an ordinary row")
+	assert.Equal(t, map[string]string{"a": "", "p": "# v1"}, plans(&tr), "a plain call does not take the plan")
 
 	tr.Apply(event.PlanRequested{Token: 1, Plan: "# v2"})
-	tr.Apply(event.PlanEnded{Token: 1})
-	assert.Equal(t, []Block{row("a", OK), Plan{key: "item:1", Text: "# v2"}}, tr.Blocks(), "the block outlives the dialog")
+	assert.Equal(t, "# v2", plans(&tr)["p"], "a repeat replaces the text")
 
+	tr.Apply(event.PlanEnded{Token: 1})
+	tr.Apply(end("p"))
+	tr.Apply(end("a"))
+	assert.Equal(t, "# v2", plans(&tr)["p"], "the plan outlives the call's end")
+
+	tr.Apply(planStart("q"))
 	tr.Apply(event.PlanRequested{Token: 2, Plan: "# next"})
-	assert.Equal(t, []Block{row("a", OK), Plan{key: "item:1", Text: "# v2"}, Plan{key: "item:2", Text: "# next"}}, tr.Blocks())
+	assert.Equal(t, map[string]string{"a": "", "p": "# v2", "q": "# next"}, plans(&tr))
 }
 
 func TestToolEndSwapsTitleOnSuccessOnly(t *testing.T) {

@@ -129,10 +129,10 @@
 
 ## ExitPlanMode
 
-- Takes no arguments. Its row reads `Plan approval`, with `approved`, `revision requested` or `dismissed` under it, and never folds into a group; a revision opens to your feedback. In plan mode it shows you the plan from the session's plan file and asks `Approve this plan?` with `Yes` and `No`.
+- Takes no arguments. Its row reads `Plan approval`, with `approved`, `revision requested` or `dismissed` under it, and never folds into a group; once answered it opens to the plan as it was presented, under your feedback for a revision. In plan mode it shows you the plan from the session's plan file and asks `Approve this plan?` with `Yes` and `No`.
 - Each root session in the fullscreen interface has a plan file, `plans/<session id>.md` in Kopi's home. The model writes it with `Write` and `Edit`; `Read`, `Write` and `Edit` reach that one file in both modes without asking by default. [Rules](permissions.md#precedence) still apply to it.
 - A resumed session keeps its plan file; a new session gets a new one. Kopi never deletes plan files.
-- The plan is drawn in the main session's transcript as Markdown when it is presented, and that view opens if you were viewing a subagent. On resume only the tool's row is restored; the plan is in the file.
+- While the dialog is open the plan is drawn as Markdown under the `Plan approval` row in the main session's transcript, and that view opens if you were viewing a subagent. Once answered the row closes to your decision; a click on it or Ctrl+O opens the plan as it was presented. After a resume the row does not open to the plan; it is in the file.
 - `Yes` switches the session to execute mode and the turn continues: the result tells the model to carry out the plan.
 - `No` takes feedback typed on its row. The feedback goes to the model, which stays in plan mode and can revise the plan and ask again. A blank `No` or Esc dismisses the plan and stops the turn; the model sees that you dismissed it.
 - The call is an error when the session is not in plan mode or the plan file is missing or empty.
@@ -202,7 +202,7 @@
 - In an `AskUserQuestion` dialog Space, Left, Right and the number keys are fixed keys, not [`keys`](configuration.md#keys) entries.
 - A note on an option that is not chosen is dropped.
 - The plan file is matched by its absolute, cleaned path; a symlink, hard link or different-case spelling of it is treated like the rest of Kopi's home.
-- On resume the plan is not drawn again.
+- After a resume the `Plan approval` row does not open to the plan.
 - In an `ExitPlanMode` dialog the number keys are fixed keys, not [`keys`](configuration.md#keys) entries.
 - While a question is open PgUp and PgDn, and the mouse wheel over the dialog, scroll a cut preview or review, not the transcript, and do nothing when nothing is cut.
 
