@@ -68,6 +68,9 @@ func (d *display) apply(ev event.Event) event.Event {
 			return e
 		}
 		display := d.tool(e.Name).Display
+		if display.Refused != nil && display.Refused(e.Output) {
+			e.Kind = event.EndRejected
+		}
 		if display.Outcome != nil {
 			e.Done, e.Action = display.Outcome(json.RawMessage(e.Args), e.Output)
 		}

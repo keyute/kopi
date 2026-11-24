@@ -116,7 +116,7 @@ func (c *pendingCache) build(queued []event.Queued, spans func(string) []app.Spa
 	if ks := km.queueEdit.Keys(); len(ks) > 0 {
 		note += " · " + ks[0] + " to edit"
 	}
-	c.note = hang("  ↳ ", fg(c.th.dim), note, fg(c.th.dim), c.width)
+	c.note = under(note, fg(c.th.dim), c.width)
 	end := c.boxes[len(c.boxes)-1][1]
 	c.box = slices.Insert(c.box, end, append([]string{""}, c.note...)...)
 }

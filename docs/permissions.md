@@ -58,7 +58,7 @@ Permission rules in `config.json` allow, ask about or deny calls:
 
 The fullscreen interface asks before a call that needs approval.
 
-- It shows the whole change, command or arguments. A preview that does not fit scrolls, with `… N earlier lines` and `… N more lines` counting the screen rows left out and the scroll hint on the note row. The status line's `sandbox` segment shows whether `Bash` runs sandboxed by default, and an `unsandboxed` call's title reads `Bash (unsandboxed) …`.
+- It shows the whole change, command or arguments. A preview with added or removed lines draws `+ ` and `- ` before them, and context lines two spaces in; one without (a command, a URL) is drawn flush left. A preview that does not fit scrolls, with `… N earlier lines` and `… N more lines` counting the screen rows left out and the scroll hint on the note row. The status line's `sandbox` segment shows whether `Bash` runs sandboxed by default, and an `unsandboxed` call's title reads `Bash (unsandboxed) …`.
 - Options:
   - `Yes`
   - `Yes, allow all edits this session` (for `Write` and `Edit` when no rule asked)

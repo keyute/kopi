@@ -161,8 +161,9 @@ func NewAskUserQuestion(ask Ask) Tool {
 				}
 				return strings.Join(answers, " · ")
 			},
-			Solo: true,
-			Body: func(string) string { return "" },
+			Solo:    true,
+			Refused: func(output string) bool { return output == questionsDismissed },
+			Body:    func(string) string { return "" },
 		},
 	}
 }

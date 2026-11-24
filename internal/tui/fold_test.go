@@ -71,7 +71,7 @@ func TestClickOnMemberTogglesItsOutputOnly(t *testing.T) {
 		open := []string{"", "▾ Read 2 files", "  ↳ a.go · 3 lines", "  ↳ b.go · 1 line", "", "Done."}
 
 		clickText(t, m, "  ↳ a.go · 3 lines")
-		assert.Equal(t, []string{"", "▾ Read 2 files", "  ↳ a.go · 3 lines", "    a1", "    a2", "  ↳ b.go · 1 line", "", "Done."}, body(m))
+		assert.Equal(t, []string{"", "▾ Read 2 files", "  ↳ a.go · 3 lines", "        a1", "        a2", "  ↳ b.go · 1 line", "", "Done."}, body(m))
 
 		clickText(t, m, "  ↳ a.go · 3 lines")
 		assert.Equal(t, open, body(m))
@@ -100,7 +100,7 @@ func TestLiveGroupThatSealsForgetsExpansion(t *testing.T) {
 		m, _ := newTestModel(t, 40, 30)
 		send(m, start("a"), okOut("a", "3 lines", "a1"), start("b"), ok("b", "1 line"))
 		clickText(t, m, "  ↳ a.go · 3 lines")
-		require.Equal(t, []string{"", "• Read 2 files", "  ↳ a.go · 3 lines", "    a1", "  ↳ b.go · 1 line"}, body(m))
+		require.Equal(t, []string{"", "• Read 2 files", "  ↳ a.go · 3 lines", "        a1", "  ↳ b.go · 1 line"}, body(m))
 
 		send(m, event.TextDelta{Text: "Done."})
 		assert.Equal(t, []string{"", "▸ Read 2 files", "", "Done."}, body(m))
@@ -119,7 +119,7 @@ func TestClickOnSingleOkRowTogglesOutput(t *testing.T) {
 		assert.Equal(t, []string{"", "• a.go", "  ↳ 3 lines"}, body(m), "only the title line toggles")
 
 		clickText(t, m, "• a.go")
-		assert.Equal(t, []string{"", "• a.go", "  ↳ 3 lines", "    a1", "    a2"}, body(m))
+		assert.Equal(t, []string{"", "• a.go", "  ↳ 3 lines", "      a1", "      a2"}, body(m))
 
 		clickText(t, m, "• a.go")
 		assert.Equal(t, []string{"", "• a.go", "  ↳ 3 lines"}, body(m))
@@ -162,7 +162,7 @@ func TestLongFailureOpensByClickAndByCtrlO(t *testing.T) {
 		}
 		out := strings.Join(lines, "\n")
 		send(m, start("a"), event.ToolEnd{CallID: "a", IsError: true, Summary: "exit code 1 · 12 lines", Output: out, Body: out})
-		collapsed := []string{"", "• a.go", "  ↳ exit code 1 · 12 lines", "    l1", "    l2", "    … 8 more lines", "    l11", "    l12"}
+		collapsed := []string{"", "• a.go", "  ↳ exit code 1 · 12 lines", "      l1", "      l2", "      … 8 more lines", "      l11", "      l12"}
 		require.Equal(t, collapsed, body(m))
 
 		clickText(t, m, "  ↳ exit code 1 · 12 lines")
@@ -171,7 +171,7 @@ func TestLongFailureOpensByClickAndByCtrlO(t *testing.T) {
 		clickText(t, m, "• a.go")
 		open := []string{"", "• a.go", "  ↳ exit code 1 · 12 lines"}
 		for _, l := range lines {
-			open = append(open, "    "+l)
+			open = append(open, "      "+l)
 		}
 		assert.Equal(t, open, body(m))
 
@@ -191,9 +191,9 @@ func TestCtrlOShowsEverythingAndMakesClicksInert(t *testing.T) {
 
 		press(m, ctrlO)
 		all := []string{
-			"", "▾ Read 2 files", "  ↳ a.go · 3 lines", "    a1", "    a2", "  ↳ b.go · 1 line",
+			"", "▾ Read 2 files", "  ↳ a.go · 3 lines", "        a1", "        a2", "  ↳ b.go · 1 line",
 			"", "Done.",
-			"", "• c.go", "  ↳ 1 line", "    c1",
+			"", "• c.go", "  ↳ 1 line", "      c1",
 		}
 		assert.Equal(t, all, body(m))
 
@@ -300,12 +300,12 @@ func TestTaskResultFoldTogglesByClickAndCtrlO(t *testing.T) {
 		require.Equal(t, closed, body(m))
 
 		press(m, ctrlO)
-		assert.Equal(t, append(closed, "    result"), body(m))
+		assert.Equal(t, append(closed, "      result"), body(m))
 		press(m, ctrlO)
 		assert.Equal(t, closed, body(m))
 
 		clickText(t, m, "• workflow finished · audit route handlers · 6m 3s")
-		assert.Equal(t, append(closed, "    result"), body(m))
+		assert.Equal(t, append(closed, "      result"), body(m))
 	})
 }
 
@@ -325,17 +325,17 @@ func TestUserCommandOutputOpensByClickAndCtrlO(t *testing.T) {
 		m, _ := newTestModel(t, 40, 40)
 		send(m, event.UserCommand{Command: "seq", State: event.CommandExited, Exit: "exit 0", Elapsed: 2 * time.Second, Output: strings.Join(out, "\n")})
 		hint := "  ↳ exit 0 · 2s"
-		assert.Contains(t, body(m), "    … 2 earlier lines")
-		assert.NotContains(t, body(m), "    l1")
+		assert.Contains(t, body(m), "      … 2 earlier lines")
+		assert.NotContains(t, body(m), "      l1")
 
 		clickText(t, m, hint)
-		assert.Contains(t, body(m), "    l1")
-		assert.NotContains(t, body(m), "    … 2 earlier lines")
+		assert.Contains(t, body(m), "      l1")
+		assert.NotContains(t, body(m), "      … 2 earlier lines")
 
 		clickText(t, m, hint)
-		assert.NotContains(t, body(m), "    l1")
+		assert.NotContains(t, body(m), "      l1")
 
 		press(m, ctrlO)
-		assert.Contains(t, body(m), "    l1")
+		assert.Contains(t, body(m), "      l1")
 	})
 }

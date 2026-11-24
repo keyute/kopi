@@ -345,6 +345,10 @@ func TestSkillDisplay(t *testing.T) {
 	assert.Equal(t, Action{Verb: "Read", One: "skill file", Many: "skill files"}, action)
 	assert.Equal(t, "loaded", d.Summary(skill.Text(skill.Skill{Name: "a"})))
 	assert.Equal(t, "2 lines", d.Summary("     1\ta\n     2\tb\n"))
+	assert.Equal(t, "1  a\n2  b\n", d.Body("     1\ta\n     2\tb\n"))
+	text := skill.Text(skill.Skill{Name: "a"})
+	assert.Equal(t, text, d.Body(text))
+	assert.Empty(t, d.Body(emptyFileNotice))
 }
 
 // skillHome builds a Kopi home holding a credential, a config and one skill,

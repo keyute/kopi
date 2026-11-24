@@ -91,6 +91,8 @@
 - A prompt keeps what it renders for a width and theme (a body, a preview); `dialog.rows` only slices it, so a frame's cost does not grow with the content.
 - A key hint is `<key> to <verb>`, from `binding` where a binding names the key, joined to the others with ` · ` in a dialog's `foot` or `keys`; only `hintRows` colours it, and a `note` is plain text. Every dialog names its way out.
 - Dialog text with no colour of its own is drawn in the theme's `text`.
+- A transcript row's columns live in `internal/tui/render.go` as `memberIndent` and `bodyIndent`; a tool's `Display` hands over text flush left and never a column, and a preview has a sign column only when it has added or removed lines.
+- A row's colour is a neutral or a signal: `text` for what the row is, `muted` for content shown on request and for running, `dim` for detail to skip, green for success, yellow for a person or a rule saying no or cutting it short, red for a failure that ran. The `↳` line takes the bullet's colour only when the row did not succeed; no accent colour appears on a row.
 - A prompt for a request closes only on that request's own `…Ended` event, which `internal/app` sends once for every request. It never closes on `TurnEnd` or `SessionChanged`.
 
 ## Style

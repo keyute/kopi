@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -188,7 +189,7 @@ func TestWorkflowDialogBulletsFollowTheState(t *testing.T) {
 		w := openFromRow(t, m)
 		th := m.th
 		for i, want := range []string{
-			fg(th.success).Render("•"), fg(th.text).Render("•"), fg(th.error).Render("•"), fg(th.dim).Render("•"),
+			fg(th.success).Render("•"), fg(th.muted).Render("•"), fg(th.error).Render("•"), fg(th.dim).Render("•"),
 		} {
 			assert.Contains(t, w.d.options[i].drawn[len(w.d.options[i].drawn)-1], "    "+want+" ", "option %d", i)
 		}
@@ -210,6 +211,19 @@ func TestWorkflowDialogHeaderNamesAnEndedRunAndStopsCounting(t *testing.T) {
 		time.Sleep(time.Minute)
 		m.arrange()
 		assert.Equal(t, box[2], workflowBox(t, m)[2], "the end fixes the time")
+	})
+}
+
+func TestWorkflowDialogHeaderColoursHowTheRunEnded(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := workflowModel(t, 52)
+		w := openFromRow(t, m)
+		th := m.th
+		for state, colour := range map[tool.TaskStatus]lipgloss.Style{tool.TaskStopped: fg(th.warning), tool.TaskFailed: fg(th.error)} {
+			setRun(m, c, func(r *fakeRun) { r.status.State, r.status.Ended = state, time.Now() })
+			workflowBox(t, m)
+			assert.Contains(t, w.head[1], colour.Render(string(state)))
+		}
 	})
 }
 

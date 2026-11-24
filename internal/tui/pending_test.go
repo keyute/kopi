@@ -304,7 +304,7 @@ func TestPendingDrawsTheQueueInOrder(t *testing.T) {
 			"", "",
 			"! sleep 9", "", "",
 			"  ↳ running · ctrl+b to background · esc to stop",
-			"    tail",
+			"      tail",
 			"", "",
 			"! pwd", "", "",
 			"  ↳ queued",
@@ -330,7 +330,7 @@ func TestPendingRunningCommandShowsClockTailAndStopKey(t *testing.T) {
 		send(m, event.QueueChanged{Pending: []event.Queued{running}})
 		s := strings.Join(pendingText(m), "\n")
 		assert.Contains(t, s, "↳ running · ctrl+b to background · esc to stop")
-		assert.Contains(t, s, "… 3 earlier lines\n    line 3\n    line 4\n    line 5\n    line 6\n    line 7")
+		assert.Contains(t, s, "… 3 earlier lines\n      line 3\n      line 4\n      line 5\n      line 6\n      line 7")
 
 		time.Sleep(12 * time.Second)
 		m.arrange()

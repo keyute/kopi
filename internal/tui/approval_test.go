@@ -94,6 +94,19 @@ func TestApprovalRowsScrollThePreview(t *testing.T) {
 	assert.Equal(t, []string{"  + l1", "  + l2", "  + l3", "  + l4", ""}, frame(), "an exact fit has no marker or hint")
 }
 
+func TestPreviewRowsHaveASignColumnOnlyWithSignedLines(t *testing.T) {
+	th := mocha()
+	context := []tool.PreviewLine{{Kind: tool.Context, Text: "ls -la"}, {Kind: tool.Context, Text: "pwd"}}
+	assert.Equal(t, []string{fg(th.muted).Render("ls -la"), fg(th.muted).Render("pwd")}, previewRows(context, 40, th))
+
+	signed := append([]tool.PreviewLine{{Kind: tool.Removed, Text: "old"}, {Kind: tool.Added, Text: "new"}}, context[0])
+	assert.Equal(t, []string{
+		fg(th.error).Render("- ") + fg(th.error).Render("old"),
+		fg(th.success).Render("+ ") + fg(th.success).Render("new"),
+		fg(th.dim).Render("  ") + fg(th.dim).Render("ls -la"),
+	}, previewRows(signed, 40, th))
+}
+
 func TestApprovalRowsJoinTheHintToTheNote(t *testing.T) {
 	a := event.ApprovalRequested{Title: "Write a.go", Rule: "Write(a.go)", Preview: numberedPreview(10)}
 	km := newKeyMap(config.DefaultKeys())
@@ -114,7 +127,7 @@ func TestApprovalRowsReachTheEndOfALongLine(t *testing.T) {
 		}
 		d.scroll.off += d.scroll.visible
 	}
-	assert.Contains(t, rows, "    01234567890123456789END")
+	assert.Contains(t, rows, "  0123456789END")
 	assert.NotContains(t, strings.Join(rows, "\n"), "more line")
 }
 
