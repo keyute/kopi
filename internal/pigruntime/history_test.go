@@ -742,7 +742,9 @@ func TestHistoryRestoresNoticeAgent(t *testing.T) {
 	faux.SetResponses([]ai.FauxResponseStep{reply("noted")})
 	sess := openTestSession(t, r)
 	n := testNotice("t1")
-	n.Shown.Agent = "explore"
+	shown := n.Shown.(event.TaskEnded)
+	shown.Agent = "explore"
+	n.Shown = shown
 	more, _ := handOnce(nil, []Notice{n})
 	_, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, more)
 	require.NoError(t, err)
@@ -766,7 +768,7 @@ func TestHistoryNoticeWithoutAgentKeyRestoresEmpty(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), `"agent"`)
 	got := unstreamed(resume(t, r, sess.ID()).History())
-	assert.Contains(t, got, event.Event(event.TaskEnded{ID: "t1", Command: n.Shown.Command, Status: n.Shown.Status, Elapsed: n.Shown.Elapsed}))
+	assert.Contains(t, got, event.Event(event.TaskEnded{ID: "t1", Command: n.Shown.(event.TaskEnded).Command, Status: n.Shown.(event.TaskEnded).Status, Elapsed: n.Shown.(event.TaskEnded).Elapsed}))
 }
 
 func TestHistoryRestoresWorkflowNoticeFields(t *testing.T) {
@@ -775,8 +777,10 @@ func TestHistoryRestoresWorkflowNoticeFields(t *testing.T) {
 	faux.SetResponses([]ai.FauxResponseStep{reply("noted")})
 	sess := openTestSession(t, r)
 	n := testNotice("t1")
-	n.Shown.Agent = "workflow"
-	n.Shown.Agents, n.Shown.Failed, n.Shown.Reason, n.Shown.Result = 9, 2, "boom", `{"ok":true}`
+	shown := n.Shown.(event.TaskEnded)
+	shown.Agent = "workflow"
+	shown.Agents, shown.Failed, shown.Reason, shown.Result = 9, 2, "boom", `{"ok":true}`
+	n.Shown = shown
 	more, _ := handOnce(nil, []Notice{n})
 	_, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, more)
 	require.NoError(t, err)
@@ -840,4 +844,23 @@ func TestHistoryRestoresTaskResultEnvelopes(t *testing.T) {
 			}, resume(t, r, sess.ID(), tool.NewTaskStop(nil)).History())
 		})
 	}
+}
+
+func TestHistoryRestoresUserCommands(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{reply("noted"), reply("again")})
+	sess := openTestSession(t, r)
+	recorded, steered := testCommand("ls"), testCommand("make")
+
+	require.NoError(t, sess.RecordNotices([]Notice{recorded}))
+	more, _ := handOnce(nil, []Notice{steered})
+	_, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, more)
+	require.NoError(t, err)
+	require.NoError(t, sess.Close(t.Context()))
+
+	// Started is not stored.
+	got := unstreamed(resume(t, r, sess.ID()).History())
+	assert.Equal(t, recorded.Shown, got[0])
+	assert.Contains(t, got, steered.Shown)
 }

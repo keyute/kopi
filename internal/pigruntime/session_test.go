@@ -49,14 +49,14 @@ func sendAsync(t *testing.T, sess *Session, text string) <-chan error {
 	return done
 }
 
-// recordDelivered collects the UserMessage and TaskEnded events; all of a
+// recordDelivered collects the UserMessage, TaskEnded and UserCommand events; all of a
 // turn's have been sent once its Send returned.
 func recordDelivered(t *testing.T, sess *Session) <-chan event.Event {
 	t.Helper()
 	evs := make(chan event.Event, 32)
 	t.Cleanup(sess.Subscribe(func(ev event.Event) {
 		switch ev.(type) {
-		case event.UserMessage, event.TaskEnded:
+		case event.UserMessage, event.TaskEnded, event.UserCommand:
 			evs <- ev
 		}
 	}))
@@ -250,19 +250,31 @@ func TestPiGSteerFromTurnEndAfterProviderError(t *testing.T) {
 
 // moreOnce hands over prompts at its first call and nothing after; calls
 // counts its calls.
-func moreOnce(prompts ...Prompt) (more func() ([]Prompt, []Notice), calls *int) {
+func moreOnce(prompts ...Prompt) (more func() []Entry, calls *int) {
 	return handOnce(prompts, nil)
 }
 
-// handOnce is moreOnce for prompts and notices.
-func handOnce(prompts []Prompt, notices []Notice) (more func() ([]Prompt, []Notice), calls *int) {
+// handOnce is moreOnce for prompts and notices, prompts first.
+func handOnce(prompts []Prompt, notices []Notice) (more func() []Entry, calls *int) {
+	var entries []Entry
+	for _, p := range prompts {
+		entries = append(entries, Entry{Prompt: p})
+	}
+	for _, n := range notices {
+		entries = append(entries, Entry{Notice: &n})
+	}
+	return handEntries(entries...)
+}
+
+// handEntries hands over entries, in order, at its first call and nothing after.
+func handEntries(entries ...Entry) (more func() []Entry, calls *int) {
 	n := 0
-	return func() ([]Prompt, []Notice) {
+	return func() []Entry {
 		n++
 		if n > 1 {
-			return nil, nil
+			return nil
 		}
-		return prompts, notices
+		return entries
 	}, &n
 }
 
@@ -522,6 +534,13 @@ func testNotice(id string) Notice {
 	}
 }
 
+func testCommand(command string) Notice {
+	return Notice{
+		Text:  "The user ran: " + command,
+		Shown: event.UserCommand{Command: command, State: event.CommandExited, Elapsed: 2 * time.Second, Exit: "exit 1", Failed: true, Output: "out of " + command, TaskID: "t9"},
+	}
+}
+
 // toolResultBefore reports whether msgs has a tool result before the user
 // message whose text is text.
 func toolResultBefore(msgs []ai.Message, text string) bool {
@@ -690,6 +709,121 @@ func TestSendReturnsUndeliveredNoticeAndClearsIt(t *testing.T) {
 	texts := userTexts(lastRequest(requests))
 	assert.Contains(t, texts, "next")
 	assert.NotContains(t, texts, n.Text)
+}
+
+func TestSendHandsOverEntriesInOrder(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done")})
+	sess := openTestSession(t, r, probeTool(okProbe))
+	evs := recordDelivered(t, sess)
+	first, last := testCommand("ls"), testNotice("t1")
+	more, _ := handEntries(Entry{Notice: &first}, Entry{Prompt: Prompt{Text: "x"}}, Entry{Notice: &last})
+
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
+	require.NoError(t, err)
+	assert.Empty(t, res.Undelivered)
+	assert.Empty(t, res.UndeliveredNotices)
+	assert.Equal(t, []string{"prompt", first.Text, "x", last.Text}, userTexts(<-requests))
+	assert.Equal(t, []event.Event{first.Shown, event.UserMessage{Text: "x"}, last.Shown}, drain(evs))
+}
+
+func TestSendUndeliversEntriesAfterNoticeFails(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), reply("done")})
+	sess := openTestSession(t, r, probeTool(okProbe))
+	evs := recordDelivered(t, sess)
+	failing, last := testCommand("ls"), testNotice("t1")
+	handed, _ := handEntries(Entry{Notice: &failing}, Entry{Prompt: Prompt{Text: "x"}}, Entry{Notice: &last})
+	// Closing the session is the only way a notice fails to queue; it ends the run.
+	more := func() []Entry {
+		require.NoError(t, sess.inner.Close())
+		return handed()
+	}
+
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
+	_ = err
+	assert.Equal(t, []Prompt{{Text: "x"}}, res.Undelivered)
+	assert.Equal(t, []Notice{failing, last}, res.UndeliveredNotices)
+	assert.Empty(t, drain(evs))
+}
+
+func TestRecordNoticesAddsWithoutRequest(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	sess := openTestSession(t, r)
+	evs := recordDelivered(t, sess)
+	n1, n2 := testCommand("ls"), testNotice("t1")
+
+	require.NoError(t, sess.RecordNotices([]Notice{n1, n2}))
+	assert.Zero(t, faux.CallCount())
+	assert.Equal(t, []event.Event{n1.Shown, n2.Shown}, drain(evs))
+}
+
+func TestRecordNoticesStopsAtFailureWithoutNotifying(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	sess := openTestSession(t, r)
+	evs := recordDelivered(t, sess)
+	require.NoError(t, sess.Close(t.Context()))
+
+	err := sess.RecordNotices([]Notice{testCommand("ls"), testNotice("t1")})
+	require.Error(t, err)
+	assert.Empty(t, drain(evs))
+}
+
+func TestRecordNoticesStopsPartWayAtFailure(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	sess := openTestSession(t, r)
+	evs := recordDelivered(t, sess)
+	first := testCommand("ls")
+	// The session closes once the first notice is recorded, so the second fails.
+	t.Cleanup(sess.Subscribe(func(ev event.Event) {
+		if _, ok := ev.(event.UserCommand); ok {
+			assert.NoError(t, sess.inner.Close())
+		}
+	}))
+
+	err := sess.RecordNotices([]Notice{first, testNotice("t1"), testNotice("t2")})
+	require.Error(t, err)
+	assert.Equal(t, []event.Event{first.Shown}, drain(evs))
+}
+
+func TestRecordNoticesThenSendReadsThemBeforePrompt(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	requests := make(chan []ai.Message, 1)
+	faux.SetResponses([]ai.FauxResponseStep{captureRequest(requests, "done")})
+	sess := openTestSession(t, r)
+	evs := recordDelivered(t, sess)
+	n := testCommand("ls")
+
+	require.NoError(t, sess.RecordNotices([]Notice{n}))
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, event.Completed, res.Outcome.Status)
+	assert.Equal(t, 1, faux.CallCount())
+	assert.Equal(t, []string{n.Text, "prompt"}, userTexts(<-requests))
+	assert.Equal(t, []event.Event{n.Shown}, drain(evs))
+}
+
+func TestRecordNoticesRefusedDuringSend(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), reply("done")})
+	started, release := make(chan struct{}), make(chan struct{})
+	sess := openTestSession(t, r, heldProbe(started, release))
+
+	done := sendAsync(t, sess, "first")
+	<-started
+	err := sess.RecordNotices([]Notice{testCommand("ls")})
+	close(release)
+	require.NoError(t, <-done)
+
+	require.ErrorIs(t, err, ErrSendInProgress)
 }
 
 func TestSendWakeIsAbortable(t *testing.T) {

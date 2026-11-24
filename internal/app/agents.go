@@ -322,7 +322,7 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 	c.mu.Unlock()
 	role.task = c.cfg.Tasks.StartAgent(spec.def.Name, description, r.stopper(w))
 	r.id, r.bound, r.emit = role.task.ID(), c.relay.bind(), role.emit
-	r.unsubscribe = r.sess.Subscribe(role.emit)
+	r.unsubscribe = r.sess.Subscribe(r.reading(r.sess, role.emit))
 	if c.children == nil {
 		c.children = map[string]*runner{}
 	}

@@ -129,13 +129,40 @@ func (c *composer) fieldStyle(th theme) {
 	c.ta.SetStyles(textarea.Styles{Focused: state, Blurred: state, Cursor: textarea.CursorStyle{Color: th.text}})
 }
 
+// shell reports whether the draft is a shell command, as the controller's
+// spans say.
+func (c *composer) shell() bool {
+	return len(c.spans) > 0 && c.spans[0].Kind == app.KindShell
+}
+
+// setSpans takes the draft's spans and restyles the textarea when the draft
+// became, or stopped being, a shell command.
+func (c *composer) setSpans(spans []app.Span, th theme) {
+	was := c.shell()
+	c.spans = spans
+	if c.shell() != was {
+		c.style(th)
+	}
+}
+
+// shade is the composer's shade: the command's while the draft is a shell command.
+func (c *composer) shade(th theme) lipgloss.Style {
+	if c.shell() {
+		return commandShade(th)
+	}
+	return shade(th)
+}
+
 func (c *composer) style(th theme) {
-	shaded := shade(th)
+	shaded, prompt := c.shade(th), th.accent
+	if c.shell() {
+		prompt = th.error
+	}
 	state := textarea.StyleState{
 		Text:        shaded,
 		CursorLine:  shaded,
 		EndOfBuffer: shaded,
-		Prompt:      shaded.Foreground(th.accent),
+		Prompt:      shaded.Foreground(prompt),
 		Selection:   shaded.Reverse(true),
 	}
 	c.ta.SetStyles(textarea.Styles{Focused: state, Blurred: state, Cursor: textarea.CursorStyle{Color: th.text}})
@@ -544,7 +571,7 @@ func (c *composer) height() int { return c.ta.Height() }
 
 // view frames the input with a blank shaded row above and below.
 func (c *composer) view(width int, th theme) []string {
-	blank := shade(th).Render(strings.Repeat(" ", width))
+	blank := c.shade(th).Render(strings.Repeat(" ", width))
 	rows := []string{blank}
 	rows = append(rows, c.highlight(strings.Split(c.ta.View(), "\n"), th)...)
 	return append(rows, blank)

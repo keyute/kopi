@@ -199,6 +199,19 @@ func TestBlocks(t *testing.T) {
 			},
 		},
 		{
+			name: "user command splits the stretch",
+			events: []event.Event{
+				start("a"), end("a"), start("b"), end("b"),
+				event.UserCommand{Command: "ls", State: event.CommandExited, Exit: "exit 0", Output: "x"},
+				start("c"), end("c"), start("d"), end("d"),
+			},
+			want: []Block{
+				group("a", true, "a", "b"),
+				Command{key: "item:2", UserCommand: event.UserCommand{Command: "ls", State: event.CommandExited, Exit: "exit 0", Output: "x"}},
+				group("c", false, "c", "d"),
+			},
+		},
+		{
 			name:   "error block",
 			events: []event.Event{event.Error{Err: assert.AnError}},
 			want:   []Block{Error{key: "item:0", Text: assert.AnError.Error()}},

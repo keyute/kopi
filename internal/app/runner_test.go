@@ -60,19 +60,153 @@ func TestSettle(t *testing.T) {
 func TestPullHandsNothingToCancelledSend(t *testing.T) {
 	a := pigruntime.Prompt{Text: "a"}
 	c := &Controller{authority: policy.NewAuthority()}
-	r := &runner{c: c, pending: []pigruntime.Prompt{a}, told: modeLine(policy.Plan, "", false)}
+	r := &runner{c: c, queued: []*entry{{prompt: a}}, told: modeLine(policy.Plan, "", false)}
 	c.main = r
 	emit := func(event.Event) {}
 
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
-	prompts, _ := r.pull(cancelled, emit)()
-	assert.Empty(t, prompts)
-	assert.Equal(t, []pigruntime.Prompt{a}, r.pending)
+	entries := r.pull(cancelled, emit)()
+	assert.Empty(t, entries)
+	assert.Equal(t, []pigruntime.Prompt{a}, r.waiting())
 
-	prompts, _ = r.pull(t.Context(), emit)()
-	assert.Equal(t, []pigruntime.Prompt{a}, prompts)
-	assert.Empty(t, r.pending)
+	entries = r.pull(t.Context(), emit)()
+	assert.Equal(t, []pigruntime.Entry{{Prompt: a}}, entries)
+	assert.Empty(t, r.waiting())
+	assert.Equal(t, []*entry{{prompt: a, handed: true}}, r.queued, "a handed prompt stays queued until it is read")
+}
+
+func TestHandedPromptsStayQueuedUntilRead(t *testing.T) {
+	a, b := pigruntime.Prompt{Text: "a"}, pigruntime.Prompt{Text: "b"}
+	agent := pigruntime.Prompt{Text: "agent", FromAgent: true}
+	c := &Controller{authority: policy.NewAuthority()}
+	r := &runner{c: c, queued: []*entry{{prompt: a}, {prompt: agent}, {prompt: b}}, told: modeLine(policy.Plan, "", false)}
+	c.main = r
+	var got []event.Event
+	emit := func(ev event.Event) { got = append(got, ev) }
+
+	entries := r.pull(t.Context(), emit)()
+	assert.Equal(t, []pigruntime.Entry{{Prompt: a}, {Prompt: agent}, {Prompt: b}}, entries)
+	assert.Empty(t, got, "the hand-over reports nothing")
+	assert.Empty(t, r.takeHuman(emit), "a handed prompt is no longer the human's to take back")
+	assert.Empty(t, got)
+
+	late := pigruntime.Prompt{Text: "late"}
+	r.queued = append(r.queued, &entry{prompt: late})
+	assert.Equal(t, []pigruntime.Prompt{late}, r.takeHuman(emit))
+	assert.Equal(t, []event.Event{event.QueueChanged{Pending: []event.Queued{{Text: "a"}, {Text: "b"}}}}, got)
+
+	got = nil
+	read := r.reading(nil, emit)
+	read(event.TextDelta{Text: "x"})
+	read(event.UserMessage{Text: "a"})
+	read(event.UserMessage{Text: "agent"})
+	read(event.UserMessage{Text: "b"})
+	assert.Equal(t, []event.Event{
+		event.TextDelta{Text: "x"},
+		event.QueueChanged{Pending: []event.Queued{{Text: "b"}}},
+		event.UserMessage{Text: "a"},
+		event.UserMessage{Text: "agent"},
+		event.QueueChanged{Pending: []event.Queued{}},
+		event.UserMessage{Text: "b"},
+	}, got)
+	assert.Empty(t, r.queued)
+}
+
+func TestReadingIgnoresAReplacedSession(t *testing.T) {
+	c := &Controller{authority: policy.NewAuthority()}
+	r := &runner{c: c, sess: &pigruntime.Session{}, queued: []*entry{{prompt: pigruntime.Prompt{Text: "a"}, handed: true}}}
+	var got []event.Event
+	r.reading(&pigruntime.Session{}, func(ev event.Event) { got = append(got, ev) })(event.UserMessage{Text: "a"})
+	assert.Equal(t, []event.Event{event.UserMessage{Text: "a"}}, got)
+	assert.Len(t, r.queued, 1)
+}
+
+func TestDropHandedKeepsWaitingInput(t *testing.T) {
+	a, b := pigruntime.Prompt{Text: "a"}, pigruntime.Prompt{Text: "b"}
+	agent := pigruntime.Prompt{Text: "agent", FromAgent: true}
+	r := &runner{queued: []*entry{{prompt: a, handed: true}, {prompt: agent, handed: true}, {prompt: b}}}
+	var got []event.Event
+	emit := func(ev event.Event) { got = append(got, ev) }
+
+	r.dropHanded(emit)
+	assert.Equal(t, []pigruntime.Prompt{b}, r.waiting())
+	assert.Equal(t, []event.Event{event.QueueChanged{Pending: []event.Queued{{Text: "b"}}}}, got)
+
+	got = nil
+	r.dropHanded(emit)
+	assert.Empty(t, got, "nothing handed, nothing to report")
+}
+
+func TestUnhandReturnsOnlyWhatARecordHanded(t *testing.T) {
+	a, b := &entry{cmd: &userCommand{}, handed: true}, &entry{cmd: &userCommand{}, handed: true}
+	r := &runner{queued: []*entry{a, b}}
+	r.unhand([]*entry{a})
+	assert.False(t, a.handed)
+	assert.True(t, b.handed, "a newer hand-over's entry stays handed")
+}
+
+func TestReclaimedQueuePlansInTypingOrder(t *testing.T) {
+	exited := func() *entry { return &entry{cmd: &userCommand{text: "a", state: event.CommandExited}} }
+	prompt := func(text string) *entry { return &entry{prompt: pigruntime.Prompt{Text: text}} }
+	newRunner := func(es ...*entry) (*runner, func(event.Event)) {
+		c := &Controller{authority: policy.NewAuthority()}
+		r := &runner{c: c, queued: es, told: modeLine(policy.Plan, "", false)}
+		c.main = r
+		return r, func(event.Event) {}
+	}
+	for _, tc := range []struct {
+		name    string
+		handed  bool
+		prompts []string
+	}{
+		{"handed and never read", true, []string{"P1"}},
+		{"still queued", false, []string{"P1", "P2"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := exited()
+			es := []*entry{a}
+			for _, text := range tc.prompts {
+				es = append(es, prompt(text))
+			}
+			for _, e := range es {
+				e.handed = tc.handed
+			}
+			r, emit := newRunner(es...)
+			var undelivered []pigruntime.Prompt
+			for _, e := range es[1:] {
+				undelivered = append(undelivered, e.prompt)
+			}
+
+			r.reclaim(emit, true, undelivered)
+			require.Empty(t, r.lead(), "the command is ahead of the prompts")
+			turn := r.plan(nil, emit)
+
+			require.NotNil(t, turn.record)
+			assert.Equal(t, "", turn.text, "the prompt is drawn where the model reads it")
+			require.Len(t, turn.record.notices, 1)
+			assert.Equal(t, a.cmd.shown(), turn.record.notices[0].Shown)
+			assert.Equal(t, es[1:], turn.record.prompts)
+			assert.Equal(t, undelivered, turn.parts)
+			assert.True(t, a.handed)
+		})
+	}
+	t.Run("a stopped Work hands the prompts back", func(t *testing.T) {
+		a, p := exited(), prompt("P1")
+		a.handed, p.handed = true, true
+		r, emit := newRunner(a, p)
+		r.reclaim(emit, false, []pigruntime.Prompt{p.prompt})
+		assert.Equal(t, []*entry{a}, r.queued)
+		assert.False(t, a.handed)
+	})
+	t.Run("the mode line goes back with its prompt", func(t *testing.T) {
+		p := prompt("P1")
+		p.handed = true
+		r, emit := newRunner(p)
+		r.reclaim(emit, true, []pigruntime.Prompt{{Text: "P1", Mode: "line"}})
+		assert.Empty(t, r.told)
+		assert.False(t, p.handed)
+	})
 }
 
 func TestJoinedPromptsKeepOrder(t *testing.T) {
@@ -144,7 +278,7 @@ func TestQueueChangedAndTakeQueuedSeeOnlyHumanInput(t *testing.T) {
 	}
 	assert.Empty(t, queues[len(queues)-1].Pending)
 	h.c.queue.Lock()
-	assert.Equal(t, []pigruntime.Prompt{agent}, h.c.main.pending, "the agent's message stays queued")
+	assert.Equal(t, []pigruntime.Prompt{agent}, h.c.main.waiting(), "the agent's message stays queued")
 	h.c.queue.Unlock()
 	assert.True(t, h.c.Interrupt(Main))
 	wait(t, w.Done())

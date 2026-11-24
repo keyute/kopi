@@ -456,6 +456,33 @@ func TestMessageToRunningChildArrivesAtItsNextTurnBoundary(t *testing.T) {
 	assert.Contains(t, a.info(t, id).Output, "› also check b\n")
 }
 
+func TestAgentSentPromptIsDeliveredAndNeverListed(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{releaseTool(started, release)}}, agentDef("explorer"))
+	requests := make(chan pigruntimetest.Request, 1)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "c1")), pigruntimetest.Capture(t, requests, "done")})
+	a.rootAcks(1)
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, started)
+	_, err := a.c.message(t.Context(), id, "also check b")
+	require.NoError(t, err)
+	close(release)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	assert.Equal(t, []string{"go", "also check b"}, receive(t, requests).UserTexts)
+	ch := a.childOf(id)
+	a.c.queue.Lock()
+	assert.Empty(t, ch.queued)
+	a.c.queue.Unlock()
+	for _, ev := range a.rec.all() {
+		if s, ok := ev.(event.Session); ok && s.ID == id {
+			if q, ok := s.Event.(event.QueueChanged); ok {
+				assert.Empty(t, q.Pending)
+			}
+		}
+	}
+}
+
 func TestFailedTurnReportsAMessageQueuedMeanwhileAsUndelivered(t *testing.T) {
 	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{}, agentDef("explorer"))
 	started, gate := make(chan struct{}), make(chan struct{})
@@ -645,7 +672,7 @@ func TestStoppedChildFinalizationOverridesTheSendOutcome(t *testing.T) {
 					require.Len(t, queued, 1)
 					assert.Contains(t, queued[0].Text, "stopped by the user: find it")
 					assert.Contains(t, queued[0].Text, "\nUndelivered messages:\nalso check b")
-					assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.Status)
+					assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.(event.TaskEnded).Status)
 				} else {
 					assert.Empty(t, queued, "the model's stop remains silent")
 				}
@@ -976,6 +1003,35 @@ func TestMessageToACancelledRunIsNotLost(t *testing.T) {
 	a.untilStatus(t, id, tool.TaskCompleted)
 
 	assert.Contains(t, receive(t, requests).UserTexts, "lost?\n\nmore work")
+}
+
+func TestSubagentPromptWaitingBehindAStoppedRunStartsDuringALogin(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	a := newAgentHarness(t, pigruntimetest.NewSandbox(t), Config{AgentTools: []tool.Tool{releaseTool(started, release)}}, agentDef("explorer"))
+	requests := make(chan pigruntimetest.Request, 1)
+	a.child.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "c1")), pigruntimetest.Capture(t, requests, "again done")})
+	a.rootAcks(2)
+	id := a.launch(t, "explorer", "find it", "go")
+	wait(t, started)
+	ch := a.childOf(id)
+	running := a.workOf(ch)
+	a.c.queue.Lock()
+	ch.stop(running, ch.emit)
+	a.c.queue.Unlock()
+	_, err := a.c.Submit(t.Context(), id, "after the stop")
+	require.NoError(t, err)
+
+	a.c.mu.Lock()
+	a.c.login = &loginRun{}
+	a.c.mu.Unlock()
+	close(release)
+	texts := receive(t, requests).UserTexts
+	a.c.mu.Lock()
+	a.c.login = nil
+	a.c.mu.Unlock()
+
+	assert.Contains(t, texts, "after the stop")
+	a.untilStatus(t, id, tool.TaskCompleted)
 }
 
 func TestMessageToARunBeingStoppedStartsTheNextRunWithIt(t *testing.T) {
@@ -1328,7 +1384,7 @@ func TestSubmitToARunningChildQueuesAndItReadsTheInput(t *testing.T) {
 
 	assert.Equal(t, []string{"go", "also check b"}, receive(t, requests).UserTexts)
 	own := sessionOf(untilSessionEnd(t, evs, id), id)
-	assert.Contains(t, own, event.QueueChanged{Pending: []string{"also check b"}})
+	assert.Contains(t, own, event.QueueChanged{Pending: []event.Queued{{Text: "also check b"}}})
 	assert.Contains(t, own, event.UserMessage{Text: "also check b"})
 }
 
@@ -1516,7 +1572,7 @@ func TestTakeQueuedFromAChildLeavesAnAgentMessage(t *testing.T) {
 
 	ch := a.childOf(id)
 	a.c.queue.Lock()
-	assert.Equal(t, []pigruntime.Prompt{{Text: "from the agent", FromAgent: true}}, ch.pending)
+	assert.Equal(t, []pigruntime.Prompt{{Text: "from the agent", FromAgent: true}}, ch.waiting())
 	a.c.queue.Unlock()
 	assert.Empty(t, a.c.TakeQueued(Main))
 }

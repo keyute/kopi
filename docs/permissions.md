@@ -138,6 +138,7 @@ Behaviour with `classifier.enabled`:
 ## Limitations
 
 - Permission rules are not an OS boundary: they match the path a call names. Only `Bash` runs under the OS [sandbox](sandbox.md).
+- A command you type with `!` is your action, not the agent's: no rule or approval applies to it, and plan mode does not restrict it. See [your own commands](usage.md#your-own-commands).
 - Kopi refuses no credential locations outside its home; deny them with rules, such as `*(~/.ssh)`, and to `Bash` with `sandbox.denyRead`.
 - Symlinks in rule paths, the start directory and the home directory are resolved once, at start; in sandbox paths too on macOS, and before each command on Linux.
 - A preview needs 3 or more rows to scroll; on a screen too short for that, the part that does not fit is not reachable.

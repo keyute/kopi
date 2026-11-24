@@ -3,12 +3,15 @@ package tui
 import (
 	"fmt"
 	"image/color"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -25,7 +28,7 @@ func TestPendingAreaSitsAboveWorkingRow(t *testing.T) {
 	send(m, event.TurnStart{Prompt: "go"})
 	busy := m.transcriptHeight()
 
-	send(m, event.QueueChanged{Pending: []string{"a", "b"}})
+	send(m, event.QueueChanged{Pending: []event.Queued{{Text: "a"}, {Text: "b"}}})
 
 	s, w := screen(m), workingIndex(m)
 	require.Equal(t, "⠋ Working… 0s", s[w])
@@ -67,17 +70,29 @@ func TestPendingNoteNamesBoundKeys(t *testing.T) {
 			opts := testOptions()
 			opts.Keys = tc.keys
 			m, _ := newTestModelWith(t, 60, 30, opts)
-			send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []string{"a"}})
+			send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []event.Queued{{Text: "a"}}})
 			assert.Equal(t, tc.want, screen(m)[workingIndex(m)-2])
 		})
 	}
+}
+
+func TestQueueEditIgnoresQueuedCommands(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	c.history = []string{"older"}
+	m.composer.setHistory(c.History())
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []event.Queued{{Command: &event.UserCommand{Command: "ls", State: event.CommandQueued}}}})
+
+	press(m, up)
+
+	assert.Zero(t, c.takes)
+	assert.Equal(t, "older", m.composer.value())
 }
 
 func TestSessionChangedClearsPending(t *testing.T) {
 	m, _ := newTestModel(t, 60, 30)
 	send(m, event.TurnStart{Prompt: "go"})
 	busy := m.transcriptHeight()
-	send(m, event.QueueChanged{Pending: []string{"a"}})
+	send(m, event.QueueChanged{Pending: []event.Queued{{Text: "a"}}})
 	require.Contains(t, screen(m), "❯ a")
 
 	send(m, event.SessionChanged{SessionID: "s2"})
@@ -89,7 +104,7 @@ func TestSessionChangedClearsPending(t *testing.T) {
 func TestLongQueueIsCapped(t *testing.T) {
 	m, _ := newTestModel(t, 60, 30)
 
-	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []string{linesOf(30)}})
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []event.Queued{{Text: linesOf(30)}}})
 
 	s, w := screen(m), workingIndex(m)
 	want := []string{"", "❯ line 0"}
@@ -103,7 +118,7 @@ func TestLongQueueIsCapped(t *testing.T) {
 
 func TestPendingBudgetTracksComposerGrowth(t *testing.T) {
 	m, _ := newTestModel(t, 80, 24)
-	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []string{linesOf(30)}})
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []event.Queued{{Text: linesOf(30)}}})
 	oldLines := &m.view().lines[0]
 	for range 7 {
 		press(m, tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt})
@@ -122,19 +137,19 @@ func TestPendingBudgetIncludesWrappedHelp(t *testing.T) {
 	th := mocha()
 	for _, width := range []int{20, 80} {
 		for budget := 0; budget <= 20; budget++ {
-			rows := pendingRows([]string{linesOf(30)}, "", nil, &km, width, 8, budget, th)
+			rows := pendingRows([]event.Queued{{Text: linesOf(30)}}, "", nil, &km, width, 8, budget, th)
 			assert.LessOrEqual(t, len(rows), budget)
 		}
 	}
-	assert.Empty(t, pendingRows([]string{"a"}, "", nil, &km, 20, 8, 0, th))
-	assert.Len(t, pendingRows([]string{linesOf(30)}, "", nil, &km, 80, 8, 20, th), 13)
+	assert.Empty(t, pendingRows([]event.Queued{{Text: "a"}}, "", nil, &km, 20, 8, 0, th))
+	assert.Len(t, pendingRows([]event.Queued{{Text: linesOf(30)}}, "", nil, &km, 80, 8, 20, th), 13)
 }
 
 func TestPendingGeometryInputPaths(t *testing.T) {
 	for _, path := range []string{"paste", "image", "history", "queue edit", "submit", "unsent", "cancel", "resize", "busy"} {
 		t.Run(path, func(t *testing.T) {
 			m, c := newTestModel(t, 80, 24)
-			send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []string{linesOf(30)}})
+			send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []event.Queued{{Text: linesOf(30)}}})
 			switch path {
 			case "paste":
 				pasteText(m, linesOf(8))
@@ -174,12 +189,12 @@ func TestPendingGeometryInputPaths(t *testing.T) {
 
 func TestPendingCacheReusesRenderedQueue(t *testing.T) {
 	m, _ := newTestModel(t, 80, 30)
-	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []string{linesOf(100)}})
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []event.Queued{{Text: linesOf(100)}}})
 	box, note := &m.pendingCache.box[0], &m.pendingCache.note[0]
 	for name, update := range map[string]func(){
 		"typing":          func() { press(m, tea.KeyPressMsg{Code: 'a', Text: "a"}) },
 		"unrelated event": func() { send(m, event.Notice{Text: "notice"}) },
-		"same content":    func() { send(m, event.QueueChanged{Pending: []string{linesOf(100)}}) },
+		"same content":    func() { send(m, event.QueueChanged{Pending: []event.Queued{{Text: linesOf(100)}}}) },
 		"height":          func() { m.Update(tea.WindowSizeMsg{Width: 80, Height: 24}) },
 		"composer growth": func() { press(m, tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt}) },
 	} {
@@ -195,14 +210,14 @@ func TestPendingCacheReusesRenderedQueue(t *testing.T) {
 
 func TestPendingCacheInvalidatesRenderedQueue(t *testing.T) {
 	for name, update := range map[string]func(*model){
-		"content":         func(m *model) { send(m, event.QueueChanged{Pending: []string{"changed"}}) },
-		"mutated content": func(m *model) { m.view().queued[0] = "changed"; m.arrange() },
+		"content":         func(m *model) { send(m, event.QueueChanged{Pending: []event.Queued{{Text: "changed"}}}) },
+		"mutated content": func(m *model) { m.view().queued[0].Text = "changed"; m.arrange() },
 		"width":           func(m *model) { m.Update(tea.WindowSizeMsg{Width: 40, Height: 30}) },
 		"theme":           func(m *model) { m.Update(tea.BackgroundColorMsg{Color: color.White}) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, _ := newTestModel(t, 80, 30)
-			send(m, event.QueueChanged{Pending: []string{linesOf(100)}})
+			send(m, event.QueueChanged{Pending: []event.Queued{{Text: linesOf(100)}}})
 			box, note := &m.pendingCache.box[0], &m.pendingCache.note[0]
 
 			update(m)
@@ -221,7 +236,7 @@ func TestPendingCacheInvalidatesRenderedQueue(t *testing.T) {
 func TestPendingCacheBudgetDoesNotAlterFullBox(t *testing.T) {
 	var c pendingCache
 	km, th := newKeyMap(testOptions().Keys), mocha()
-	queued := []string{linesOf(30)}
+	queued := []event.Queued{{Text: linesOf(30)}}
 	full := c.rows(queued, "", nil, &km, 80, 100, 100, th)
 	box := append([]string(nil), c.box...)
 	for budget := 0; budget < 40; budget++ {
@@ -239,7 +254,7 @@ func TestFoldClickHitsTranscriptWhilePendingShown(t *testing.T) {
 			send(m, event.Notice{Text: fmt.Sprintf("n%d", i)})
 		}
 		send(m, sealedGroup()...)
-		send(m, event.QueueChanged{Pending: []string{"a", "b"}})
+		send(m, event.QueueChanged{Pending: []event.Queued{{Text: "a"}, {Text: "b"}}})
 
 		clickText(t, m, "▸ Read 2 files")
 
@@ -252,7 +267,258 @@ func TestPendingRowsStyleSkillTokens(t *testing.T) {
 	set, _ := skill.NewSet("skill", []skill.Skill{{Name: "a"}}, nil)
 	spans := func(text string) []app.Span { return app.Spans(text, set, false, false) }
 
-	rows := pendingRows([]string{"run /skill:a"}, "", spans, &km, 40, 8, 20, th)
+	rows := pendingRows([]event.Queued{{Text: "run /skill:a"}}, "", spans, &km, 40, 8, 20, th)
 
 	assert.Contains(t, rows[1], spanStyle(th, app.KindCommand).Render("/skill:a"))
+}
+
+func queuedCommand(command string, state event.CommandState) event.Queued {
+	return event.Queued{Command: &event.UserCommand{Command: command, State: state, Exit: "exit 0", Elapsed: 12 * time.Second}}
+}
+
+// pendingText is the steering section as drawn, trimmed.
+func pendingText(m *model) []string {
+	out := make([]string, len(m.pending))
+	for i, r := range m.pending {
+		out[i] = strings.TrimRight(ansi.Strip(r), " ")
+	}
+	return out
+}
+
+func TestPendingDrawsTheQueueInOrder(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTestModel(t, 60, 100)
+		c.commandOutput = "tail"
+		running := queuedCommand("sleep 9", event.CommandRunning)
+		running.Command.Started = time.Now()
+		send(m, event.QueueChanged{Pending: []event.Queued{
+			queuedCommand("ls", event.CommandExited), {Text: "a"}, {Text: "b"}, running, queuedCommand("pwd", event.CommandQueued),
+		}})
+
+		assert.Equal(t, []string{
+			"! ls", "", "",
+			"  ↳ exit 0 · 12s · unread",
+			"", "",
+			"❯ a", "", "  b", "",
+			"",
+			"  ↳ queued · ctrl+enter to send now · up to edit",
+			"", "",
+			"! sleep 9", "", "",
+			"  ↳ running · ctrl+b to background · esc to stop",
+			"      tail",
+			"", "",
+			"! pwd", "", "",
+			"  ↳ queued",
+			"",
+		}, pendingText(m)[1:])
+	})
+}
+
+func TestPendingNoteIsAbsentWithoutQueuedPrompts(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	send(m, event.QueueChanged{Pending: []event.Queued{queuedCommand("ls", event.CommandQueued)}})
+
+	assert.NotContains(t, strings.Join(pendingText(m), "\n"), "to send now")
+	assert.Equal(t, "", pendingText(m)[len(m.pending)-1])
+}
+
+func TestPendingRunningCommandShowsClockTailAndStopKey(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTestModel(t, 60, 100)
+		c.commandOutput = linesOf(8)
+		running := queuedCommand("make", event.CommandRunning)
+		running.Command.Started = time.Now()
+		send(m, event.QueueChanged{Pending: []event.Queued{running}})
+		s := strings.Join(pendingText(m), "\n")
+		assert.Contains(t, s, "↳ running · ctrl+b to background · esc to stop")
+		assert.Contains(t, s, "… 3 earlier lines\n      line 3\n      line 4\n      line 5\n      line 6\n      line 7")
+
+		time.Sleep(12 * time.Second)
+		m.arrange()
+		assert.Contains(t, strings.Join(pendingText(m), "\n"), "↳ running 12s · ctrl+b to background")
+
+		send(m, event.TurnStart{Prompt: "go"})
+		s = strings.Join(pendingText(m), "\n")
+		assert.Contains(t, s, "↳ running 12s · ctrl+b to background\n")
+		assert.NotContains(t, s, "esc to stop")
+	})
+}
+
+func TestTickWantedWhileACommandRuns(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	require.False(t, m.tickWanted())
+
+	_, cmd := m.Update(eventsMsg{event.QueueChanged{Pending: []event.Queued{queuedCommand("make", event.CommandRunning)}}})
+	assert.True(t, m.tickWanted())
+	assert.NotNil(t, cmd)
+
+	send(m, event.QueueChanged{Pending: []event.Queued{queuedCommand("make", event.CommandQueued)}})
+	assert.False(t, m.tickWanted())
+	send(m, event.QueueChanged{})
+	assert.False(t, m.tickWanted())
+}
+
+func TestPendingCapEndsWithMoreLines(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	var q []event.Queued
+	for range 4 {
+		ls := queuedCommand("ls", event.CommandExited)
+		ls.Command.Output = linesOf(8)
+		q = append(q, ls)
+	}
+	q = append(q, event.Queued{Text: "tail prompt"})
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: q})
+
+	rows := pendingText(m)
+	require.Len(t, rows, 10+2+2, "a third of the height, its two shaded rows, the note and the trailing row, less the row the cut gives up so it is not left on the next command's opening row")
+	s := strings.Join(rows, "\n")
+	assert.NotContains(t, s, "line 7", "exited commands lose their output lines before any row is cut")
+	assert.Contains(t, s, "❯ tail prompt")
+	assert.Contains(t, s, "queued · ctrl+enter to send now · up to edit")
+	assert.Regexp(t, `… \d+ more lines`, s)
+	more := slices.IndexFunc(rows, func(r string) bool { return strings.Contains(r, "more lines") })
+	require.Positive(t, more)
+	assert.Equal(t, []string{"      … 8 earlier lines", ""}, rows[more-2:more], "only the gap follows the output; the next command's opening row is cut with it")
+	assert.Empty(t, rows[len(rows)-1])
+	assert.Len(t, screen(m), 30)
+	assert.Equal(t, "❯", screen(m)[m.composerTop()])
+}
+
+func TestPendingCapShrinksARunningCommandsTailBeforeHidingThePrompt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTestModel(t, 60, 30)
+		c.commandOutput = linesOf(8)
+		running := queuedCommand("make", event.CommandRunning)
+		running.Command.Started = time.Now()
+		send(m, event.QueueChanged{Pending: []event.Queued{running, {Text: "my prompt"}}})
+
+		assert.Equal(t, []string{
+			"! make", "", "",
+			"  ↳ running · ctrl+b to background · esc to stop",
+			"      … 6 earlier lines",
+			"      line 6", "      line 7",
+			"", "",
+			"❯ my prompt", "", "",
+			"  ↳ queued · ctrl+enter to send now · up to edit",
+			"",
+		}, pendingText(m)[1:], "the tail shrinks, and no shaded row is left alone")
+		assert.Len(t, screen(m), 30)
+	})
+}
+
+func TestPendingCapInsideLastBoxKeepsTheNote(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []event.Queued{{Text: linesOf(30)}, queuedCommand("ls", event.CommandQueued)}})
+
+	rows := pendingText(m)
+	require.Len(t, rows, 10+2+2+1)
+	assert.Equal(t, []string{"  … 27 more lines", "", "", "  ↳ queued · ctrl+enter to send now · up to edit", ""}, rows[len(rows)-5:])
+}
+
+func TestPendingCapWithACommandAfterTheLastBoxDrawsTheBoxOnce(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	q := []event.Queued{{Text: "hello"}}
+	for range 3 {
+		ls := queuedCommand("ls", event.CommandExited)
+		ls.Command.Output = linesOf(8)
+		q = append(q, ls)
+	}
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: q})
+
+	rows := pendingText(m)
+	assert.LessOrEqual(t, len(rows), 10+2+2+1)
+	assert.Equal(t, 1, strings.Count(strings.Join(rows, "\n"), "❯ hello"))
+	assert.Len(t, screen(m), 30)
+}
+
+func TestPendingCapInsideLastBoxAfterCommandsStaysInBudget(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	var q []event.Queued
+	for range 4 {
+		ls := queuedCommand("ls", event.CommandExited)
+		ls.Command.Output = linesOf(8)
+		q = append(q, ls)
+	}
+	q = append(q, event.Queued{Text: linesOf(30)})
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: q})
+
+	rows := pendingText(m)
+	require.Len(t, rows, 10+2+2+1)
+	s := strings.Join(rows, "\n")
+	assert.NotContains(t, s, "! ls", "the commands before the last box are counted, not drawn")
+	assert.Contains(t, s, "❯ line 0")
+	assert.Equal(t, []string{"", "", "  ↳ queued · ctrl+enter to send now · up to edit", ""}, rows[len(rows)-4:])
+	assert.Len(t, screen(m), 30)
+}
+
+func TestPendingStopHintYieldsToAnOpenMenu(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newMenuModel(t, 60, 30)
+		running := queuedCommand("make", event.CommandRunning)
+		running.Command.Started = time.Now()
+		send(m, event.QueueChanged{Pending: []event.Queued{running}})
+		require.Contains(t, strings.Join(pendingText(m), "\n"), "esc to stop")
+
+		keys(m, "/")
+
+		require.Positive(t, m.menuHeight())
+		assert.NotContains(t, strings.Join(pendingText(m), "\n"), "esc to stop")
+	})
+}
+
+func TestPendingRunningCommandWithoutOutputDrawsNoTail(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTestModel(t, 60, 30)
+		c.commandOutput = noOutputNotice
+		running := queuedCommand("sleep 30", event.CommandRunning)
+		running.Command.Started = time.Now()
+		send(m, event.QueueChanged{Pending: []event.Queued{running}})
+
+		assert.NotContains(t, strings.Join(pendingText(m), "\n"), "no output")
+		assert.False(t, m.pendingCache.tailed)
+	})
+}
+
+// cutRows draws the queue in a cache of its own, trimmed.
+func cutRows(m *model, q []event.Queued, maxContent, maxRows int) []string {
+	var c pendingCache
+	var out []string
+	for _, r := range c.rows(q, app.Main, nil, &m.keys, 60, maxContent, maxRows, m.th) {
+		out = append(out, strings.TrimRight(ansi.Strip(r), " "))
+	}
+	return out
+}
+
+func TestPendingCapNeverEndsOnACommandsOpeningRow(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	q := []event.Queued{queuedCommand("a", event.CommandQueued), queuedCommand("b", event.CommandQueued)}
+
+	assert.Equal(t, []string{
+		"", "! a", "", "", "  ↳ queued", "", "  … 5 more lines", "",
+	}, cutRows(m, q, 6, 9), "the next command's opening row is cut with it")
+}
+
+func TestPendingCapCountsRowsAfterTheNoteBelowIt(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	q := []event.Queued{{Text: "my prompt"}, queuedCommand("make", event.CommandExited)}
+	q[1].Command.Output = linesOf(8)
+
+	assert.Equal(t, []string{
+		"", "❯ my prompt", "", "", "  ↳ queued · ctrl+enter to send now · up to edit", "  … 7 more lines", "",
+	}, cutRows(m, q, 6, 9), "typing order holds: the command's rows are counted under the note")
+}
+
+func TestQueueEditTakesPromptsAndKeepsCommands(t *testing.T) {
+	m, c := newTestModel(t, 60, 30)
+	c.queued = []event.Input{{Text: "a"}, {Text: "b"}}
+	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: []event.Queued{
+		{Text: "a"}, queuedCommand("ls", event.CommandQueued), {Text: "b"},
+	}})
+
+	press(m, up)
+
+	assert.Equal(t, 1, c.takes)
+	assert.Equal(t, "a\n\nb", m.composer.value())
+	require.Len(t, m.view().queued, 1)
+	assert.Equal(t, "ls", m.view().queued[0].Command.Command)
 }

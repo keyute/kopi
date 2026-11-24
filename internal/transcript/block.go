@@ -95,6 +95,12 @@ type Task struct {
 	Reason, Result string
 }
 
+// Command is a command the human ran with `!`, at the point the model read it.
+type Command struct {
+	key string
+	event.UserCommand
+}
+
 func (b User) Key() string      { return b.key }
 func (b Assistant) Key() string { return b.key }
 func (b Row) Key() string       { return "call:" + b.Call.ID }
@@ -103,6 +109,7 @@ func (b Notice) Key() string    { return b.key }
 func (b Error) Key() string     { return b.key }
 func (b Turn) Key() string      { return b.key }
 func (b Task) Key() string      { return b.key }
+func (b Command) Key() string   { return b.key }
 
 func (t *Transcript) Blocks() []Block {
 	var (
@@ -139,6 +146,8 @@ func (t *Transcript) Blocks() []Block {
 			blocks = append(blocks, Turn{key: key, Outcome: it.outcome, Elapsed: it.elapsed})
 		case taskItem:
 			blocks = append(blocks, Task{key: key, ID: it.task.ID, Command: it.task.Command, Agent: it.task.Agent, Status: it.task.Status, Elapsed: it.task.Elapsed, Agents: it.task.Agents, Failed: it.task.Failed, Reason: it.task.Reason, Result: it.task.Result})
+		case commandItem:
+			blocks = append(blocks, Command{key: key, UserCommand: it.command})
 		}
 	}
 	flush(len(t.items) <= t.boundary)

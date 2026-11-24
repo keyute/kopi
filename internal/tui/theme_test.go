@@ -46,13 +46,13 @@ func writeTheme(t *testing.T, dir, name, body string) {
 
 func TestLoadThemes(t *testing.T) {
 	dir := t.TempDir()
-	writeTheme(t, dir, "mine", `{"base": "dracula", "colors": {"accent": "#abc", "dim": "244"}, "codeTheme": "monokai"}`)
+	writeTheme(t, dir, "mine", `{"base": "dracula", "colors": {"accent": "#abc", "dim": "244", "userCommandBg": "#123456"}, "codeTheme": "monokai"}`)
 
 	got, err := LoadThemes(dir, "mine", "gruvbox-light")
 	require.NoError(t, err)
 
 	want := builtinThemes["dracula"]()
-	want.accent, want.dim, want.codeTheme = lipgloss.Color("#abc"), lipgloss.Color("244"), "monokai"
+	want.accent, want.dim, want.userCommandBg, want.codeTheme = lipgloss.Color("#abc"), lipgloss.Color("244"), lipgloss.Color("#123456"), "monokai"
 	assert.Equal(t, want, got.dark)
 	assert.Equal(t, builtinThemes["gruvbox-light"](), got.light)
 }

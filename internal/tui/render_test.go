@@ -791,3 +791,110 @@ func TestShadedBoxStylesSpansOnWrappedRows(t *testing.T) {
 	assert.Contains(t, got[2], spanStyle(th, app.KindCommand).Render("/skill:a"))
 	assert.Contains(t, got[2], spanStyle(th, app.KindCommand).Render("ultracode"))
 }
+
+func TestCommandHint(t *testing.T) {
+	th := mocha()
+	dim, success, errc, warn := fg(th.dim), fg(th.success), fg(th.error), fg(th.warning)
+	for _, tc := range []struct {
+		name string
+		c    event.UserCommand
+		o    commandOptions
+		want string
+	}{
+		{"queued", event.UserCommand{State: event.CommandQueued}, commandOptions{}, "  ↳ queued"},
+		{"running", event.UserCommand{State: event.CommandRunning}, commandOptions{Elapsed: 12 * time.Second, BackgroundKey: "ctrl+b", StopKey: "esc"}, "  ↳ running 12s · ctrl+b to background · esc to stop"},
+		{"running under a second", event.UserCommand{State: event.CommandRunning}, commandOptions{Elapsed: time.Second - 1, BackgroundKey: "ctrl+b"}, "  ↳ running · ctrl+b to background"},
+		{"running without keys", event.UserCommand{State: event.CommandRunning}, commandOptions{Elapsed: 3 * time.Second}, "  ↳ running 3s"},
+		{"exited", event.UserCommand{State: event.CommandExited, Exit: "exit 0", Elapsed: 12 * time.Second}, commandOptions{}, "  ↳ exit 0 · 12s"},
+		{"exited unread", event.UserCommand{State: event.CommandExited, Exit: "exit 0", Elapsed: 12 * time.Second}, commandOptions{Unread: true}, "  ↳ exit 0 · 12s · unread"},
+		{"exited under a second", event.UserCommand{State: event.CommandExited, Exit: "exit 0", Elapsed: 10 * time.Millisecond}, commandOptions{}, "  ↳ exit 0"},
+		{"failed", event.UserCommand{State: event.CommandExited, Exit: "exit 1", Failed: true, Elapsed: 12 * time.Second}, commandOptions{Unread: true}, "  ↳ exit 1 · 12s · unread"},
+		{"stopped", event.UserCommand{State: event.CommandStopped, Elapsed: 12 * time.Second}, commandOptions{Unread: true}, "  ↳ stopped after 12s · unread"},
+		{"stopped under a second", event.UserCommand{State: event.CommandStopped}, commandOptions{}, "  ↳ stopped"},
+		{"moved", event.UserCommand{State: event.CommandMoved, Elapsed: 12 * time.Second}, commandOptions{}, "  ↳ moved to background after 12s"},
+		{"moved under a second", event.UserCommand{State: event.CommandMoved}, commandOptions{}, "  ↳ moved to background"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := commandHint(tc.c, tc.o, 80, th)
+			require.Len(t, got, 1)
+			assert.Equal(t, tc.want, ansi.Strip(got[0]))
+		})
+	}
+
+	t.Run("colours", func(t *testing.T) {
+		hint := func(c event.UserCommand, o commandOptions) string { return commandHint(c, o, 80, th)[0] }
+		exited := hint(event.UserCommand{State: event.CommandExited, Exit: "exit 0", Elapsed: 12 * time.Second}, commandOptions{Unread: true})
+		assert.Contains(t, exited, success.Render("exit 0"))
+		assert.Contains(t, exited, dim.Render(" · 12s · unread"))
+
+		failed := hint(event.UserCommand{State: event.CommandExited, Exit: "exit 1", Failed: true, Elapsed: 12 * time.Second}, commandOptions{})
+		assert.Contains(t, failed, errc.Render("exit 1 · 12s"))
+
+		stopped := hint(event.UserCommand{State: event.CommandStopped, Elapsed: 12 * time.Second}, commandOptions{})
+		assert.Contains(t, stopped, warn.Render("stopped after 12s"))
+
+		assert.Contains(t, hint(event.UserCommand{State: event.CommandQueued}, commandOptions{}), dim.Render("queued"))
+		assert.Contains(t, hint(event.UserCommand{State: event.CommandMoved, Elapsed: 12 * time.Second}, commandOptions{}), dim.Render("moved to background after 12s"))
+		assert.Contains(t, hint(event.UserCommand{State: event.CommandRunning}, commandOptions{StopKey: "esc"}), dim.Render("running · esc to stop"))
+	})
+}
+
+func TestCommandRowsBox(t *testing.T) {
+	th := mocha()
+	got := commandRows(event.UserCommand{Command: "ls -la", State: event.CommandExited, Exit: "exit 0"}, commandOptions{Lines: 10}, 20, th)
+	blank := commandShade(th).Render(strings.Repeat(" ", 20))
+	assert.Equal(t, blank, got[0].text)
+	assert.Equal(t, blank, got[2].text)
+	assert.True(t, strings.HasPrefix(got[1].text, commandShade(th).Foreground(th.error).Render("! ")), "the glyph is error on the command shade")
+	assert.Contains(t, got[1].text, commandShade(th).Foreground(th.text).Render("ls -la"+strings.Repeat(" ", 12)))
+	assert.Equal(t, line{}, got[3], "a blank row follows the box")
+	assert.Equal(t, "  ↳ exit 0", ansi.Strip(got[4].text))
+	assert.Len(t, got, 5, "no output, no rows")
+}
+
+func TestCommandRowsOutput(t *testing.T) {
+	th := mocha()
+	numbered := func(n int) string {
+		var ls []string
+		for i := 1; i <= n; i++ {
+			ls = append(ls, fmt.Sprintf("l%d", i))
+		}
+		return strings.Join(ls, "\n") + "\n\n"
+	}
+	c := event.UserCommand{Command: "seq", State: event.CommandExited, Exit: "exit 0", Output: numbered(12)}
+	h := hit{kind: hitOutput, id: "k"}
+	tail := func(from, to int) []string {
+		var out []string
+		for i := from; i <= to; i++ {
+			out = append(out, fmt.Sprintf("      l%d", i))
+		}
+		return out
+	}
+	rows := func(c event.UserCommand, o commandOptions) []string {
+		var out []string
+		for _, l := range commandRows(c, o, 40, th)[4:] {
+			out = append(out, ansi.Strip(l.text))
+		}
+		return out
+	}
+
+	assert.Equal(t, append([]string{"  ↳ exit 0", "      … 2 earlier lines"}, tail(3, 12)...), rows(c, commandOptions{Lines: 10}))
+	assert.Equal(t, append([]string{"  ↳ exit 0"}, tail(1, 12)...), rows(c, commandOptions{Lines: 10, Expanded: true}))
+	c.Output = numbered(10)
+	assert.Equal(t, append([]string{"  ↳ exit 0"}, tail(1, 10)...), rows(c, commandOptions{Lines: 10}), "exactly the limit is not cut")
+	c.Output = numbered(7)
+	assert.Equal(t, append([]string{"  ↳ exit 0", "      … 2 earlier lines"}, tail(3, 7)...), rows(c, commandOptions{Lines: 5}))
+
+	for _, l := range commandRows(c, commandOptions{Lines: 5, Hit: h}, 40, th)[4:5] {
+		assert.Equal(t, h, l.hit, "the hint row toggles the output")
+	}
+	assert.Equal(t, hit{}, commandRows(c, commandOptions{Lines: 5, Hit: h}, 40, th)[1].hit)
+	c.Output = ""
+	assert.Equal(t, hit{}, commandRows(c, commandOptions{Hit: h}, 40, th)[4].hit, "nothing to toggle")
+}
+
+func TestUserCommandBlockShowsInTheTranscript(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	send(m, event.UserCommand{Command: "echo hi", State: event.CommandExited, Exit: "exit 0", Elapsed: 2 * time.Second, Output: "hi\n"})
+	assert.Equal(t, []string{"", "", "! echo hi", "", "", "  ↳ exit 0 · 2s", "      hi"}, body(m))
+}

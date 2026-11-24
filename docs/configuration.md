@@ -107,7 +107,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `expand-all` | `ctrl+o` |
 | `page-up`, `page-down` | `pgup`, `pgdown` |
 
-What each key does is in [usage](usage.md#keys).
+What each key does is in [usage](usage.md#keys); `interrupt`, `cancel` and `background` also act on [your own commands](usage.md#your-own-commands).
 
 ## Status line
 
@@ -255,7 +255,7 @@ Segments:
 - Built-in names: `catppuccin-mocha`, `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `gruvbox-dark`, `gruvbox-light`, `tokyonight-night`, `tokyonight-day`, `rose-pine`, `rose-pine-dawn`, `solarized-dark`, `solarized-light`, `dracula`, `ansi-dark` and `ansi-light`; the last two use the terminal's own 16 colours.
 - Any other name reads `themes/<name>.json` in Kopi's home:
   - `base`: required, a built-in theme.
-  - `colors`: optional overrides by role: `accent`, `success`, `error`, `warning`, `muted`, `dim`, `text`, `userMessageBg`, `heading`, `link`, `code`, `frame`.
+  - `colors`: optional overrides by role: `accent`, `success`, `error`, `warning`, `muted`, `dim`, `text`, `userMessageBg`, `userCommandBg`, `heading`, `link`, `code`, `frame`. `userMessageBg` shades your messages; `userCommandBg` shades a command you run with `!` and the input while you type one.
   - `codeTheme`: optional Chroma style for code blocks.
 - A colour is `#rgb`, `#rrggbb` or a number from 0 to 255.
 - An unknown theme, role, colour or style fails at start.

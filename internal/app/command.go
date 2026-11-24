@@ -260,7 +260,7 @@ func (c *Controller) endModelChange() {
 	defer c.queue.Unlock()
 	c.mu.Lock()
 	c.changingModel = false
-	c.main.wakeLocked()
+	c.main.advanceLocked(true)
 }
 
 // Arguments returns the candidates for command name's argument; nil when it takes

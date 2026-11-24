@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -176,4 +177,30 @@ func TestHighlightMarksTheKeywordOnlyInTheMainView(t *testing.T) {
 	display(m, "t1")
 	pasteText(m, "ultracode now")
 	assert.Nil(t, pieces(m))
+}
+
+func TestComposerTurnsRedWhileTheDraftIsAShellCommand(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	view := func() []string { return m.composer.view(m.width, m.th) }
+	blank := func(st lipgloss.Style) string { return st.Render(strings.Repeat(" ", m.width)) }
+	glyph := func(rows []string) string { return rows[1] }
+
+	typeText(m, "ls")
+	m.Update(nil)
+	assert.Equal(t, blank(shade(m.th)), view()[0])
+	assert.Contains(t, glyph(view()), shade(m.th).Foreground(m.th.accent).Render("❯ "))
+
+	m.composer.reset()
+	typeText(m, "!ls")
+	m.syncInput(false)
+	assert.Equal(t, blank(commandShade(m.th)), view()[0])
+	assert.Contains(t, glyph(view()), commandShade(m.th).Foreground(m.th.error).Render("❯ "))
+	assert.Equal(t, []string{"!"}, pieces(m)[:1])
+	assert.Contains(t, glyph(view()), spanStyle(m.th, app.KindShell).Render("!"))
+
+	m.composer.reset()
+	typeText(m, " !ls")
+	m.syncInput(false)
+	assert.Equal(t, blank(shade(m.th)), view()[0])
+	assert.Contains(t, glyph(view()), shade(m.th).Foreground(m.th.accent).Render("❯ "))
 }

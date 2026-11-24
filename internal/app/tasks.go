@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -17,6 +18,7 @@ import (
 type Tasks interface {
 	OnChange(f func(tool.TaskInfo))
 	OnForeground(f func())
+	Begin(ctx context.Context, sh *tool.Shell, command string) (*tool.Live, error)
 	Detach() bool
 	Foreground() bool
 	List() []tool.TaskInfo

@@ -27,7 +27,7 @@ type view struct {
 	// verb is the running or last turn's.
 	verb verb
 	// queued is the input queued for the running turn.
-	queued []string
+	queued []event.Queued
 	// unsent is the input a turn handed back while the view was hidden, restored
 	// into the composer when the view is next shown.
 	unsent []event.Input

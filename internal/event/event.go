@@ -20,8 +20,48 @@ type Input struct {
 	Images []string
 }
 
-// QueueChanged carries the messages queued for the running turn, in order.
-type QueueChanged struct{ Pending []string }
+// QueueChanged carries the input queued for the running turn, in order.
+type QueueChanged struct{ Pending []Queued }
+
+// Queued is one entry of the queue: a prompt has Text and a nil Command, a
+// user command has Command set.
+type Queued struct {
+	Text    string
+	Command *UserCommand
+}
+
+// CommandState is where a user command is in its life.
+type CommandState string
+
+const (
+	CommandQueued  CommandState = "queued"
+	CommandRunning CommandState = "running"
+	CommandExited  CommandState = "exited"
+	CommandStopped CommandState = "stopped"
+	CommandMoved   CommandState = "moved"
+)
+
+// UserCommand is a command the human ran with `!`. As an event it is at the
+// point the model reads it; inside Queued it is one not yet read. Exit is the
+// exit status as shown, such as "exit 0", and Failed reports a non-zero one.
+// TaskID is set only for CommandMoved, the background task it became.
+type UserCommand struct {
+	Command string
+	State   CommandState
+	Started time.Time
+	Elapsed time.Duration
+	Exit    string
+	Failed  bool
+	Output  string
+	TaskID  string
+}
+
+// Unsent is queued input handed back to the human when no turn ends. Dropped
+// counts the queued commands the stop discarded.
+type Unsent struct {
+	Inputs  []Input
+	Dropped int
+}
 
 // UserMessage is a queued message at the point the model reads it.
 type UserMessage struct{ Text string }
@@ -238,6 +278,8 @@ type SessionClosed struct{ ID string }
 func (TurnStart) isEvent()           {}
 func (QueueChanged) isEvent()        {}
 func (UserMessage) isEvent()         {}
+func (UserCommand) isEvent()         {}
+func (Unsent) isEvent()              {}
 func (TextDelta) isEvent()           {}
 func (ThinkingDelta) isEvent()       {}
 func (ToolStart) isEvent()           {}

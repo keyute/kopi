@@ -148,7 +148,7 @@ func TestSessionChangedRestoresHeldInputOfASubagentTheControllerNoLongerLists(t 
 
 func TestInputActsOnTheShownView(t *testing.T) {
 	m, c := agentsModel(t)
-	send(m, sub("t1", event.TurnStart{Prompt: "dig"}), sub("t1", event.QueueChanged{Pending: []string{"q"}}))
+	send(m, sub("t1", event.TurnStart{Prompt: "dig"}), sub("t1", event.QueueChanged{Pending: []event.Queued{{Text: "q"}}}))
 	display(m, "t1")
 
 	submitText(m, "hi")
@@ -192,7 +192,7 @@ func TestStatusLineFollowsTheShownView(t *testing.T) {
 
 func TestSubagentQueueShowsInItsViewOnly(t *testing.T) {
 	m, _ := agentsModel(t)
-	send(m, sub("t1", event.TurnStart{Prompt: "dig"}), sub("t1", event.QueueChanged{Pending: []string{"more"}}))
+	send(m, sub("t1", event.TurnStart{Prompt: "dig"}), sub("t1", event.QueueChanged{Pending: []event.Queued{{Text: "more"}}}))
 	assert.NotContains(t, screen(m), "❯ more")
 
 	display(m, "t1")

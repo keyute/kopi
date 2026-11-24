@@ -31,7 +31,7 @@ func TestSteeredMessageDrawsAsRestored(t *testing.T) {
 	for _, ev := range []event.Event{
 		event.TurnStart{Prompt: "go"},
 		start("a"), end("a"),
-		event.QueueChanged{Pending: []string{"x"}},
+		event.QueueChanged{Pending: []event.Queued{{Text: "x"}}},
 		event.QueueChanged{},
 		event.UserMessage{Text: "x"},
 		event.TextDelta{Text: "ok"},
@@ -81,6 +81,20 @@ func TestTaskEndedDrawsAsRestored(t *testing.T) {
 	assert.Equal(t, want, restored.Blocks())
 }
 
+func TestUserCommandDrawsAsRestored(t *testing.T) {
+	cmd := event.UserCommand{Command: "make", State: event.CommandExited, Elapsed: time.Second, Exit: "exit 2", Failed: true, Output: "boom"}
+	events := []event.Event{start("a"), end("a"), cmd, start("b"), end("b")}
+	var live, restored Transcript
+	for _, ev := range events {
+		live.Apply(ev)
+	}
+	restored.Restore(events)
+
+	want := []Block{row("a", OK), Command{key: "item:1", UserCommand: cmd}, row("b", OK)}
+	assert.Equal(t, want, live.Blocks())
+	assert.Equal(t, want, restored.Blocks())
+}
+
 func TestAgentTaskEndedCarriesTheAgent(t *testing.T) {
 	events := []event.Event{
 		event.TaskEnded{ID: "t2", Agent: "explore", Command: "look around", Status: "completed", Elapsed: 2 * time.Minute},
@@ -96,7 +110,7 @@ func TestAgentTaskEndedCarriesTheAgent(t *testing.T) {
 
 func TestQueueChangedAddsNoBlock(t *testing.T) {
 	var tr Transcript
-	tr.Apply(event.QueueChanged{Pending: []string{"x"}})
+	tr.Apply(event.QueueChanged{Pending: []event.Queued{{Text: "x"}}})
 	assert.Empty(t, tr.Blocks())
 }
 

@@ -59,7 +59,7 @@ var StatusSegments = slices.Concat([]string{"model", "effort", "context", "tools
 var SubagentSegments = []string{"agent", "tokens", "model", "effort", "context", "tools", "cost", "elapsed", "state", "activity", "id"}
 
 // ThemeRoles lists every colour role a theme defines.
-var ThemeRoles = []string{"accent", "success", "error", "warning", "muted", "dim", "text", "userMessageBg", "heading", "link", "code", "frame"}
+var ThemeRoles = []string{"accent", "success", "error", "warning", "muted", "dim", "text", "userMessageBg", "userCommandBg", "heading", "link", "code", "frame"}
 
 type StatusLine struct {
 	Left  []string `koanf:"left"`

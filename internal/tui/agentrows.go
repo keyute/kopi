@@ -169,7 +169,13 @@ func (m *model) elapsedTicks() bool {
 // ticks.
 func (m *model) tickWanted() bool {
 	_, working := m.workingText()
-	return working || m.elapsedTicks() || len(m.workflows) > 0
+	return working || m.elapsedTicks() || len(m.workflows) > 0 || m.queuedRunning()
+}
+
+// queuedRunning reports whether the shown view's queue holds a running user
+// command, whose elapsed time and output tail change while the agent is idle.
+func (m *model) queuedRunning() bool {
+	return hasRunning(m.view().queued)
 }
 
 // rowTargets are the agent rows' entries and the ids of every row: the entries'

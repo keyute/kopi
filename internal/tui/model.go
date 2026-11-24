@@ -316,7 +316,7 @@ func (m *model) syncInput(wasHeld bool) tea.Cmd {
 	value, line, col := m.composer.value(), m.composer.ta.Line(), m.composer.ta.Column()
 	changed := value != m.seen.value || line != m.seen.line || col != m.seen.col
 	if value != m.seen.value || m.shown != m.seen.shown {
-		m.composer.spans = m.c.Spans(m.shown, value)
+		m.composer.setSpans(m.c.Spans(m.shown, value), m.th)
 	}
 	m.seen.value, m.seen.shown, m.seen.line, m.seen.col = value, m.shown, line, col
 	if m.holding() || (!changed && !wasHeld) {
@@ -387,7 +387,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(msg, km.toggleMode):
 		m.c.ToggleMode()
 		return nil
-	case key.Matches(msg, km.queueEdit) && len(m.view().queued) > 0 && m.composer.atTop():
+	case key.Matches(msg, km.queueEdit) && slices.ContainsFunc(m.view().queued, isPrompt) && m.composer.atTop():
 		m.editQueue()
 		return nil
 	case key.Matches(msg, km.historyPrev) && m.composer.historyPrev():
@@ -449,18 +449,28 @@ func (m *model) flash(text string) tea.Cmd {
 	return tea.Tick(flashFor, func(time.Time) tea.Msg { return flashMsg{seq} })
 }
 
+// draft is the composer's text with pastes expanded. Only a draft that shows as a
+// shell command is sent as one: a "!" that a collapsed paste brings in is not.
+func (m *model) draft() (string, []string) {
+	text, images := m.composer.expanded()
+	if !m.composer.shell() {
+		text = app.AsPrompt(text)
+	}
+	return text, images
+}
+
 func (m *model) submit() tea.Cmd {
 	if strings.TrimSpace(m.composer.value()) == "" {
 		return nil
 	}
-	text, images := m.composer.expanded()
+	text, images := m.draft()
 	_, err := m.c.Submit(m.ctx, m.shown, text, images...)
 	return m.submitted(err)
 }
 
 // sendNow is submit through SendNow; an empty draft sends just the queue.
 func (m *model) sendNow() tea.Cmd {
-	text, images := m.composer.expanded()
+	text, images := m.draft()
 	return m.submitted(m.c.SendNow(m.ctx, m.shown, text, images...))
 }
 
@@ -498,14 +508,17 @@ func (m *model) submitted(err error) tea.Cmd {
 func (m *model) editQueue() {
 	m.composer.restore(m.c.TakeQueued(m.shown))
 	// QueueChanged follows; clearing now keeps a second press from taking again.
-	m.view().queued = nil
+	m.view().queued = slices.DeleteFunc(m.view().queued, isPrompt)
 }
+
+func isPrompt(q event.Queued) bool { return q.Command == nil }
 
 // applyBatch applies events in order, refreshes the status when one of them
 // can change it, and starts the spinner when the working row appears.
 func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 	wasShown := m.tickWanted()
 	refresh, redraw, respan := false, false, false
+	dropped := 0
 	pureThinking := len(evs) > 0
 	for _, ev := range evs {
 		_, inner := unwrap(ev)
@@ -520,6 +533,9 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 		case event.SessionChanged, event.EffortChanged, event.ModelChanged:
 			respan = true
 		}
+		if u, ok := inner.(event.Unsent); ok {
+			dropped += u.Dropped
+		}
 		if m.commands != nil {
 			m.commands.Observe(ev)
 		}
@@ -531,16 +547,23 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 		m.status, m.agents, m.workflows = m.c.Status(), m.c.Agents(), m.c.Workflows()
 	}
 	if respan {
-		m.composer.spans = m.c.Spans(m.shown, m.composer.value())
+		m.composer.setSpans(m.c.Spans(m.shown, m.composer.value()), m.th)
 	}
 	if redraw && !pureThinking {
 		m.relayout()
 	}
 	cmds := []tea.Cmd{m.bridge.wait()}
+	if dropped > 0 {
+		cmds = append(cmds, m.flash(droppedText(dropped)))
+	}
 	if m.tickWanted() && !wasShown {
 		cmds = append(cmds, m.spinner.Tick)
 	}
 	return tea.Batch(cmds...)
+}
+
+func droppedText(n int) string {
+	return "dropped " + countText(n, "queued command")
 }
 
 // unwrap is the session an event belongs to and the event itself; a bare
@@ -646,6 +669,13 @@ func (m *model) apply(ev event.Event) *view {
 	case event.QueueChanged:
 		v.queued = ev.Pending
 		return v
+	case event.Unsent:
+		if id == m.shown {
+			m.composer.restore(ev.Inputs)
+		} else {
+			v.unsent = append(v.unsent, ev.Inputs...)
+		}
+		return nil
 	case event.TurnStart:
 		if id == app.Main {
 			m.unseen = ""
@@ -775,6 +805,10 @@ func (m *model) place() {
 		m.geo.menu = max(0, min(m.menu.want(), free-input))
 	}
 	free -= input + m.geo.menu
+	m.pendingCache.tail, m.pendingCache.stoppable = nil, m.shown == app.Main && !m.view().busy && m.front() == nil && (m.menuHeight() == 0 || m.holding())
+	if m.queuedRunning() {
+		m.pendingCache.tail = m.c.CommandOutput
+	}
 	m.pending = m.pendingCache.rows(m.view().queued, m.shown, func(t string) []app.Span { return m.c.PromptSpans(m.shown, t) }, &m.keys, m.width, max(2, m.height/3), free, m.th)
 	m.geo.transcript = max(0, free-len(m.pending))
 	// The rows take only what is left of the transcript.

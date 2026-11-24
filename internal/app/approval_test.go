@@ -977,7 +977,7 @@ func TestChildRejectWithoutReasonStopsOnlyThatChild(t *testing.T) {
 	queued := a.queuedNotices()
 	require.Len(t, queued, 1, "counting the child out and its notice are one step")
 	assert.True(t, strings.HasPrefix(queued[0].Text, fmt.Sprintf("Agent %s (worker) stopped by the user: one", first)), queued[0].Text)
-	assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.Status)
+	assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.(event.TaskEnded).Status)
 	assert.True(t, a.idle(), "the stop wakes nobody")
 	assert.Equal(t, tool.TaskRunning, a.info(t, second).Status)
 	assert.True(t, a.c.Answer(req2.Token, policy.Decision{Answer: policy.Allow}))

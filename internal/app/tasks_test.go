@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -57,6 +58,10 @@ func (f *fakeTasks) foreground(fg bool) {
 	fn := f.onForeground
 	f.mu.Unlock()
 	fn()
+}
+
+func (f *fakeTasks) Begin(context.Context, *tool.Shell, string) (*tool.Live, error) {
+	return nil, errors.New("fake tasks run no command")
 }
 
 func (f *fakeTasks) Detach() bool {
@@ -229,7 +234,7 @@ func TestDelayedStopTaskAcrossReplacement(t *testing.T) {
 			if failed {
 				queued := h.queuedNotices()
 				require.Len(t, queued, 1)
-				assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.Status)
+				assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.(event.TaskEnded).Status)
 			} else {
 				assert.Empty(t, h.queuedNotices())
 			}
@@ -595,7 +600,7 @@ func TestStopTaskQueuesNonWakingNotice(t *testing.T) {
 	assert.Equal(t, []string{"t1"}, stops, "an ended task is not stopped again")
 	queued := h.queuedNotices()
 	require.Len(t, queued, 1)
-	assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.Status)
+	assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.(event.TaskEnded).Status)
 
 	h.turn(t, "hi")
 	want := "Background task t1 stopped by the user: make t1\nbuilt t1"
@@ -851,7 +856,7 @@ func TestUndeliveredStopNoticeDoesNotContinueTurn(t *testing.T) {
 	assert.True(t, h.idle())
 	queued := h.queuedNotices()
 	require.Len(t, queued, 1)
-	assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.Status)
+	assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.(event.TaskEnded).Status)
 	h.turn(t, "hi")
 	assert.Equal(t, []string{"hi", stopText}, receive(t, requests).UserTexts)
 }
@@ -1061,8 +1066,8 @@ func TestStopTaskOnAgentQueuesAgentNotice(t *testing.T) {
 	queued := h.queuedNotices()
 	require.Len(t, queued, 1)
 	assert.Equal(t, "Agent "+at.ID()+" (reviewer) stopped by the user: check the diff\n(no output)", queued[0].Text)
-	assert.Equal(t, "reviewer", queued[0].Shown.Agent)
-	assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.Status)
+	assert.Equal(t, "reviewer", queued[0].Shown.(event.TaskEnded).Agent)
+	assert.Equal(t, string(tool.TaskStopped), queued[0].Shown.(event.TaskEnded).Status)
 }
 
 func TestStatusCountsAgentsSeparately(t *testing.T) {
@@ -1088,11 +1093,11 @@ func TestTaskNoticeNamesTheSavedOutput(t *testing.T) {
 	info.OutputFile = "/kopi/outputs/s1/a.txt"
 	n := notice(info, head)
 	assert.Equal(t, endText("t1")+"\n[Output saved to /kopi/outputs/s1/a.txt]", n.Text)
-	assert.Equal(t, "built t1\n[Output saved to /kopi/outputs/s1/a.txt]", n.Shown.Result)
+	assert.Equal(t, "built t1\n[Output saved to /kopi/outputs/s1/a.txt]", n.Shown.(event.TaskEnded).Result)
 
 	info.Output = "[… 9 bytes cut; full output: /kopi/outputs/s1/a.txt; use Read with offset=3 to continue …]\nbuilt t1"
 	text := notice(info, head).Text
 	assert.Equal(t, 1, strings.Count(text, "/kopi/outputs/s1/a.txt"))
 	assert.NotContains(t, text, "[Output saved to")
-	assert.Equal(t, info.Output, notice(info, head).Shown.Result)
+	assert.Equal(t, info.Output, notice(info, head).Shown.(event.TaskEnded).Result)
 }

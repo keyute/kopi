@@ -25,7 +25,7 @@ type bashArgs struct {
 	Unsandboxed     bool `json:"unsandboxed"`
 }
 
-// A background result is one of these, then backgroundTail.
+// A background result is one of these, then BackgroundTail.
 const (
 	startedFormat = "Background task %s started"
 	movedFormat   = "Background task %s: the user moved this command to the background, where it keeps running"
@@ -43,7 +43,7 @@ var (
 )
 
 // resultPattern matches the text format produces, with the task id as the
-// first group and any further verbs matching args, then one of backgroundTail's
+// first group and any further verbs matching args, then one of BackgroundTail's
 // tails; a result saved before those existed ends like the shortest of them.
 func resultPattern(format string, args ...string) *regexp.Regexp {
 	verbs := append([]any{`(t\d+)`}, make([]any, len(args))...)
@@ -55,10 +55,10 @@ func resultPattern(format string, args ...string) *regexp.Regexp {
 	return regexp.MustCompile("^" + fmt.Sprintf(regexp.QuoteMeta(format), verbs...) + tail + "$")
 }
 
-// backgroundTail ends a background result with where the command's output is
+// BackgroundTail ends a background result with where the command's output is
 // saved, when it is, and, when the command's end reaches the model whatever
 // its turn does, that it need not read the file to wait.
-func backgroundTail(file string, wakes bool) string {
+func BackgroundTail(file string, wakes bool) string {
 	var tail string
 	if file != "" {
 		tail = fmt.Sprintf(backgroundFile, file)
@@ -216,7 +216,7 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed, wakes bool) Tool {
 				if err != nil {
 					return Result{}, err
 				}
-				return Result{Text: fmt.Sprintf(startedFormat, info.ID) + backgroundTail(info.OutputFile, wakes)}, nil
+				return Result{Text: fmt.Sprintf(startedFormat, info.ID) + BackgroundTail(info.OutputFile, wakes)}, nil
 			}
 			timeout := defaultBashTimeoutMS
 			if args.Timeout != nil {
@@ -232,9 +232,9 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed, wakes bool) Tool {
 			case moved.ID == "":
 				return Result{Text: out}, err
 			case moved.TimedOut:
-				return Result{Text: fmt.Sprintf(timeoutFormat, moved.ID, d) + backgroundTail(moved.OutputFile, wakes)}, nil
+				return Result{Text: fmt.Sprintf(timeoutFormat, moved.ID, d) + BackgroundTail(moved.OutputFile, wakes)}, nil
 			default:
-				return Result{Text: fmt.Sprintf(movedFormat, moved.ID) + backgroundTail(moved.OutputFile, wakes)}, nil
+				return Result{Text: fmt.Sprintf(movedFormat, moved.ID) + BackgroundTail(moved.OutputFile, wakes)}, nil
 			}
 		},
 		Display: Display{

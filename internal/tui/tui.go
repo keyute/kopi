@@ -55,6 +55,8 @@ type Controller interface {
 	// Background moves the live foreground command to the background; false
 	// when there was none.
 	Background() bool
+	// CommandOutput is the running user command's output so far, "" when none runs.
+	CommandOutput() string
 	Tasks() []tool.TaskInfo
 	TaskOutput(id string) (tool.TaskInfo, error)
 	StopTask(id string) error
