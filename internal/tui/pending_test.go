@@ -361,17 +361,45 @@ func TestPendingCapEndsWithMoreLines(t *testing.T) {
 	m, _ := newTestModel(t, 60, 30)
 	var q []event.Queued
 	for range 4 {
-		q = append(q, queuedCommand("ls", event.CommandExited))
+		ls := queuedCommand("ls", event.CommandExited)
+		ls.Command.Output = linesOf(8)
+		q = append(q, ls)
 	}
 	q = append(q, event.Queued{Text: "tail prompt"})
 	send(m, event.TurnStart{Prompt: "go"}, event.QueueChanged{Pending: q})
 
 	rows := pendingText(m)
 	require.Len(t, rows, 10+2+2+1, "a third of the height, its two shaded rows, the note and the trailing row")
-	assert.Equal(t, "  … 16 more lines", rows[len(rows)-2])
+	s := strings.Join(rows, "\n")
+	assert.NotContains(t, s, "line 7", "exited commands lose their output lines before any row is cut")
+	assert.Contains(t, s, "❯ tail prompt")
+	assert.Contains(t, s, "queued · ctrl+enter to send now · up to edit")
+	assert.Regexp(t, `… \d+ more lines`, s)
 	assert.Empty(t, rows[len(rows)-1])
 	assert.Len(t, screen(m), 30)
 	assert.Equal(t, "❯", screen(m)[m.composerTop()])
+}
+
+func TestPendingCapShrinksARunningCommandsTailBeforeHidingThePrompt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTestModel(t, 60, 30)
+		c.commandOutput = linesOf(8)
+		running := queuedCommand("make", event.CommandRunning)
+		running.Command.Started = time.Now()
+		send(m, event.QueueChanged{Pending: []event.Queued{running, {Text: "my prompt"}}})
+
+		assert.Equal(t, []string{
+			"! make", "", "",
+			"  ↳ running · ctrl+b to background · esc to stop",
+			"      … 6 earlier lines",
+			"      line 6", "      line 7",
+			"", "",
+			"❯ my prompt", "", "",
+			"  ↳ queued · ctrl+enter to send now · up to edit",
+			"",
+		}, pendingText(m)[1:], "the tail shrinks, and no shaded row is left alone")
+		assert.Len(t, screen(m), 30)
+	})
 }
 
 func TestPendingCapInsideLastBoxKeepsTheNote(t *testing.T) {

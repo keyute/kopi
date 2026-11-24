@@ -91,27 +91,24 @@ func branchMessages(entries []coding.SessionEntry) ([]agent.AgentMessage, error)
 			if err := json.Unmarshal(entry.Raw(), &record); err != nil {
 				return msgs, fmt.Errorf("failed to decode history custom message %s: %w", entry.Base().ID, err)
 			}
-			var details any
+			// Only history reads the message, so it carries details decoded.
 			switch record.CustomType {
 			case noticeType:
-				details = &noticeDetails{}
+				var stored struct {
+					Details noticeDetails `json:"details"`
+				}
+				if err := json.Unmarshal(entry.Raw(), &stored); err != nil {
+					return msgs, fmt.Errorf("failed to decode history notice %s: %w", entry.Base().ID, err)
+				}
+				msgs = append(msgs, agent.AgentMessage{Custom: map[string]any{"role": agent.RoleCustom, "customType": noticeType, "details": stored.Details}})
 			case commandType:
-				details = &commandDetails{}
-			default:
-				continue
-			}
-			stored := struct {
-				Details any `json:"details"`
-			}{details}
-			if err := json.Unmarshal(entry.Raw(), &stored); err != nil {
-				return msgs, fmt.Errorf("failed to decode history notice %s: %w", entry.Base().ID, err)
-			}
-			// Only history reads the message, so it carries details decoded.
-			switch d := details.(type) {
-			case *noticeDetails:
-				msgs = append(msgs, agent.AgentMessage{Custom: map[string]any{"role": agent.RoleCustom, "customType": noticeType, "details": *d}})
-			case *commandDetails:
-				msgs = append(msgs, agent.AgentMessage{Custom: map[string]any{"role": agent.RoleCustom, "customType": commandType, "details": *d}})
+				var stored struct {
+					Details commandDetails `json:"details"`
+				}
+				if err := json.Unmarshal(entry.Raw(), &stored); err != nil {
+					return msgs, fmt.Errorf("failed to decode history notice %s: %w", entry.Base().ID, err)
+				}
+				msgs = append(msgs, agent.AgentMessage{Custom: map[string]any{"role": agent.RoleCustom, "customType": commandType, "details": stored.Details}})
 			}
 			continue
 		}

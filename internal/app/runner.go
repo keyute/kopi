@@ -386,6 +386,9 @@ type recordStep struct {
 	cmds    []*entry
 	prompts []*entry
 	text    string
+	// drawn is set once the prompts were shown as read, which the send that
+	// follows may still not deliver.
+	drawn bool
 }
 
 // plan decides how a turn starts and marks what it takes. left is the input
@@ -429,7 +432,7 @@ func (r *runner) plan(left []pigruntime.Prompt, emit func(event.Event)) turn {
 	case len(run) > 0:
 		t.parts = r.tell(prompts(run))
 		t.text = joined(t.parts).Text
-		r.queued = slices.DeleteFunc(r.queued, func(e *entry) bool { return slices.Contains(run, e) })
+		r.remove(run)
 		r.queueChanged(emit)
 	}
 	t.notices = append(t.notices, r.takeNotices()...)
@@ -440,11 +443,16 @@ func (r *runner) plan(left []pigruntime.Prompt, emit func(event.Event)) turn {
 }
 
 func prompts(es []*entry) []pigruntime.Prompt {
-	out := make([]pigruntime.Prompt, 0, len(es))
+	var out []pigruntime.Prompt
 	for _, e := range es {
 		out = append(out, e.prompt)
 	}
 	return out
+}
+
+// remove takes es out of the queue; it must be called with queue held.
+func (r *runner) remove(es []*entry) {
+	r.queued = slices.DeleteFunc(r.queued, func(e *entry) bool { return slices.Contains(es, e) })
 }
 
 // ready returns the entries the model may be given now, in order: those not
@@ -547,9 +555,13 @@ func (r *runner) runTurn(ctx context.Context, sess *pigruntime.Session, emit fun
 		start := time.Now()
 		var res pigruntime.SendResult
 		var err error
+		var drawn *recordStep
 		if rec := w.record; rec != nil {
 			w.record = nil
-			err = r.record(ctx, sess, emit, rec)
+			drawn = rec
+			if err = r.record(ctx, sess, emit, rec); err != nil {
+				res.UndeliveredNotices = notices
+			}
 		}
 		if err == nil {
 			p := joined(parts)
@@ -585,11 +597,11 @@ func (r *runner) runTurn(ctx context.Context, sess *pigruntime.Session, emit fun
 			undelivered = nil
 		}
 		r.reclaim(emit, cont, res.Undelivered)
-		next, unsent := settle(w.stopped, cancelled, res.Outcome, res.Sent, parts, undelivered, w.handBack, promptsOf(r.lead()))
+		next, unsent := settle(w.stopped, cancelled, res.Outcome, res.Sent, parts, undelivered, w.handBack, prompts(r.lead()))
 		r.untell(next, unsent)
 		if !w.stopped {
 			lead := r.lead()
-			r.queued = slices.DeleteFunc(r.queued, func(e *entry) bool { return slices.Contains(lead, e) })
+			r.remove(lead)
 			var rest []pigruntime.Prompt
 			if !cont {
 				rest = r.take(emit)
@@ -610,6 +622,11 @@ func (r *runner) runTurn(ctx context.Context, sess *pigruntime.Session, emit fun
 			ctx, w.cancel = context.WithCancel(w.base)
 			w.sendCtx = ctx
 			t := r.plan(next, emit)
+			if drawn != nil && drawn.drawn && !res.Sent {
+				// The record showed parts as read and the send never took them; they go
+				// again first, so the transcript shows only what follows.
+				t.text = joined(next[len(parts):]).Text
+			}
 			parts, notices, w.record = t.parts, t.notices, t.record
 			emit(event.TurnEnd{WorkID: w.id, Outcome: res.Outcome, Elapsed: elapsed})
 			emit(event.TurnStart{WorkID: w.id, Prompt: t.text})
@@ -637,13 +654,6 @@ func (r *runner) runTurn(ctx context.Context, sess *pigruntime.Session, emit fun
 	}
 }
 
-func promptsOf(es []*entry) []pigruntime.Prompt {
-	if len(es) == 0 {
-		return nil
-	}
-	return prompts(es)
-}
-
 // opens reports whether the ready entries es, with the queued notices, start or
 // continue a turn: a prompt always does, and a command that finished or a
 // waking notice does when wake is set and the human has not stopped the model.
@@ -662,9 +672,10 @@ func (r *runner) record(ctx context.Context, sess *pigruntime.Session, emit func
 	r.c.queue.Lock()
 	defer r.c.queue.Unlock()
 	r.unhand(rec.cmds)
-	r.queued = slices.DeleteFunc(r.queued, func(e *entry) bool { return slices.Contains(rec.prompts, e) })
+	r.remove(rec.prompts)
 	r.queueChanged(emit)
 	if err == nil && ctx.Err() == nil {
+		rec.drawn = true
 		emit(event.UserMessage{Text: rec.text})
 	}
 	return err
@@ -782,6 +793,13 @@ func (r *runner) recordSilently(prefix []*entry, wake bool) {
 		// does not report to the queue.
 		if err != nil {
 			emit(event.Error{Err: err})
+			// A prompt typed while the record was in flight waits behind it and has no
+			// other turn to start it; advancing with none waiting would record the same
+			// commands again.
+			if hasPrompt(r.ready()) {
+				c.mu.Lock()
+				r.advanceLocked(false)
+			}
 			return
 		}
 		if slices.ContainsFunc(prefix, func(e *entry) bool { return slices.Contains(r.queued, e) }) {
@@ -910,8 +928,8 @@ func (c *Controller) inputs(ps []pigruntime.Prompt) []event.Input {
 	out := make([]event.Input, 0, len(ps))
 	for _, p := range ps {
 		in := event.Input{Text: p.Text}
-		if _, shell := shellInput(p.Text); shell && c.cfg.UserShell != nil {
-			in.Text = " " + p.Text
+		if c.cfg.UserShell != nil {
+			in.Text = AsPrompt(p.Text)
 		}
 		for _, img := range p.Images {
 			in.Images = append(in.Images, img.Path)

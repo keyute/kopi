@@ -20,10 +20,10 @@ type userCommand struct {
 	started time.Time
 	elapsed time.Duration
 	// reason is why it ended as the task registry words it, such as "exit code
-	// 3"; exit is that as shown, "exit 3".
-	reason, exit string
-	failed       bool
-	output       string
+	// 3"; it is shown as "exit 3".
+	reason string
+	failed bool
+	output string
 	// file is where a moved command's output is saved; taskID is its task.
 	file, taskID string
 	// live is the running command, nil before it begins and after it ends.
@@ -41,7 +41,7 @@ func (u *userCommand) snapshot() *event.UserCommand {
 }
 
 func (u *userCommand) shown() event.UserCommand {
-	return event.UserCommand{Command: u.text, State: u.state, Started: u.started, Elapsed: u.elapsed, Exit: u.exit, Failed: u.failed, Output: u.output, TaskID: u.taskID}
+	return event.UserCommand{Command: u.text, State: u.state, Started: u.started, Elapsed: u.elapsed, Exit: exitText(u.reason), Failed: u.failed, Output: u.output, TaskID: u.taskID}
 }
 
 // notice is what the model reads of a command that has finished, was stopped or
@@ -126,21 +126,14 @@ func (r *runner) startNextLocked() bool {
 	if blocked {
 		return false
 	}
-	var next *entry
-	for _, e := range r.queued {
-		if e.cmd == nil {
-			continue
-		}
-		if e.cmd.state == event.CommandRunning {
-			return false
-		}
-		if next == nil && e.cmd.state == event.CommandQueued {
-			next = e
-		}
-	}
-	if next == nil {
+	if r.running() != nil {
 		return false
 	}
+	i := slices.IndexFunc(r.queued, func(e *entry) bool { return e.cmd != nil && e.cmd.state == event.CommandQueued })
+	if i < 0 {
+		return false
+	}
+	next := r.queued[i]
 	next.cmd.state, next.cmd.started = event.CommandRunning, time.Now()
 	c.wg.Go(func() { r.runCommand(next) })
 	return true
@@ -179,7 +172,7 @@ func (r *runner) runCommand(e *entry) {
 	}
 	switch {
 	case err != nil:
-		u.state, u.failed, u.reason, u.exit, u.output = event.CommandExited, true, "failed to start", "failed to start", err.Error()
+		u.state, u.failed, u.reason, u.output = event.CommandExited, true, "failed to start", err.Error()
 		u.elapsed = time.Since(u.started)
 	case moved.ID != "":
 		u.state, u.taskID, u.file = event.CommandMoved, moved.ID, moved.OutputFile
@@ -188,7 +181,7 @@ func (r *runner) runCommand(e *entry) {
 		u.state = event.CommandStopped
 		u.elapsed, u.output = info.Ended.Sub(info.Started), info.Output
 	default:
-		u.state, u.failed, u.reason, u.exit = event.CommandExited, info.Status == tool.TaskFailed, info.Reason, exitText(info.Reason)
+		u.state, u.failed, u.reason = event.CommandExited, info.Status == tool.TaskFailed, info.Reason
 		u.elapsed, u.output, u.file = info.Ended.Sub(info.Started), info.Output, info.OutputFile
 	}
 	r.startNextLocked()
@@ -197,15 +190,23 @@ func (r *runner) runCommand(e *entry) {
 	r.advanceLocked(true)
 }
 
+// running returns the entry whose command runs, nil when none does; it must be
+// called with queue held.
+func (r *runner) running() *entry {
+	i := slices.IndexFunc(r.queued, func(e *entry) bool { return e.cmd != nil && e.cmd.state == event.CommandRunning })
+	if i < 0 {
+		return nil
+	}
+	return r.queued[i]
+}
+
 // CommandOutput returns the output so far of the command that runs, "" when none
 // does.
 func (c *Controller) CommandOutput() string {
 	c.queue.Lock()
 	var live *tool.Live
-	for _, e := range c.main.queued {
-		if e.cmd != nil && e.cmd.state == event.CommandRunning {
-			live = e.cmd.live
-		}
+	if e := c.main.running(); e != nil {
+		live = e.cmd.live
 	}
 	c.queue.Unlock()
 	if live == nil {
@@ -221,12 +222,7 @@ func (c *Controller) CommandOutput() string {
 // caller calls once queue is released, and whether there was a command. It must
 // be called with queue held.
 func (r *runner) interruptCommand(emit func(event.Event)) (stop func(), ok bool) {
-	var running *entry
-	for _, e := range r.queued {
-		if e.cmd != nil && e.cmd.state == event.CommandRunning {
-			running = e
-		}
-	}
+	running := r.running()
 	if running == nil {
 		return nil, false
 	}

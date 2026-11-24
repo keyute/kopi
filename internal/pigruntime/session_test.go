@@ -741,6 +741,18 @@ func TestRecordNoticesAddsWithoutRequest(t *testing.T) {
 	assert.Equal(t, []event.Event{n1.Shown, n2.Shown}, drain(evs))
 }
 
+func TestRecordNoticesStopsAtFailureWithoutNotifying(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	sess := openTestSession(t, r)
+	evs := recordDelivered(t, sess)
+	require.NoError(t, sess.Close(t.Context()))
+
+	err := sess.RecordNotices([]Notice{testCommand("ls"), testNotice("t1")})
+	require.Error(t, err)
+	assert.Empty(t, drain(evs))
+}
+
 func TestRecordNoticesThenSendReadsThemBeforePrompt(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)

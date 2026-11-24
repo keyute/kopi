@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/tool"
 )
@@ -44,7 +46,9 @@ type userHarness struct {
 func newUserHarness(t *testing.T, cfg Config) *userHarness {
 	t.Helper()
 	sb := pigruntimetest.NewSandbox(t)
-	cfg.Tasks = tool.NewTasks()
+	if cfg.Tasks == nil {
+		cfg.Tasks = tool.NewTasks()
+	}
 	cfg.UserShell = tool.NewShell(sb.Workspace, nil)
 	cfg.Wake = true
 	h := newHarness(t, sb, cfg)
@@ -415,6 +419,17 @@ func TestEscapeAtIdleStopsTheRunningCommandAndDropsTheRest(t *testing.T) {
 	default:
 	}
 	assert.False(t, u.c.Interrupt(Main), "nothing left to stop")
+
+	// A stray wake would still be on its way; the next prompt's request is the
+	// only one.
+	u.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, u.requests, "ok")})
+	ends := turnEnds(u.c)
+	u.submit(t, "next")
+	receiveEnd(t, ends)
+	texts := receive(t, u.requests).UserTexts
+	require.NotEmpty(t, texts)
+	assert.Equal(t, "next", texts[len(texts)-1])
+	assert.Equal(t, 1, u.faux.CallCount())
 }
 
 func TestBackgroundingTheCommandLetsTheRestGoOn(t *testing.T) {
@@ -510,6 +525,7 @@ func TestNewSessionClearsTheQueueAndKillsTheRunningCommand(t *testing.T) {
 	assert.Empty(t, u.shape())
 	assert.Equal(t, 1, u.faux.CallCount(), "nothing is delivered to the new session")
 	assert.Empty(t, ofType[event.UserCommand](u.rec.all()))
+	ends := turnEnds(u.c)
 	evs := u.rec.all()
 	changed := slices.IndexFunc(evs, func(ev event.Event) bool { _, ok := ev.(event.SessionChanged); return ok })
 	require.GreaterOrEqual(t, changed, 0)
@@ -519,6 +535,14 @@ func TestNewSessionClearsTheQueueAndKillsTheRunningCommand(t *testing.T) {
 		t.Fatal("the queued command ran")
 	default:
 	}
+
+	// A stray wake would still be on its way; the next prompt's request is the
+	// only one, and the new session's alone.
+	u.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, u.requests, "ok")})
+	u.submit(t, "next")
+	receiveEnd(t, ends)
+	assert.Equal(t, []string{"next"}, receive(t, u.requests).UserTexts)
+	assert.Equal(t, 2, u.faux.CallCount())
 }
 
 func TestCloseKillsTheRunningCommandAndReturns(t *testing.T) {
@@ -759,4 +783,195 @@ func TestPromptHandedBackKeepsItsEscape(t *testing.T) {
 	u.submit(t, "plain")
 	require.True(t, u.c.Interrupt(Main))
 	assert.Equal(t, []event.Input{{Text: " !make clean"}, {Text: "plain"}}, receiveEnd(t, ends).Unsent)
+}
+
+// beginTasks is a task manager whose Begin the test replaces and whose StopAll
+// it can see, the step Close takes after it cleared the queue.
+type beginTasks struct {
+	*tool.Tasks
+	begin   func(context.Context, *tool.Shell, string) (*tool.Live, error)
+	stopAll chan struct{}
+	once    sync.Once
+}
+
+func (b *beginTasks) Begin(ctx context.Context, sh *tool.Shell, command string) (*tool.Live, error) {
+	return b.begin(ctx, sh, command)
+}
+
+func (b *beginTasks) StopAll() {
+	b.once.Do(func() { close(b.stopAll) })
+	b.Tasks.StopAll()
+}
+
+func TestCommandThatFailsToBeginEndsFailedAndTheModelReplies(t *testing.T) {
+	u := newUserHarness(t, Config{Tasks: &beginTasks{Tasks: tool.NewTasks(), stopAll: make(chan struct{}), begin: func(context.Context, *tool.Shell, string) (*tool.Live, error) {
+		return nil, errors.New("no process")
+	}}})
+	u.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, u.requests, "ok")})
+	ends := turnEnds(u.c)
+
+	u.submit(t, "!never")
+
+	receiveEnd(t, ends)
+	cmds := ofType[event.UserCommand](u.rec.all())
+	require.Len(t, cmds, 1)
+	assert.Equal(t, event.CommandExited, cmds[0].State)
+	assert.True(t, cmds[0].Failed)
+	assert.Equal(t, "failed to start", cmds[0].Exit)
+	assert.Equal(t, "no process", cmds[0].Output)
+	texts := receive(t, u.requests).UserTexts
+	require.Len(t, texts, 1)
+	assert.Contains(t, texts[0], "failed to start")
+	assert.Contains(t, texts[0], "no process")
+	u.untilShape(t)
+}
+
+func TestStopWhileTheCommandIsBeginningStopsItOnceItBegan(t *testing.T) {
+	for _, closing := range []bool{false, true} {
+		t.Run(map[bool]string{false: "interrupt", true: "close"}[closing], func(t *testing.T) {
+			real := tool.NewTasks()
+			entered, release := make(chan struct{}), make(chan struct{})
+			began := make(chan *tool.Live, 1)
+			tasks := &beginTasks{Tasks: real, stopAll: make(chan struct{})}
+			tasks.begin = func(ctx context.Context, sh *tool.Shell, command string) (*tool.Live, error) {
+				close(entered)
+				<-release
+				live, err := real.Begin(ctx, sh, command)
+				began <- live
+				return live, err
+			}
+			u := newUserHarness(t, Config{Tasks: tasks})
+
+			u.submit(t, "!sleep 30")
+			wait(t, entered)
+			if closing {
+				closed := make(chan error, 1)
+				go func() { closed <- u.c.Close(context.Background()) }()
+				wait(t, tasks.stopAll)
+				close(release)
+				require.NoError(t, <-closed)
+			} else {
+				require.True(t, u.c.Interrupt(Main))
+				close(release)
+				u.until(t, func() bool { return u.commandEvents(event.CommandStopped) == 1 })
+				u.untilShape(t)
+			}
+
+			live := <-began
+			require.NotNil(t, live)
+			assert.Equal(t, tool.TaskStopped, live.Info().Status)
+			assert.Zero(t, u.faux.CallCount())
+		})
+	}
+}
+
+func TestCommandChainResumesWhenAFailedSwitchEnds(t *testing.T) {
+	u := newUserHarness(t, Config{})
+	a, b := u.cmd("a", "out-a"), u.cmd("b", "out-b")
+	u.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, u.requests, "a-ack"), pigruntimetest.Capture(t, u.requests, "b-ack")})
+	ends := turnEnds(u.c)
+	errs := subscribeTo[event.Error](u.c)
+
+	u.run(t, a)
+	wait(t, a.started)
+	u.run(t, b)
+
+	// Holding life keeps the switch under way, as the switch tests do.
+	u.c.life.Lock()
+	u.submit(t, "/resume no-such-session")
+	a.release()
+	u.untilShape(t, "!a:exited", "!b:queued")
+	select {
+	case <-b.started:
+		t.Fatal("the next command ran during the switch")
+	default:
+	}
+	assert.Zero(t, u.faux.CallCount())
+	u.c.life.Unlock()
+
+	require.ErrorIs(t, receiveEvent(t, errs).Err, pigruntime.ErrSessionNotFound)
+	wait(t, b.started)
+	receiveEnd(t, ends)
+	wantNotice(t, receive(t, u.requests).UserTexts[0], a, exited)
+	b.release()
+	receiveEnd(t, ends)
+	texts := receive(t, u.requests).UserTexts
+	wantNotice(t, texts[len(texts)-1], b, exited)
+	u.untilShape(t)
+}
+
+func TestRunShellRefusalsQueueNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(*Controller)
+		want error
+	}{
+		{"no session", func(c *Controller) { c.main.sess = nil }, ErrNoSession},
+		{"login", func(c *Controller) { c.login = &loginRun{} }, ErrLoggingIn},
+		{"switch", func(c *Controller) { c.switching = &sessionSwitch{} }, ErrBusy},
+		{"model change", func(c *Controller) { c.changingModel = true }, ErrBusy},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := newUserHarness(t, Config{})
+			u.c.mu.Lock()
+			sess := u.c.main.sess
+			tc.set(u.c)
+			u.c.mu.Unlock()
+			t.Cleanup(func() {
+				u.c.mu.Lock()
+				u.c.main.sess, u.c.login, u.c.switching, u.c.changingModel = sess, nil, nil, false
+				u.c.mu.Unlock()
+			})
+
+			assert.ErrorIs(t, u.c.runShell("echo hi", "!echo hi"), tc.want)
+			assert.Empty(t, u.shape())
+			assert.Empty(t, ofType[event.QueueChanged](u.rec.all()))
+		})
+	}
+}
+
+// A send the test starts on the session itself keeps it from recording, which
+// is how a record fails.
+func TestFailedRecordsKeepWhatTheModelNeverRead(t *testing.T) {
+	u := newUserHarness(t, Config{})
+	a := u.cmd("a", "out-a")
+	entered, gate := make(chan struct{}), make(chan struct{})
+	u.faux.SetResponses([]ai.FauxResponseStep{ai.FauxFactoryStep(func(ai.TranscriptContext, ai.StreamOptions, *ai.FauxProviderState, *ai.Model) (ai.AssistantMessage, error) {
+		close(entered)
+		<-gate
+		return ai.FauxAssistantMessage(ai.FauxContentString("done"), ai.FauxAssistantMessageOptions{}), nil
+	})})
+	u.c.mu.Lock()
+	sess := u.c.main.sess
+	u.c.mu.Unlock()
+	sent := make(chan error, 1)
+	go func() {
+		_, err := sess.Send(t.Context(), pigruntime.Prompt{Text: "occupy"}, nil, nil)
+		sent <- err
+	}()
+	wait(t, entered)
+	ends := turnEnds(u.c)
+	errs := subscribeTo[event.Error](u.c)
+	notice := pigruntime.Notice{Text: "n", Shown: event.TaskEnded{Status: string(tool.TaskStopped)}}
+
+	u.run(t, a)
+	wait(t, a.started)
+	u.submit(t, "P")
+	u.c.main.queueNotice(notice)
+	a.release()
+
+	end := receiveEnd(t, ends)
+	assert.Equal(t, event.Failed, end.Outcome.Status)
+	assert.Equal(t, []event.Input{{Text: "P"}}, end.Unsent)
+	u.c.queue.Lock()
+	assert.Equal(t, []pigruntime.Notice{notice}, u.c.main.notices, "the notice the failed record took is back")
+	u.c.queue.Unlock()
+
+	// The command is left for a record that can run: the failed silent record is
+	// reported once and does not try again on its own.
+	require.ErrorIs(t, receiveEvent(t, errs).Err, pigruntime.ErrSendInProgress)
+	close(gate)
+	require.NoError(t, <-sent)
+	assert.Empty(t, errs)
+	assert.Equal(t, []string{"!a:exited"}, u.shape())
 }

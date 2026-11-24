@@ -259,14 +259,14 @@ An input that starts with `!` runs the rest as a shell command of yours. A leadi
 - Esc and Ctrl+C interrupt the agent's turn when one runs and leave your commands alone. With no turn running they stop your running command; commands still queued behind it are dropped, and prompts waiting behind it return to the input.
 - `/new`, `/resume` and exit stop your running command and drop the queued ones. A result the agent had not read yet is lost.
 
-A command is a shaded block: `!` and the command, a status line under it, then the last lines of its output, 5 while above the input and 10 in the transcript. Click the status line or press Ctrl+O to see all of the stored output.
+A command is a shaded block: `!` and the command, a status line under it, then the last lines of its output, 5 while above the input and 10 in the transcript. Above the input the output is only the last lines; click the status line or press Ctrl+O in the transcript to see all of the stored output.
 
 | Status line | Meaning |
 | --- | --- |
 | `queued` | Waiting for an earlier command |
 | `running 12s · ctrl+b to background · esc to stop` | Running |
 | `exit 0 · 12s` | Finished; `· unread` is added while it is above the input |
-| `stopped after 12s` | You stopped it |
+| `stopped after 12s` | You stopped it; `· unread` is added while it is above the input |
 | `moved to background after 12s` | You moved it to the background |
 
 ## Mouse

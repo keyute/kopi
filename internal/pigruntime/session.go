@@ -565,6 +565,8 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	// pending is the notices not yet delivered. PiG delivers them in the
 	// order Send gives them, so each notice message is the head.
 	pending := slices.Clone(notices)
+	// failed is set once a notice fails to queue, for the rest of the run.
+	failed := false
 	var sent bool
 	// last is the run's last assistant message. SendContent returns PiG's
 	// whole transcript, so it cannot say which assistant message is this run's.
@@ -608,9 +610,8 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 			// Prompts and notices share PiG's steering queue, so one pass in the
 			// order given keeps that order. A notice's TriggerTurn stays nil, so
 			// on an idle session it is only appended and never starts a run on
-			// the event executor. After a notice fails to queue the rest are only
-			// recorded as undelivered, so no later entry overtakes it.
-			failed := false
+			// the event executor. After a notice fails to queue every later entry
+			// of the run is only recorded as undelivered, so none overtakes it.
 			for _, e := range more() {
 				if n := e.Notice; n != nil {
 					pending = append(pending, *n)
