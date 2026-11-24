@@ -175,8 +175,8 @@ func (w *workflowDialog) dialog(width int, th theme) *dialog {
 		}
 		if width != w.hintWidth {
 			w.hintWidth = width
-			back := " · " + binding(w.m.keys.dismiss, "go back")
-			w.hint.foot = cut("watching "+w.watchWhat, width-2-lipgloss.Width(back)) + back
+			back := binding(w.m.keys.dismiss, "go back")
+			w.hint.note, w.hint.keys = cut("watching "+w.watchWhat, width-2-lipgloss.Width(" · "+back)), back
 		}
 		return w.hint
 	}

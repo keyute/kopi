@@ -315,49 +315,25 @@ func (d *dialog) fit(s *shape, keys, foot string, maxRows, limit int, th theme) 
 
 // hintRows wraps text and the key hints after it for width, two columns in.
 // All of it is dim but the key of each hint, written "<key> to <verb>" as
-// binding writes it, which is muted wherever the rows break.
+// binding writes it, which is muted.
 func hintRows(text, keys string, width int, th theme) []string {
-	text, keys = clean(text), clean(keys)
-	line := strings.Join(slices.DeleteFunc([]string{text, keys}, isEmpty), " · ")
-	// spans are the bytes of line that are a key.
-	var spans [][2]int
-	at := len(line) - len(keys)
-	for part := range strings.SplitSeq(keys, " · ") {
-		if k, rest, ok := strings.Cut(part, " "); ok && strings.HasPrefix(rest, "to ") {
-			spans = append(spans, [2]int{at, at + len(k)})
-		}
-		at += len(part) + len(" · ")
-	}
 	dim, muted := fg(th.dim), fg(th.muted)
-	rows := strings.Split(lipgloss.Wrap(line, max(1, width-2), ""), "\n")
-	cursor := 0
-	for i, r := range rows {
-		// Wrap only drops whitespace at a break, so the rows are in-order
-		// substrings of line.
-		start := strings.Index(line[cursor:], r)
-		if start < 0 {
-			rows[i] = "  " + dim.Render(r)
-			continue
-		}
-		start += cursor
-		cursor = start + len(r)
-		var b strings.Builder
-		b.WriteString("  ")
-		for _, s := range spans {
-			lo, hi := max(s[0], start), min(s[1], cursor)
-			if lo >= hi {
-				continue
+	var parts []string
+	if text = clean(text); text != "" {
+		parts = append(parts, dim.Render(text))
+	}
+	if keys = clean(keys); keys != "" {
+		for part := range strings.SplitSeq(keys, " · ") {
+			if k, rest, ok := strings.Cut(part, " "); ok && strings.HasPrefix(rest, "to ") {
+				parts = append(parts, muted.Render(k)+dim.Render(" "+rest))
+			} else {
+				parts = append(parts, dim.Render(part))
 			}
-			if lo > start {
-				b.WriteString(dim.Render(line[start:lo]))
-			}
-			b.WriteString(muted.Render(line[lo:hi]))
-			start = hi
 		}
-		if start < cursor {
-			b.WriteString(dim.Render(line[start:cursor]))
-		}
-		rows[i] = b.String()
+	}
+	rows := strings.Split(lipgloss.Wrap(strings.Join(parts, dim.Render(" · ")), max(1, width-2), ""), "\n")
+	for i := range rows {
+		rows[i] = "  " + rows[i]
 	}
 	return rows
 }

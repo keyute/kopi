@@ -222,6 +222,14 @@ func TestUsageWindowOmitsAnUnknownReset(t *testing.T) {
 	})
 }
 
+func TestUsageContextShowsATinyShareAsUnderATenth(t *testing.T) {
+	u := app.Usage{ContextTokens: 84_200, ContextWindow: 1_000_000, Context: app.Context{Agents: 400, Messages: 83_800}}
+	rows := usageContext(u, 60, mocha())
+	require.Len(t, rows, 2)
+	assert.Equal(t, "Agents       400   <0.1%", ansi.Strip(rows[0]))
+	assert.Equal(t, "Messages   83.8k    8.4%", ansi.Strip(rows[1]))
+}
+
 func TestPercentBarWarnsWhenAsked(t *testing.T) {
 	th := mocha()
 	cells := func(n int) string { return strings.Repeat("▰", n) }

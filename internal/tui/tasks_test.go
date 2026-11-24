@@ -434,14 +434,35 @@ func TestTasksListKeepsTheCursorOnATaskThatEnds(t *testing.T) {
 func TestTasksListBulletsFollowTheStatus(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, c := tasksModel(t)
-		c.tasks = append(c.tasks, tool.TaskInfo{ID: "t3", Command: "false", Started: time.Now(), Ended: time.Now(), Status: tool.TaskFailed})
+		c.tasks = append(c.tasks,
+			tool.TaskInfo{ID: "t3", Command: "false", Started: time.Now(), Ended: time.Now(), Status: tool.TaskFailed},
+			tool.TaskInfo{ID: "t4", Command: "yes", Started: time.Now(), Ended: time.Now(), Status: tool.TaskStopped},
+		)
 		submitText(m, "/tasks")
 
 		th := m.th
-		for i, want := range []string{fg(th.text).Render("•"), fg(th.error).Render("•"), fg(th.success).Render("•")} {
+		for i, want := range []string{fg(th.text).Render("•"), fg(th.error).Render("•"), fg(th.error).Render("•"), fg(th.success).Render("•")} {
 			drawn := tasksOf(m).d.options[i].drawn
 			assert.Contains(t, drawn[len(drawn)-1], "  "+want+" ", "option %d", i)
 		}
+		assert.Equal(t, listRow(false, "yes", "stopped · 0s", 60), dialogRows(t, m)[6])
+	})
+}
+
+func TestTasksRunningTimesAdvanceEachSecond(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := tasksModel(t)
+		submitText(m, "/tasks")
+		assert.Equal(t, listRow(true, "sleep 30", "1m 2s", 60), dialogRows(t, m)[3])
+
+		time.Sleep(time.Second)
+		m.arrange()
+		assert.Equal(t, listRow(true, "sleep 30", "1m 3s", 60), dialogRows(t, m)[3], "in the list")
+
+		press(m, enter)
+		time.Sleep(time.Second)
+		m.arrange()
+		assert.Equal(t, "  running · 1m 4s · sleep 30", dialogRows(t, m)[1], "in an open task's title")
 	})
 }
 

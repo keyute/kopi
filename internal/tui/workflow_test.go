@@ -242,7 +242,7 @@ func TestWorkflowDialogEnterWatchesARunningAgent(t *testing.T) {
 		assert.Equal(t, "s2", m.shown)
 		assert.Contains(t, body(m), "❯ review users.ts")
 		assert.Contains(t, statusText(m), "rev-1", "the status line is the agent's")
-		assert.Equal(t, []string{"", "  watching reviewer › users.ts · esc to go back"}, workflowBoxFoot(t, m))
+		assert.Equal(t, []string{"  watching reviewer › users.ts · esc to go back", ""}, workflowBoxFoot(t, m))
 	})
 }
 

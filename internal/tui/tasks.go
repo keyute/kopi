@@ -23,11 +23,10 @@ type taskDialog struct {
 	open string
 	info tool.TaskInfo
 	// width, th and at are what the title and options were drawn for; at is the
-	// displayed second, which they depend on only while ticking.
-	width   int
-	th      theme
-	at      time.Time
-	ticking bool
+	// displayed second.
+	width int
+	th    theme
+	at    time.Time
 	// out is info's output as body rows for outWidth and outTheme, kept
 	// across renders.
 	out      []string
@@ -169,14 +168,12 @@ func (t *taskDialog) setOptions() {
 	d.options = d.options[:0]
 	t.at = time.Now().Truncate(time.Second)
 	if t.open != "" {
-		t.ticking = t.stoppable()
 		d.title = cut(taskLine(t.info, t.at), t.width-2)
 		if t.stoppable() {
 			d.options = append(d.options, option{label: "Stop"})
 		}
 		d.options = append(d.options, option{label: "Back"})
 	} else {
-		t.ticking = false
 		d.title = "Background tasks"
 		for i, info := range t.list {
 			var rows []string
@@ -184,7 +181,6 @@ func (t *taskDialog) setOptions() {
 			if !running && (i == 0 || t.list[i-1].Status == tool.TaskRunning) {
 				rows = append(rows, "  "+fg(t.th.muted).Render("Finished"))
 			}
-			t.ticking = t.ticking || running
 			d.options = append(d.options, option{drawn: append(rows, taskRow(info, t.at, t.width, t.th))})
 		}
 	}
@@ -194,7 +190,7 @@ func (t *taskDialog) setOptions() {
 // dialog is the task list or, for an open task, its output, which fills what
 // the other rows leave, from its end until it is scrolled.
 func (t *taskDialog) dialog(width int, th theme) *dialog {
-	if width != t.width || th != t.th || (t.ticking && !time.Now().Truncate(time.Second).Equal(t.at)) {
+	if width != t.width || th != t.th || !time.Now().Truncate(time.Second).Equal(t.at) {
 		t.width, t.th = width, th
 		t.setOptions()
 	}

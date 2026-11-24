@@ -69,18 +69,18 @@ func TestHintRowsDrawTheKeysMuted(t *testing.T) {
 	th := mocha()
 	dim, muted := fg(th.dim), fg(th.muted)
 
-	assert.Equal(t, []string{"  " + muted.Render("enter") + dim.Render(" to view · ") + muted.Render("esc") + dim.Render(" to close")},
+	assert.Equal(t, []string{"  " + muted.Render("enter") + dim.Render(" to view") + dim.Render(" · ") + muted.Render("esc") + dim.Render(" to close")},
 		hintRows("", "enter to view · esc to close", 40, th))
-	assert.Equal(t, []string{"  " + dim.Render("watching reviewer › pay.ts · ") + muted.Render("←/→") + dim.Render(" to switch questions")},
+	assert.Equal(t, []string{"  " + dim.Render("watching reviewer › pay.ts") + dim.Render(" · ") + muted.Render("←/→") + dim.Render(" to switch questions")},
 		hintRows("", "watching reviewer › pay.ts · ←/→ to switch questions", 80, th), "a part that names no key is dim")
-	assert.Equal(t, []string{"  " + dim.Render("denied: push to main · ") + muted.Render("esc") + dim.Render(" to close")},
+	assert.Equal(t, []string{"  " + dim.Render("denied: push to main") + dim.Render(" · ") + muted.Render("esc") + dim.Render(" to close")},
 		hintRows("denied: push to main", "esc to close", 40, th), "the text before the hints names no key")
-	assert.Equal(t, []string{"  " + muted.Render("pgup/pgdown") + dim.Render(" to"), "  " + dim.Render("scroll · ") + muted.Render("esc") + dim.Render(" to"), "  " + dim.Render("close")},
+	assert.Equal(t, []string{"  " + muted.Render("pgup/pgdown") + dim.Render(" to"), "  " + dim.Render("scroll") + dim.Render(" · ") + muted.Render("esc") + dim.Render(" to"), "  " + dim.Render("close")},
 		hintRows("", "pgup/pgdown to scroll · esc to close", 18, th), "a key stays muted where its row breaks")
 
 	d := dialog{title: "Pick", note: "push to main", keys: "ctrl+g to edit", foot: "esc to close", options: []option{{label: "Yes"}}}
 	rows := d.rows(40, 100, 1, th)
-	assert.Equal(t, "  "+dim.Render("push to main · ")+muted.Render("ctrl+g")+dim.Render(" to edit"), rows[2])
+	assert.Equal(t, "  "+dim.Render("push to main")+dim.Render(" · ")+muted.Render("ctrl+g")+dim.Render(" to edit"), rows[2])
 	assert.Equal(t, "  "+muted.Render("esc")+dim.Render(" to close"), rows[len(rows)-2])
 }
 

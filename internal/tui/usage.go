@@ -194,7 +194,11 @@ func usageContext(u app.Usage, width int, th theme) []string {
 		if part.tokens <= 0 {
 			continue
 		}
-		rows = append(rows, [3]string{part.name, compactCount(part.tokens), fmt.Sprintf("%.1f%%", float64(part.tokens)*100/float64(u.ContextWindow))})
+		share := fmt.Sprintf("%.1f%%", float64(part.tokens)*100/float64(u.ContextWindow))
+		if share == "0.0%" {
+			share = "<0.1%"
+		}
+		rows = append(rows, [3]string{part.name, compactCount(part.tokens), share})
 	}
 	return usageColumns(rows, width, fg(th.muted), th)
 }
@@ -242,14 +246,15 @@ type usageFact struct{ label, value string }
 // something to say.
 func usageFacts(u app.Usage, th theme, now time.Time) []usageFact {
 	sep, text := fg(th.muted).Render(" · "), fg(th.text)
-	// join draws the parts with no colour of their own as text.
 	join := func(parts []string) string {
+		var b strings.Builder
 		for i, p := range parts {
-			if !strings.Contains(p, "\x1b") {
-				parts[i] = text.Render(p)
+			if i > 0 {
+				b.WriteString(sep)
 			}
+			b.WriteString(text.Render(p))
 		}
-		return strings.Join(parts, sep)
+		return b.String()
 	}
 	var facts []usageFact
 	if t := u.Tokens; t != (app.Tokens{}) {
@@ -260,11 +265,11 @@ func usageFacts(u app.Usage, th theme, now time.Time) []usageFact {
 	var cache []string
 	c := u.Cache
 	if c.Reported {
-		cache = append(cache, fmt.Sprintf("%.0f%% hit", c.Hit))
+		cache = append(cache, text.Render(fmt.Sprintf("%.0f%% hit", c.Hit)))
 	}
 	if !c.Expires.IsZero() {
 		if now.Before(c.Expires) {
-			cache = append(cache, "warm until "+clockText(c.Expires, now))
+			cache = append(cache, text.Render("warm until "+clockText(c.Expires, now)))
 		} else {
 			cache = append(cache, fg(th.warning).Render("expired "+clockText(c.Expires, now)))
 		}
@@ -274,10 +279,10 @@ func usageFacts(u app.Usage, th theme, now time.Time) []usageFact {
 		if c.Misses == 1 {
 			noun = "miss"
 		}
-		cache = append(cache, fmt.Sprintf("%d %s $%.2f", c.Misses, noun, c.MissedCost))
+		cache = append(cache, text.Render(fmt.Sprintf("%d %s $%.2f", c.Misses, noun, c.MissedCost)))
 	}
 	if len(cache) > 0 {
-		facts = append(facts, usageFact{"Cache", join(cache)})
+		facts = append(facts, usageFact{"Cache", strings.Join(cache, sep)})
 	}
 	var compaction []string
 	if u.Compactions > 0 {
