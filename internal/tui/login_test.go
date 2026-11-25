@@ -36,14 +36,14 @@ func TestLoginRowsListOptionsWithDescriptions(t *testing.T) {
 		"❭ 1. Account - sign in with a browser",
 		"  2. API key",
 		"",
-		"  esc to cancel",
+		"  enter to choose · esc to cancel",
 		rule40,
 	}, plainLoginRows(ev, 0))
 }
 
 func TestLoginRowsShowATextFieldWithItsPlaceholder(t *testing.T) {
 	ev := event.LoginRequested{Message: "Paste the code", Placeholder: "code"}
-	assert.Equal(t, []string{rule40, "  Paste the code", "", "❭ code", "", "  esc to cancel", rule40}, plainLoginRows(ev, 0))
+	assert.Equal(t, []string{rule40, "  Paste the code", "", "❭ code", "", "  enter to submit · esc to cancel", rule40}, plainLoginRows(ev, 0))
 }
 
 func TestLoginRowsMaskASecret(t *testing.T) {
@@ -147,7 +147,7 @@ func TestLoginRowsWindowIsContiguousAndCentredOnTheSelection(t *testing.T) {
 		"  22. Provider 22",
 		"  21 of 40",
 		"",
-		"  esc to cancel",
+		"  enter to choose · esc to cancel",
 		rule40,
 	}, rows)
 }

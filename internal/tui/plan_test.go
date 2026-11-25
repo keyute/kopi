@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -45,12 +46,14 @@ func TestPlanDialogShowsTitleRowsAndHints(t *testing.T) {
 	assert.Equal(t, []string{
 		rule,
 		"  Approve this plan?",
-		"  " + planPath + " · ctrl+g to edit · pgup/pgdown to scroll · esc to dismiss",
+		"  " + planPath,
 		"",
 		"❭ 1. Yes",
 		"  2. No  What should change?",
+		"",
+		"  enter to choose · ctrl+g to edit · pgup/pgdown to scroll · esc to dismiss",
 		rule,
-	}, rows[len(rows)-7:], "the last rows of the screen")
+	}, rows[len(rows)-9:], "the last rows of the screen")
 	assert.Contains(t, strings.Join(rows, "\n"), "Heading", "the plan is under the row")
 }
 
@@ -110,7 +113,8 @@ func TestPlanRowsKeepRulesSelectionAndFieldAreasWithinBudget(t *testing.T) {
 					}
 					if sel == 1 && feedback == "" {
 						require.Len(t, d.areas, 1)
-						assert.Equal(t, fieldArea{c: f, x: 9, y: len(rows) - 2, h: 1}, d.areas[0])
+						at := slices.IndexFunc(rows, func(r string) bool { return strings.Contains(r, "What should change?") })
+						assert.Equal(t, fieldArea{c: f, x: 9, y: at, h: 1}, d.areas[0])
 						assert.Contains(t, rows[d.areas[0].y], "What should change?")
 					}
 					if sel == 1 && feedback != "" && budget == 3 {
@@ -131,7 +135,8 @@ func TestPlanDialogHintsLeaveOutUnboundKeys(t *testing.T) {
 	delete(opts.Keys, "page-up")
 	m, _ := newTestModelWith(t, 70, 30, opts)
 	send(m, planRequest(7, "x"))
-	assert.Contains(t, screen(m), "  "+planPath+" · esc to dismiss")
+	assert.Contains(t, screen(m), "  "+planPath)
+	assert.Contains(t, screen(m), "  enter to choose · esc to dismiss")
 }
 
 func TestPlanYesApproves(t *testing.T) {

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"slices"
-	"strings"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -67,7 +66,7 @@ func newApprovalDialog(a *event.ApprovalRequested, km *keyMap, th theme) *approv
 	if a.Agent != "" {
 		d.title = a.Agent + " " + a.TaskID + " › " + a.Title
 	}
-	d.foot = strings.Join(slices.DeleteFunc([]string{binding(km.submit, "choose"), binding(km.interrupt, "reject")}, isEmpty), " · ")
+	d.hints = []string{binding(km.submit, "choose"), binding(km.dismiss, "reject")}
 	for _, o := range approvalOptions(a) {
 		opt := option{label: o.label}
 		if o.answer == policy.Reject {
@@ -78,10 +77,9 @@ func newApprovalDialog(a *event.ApprovalRequested, km *keyMap, th theme) *approv
 	return &approvalDialog{req: a, d: d, km: km}
 }
 
-// dialog has the preview as its body, windowed from d's scroll, and the scroll
-// hint for when it is cut.
+// dialog has the preview as its body, windowed from d's scroll.
 func (a *approvalDialog) dialog(width int, th theme) *dialog {
-	a.d.body, a.d.hint = a.preview.lines(a.req.Preview, width-2, th), scrollHint(a.km)
+	a.d.body = a.preview.lines(a.req.Preview, width-2, th)
 	return a.d
 }
 

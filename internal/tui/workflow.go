@@ -138,10 +138,9 @@ type workflowDialog struct {
 	// number.
 	prev   string
 	watchN int
-	// hint is the dialog shown while watching, drawn for hintWidth, and
-	// watchWhat the watched agent's agentWhat.
+	// hint is the dialog shown while watching, and watchWhat the watched
+	// agent's agentWhat.
 	hint      *dialog
-	hintWidth int
 	watchWhat string
 }
 
@@ -173,15 +172,10 @@ func (w *workflowDialog) dialog(width int, th theme) *dialog {
 		if w.stale {
 			w.read()
 		}
-		if width != w.hintWidth {
-			w.hintWidth = width
-			back := binding(w.m.keys.dismiss, "go back")
-			w.hint.note, w.hint.keys = cut("watching "+w.watchWhat, width-2-lipgloss.Width(" · "+back)), back
-		}
 		return w.hint
 	}
 	w.sync(width, th)
-	w.d.foot = w.foot()
+	w.d.hints = w.foot()
 	return w.d
 }
 
@@ -385,14 +379,13 @@ func (w *workflowDialog) selected() (app.WorkflowAgent, bool) {
 	return w.agents[w.order[w.d.sel]], true
 }
 
-func (w *workflowDialog) foot() string {
+func (w *workflowDialog) foot() []string {
 	km := &w.m.keys
 	parts := []string{binding(km.submit, "view")}
 	if a, ok := w.selected(); ok && (a.State == tool.TaskRunning || a.State == app.WorkflowQueued) {
 		parts = append(parts, binding(km.stopAgent, "stop agent"))
 	}
-	parts = append(parts, binding(km.dismiss, "close"))
-	return strings.Join(slices.DeleteFunc(parts, isEmpty), " · ")
+	return append(parts, binding(km.dismiss, "close"))
 }
 
 // key goes to the list: dismiss closes it, the stop key stops the selected
@@ -459,7 +452,8 @@ func (w *workflowDialog) watchSelected(m *model) tea.Cmd {
 		m.views[a.ID] = v
 	}
 	w.watching, w.prev, w.watchN = true, m.shown, a.N
-	w.watchWhat, w.hintWidth = agentWhat(a), 0
+	w.watchWhat = agentWhat(a)
+	w.hint.note, w.hint.hints = "watching "+w.watchWhat, []string{binding(m.keys.dismiss, "go back")}
 	m.watched = a.AgentStatus
 	return m.show(a.ID)
 }

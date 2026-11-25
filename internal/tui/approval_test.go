@@ -84,7 +84,8 @@ func TestApprovalRowsScrollThePreview(t *testing.T) {
 	hint := ""
 
 	assert.Equal(t, []string{"  + l1", "  + l2", "  + l3", "  … 7 more lines", hint}, frame())
-	assert.Contains(t, strings.Join(plainRows(p.dialog(40, mocha()).rows(40, 100, 4, mocha())), "\n"), scrollHint(&km), "the scroll hint joins the foot")
+	d.scrollHint = scrollHint(&km)
+	assert.Contains(t, strings.Join(plainRows(p.dialog(40, mocha()).rows(40, 100, 4, mocha())), "\n"), scrollHint(&km), "the scroll hint joins the hint row")
 	d.scroll.off += d.scroll.visible
 	assert.Equal(t, []string{"  … 2 earlier lines", "  + l3", "  + l4", "  … 6 more lines", hint}, frame())
 	d.scroll.off += 100
@@ -113,7 +114,9 @@ func TestPreviewRowsHaveASignColumnOnlyWithSignedLines(t *testing.T) {
 func TestApprovalRowsJoinTheHintToTheFootNotTheNote(t *testing.T) {
 	a := event.ApprovalRequested{Title: "Write a.go", Rule: "Write(a.go)", Preview: numberedPreview(10)}
 	km := newKeyMap(config.DefaultKeys())
-	rows := plainRows(newApprovalDialog(&a, &km, mocha()).dialog(60, mocha()).rows(60, 100, 4, mocha()))
+	d := newApprovalDialog(&a, &km, mocha()).dialog(60, mocha())
+	d.scrollHint = scrollHint(&km)
+	rows := plainRows(d.rows(60, 100, 4, mocha()))
 	assert.Equal(t, "  asked by Write(a.go)", rows[6])
 	assert.Contains(t, rows, "  "+scrollHint(&km)+" · enter to choose · esc to reject")
 }
@@ -329,26 +332,26 @@ func TestApprovalRowsDropAnUnselectedFieldBeforeAnOption(t *testing.T) {
 	}
 }
 
-func TestApprovalFootNamesTheBoundKeys(t *testing.T) {
+func TestApprovalHintsNameTheBoundKeys(t *testing.T) {
 	a := event.ApprovalRequested{Title: "Write a.go"}
 	for _, tc := range []struct {
 		name string
 		keys map[string][]string
-		want string
+		want []string
 	}{
-		{"default", config.DefaultKeys(), "enter to choose · esc to reject"},
-		{"rebound", map[string][]string{"submit": {"ctrl+j"}, "interrupt": {"ctrl+g"}}, "ctrl+j to choose · ctrl+g to reject"},
-		{"no interrupt", map[string][]string{"submit": {"enter"}}, "enter to choose"},
-		{"neither", map[string][]string{}, ""},
+		{"default", config.DefaultKeys(), []string{"enter to choose", "esc to reject"}},
+		{"rebound", map[string][]string{"submit": {"ctrl+j"}, "interrupt": {"ctrl+g"}}, []string{"ctrl+j to choose", "ctrl+g to reject"}},
+		{"no interrupt", map[string][]string{"submit": {"enter"}}, []string{"enter to choose", ""}},
+		{"neither", map[string][]string{}, []string{"", ""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			km := newKeyMap(tc.keys)
-			assert.Equal(t, tc.want, newApprovalDialog(&a, &km, mocha()).d.foot)
+			assert.Equal(t, tc.want, newApprovalDialog(&a, &km, mocha()).d.hints)
 		})
 	}
 }
 
-func TestApprovalNoticeJoinsTheFootWithoutChangingTheRows(t *testing.T) {
+func TestApprovalNoticeJoinsTheHintsWithoutChangingTheRows(t *testing.T) {
 	a := event.ApprovalRequested{Title: "Write a.go", Rule: "Write(a.go)"}
 	km := newKeyMap(config.DefaultKeys())
 	d := newApprovalDialog(&a, &km, mocha()).d
@@ -358,7 +361,7 @@ func TestApprovalNoticeJoinsTheFootWithoutChangingTheRows(t *testing.T) {
 	rows := plainRows(d.rows(60, 100, 4, mocha()))
 
 	require.Len(t, rows, len(bare))
-	assert.Equal(t, "  Copied · enter to choose · esc to reject", rows[len(rows)-2])
+	assert.Equal(t, "  enter to choose · esc to reject · Copied", rows[len(rows)-2])
 }
 
 func TestApprovalRowsNameTheRuleOnlyWhenSet(t *testing.T) {

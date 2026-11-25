@@ -801,7 +801,7 @@ func (m *model) place() {
 	if front := m.front(); front != nil {
 		free++
 		d = front.dialog(m.width, m.th)
-		d.notice = m.flashText
+		d.scrollHint, d.notice = scrollHint(&m.keys), m.flashText
 		m.prompt = d.rows(m.width, free+2, max(2, m.height/3), m.th)
 		// The prompt takes the composer's frame rows too.
 		input = len(m.prompt) - 2

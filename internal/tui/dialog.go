@@ -48,22 +48,23 @@ type dialog struct {
 	head  []string
 	title string
 	body  []string // rendered at width-2; rows indents them
-	note  string
-	// keys is key hints drawn after the note, on its rows.
-	keys string
-	// hint joins the foot, else the keys, while the body or pane is cut.
-	hint    string
-	options []option
-	sel     int
+	// note is text, never key hints.
+	note string
+	// scrollHint is the first part of the hint row while the body or pane is
+	// cut.
+	scrollHint string
+	options    []option
+	sel        int
 	// tail starts the body at its end and keeps it there until scrolled off it.
 	tail bool
 	// pane is the selected option's preview.
 	pane *pane
-	// foot is the key hints above the bottom rule.
-	foot string
-	// notice joins the foot, else the keys, as a hint that is always shown.
+	// hints is the dialog's own key hints, Enter's first and the way out last;
+	// empty entries are dropped.
+	hints []string
+	// notice is the last part of the hint row, always shown.
 	notice string
-	// warn is drawn in place of foot; the next key clears it.
+	// warn is drawn in place of the hint row; the next key clears it.
 	warn string
 	// areas is where the last rows call drew each field, y counting from its
 	// first row.
@@ -87,18 +88,19 @@ type pane struct {
 // rows draws d between two rules within maxRows, never more. Below the rules:
 // the head, the title, the body windowed from scroll, the note, a blank row,
 // the numbered options with the cursor on sel, the pane, a blank row and the
-// foot. A field shows the rows maxRows leaves after every row but the body's
-// and pane's, at most limit; with none left, the selected option's field still
-// shows one row and a field below an unselected label shows none, so it never
-// pushes the selected row out. The body or pane takes what is left, at most
-// limit, and a hint joins the foot, else the keys, while it is cut.
+// hint row: the scroll hint while the body or pane is cut, hints and notice,
+// joined with " · ". A field shows the rows maxRows leaves after every row but
+// the body's and pane's, at most limit; with none left, the selected option's
+// field still shows one row and a field below an unselected label shows none,
+// so it never pushes the selected row out. The body or pane takes what is left,
+// at most limit.
 //
 // When even the fixed rows do not fit, the body and pane go first, then fields
 // shrink to those rules. If the options still fit they all stay, and the rows
-// left go to the head, title, note, foot and blanks in that order. If not, the
-// rows go to the selected option's first row, the head, the rest of the
-// selected option, an "n of m" row, the title, note, foot and blanks, and then
-// to the options around the selected one.
+// left go to the head, title, note, hint row and blanks in that order. If not,
+// the rows go to the selected option's first row, the head, the rest of the
+// selected option, an "n of m" row, the title, note, hint row and blanks, and
+// then to the options around the selected one.
 func (d *dialog) rows(width, maxRows, limit int, th theme) []string {
 	d.areas, d.optionStarts = nil, nil
 	rule := fg(th.frame).Render(strings.Repeat("─", width))
@@ -118,26 +120,17 @@ func (d *dialog) rows(width, maxRows, limit int, th theme) []string {
 		s.title = hang("  ", none, d.title, fg(th.text).Bold(true), width)
 	}
 	s.opts = d.blocks(s.col, th)
-	scroll, keys, foot := d.scroll, d.keys, d.foot
-	if d.notice != "" {
-		if foot != "" {
-			foot = strings.Join([]string{d.notice, foot}, " · ")
-		} else {
-			keys = strings.Join(slices.DeleteFunc([]string{keys, d.notice}, isEmpty), " · ")
-		}
+	scroll := d.scroll
+	row := func(scrollHint string) []string {
+		return slices.DeleteFunc(slices.Concat([]string{scrollHint}, d.hints, []string{d.notice}), isEmpty)
 	}
-	rows, cut := d.fit(s, keys, foot, maxRows, limit, th)
-	if !cut || d.hint == "" {
+	rows, cut := d.fit(s, row(""), maxRows, limit, th)
+	if !cut || d.scrollHint == "" {
 		return rows
 	}
 	bare, areas, starts, scrolled := rows, d.areas, d.optionStarts, d.scroll
 	d.scroll = scroll
-	if foot != "" {
-		foot = strings.Join([]string{d.hint, foot}, " · ")
-	} else {
-		keys = strings.Join(slices.DeleteFunc([]string{keys, d.hint}, isEmpty), " · ")
-	}
-	rows, cut = d.fit(s, keys, foot, maxRows, limit, th)
+	rows, cut = d.fit(s, row(d.scrollHint), maxRows, limit, th)
 	if !cut {
 		// The hint cost the body or pane its last row, so it would advertise
 		// nothing.
@@ -220,22 +213,22 @@ func (d *dialog) blocks(col int, th theme) []optionBlock {
 	return opts
 }
 
-// fit draws d within maxRows with the given keys and foot, reporting whether
+// fit draws d within maxRows with the given hint row parts, reporting whether
 // the body or pane is cut.
-func (d *dialog) fit(s *shape, keys, foot string, maxRows, limit int, th theme) ([]string, bool) {
+func (d *dialog) fit(s *shape, hints []string, maxRows, limit int, th theme) ([]string, bool) {
 	none := lipgloss.NewStyle()
 	d.areas, d.optionStarts = nil, make([]int, 0, len(s.opts)+1)
 	var noteRows, footRows []string
 	// gap is 1 when a blank row separates the options from the foot.
 	gap := 0
-	if d.note != "" || keys != "" {
-		noteRows = hintRows(d.note, keys, s.width, th)
+	if d.note != "" {
+		noteRows = hintRows(d.note, nil, s.width, th)
 	}
 	switch {
 	case d.warn != "":
 		footRows = hang("  ", none, d.warn, fg(th.warning), s.width)
-	case foot != "":
-		footRows = hintRows("", foot, s.width, th)
+	case len(hints) > 0:
+		footRows = hintRows("", hints, s.width, th)
 	}
 	// Without options the blank row after the body already separates the foot.
 	if len(footRows) > 0 && len(s.opts) > 0 {
@@ -324,20 +317,19 @@ func (d *dialog) fit(s *shape, keys, foot string, maxRows, limit int, th theme) 
 
 // hintRows wraps text and the key hints after it for width, two columns in.
 // All of it is dim but the key of each hint, written "<key> to <verb>" as
-// binding writes it, which is muted.
-func hintRows(text, keys string, width int, th theme) []string {
+// binding writes it, which is muted. A hint holding " · " is still one hint.
+func hintRows(text string, hints []string, width int, th theme) []string {
 	dim, muted := fg(th.dim), fg(th.muted)
 	var parts []string
 	if text = clean(text); text != "" {
 		parts = append(parts, dim.Render(text))
 	}
-	if keys = clean(keys); keys != "" {
-		for part := range strings.SplitSeq(keys, " · ") {
-			if k, rest, ok := strings.Cut(part, " "); ok && strings.HasPrefix(rest, "to ") {
-				parts = append(parts, muted.Render(k)+dim.Render(" "+rest))
-			} else {
-				parts = append(parts, dim.Render(part))
-			}
+	for _, hint := range hints {
+		hint = clean(hint)
+		if k, rest, ok := strings.Cut(hint, " "); ok && strings.HasPrefix(rest, "to ") {
+			parts = append(parts, muted.Render(k)+dim.Render(" "+rest))
+		} else {
+			parts = append(parts, dim.Render(hint))
 		}
 	}
 	rows := strings.Split(lipgloss.Wrap(strings.Join(parts, dim.Render(" · ")), max(1, width-2), ""), "\n")
@@ -346,6 +338,25 @@ func hintRows(text, keys string, width int, th theme) []string {
 	}
 	return rows
 }
+
+// binding is "<first key> to <verb>", empty when the binding has no keys.
+// hintRows finds the key by this form.
+func binding(b key.Binding, verb string) string {
+	if ks := b.Keys(); len(ks) > 0 {
+		return ks[0] + " to " + verb
+	}
+	return ""
+}
+
+// scrollHint is "<page up>/<page down> to scroll", empty unless both are bound.
+func scrollHint(km *keyMap) string {
+	if up, down := km.pageUp.Keys(), km.pageDown.Keys(); len(up) > 0 && len(down) > 0 {
+		return up[0] + "/" + down[0] + " to scroll"
+	}
+	return ""
+}
+
+func isEmpty(s string) bool { return s == "" }
 
 // expand is the options' rows with each field's, a field at most room rows;
 // with none, only a field beside its label or selected shows, at one row. It

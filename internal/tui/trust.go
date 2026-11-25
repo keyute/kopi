@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -164,7 +163,7 @@ func (m *trustModel) rows() []string {
 		list("Kopi would load the skills in these folders:", m.req.Skills)
 		m.bodyWidth, m.bodyTheme = m.width, m.th
 	}
-	m.dialog.body, m.dialog.hint = m.body, scrollHint(&m.keys)
-	m.dialog.foot = strings.Join(slices.DeleteFunc([]string{binding(m.keys.submit, "choose"), binding(m.keys.interrupt, "decide later")}, isEmpty), " · ")
+	m.dialog.body, m.dialog.scrollHint = m.body, scrollHint(&m.keys)
+	m.dialog.hints = []string{binding(m.keys.submit, "choose"), binding(m.keys.dismiss, "decide later")}
 	return m.dialog.rows(m.width, m.height, m.height, m.th)
 }

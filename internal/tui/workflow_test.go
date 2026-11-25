@@ -256,12 +256,11 @@ func TestWorkflowDialogEnterWatchesARunningAgent(t *testing.T) {
 		assert.Equal(t, "s2", m.shown)
 		assert.Contains(t, body(m), "❯ review users.ts")
 		assert.Contains(t, statusLine(m.statusInput(), m.layout, m.width, m.th), "rev-1", "the status line is the agent's")
-		assert.Equal(t, []string{"  watching reviewer › users.ts · esc to go back", ""}, workflowBoxFoot(t, m))
+		assert.Equal(t, []string{"  watching reviewer › users.ts", "", "  esc to go back"}, workflowBoxFoot(t, m))
 	})
 }
 
-// workflowBoxFoot is the blank row and the key hint of a dialog that has only a
-// foot.
+// workflowBoxFoot is the note, the blank row and the key hint of the watch bar.
 func workflowBoxFoot(t *testing.T, m *model) []string {
 	t.Helper()
 	box := workflowBox(t, m)
@@ -297,7 +296,7 @@ func TestWorkflowDialogEnterOnAnAgentWithoutASessionFlashesWhy(t *testing.T) {
 		press(m, down)
 
 		press(m, enter)
-		assert.Contains(t, strings.Join(workflowBox(t, m), "\n"), "not started yet")
+		assert.Contains(t, strings.Join(strings.Fields(strings.Join(workflowBox(t, m), "\n")), " "), "not started yet", "the notice wraps in the hint row")
 		press(m, down)
 		press(m, enter)
 		assert.Contains(t, strings.Join(workflowBox(t, m), "\n"), "no slot")
