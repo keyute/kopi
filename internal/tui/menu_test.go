@@ -396,6 +396,43 @@ func TestTypedArgumentMenu(t *testing.T) {
 	})
 }
 
+func TestTypedArgumentMenuHoldsKeysWithoutRows(t *testing.T) {
+	for _, afterEmpty := range []bool{false, true} {
+		name := "initial"
+		if afterEmpty {
+			name = "after empty reply"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				m, c := newTypedMenuModel(t)
+				c.history = []string{"previous prompt"}
+				m.composer.setHistory(c.History())
+				var cmd tea.Cmd
+				if afterEmpty {
+					settle(m, keys(m, "/add-dir x"))
+					require.Empty(t, m.menu.shown)
+					cmd = press(m, backspace)
+				} else {
+					cmd = keys(m, "/add-dir ")
+				}
+				require.True(t, m.menu.pending)
+				require.Zero(t, m.menuHeight())
+				for _, k := range []tea.KeyPressMsg{up, down, tab} {
+					press(m, k)
+					assert.Equal(t, "/add-dir ", m.composer.value())
+					assert.False(t, m.composer.browsing())
+				}
+				require.Equal(t, []tea.KeyPressMsg{up, down, tab}, m.menu.held)
+				settle(m, cmd)
+				assert.Equal(t, "/add-dir ../kopi.sandbox/", m.composer.value())
+				assert.False(t, m.composer.browsing())
+				assert.Empty(t, m.menu.held)
+				assert.Empty(t, c.submitted)
+			})
+		})
+	}
+}
+
 func TestTypedArgumentMenuKeepsKeysPressedWhilePending(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, _ := newTypedMenuModel(t)

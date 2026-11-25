@@ -373,3 +373,36 @@ func TestTrustWriterProcess(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, s.Set(args[1], d))
 }
+
+func TestCanonicalResolvesSymlinkBeforeDotDot(t *testing.T) {
+	root := tempDir(t)
+	target := mkdir(t, root, "target", "nested")
+	want := mkdir(t, root, "target", "sibling")
+	link := filepath.Join(root, "link")
+	require.NoError(t, os.Symlink(target, link))
+	got, err := Canonical(link + "/../sibling")
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	rel, err := filepath.Rel(cwd, link)
+	require.NoError(t, err)
+	got, err = Canonical(rel + "/../sibling")
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+func TestSetCanonicalDoesNotResolveAgain(t *testing.T) {
+	root := tempDir(t)
+	dir := mkdir(t, root, "dir")
+	target := mkdir(t, root, "target")
+	s, err := Open(filepath.Join(root, "trust.json"))
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(dir))
+	require.NoError(t, os.Symlink(target, dir))
+	require.NoError(t, s.SetCanonical(dir, Trusted))
+	_, ok, err := s.Lookup(target)
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Equal(t, Trusted, s.folders[dir])
+}

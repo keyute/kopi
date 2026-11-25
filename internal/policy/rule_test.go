@@ -917,6 +917,31 @@ func TestSetDirsAppliesRulesThroughASymlinkedSpelling(t *testing.T) {
 	assert.Equal(t, effectNone, eff)
 }
 
+func TestSetDirsResolvesSymlinkBeforeParent(t *testing.T) {
+	d := newDirs(t)
+	base := addedDir(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(base, "actual/sub"), 0o755))
+	require.NoError(t, os.Symlink("actual/sub", filepath.Join(base, "link")))
+	require.NoError(t, os.WriteFile(filepath.Join(base, "actual/servers.json"), []byte("{}"), 0o600))
+	require.NoError(t, os.Symlink("servers.json", filepath.Join(base, "actual", ProjectMCPFile)))
+	given := base + "/link/.."
+	r := d.rules(t, Source{Name: "config", Deny: []string{"Read(private/**)"}, Allow: []string{"Write"}})
+	r.SetDirs([]string{given})
+
+	for _, tc := range []struct {
+		tool, path string
+		want       effect
+	}{
+		{"Read", filepath.Join(base, "actual/private/file"), effectDeny},
+		{"Read", filepath.Join(base, "private/file"), effectNone},
+		{"Write", filepath.Join(base, "actual/servers.json"), effectAsk},
+		{"Write", filepath.Join(base, "servers.json"), effectAllow},
+	} {
+		eff, _, _ := r.decide(tc.tool, at(tc.path))
+		assert.Equal(t, tc.want, eff, tc.path)
+	}
+}
+
 func TestSetDirsKeepsExceptionsInAddedDirectory(t *testing.T) {
 	d := newDirs(t)
 	extra := addedDir(t)
@@ -958,6 +983,45 @@ func TestSetDirsReplacesWhatAnEarlierCallSet(t *testing.T) {
 	}
 	eff, _, _ = r.decide("Read", at(filepath.Join(d.ws, ".env")))
 	assert.Equal(t, effectDeny, eff)
+}
+
+func TestSetDirsPreservesResolutionsOnAdditionAndRollback(t *testing.T) {
+	d := newDirs(t)
+	first, second := addedDir(t), addedDir(t)
+	for _, name := range []string{"old", "new"} {
+		require.NoError(t, os.Mkdir(filepath.Join(first, name), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(first, name+".json"), []byte("{}"), 0o600))
+	}
+	private := filepath.Join(first, "private")
+	mcp := filepath.Join(first, ProjectMCPFile)
+	require.NoError(t, os.Symlink("old", private))
+	require.NoError(t, os.Symlink("old.json", mcp))
+	r := d.rules(t, Source{Name: "config", Deny: []string{"Read(private/**)"}, Ask: []string{"Write(private/**)"}, Allow: []string{"Edit(private/**)", "Write"}})
+	r.SetDirs([]string{first})
+	require.NoError(t, os.Remove(private))
+	require.NoError(t, os.Symlink("new", private))
+	require.NoError(t, os.Remove(mcp))
+	require.NoError(t, os.Symlink("new.json", mcp))
+
+	for _, roots := range [][]string{{first, second}, {first}} {
+		r.SetDirs(roots)
+		for _, tc := range []struct {
+			tool string
+			path string
+			want effect
+		}{
+			{"Read", filepath.Join(first, "old/file"), effectDeny},
+			{"Read", filepath.Join(first, "new/file"), effectNone},
+			{"Write", filepath.Join(first, "old/file"), effectAsk},
+			{"Edit", filepath.Join(first, "old/file"), effectAllow},
+			{"Edit", filepath.Join(first, "new/file"), effectNone},
+			{"Write", filepath.Join(first, "old.json"), effectAsk},
+			{"Write", filepath.Join(first, "new.json"), effectAllow},
+		} {
+			eff, _, _ := r.decide(tc.tool, at(tc.path))
+			assert.Equal(t, tc.want, eff, "%s %s with %v", tc.tool, tc.path, roots)
+		}
+	}
 }
 
 func TestSetDirsGuardsAddedDirectoryMCPFile(t *testing.T) {

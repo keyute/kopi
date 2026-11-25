@@ -1238,6 +1238,79 @@ func TestAddedDirectorySpellings(t *testing.T) {
 	}
 }
 
+func TestAddedAliasInsideWorkspaceRoutesToPinnedRoot(t *testing.T) {
+	for _, insideAdded := range []bool{false, true} {
+		t.Run(fmt.Sprintf("insideAdded=%t", insideAdded), func(t *testing.T) {
+			start := realPath(t, t.TempDir())
+			other := realPath(t, t.TempDir())
+			outside := realPath(t, t.TempDir())
+			ws := newWorkspace(t, start, nil)
+			parent := start
+			if insideAdded {
+				parent = realPath(t, t.TempDir())
+				require.NoError(t, ws.Add(Dir{Given: parent, Real: parent}))
+			}
+			alias := filepath.Join(parent, "external")
+			require.NoError(t, os.Symlink(other, alias))
+			writeFile(t, filepath.Join(other, "file"), "original")
+			writeFile(t, filepath.Join(outside, "secret"), "secret")
+			require.NoError(t, os.Symlink(outside, filepath.Join(other, "escape")))
+			require.NoError(t, ws.Add(Dir{Given: alias, Real: other}))
+			path := filepath.Join(alias, "file")
+			assert.Equal(t, "original", readAll(t, ws.in(path), path))
+			require.NoError(t, ws.in(path).WriteFile(path, []byte("updated")))
+			assert.Equal(t, "updated", readContent(t, filepath.Join(other, "file")))
+			escape := filepath.Join(alias, "escape", "secret")
+			_, err := ws.in(escape).Open(escape)
+			require.ErrorIs(t, err, ErrOutsideWorkspace)
+			require.ErrorIs(t, ws.in(escape).WriteFile(escape, []byte("changed")), ErrOutsideWorkspace)
+			assert.Equal(t, "secret", readContent(t, filepath.Join(outside, "secret")))
+			require.NoError(t, os.Remove(alias))
+			require.NoError(t, os.Symlink(outside, alias))
+			assert.Equal(t, "updated", readAll(t, ws.in(path), path))
+			require.NoError(t, ws.in(path).WriteFile(path, []byte("pinned")))
+			assert.Equal(t, "pinned", readContent(t, filepath.Join(other, "file")))
+			assert.NoFileExists(t, filepath.Join(outside, "file"))
+			assert.Same(t, ws, ws.in("external/file"))
+		})
+	}
+}
+
+func TestAddedDirectoryPreservesSymlinkDotDotSpelling(t *testing.T) {
+	parent := realPath(t, t.TempDir())
+	start := filepath.Join(parent, "start")
+	real := filepath.Join(parent, "other")
+	require.NoError(t, os.MkdirAll(filepath.Join(real, "sub"), 0o755))
+	require.NoError(t, os.MkdirAll(start, 0o755))
+	require.NoError(t, os.Symlink(filepath.Join(real, "sub"), filepath.Join(start, "link")))
+	writeFile(t, filepath.Join(real, "file"), "real")
+	writeFile(t, filepath.Join(start, "file"), "decoy")
+	ws := newWorkspace(t, start, nil)
+	given := filepath.Join(start, "link") + "/.."
+	require.NoError(t, ws.Add(Dir{Given: given, Real: real}))
+	path := given + "/file"
+	view := ws.in(path)
+	assert.True(t, view.extra)
+	assert.Equal(t, "real", readAll(t, view, path))
+	target, err := view.Target(path)
+	require.NoError(t, err)
+	assert.Equal(t, policy.Target{Path: filepath.Join(real, "file"), Real: filepath.Join(real, "file")}, target)
+	dest, err := view.prepare(path)
+	require.NoError(t, err)
+	assert.Equal(t, target, dest.target)
+	require.NoError(t, dest.parent.Close())
+	require.NoError(t, view.WriteFile(path, []byte("updated")))
+	assert.Equal(t, "updated", readContent(t, filepath.Join(real, "file")))
+	assert.Equal(t, "decoy", readContent(t, filepath.Join(start, "file")))
+	assert.Same(t, ws, ws.in(filepath.Join(start, "file")))
+	require.NoError(t, os.Remove(filepath.Join(start, "link")))
+	require.NoError(t, os.Symlink(start, filepath.Join(start, "link")))
+	assert.Equal(t, "updated", readAll(t, ws.in(path), path))
+	target, err = ws.in(path).Target(path)
+	require.NoError(t, err)
+	assert.Equal(t, policy.Target{Path: filepath.Join(real, "file"), Real: filepath.Join(real, "file")}, target)
+}
+
 func TestAddRefusesARealPathOfAnotherDirectory(t *testing.T) {
 	ws := newWorkspace(t, t.TempDir(), nil)
 	given, other := t.TempDir(), t.TempDir()

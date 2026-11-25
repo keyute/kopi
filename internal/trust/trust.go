@@ -102,6 +102,11 @@ func (s *Store) Set(dir string, d Decision) (err error) {
 	if err != nil {
 		return err
 	}
+	return s.SetCanonical(dir, d)
+}
+
+// SetCanonical records a previously resolved canonical key without resolving it again.
+func (s *Store) SetCanonical(dir string, d Decision) (err error) {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return fmt.Errorf("failed to create trust file directory: %w", err)
 	}
@@ -131,9 +136,13 @@ func (s *Store) Set(dir string, d Decision) (err error) {
 // are keyed. On darwin each name is also spelled as on disk: APFS is usually
 // case-insensitive and the working directory keeps the case it was typed in.
 func Canonical(dir string) (string, error) {
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve folder %s: %w", dir, err)
+	abs := dir
+	if !filepath.IsAbs(dir) {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve folder %s: %w", dir, err)
+		}
+		abs = cwd + string(filepath.Separator) + dir
 	}
 	resolved, err := filepath.EvalSymlinks(abs)
 	if err != nil {

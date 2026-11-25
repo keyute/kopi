@@ -49,6 +49,8 @@ type Workspace struct {
 	more *added
 	// extra marks a view of an added directory: results give absolute paths.
 	extra bool
+	// unsafeGiven means cleaning the given spelling names another directory.
+	unsafeGiven bool
 }
 
 type added struct {
@@ -132,6 +134,19 @@ func (w *Workspace) absolute(path string) string {
 	return filepath.Join(w.given, path)
 }
 
+// targetPath avoids attributing a symlink/.. spelling to the unrelated path
+// that lexical cleaning would produce in the permission rules.
+func (w *Workspace) targetPath(path string) string {
+	if w.unsafeGiven && filepath.IsAbs(path) {
+		view := *w
+		view.realDir = view.given
+		if rel, err := view.relative(path); err == nil {
+			return filepath.Join(w.realDir, rel)
+		}
+	}
+	return filepath.Clean(w.absolute(path))
+}
+
 // Close closes the start directory and every added one.
 func (w *Workspace) Close() error {
 	w.more.mu.Lock()
@@ -199,7 +214,9 @@ func (w *Workspace) Add(d Dir) error {
 		root.Close()
 		return fmt.Errorf("%s is not the directory %s", d.Real, d.Given)
 	}
-	w.more.dirs = append(w.more.dirs, &Workspace{root: root, given: filepath.Clean(d.Given), realDir: d.Real, protected: w.protected, more: &added{}})
+	cleanReal, err := filepath.EvalSymlinks(filepath.Clean(d.Given))
+	unsafeGiven := err != nil || cleanReal != d.Real
+	w.more.dirs = append(w.more.dirs, &Workspace{root: root, given: d.Given, realDir: d.Real, protected: w.protected, more: &added{}, unsafeGiven: unsafeGiven})
 	return nil
 }
 
@@ -244,27 +261,48 @@ func (w *Workspace) canAdd(dir string) error {
 	return nil
 }
 
-// in returns the view whose directory holds path: w for a relative path or one
-// in the start directory, else a copy of the first added directory that holds
-// it, else w, which refuses the path as outside the workspace. A path that
-// matches a directory's prefix but climbs out with ".." is not held by it, as
-// when a parent of the start directory is added. A view keeps the plan and
-// output files reachable.
+// in selects the start directory or the first added directory holding path,
+// except that a more specific added spelling takes precedence over a root it
+// aliases out of. Relative paths remain rooted at the start directory.
 func (w *Workspace) in(path string) *Workspace {
-	if !filepath.IsAbs(path) || w.holds(path) {
+	if !filepath.IsAbs(path) {
 		return w
 	}
 	w.more.mu.Lock()
 	dirs := slices.Clone(w.more.dirs)
 	w.more.mu.Unlock()
+	chosen := w
+	depth := w.matchDepth(path)
 	for _, d := range dirs {
-		if d.holds(path) {
-			v := *d
-			v.plans, v.outputs, v.more, v.extra = w.plans, w.outputs, w.more, true
-			return &v
+		match := d.matchDepth(path)
+		if match < 0 {
+			continue
+		}
+		alias := *d
+		alias.realDir = alias.given
+		aliasDepth := alias.matchDepth(path)
+		if depth < 0 || d.given != d.realDir && aliasDepth > depth {
+			chosen, depth = d, match
 		}
 	}
-	return w
+	if chosen == w {
+		return w
+	}
+	v := *chosen
+	v.plans, v.outputs, v.more, v.extra = w.plans, w.outputs, w.more, true
+	return &v
+}
+
+func (w *Workspace) matchDepth(path string) int {
+	depth := -1
+	for _, base := range []string{w.given, w.realDir} {
+		view := *w
+		view.given, view.realDir = base, base
+		if view.holds(path) {
+			depth = max(depth, len(components(base)))
+		}
+	}
+	return depth
 }
 
 // holds reports whether the absolute path lies in w's directory without
@@ -305,7 +343,7 @@ func (w *Workspace) Target(path string) (policy.Target, error) {
 	if err != nil {
 		return policy.Target{}, err
 	}
-	return policy.Target{Path: filepath.Clean(abs), Real: resolved}, nil
+	return policy.Target{Path: w.targetPath(path), Real: resolved}, nil
 }
 
 // WriteFile creates path, or replaces it atomically, with data. A symlink is
@@ -361,11 +399,7 @@ func (w *Workspace) prepare(path string) (*writeDestination, error) {
 	if err != nil {
 		return nil, err
 	}
-	targetPath := path
-	if !filepath.IsAbs(path) {
-		targetPath = filepath.Join(w.given, path)
-	}
-	dest.target = policy.Target{Path: filepath.Clean(targetPath), Real: target}
+	dest.target = policy.Target{Path: w.targetPath(path), Real: target}
 	return dest, nil
 }
 

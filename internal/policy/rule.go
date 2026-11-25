@@ -57,15 +57,21 @@ type source struct {
 }
 
 type Rules struct {
-	// mu guards each rule's extra and mcpFiles, the two things SetDirs replaces.
+	// mu guards each rule's extra, dirs and mcpFiles.
 	mu      sync.RWMutex
 	sources []source
+	dirs    map[string]dirRules
 	// fold matches case-insensitively, as the file systems of darwin and
 	// windows do by default.
 	fold bool
 	// mcpFiles are the files the .mcp.json of the workspace, then of each added
 	// directory, resolves to when the rules or the directories are set.
 	mcpFiles []string
+}
+
+type dirRules struct {
+	mcp    string
+	extras [][]string
 }
 
 type effect int
@@ -242,33 +248,38 @@ func (r *Rules) SetDirs(dirs []string) {
 	if r == nil {
 		return
 	}
-	escaped := make([]string, len(dirs))
-	mcp := make([]string, len(dirs))
-	for i, dir := range dirs {
-		escaped[i] = escape(filepath.ToSlash(filepath.Clean(dir)))
-		mcp[i] = Resolve(filepath.Join(dir, ProjectMCPFile))
-	}
-	// Forms stat the file system, so they are built before the lock is taken;
-	// spec and patterns never change, so reading them needs none.
-	var extras [][]string
-	r.eachRule(func(ru *rule) {
-		var extra []string
-		if rest, ok := underWorkspace(ru.spec); ok && ru.patterns != nil {
-			for _, dir := range escaped {
-				extra = append(extra, forms(dir+rest)...)
-			}
-		}
-		extras = append(extras, extra)
-	})
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	next := make(map[string]dirRules, len(dirs))
+	for _, dir := range dirs {
+		entry, ok := r.dirs[dir]
+		if !ok {
+			entry.mcp = Resolve(dir + string(filepath.Separator) + ProjectMCPFile)
+			escaped := escape(filepath.ToSlash(dir))
+			r.eachRule(func(ru *rule) {
+				var extra []string
+				if rest, ok := underWorkspace(ru.spec); ok && ru.patterns != nil {
+					extra = forms(escaped + rest)
+				}
+				entry.extras = append(entry.extras, extra)
+			})
+		}
+		next[dir] = entry
+	}
 	i := 0
 	r.eachRule(func(ru *rule) {
-		ru.extra = extras[i]
+		ru.extra = nil
+		for _, dir := range dirs {
+			ru.extra = append(ru.extra, next[dir].extras[i]...)
+		}
 		i++
 	})
-	r.mcpFiles = append(r.mcpFiles[:1], mcp...)
+	r.mcpFiles = r.mcpFiles[:1]
+	for _, dir := range dirs {
+		r.mcpFiles = append(r.mcpFiles, next[dir].mcp)
+	}
+	r.dirs = next
 }
 
 // forms resolves the literal prefix before cleaning it. A cleaned lexical

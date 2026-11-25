@@ -750,3 +750,80 @@ func TestDirCandidatesPutTheExactNameFirst(t *testing.T) {
 	require.Len(t, cs, 2)
 	assert.Equal(t, "../pig/", cs[0].Value)
 }
+
+func TestAnswerDirRefusesReplacedDirectory(t *testing.T) {
+	for _, broad := range []bool{false, true} {
+		t.Run(fmt.Sprint(broad), func(t *testing.T) {
+			d := newDirHarness(t, Config{}, true)
+			dir := filepath.Join(canonicalTemp(t), "dir")
+			require.NoError(t, os.Mkdir(dir, 0o700))
+			target := canonicalTemp(t)
+			if broad {
+				target = d.c.cfg.Home.Real
+			}
+			requests, errs := subscribeTo[event.DirRequested](d.c), subscribeTo[event.Error](d.c)
+			require.NoError(t, d.c.AddDir(dir))
+			req := receiveEvent(t, requests)
+			require.True(t, req.Saved)
+			require.NoError(t, os.Remove(dir))
+			require.NoError(t, os.Symlink(target, dir))
+			assert.True(t, d.c.AnswerDir(req.Token, true, true))
+			assert.Error(t, receiveEvent(t, errs).Err)
+			assert.NoFileExists(t, d.c.cfg.TrustFile)
+			assert.Empty(t, d.sandboxed)
+		})
+	}
+}
+
+func TestAddDirResolvesSymlinkBeforeDotDot(t *testing.T) {
+	for _, kind := range []string{"absolute", "relative", "home"} {
+		t.Run(kind, func(t *testing.T) {
+			d := newDirHarness(t, Config{}, true)
+			root := canonicalTemp(t)
+			nested := filepath.Join(root, "nested")
+			want := filepath.Join(root, "sibling")
+			require.NoError(t, os.Mkdir(nested, 0o700))
+			require.NoError(t, os.Mkdir(want, 0o700))
+			base := d.sb.Workspace
+			if kind == "home" {
+				base = d.c.cfg.Home.Given
+			}
+			link := filepath.Join(base, "link")
+			lexical := filepath.Join(base, "sibling")
+			require.NoError(t, os.Mkdir(lexical, 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(lexical, "file"), []byte("decoy"), 0o600))
+			require.NoError(t, os.Symlink(nested, link))
+			arg := "link/../sibling"
+			if kind == "absolute" {
+				arg = link + "/../sibling"
+			}
+			if kind == "home" {
+				arg = "~/" + arg
+			}
+			p, _, _, err := d.c.prepareDir(arg)
+			require.NoError(t, err)
+			assert.Equal(t, want, p.dir.Real)
+			assert.Equal(t, link+"/../sibling", p.dir.Given)
+			require.NoError(t, os.WriteFile(filepath.Join(want, "file"), []byte("target"), 0o600))
+			requests := subscribeTo[event.DirRequested](d.c)
+			require.NoError(t, d.c.AddDir(arg))
+			req := receiveEvent(t, requests)
+			assert.Equal(t, want, req.Dir)
+			assert.True(t, d.c.AnswerDir(req.Token, true, false))
+			args, err := json.Marshal(map[string]string{"file_path": link + "/../sibling/file"})
+			require.NoError(t, err)
+			require.NoError(t, d.gate.Before(t.Context(), "dot", "Read", args))
+			result, err := tool.NewRead(d.ws).Run(t.Context(), args, func(target policy.Target) (policy.Mode, error) {
+				return d.gate.Admit("dot", "Read", args, &target)
+			})
+			require.NoError(t, err)
+			assert.Contains(t, result.Text, "target")
+			assert.NotContains(t, result.Text, "decoy")
+			if kind == "home" {
+				_, err = d.ws.Open(filepath.Join(lexical, "file"))
+				assert.Error(t, err)
+			}
+			assert.Equal(t, [][]string{{want}}, d.sandboxed)
+		})
+	}
+}

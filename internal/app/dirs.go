@@ -32,6 +32,7 @@ type pendingDir struct {
 	arg   string
 	dir   tool.Dir
 	files []instruction.File
+	info  os.FileInfo
 	// saved is false when the answer is never written to the trust store.
 	saved bool
 }
@@ -98,6 +99,10 @@ func (c *Controller) prepareDir(arg string) (p *pendingDir, decision trust.Decis
 		return nil, 0, false, err
 	}
 	dir := tool.Dir{Given: given, Real: real}
+	info, err := os.Stat(real)
+	if err != nil {
+		return nil, 0, false, err
+	}
 	store, err := trust.Open(c.cfg.TrustFile)
 	if err != nil {
 		return nil, 0, false, err
@@ -106,7 +111,7 @@ func (c *Controller) prepareDir(arg string) (p *pendingDir, decision trust.Decis
 	if err != nil {
 		return nil, 0, false, err
 	}
-	p = &pendingDir{arg: arg, dir: dir, files: c.newInstructionFiles(dir.Real), saved: !trust.Broad(dir.Real, c.cfg.Home.Real)}
+	p = &pendingDir{arg: arg, dir: dir, info: info, files: c.newInstructionFiles(dir.Real), saved: !trust.Broad(dir.Real, c.cfg.Home.Real)}
 	return p, decision, decided, nil
 }
 
@@ -135,6 +140,20 @@ func (c *Controller) AnswerDir(token uint64, add, trusted bool) bool {
 		c.report(event.Error{Err: fmt.Errorf("failed to add %s: %w", p.arg, err)})
 		return true
 	}
+	real, err := trust.Canonical(p.dir.Given)
+	if err == nil && real == p.dir.Real {
+		var info os.FileInfo
+		info, err = os.Stat(real)
+		if err == nil && !os.SameFile(p.info, info) {
+			err = errors.New("directory identity changed")
+		}
+	} else if err == nil {
+		err = errors.New("directory identity changed")
+	}
+	if err != nil {
+		c.report(event.Error{Err: fmt.Errorf("failed to add %s: %w", p.arg, err)})
+		return true
+	}
 	if p.saved {
 		decision := trust.Untrusted
 		if trusted {
@@ -142,7 +161,7 @@ func (c *Controller) AnswerDir(token uint64, add, trusted bool) bool {
 		}
 		store, err := trust.Open(c.cfg.TrustFile)
 		if err == nil {
-			err = store.Set(p.dir.Real, decision)
+			err = store.SetCanonical(p.dir.Real, decision)
 		}
 		if err != nil {
 			c.report(event.Error{Err: fmt.Errorf("failed to save the trust decision: %w", err)})
@@ -237,11 +256,11 @@ func (c *Controller) typedDir(arg string) string {
 	case arg == "~":
 		arg = c.cfg.Home.Given
 	case strings.HasPrefix(arg, "~/"):
-		arg = filepath.Join(c.cfg.Home.Given, arg[2:])
+		arg = c.cfg.Home.Given + string(filepath.Separator) + arg[2:]
 	case !filepath.IsAbs(arg):
-		arg = filepath.Join(c.cfg.Workspace, arg)
+		arg = c.cfg.Workspace + string(filepath.Separator) + arg
 	}
-	return filepath.Clean(arg)
+	return arg
 }
 
 // sentFilesLocked is the paths of the instruction files the model has been or
@@ -395,7 +414,7 @@ func (c *Controller) dirCandidates(typed string) ([]Candidate, error) {
 		if strings.HasPrefix(name, ".") && !strings.HasPrefix(last, ".") || !strings.HasPrefix(strings.ToLower(name), strings.ToLower(last)) {
 			continue
 		}
-		path := filepath.Join(dir, name)
+		path := dir + string(filepath.Separator) + name
 		isDir := e.IsDir()
 		if e.Type()&fs.ModeSymlink != 0 {
 			info, err := os.Stat(path)
