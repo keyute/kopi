@@ -2254,15 +2254,18 @@ func TestOpenSandboxSetDirsMakesTheDirectoryWritableOnlyInExecuteMode(t *testing
 	assert.FileExists(t, filepath.Join(added, "f"))
 
 	require.NoError(t, os.Mkdir(filepath.Join(added, ".git"), 0o700))
-	for _, name := range []string{".mcp.json", filepath.Join(".git", "config")} {
-		cmd, cleanup, err := execute.Command([]string{"/bin/bash", "-c", "printf x > " + filepath.Join(added, name)})
+	for _, tc := range []struct{ name, linux string }{
+		{".mcp.json", permissionDenied},
+		{filepath.Join(".git", "config"), readOnly},
+	} {
+		cmd, cleanup, err := execute.Command([]string{"/bin/bash", "-c", "printf x > " + filepath.Join(added, tc.name)})
 		require.NoError(t, err)
 		cmd.Dir = e.workspace
 		out, err := cmd.CombinedOutput()
 		cleanup()
-		require.Error(t, err, name)
-		assert.Contains(t, string(out), refused(readOnly), name)
-		assert.NoFileExists(t, filepath.Join(added, name))
+		require.Error(t, err, tc.name)
+		assert.Contains(t, string(out), refused(tc.linux), tc.name)
+		assert.NoFileExists(t, filepath.Join(added, tc.name))
 	}
 }
 
