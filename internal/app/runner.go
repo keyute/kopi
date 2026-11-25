@@ -77,8 +77,6 @@ type runner struct {
 	// before it, which a prompt that was not delivered puts back.
 	dirsTold int
 	dirsFrom map[string]int
-	// pulled are the prompts handed to the model mid-send, until that send ends.
-	pulled []pigruntime.Prompt
 }
 
 // entry is one item of runner.queued: a prompt, or a command when cmd is set.
@@ -612,12 +610,8 @@ func (r *runner) runTurn(ctx context.Context, sess *pigruntime.Session, emit fun
 			}))
 		}
 		// Only a handed-over prompt's mode line can fail this way, never the
-		// send's own prompt; the result does not say which, so every handed-over
-		// prompt is taken back.
-		if res.ModeUndelivered {
-			r.untell(r.pulled)
-		}
-		r.pulled = nil
+		// send's own prompt.
+		r.untell(res.ModeUndelivered)
 		// A turn that went on may be continued; one that failed or stopped hands
 		// back every prompt still waiting.
 		cont := !w.stopped && (cancelled || res.Outcome.Status == event.Completed && res.Sent)
@@ -746,7 +740,6 @@ func (r *runner) pull(ctx context.Context, emit func(event.Event)) func() []pigr
 				continue
 			}
 			entries = append(entries, pigruntime.Entry{Prompt: told[0]})
-			r.pulled = append(r.pulled, told[0])
 			told = told[1:]
 		}
 		for _, n := range r.takeNotices() {

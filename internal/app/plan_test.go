@@ -430,6 +430,22 @@ func TestDirectoriesOfEveryPromptNotDeliveredAreToldAgain(t *testing.T) {
 	assert.Contains(t, got, "/two")
 }
 
+func TestOnlyTheDirectoriesOfThePromptNotDeliveredAreToldAgain(t *testing.T) {
+	c := &Controller{authority: policy.NewAuthority()}
+	c.cfg.Workspace = "/ws"
+	c.main = &runner{c: c}
+	c.dirs = []addedDir{{path: "/one"}}
+	c.main.tell([]pigruntime.Prompt{{Text: "a"}})
+	c.dirs = append(c.dirs, addedDir{path: "/two"})
+	second := c.main.tell([]pigruntime.Prompt{{Text: "b"}})
+
+	c.main.untell(second)
+
+	got := c.main.tell([]pigruntime.Prompt{{Text: "c"}})[0].Mode
+	assert.Contains(t, got, "/two")
+	assert.NotContains(t, got, "/one")
+}
+
 func TestSubagentRunnerIsToldTheDirectoriesButNotTheMode(t *testing.T) {
 	c := &Controller{authority: policy.NewAuthority()}
 	c.cfg.Workspace = "/ws"

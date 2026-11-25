@@ -467,9 +467,9 @@ type SendResult struct {
 	// UndeliveredNotices are the notices, given or handed over, the model
 	// never read, in delivery order.
 	UndeliveredNotices []Notice
-	// ModeUndelivered reports that a handed-over prompt's mode line failed to
-	// reach the model, so the caller must offer it again.
-	ModeUndelivered bool
+	// ModeUndelivered are the handed-over prompts whose mode line failed to
+	// reach the model, as given; the caller must offer it again.
+	ModeUndelivered []Prompt
 	// Continuation keeps this send's raise for a continuation of the turn.
 	// SetEffort invalidates it, including after Send returns. A pre-cancelled
 	// send passes its prompt's continuation through without applying it.
@@ -555,7 +555,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	// producer into PiG's queue and PiG delivers in queue order, after p, so
 	// each user message after p's is the head.
 	var handed []Prompt
-	var modeUndelivered bool
+	var modeUndelivered []Prompt
 	// pending is the notices not yet delivered. PiG delivers them in the
 	// order Send gives them, so each notice message is the head.
 	pending := slices.Clone(notices)
@@ -636,7 +636,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 				if q.Mode != "" {
 					if err := s.inner.SendCustomMessage(pigCtx, modeMessage(q.Mode), &extension.SendMessageOptions{DeliverAs: extension.DeliverAsSteer}); err != nil {
 						slog.Warn("failed to hand over mode line", "error", err)
-						modeUndelivered = true
+						modeUndelivered = append(modeUndelivered, q)
 					}
 				}
 			}

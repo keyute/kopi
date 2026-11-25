@@ -1099,6 +1099,32 @@ func TestSendHandsOverModeWithPrompt(t *testing.T) {
 	assert.Equal(t, event.Completed, res.Outcome.Status)
 	assert.Equal(t, []string{"prompt", "x", "S", "M"}, userTexts(<-requests))
 	assert.Equal(t, []event.Event{event.UserMessage{Text: "x"}}, drain(evs))
+	assert.Empty(t, res.ModeUndelivered)
+}
+
+func TestSendNamesTheHandedOverPromptsWhoseModeLineFailed(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), callProbe(), reply("done")})
+	sess := openTestSession(t, r, probeTool(okProbe))
+	calls := 0
+	// Closing the session is the only way a mode line fails to queue, so the
+	// first hand-over is delivered and the second is not.
+	more := func() []Entry {
+		calls++
+		switch calls {
+		case 1:
+			return []Entry{{Prompt: Prompt{Text: "a", Mode: "M1"}}}
+		case 2:
+			require.NoError(t, sess.inner.Close())
+			return []Entry{{Prompt: Prompt{Text: "b", Mode: "M2"}}}
+		}
+		return nil
+	}
+
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
+	_ = err
+	assert.Equal(t, []Prompt{{Text: "b", Mode: "M2"}}, res.ModeUndelivered)
 }
 
 func TestRootAndChildSessionsSendConcurrently(t *testing.T) {
