@@ -531,7 +531,15 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	added := map[string]bool{}
 	for _, dir := range addDirs {
 		// A folder named twice, or through a symlink, joins once, and asks once.
-		if canonical, err := trust.Canonical(dir); err == nil {
+		// Shells leave ~ literal after =, as the controller expands it.
+		spelled := dir
+		switch {
+		case dir == "~":
+			spelled = userHome
+		case strings.HasPrefix(dir, "~/"):
+			spelled = filepath.Join(userHome, dir[2:])
+		}
+		if canonical, err := trust.Canonical(spelled); err == nil {
 			if added[canonical] {
 				continue
 			}

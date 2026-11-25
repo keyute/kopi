@@ -50,7 +50,7 @@ A folder added with [`/add-dir` or `--add-dir`](usage.md#commands) is trusted or
   - `No, don't add` and Esc add nothing and save nothing.
 - For your home directory or the root the dialog does not say the answer is saved, and it holds for this run only.
 - Print mode never asks: it adds a folder no decision covers with file access only and saves nothing.
-- The instruction files are found as for the start directory, one per directory from the one holding `.git` down to the folder. They reach the model in a message, not the system prompt, and only when the folder is trusted. A file the model already has is not sent again.
+- The instruction files are found as for the start directory, one per directory from the one holding `.git` down to the folder. They reach the model in a message, not the system prompt, and only when the folder is trusted. A file the model already has is not sent again in the same session; a session started or resumed is told again.
 
 ## Limitations
 

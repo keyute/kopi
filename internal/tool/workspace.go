@@ -589,18 +589,9 @@ func fillTemp(f *os.File, path string, data []byte, mode *fs.FileMode) error {
 	return err
 }
 
-// within reports whether target is base or lies lexically in it. APFS is
-// case-insensitive, so darwin compares case-folded.
-func within(base, target string) bool {
-	if runtime.GOOS == "darwin" {
-		base, target = strings.ToLower(base), strings.ToLower(target)
-	}
-	rel, err := filepath.Rel(base, target)
-	return err == nil && filepath.IsLocal(rel)
-}
-
 // inProtectedPath reports whether target lies lexically in a protected path,
-// itself walked to its real path.
+// itself walked to its real path. APFS is case-insensitive, so darwin compares
+// case-folded.
 func (w *Workspace) inProtectedPath(target string) (bool, error) {
 	for _, p := range w.protected {
 		store, _, err := walk(string(filepath.Separator), p, nil)
@@ -610,7 +601,10 @@ func (w *Workspace) inProtectedPath(target string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if within(store, target) {
+		if runtime.GOOS == "darwin" {
+			store, target = strings.ToLower(store), strings.ToLower(target)
+		}
+		if rel, err := filepath.Rel(store, target); err == nil && filepath.IsLocal(rel) {
 			return true, nil
 		}
 	}

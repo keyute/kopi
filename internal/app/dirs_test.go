@@ -415,6 +415,33 @@ func TestAddDirRollsBackWhenTheSandboxRefuses(t *testing.T) {
 	assert.True(t, d.denied(t, filepath.Join(dir, ".env")))
 }
 
+func TestAddDirRollsBackWhenTheWorkspaceRefuses(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	dir := canonicalTemp(t)
+	elsewhere := canonicalTemp(t)
+	decide(t, d.c, dir, trust.Untrusted)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), nil, 0o600))
+	inner := d.c.cfg.SandboxDirs
+	replaced := false
+	d.c.cfg.SandboxDirs = func(dirs []string) error {
+		if !replaced {
+			replaced = true
+			require.NoError(t, os.RemoveAll(dir))
+			require.NoError(t, os.Symlink(elsewhere, dir))
+		}
+		return inner(dirs)
+	}
+
+	err := d.c.AddDir(dir)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to add "+dir)
+	assert.Equal(t, [][]string{{dir}, {}}, d.sandboxed, "the previous list is put back")
+	assert.False(t, d.denied(t, filepath.Join(dir, ".env")), "the rules no longer reach it")
+	assert.NotErrorIs(t, d.ws.CanAdd(dir), tool.ErrInWorkspace, "the directory is not in the workspace")
+	assert.Empty(t, d.c.dirsText(0, d.c.dirCount(), true))
+}
+
 func TestAddDirAppliesRulesBeforeTheSandbox(t *testing.T) {
 	d := newDirHarness(t, Config{}, true)
 	dir := canonicalTemp(t)

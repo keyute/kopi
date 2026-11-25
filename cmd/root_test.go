@@ -2251,6 +2251,42 @@ func TestOpenSandboxSetDirsMakesTheDirectoryWritableOnlyInExecuteMode(t *testing
 	out, err = attempt(execute)
 	require.NoError(t, err, out)
 	assert.FileExists(t, filepath.Join(added, "f"))
+
+	require.NoError(t, os.Mkdir(filepath.Join(added, ".git"), 0o700))
+	for _, name := range []string{".mcp.json", filepath.Join(".git", "config")} {
+		cmd, cleanup, err := execute.Command([]string{"/bin/bash", "-c", "printf x > " + filepath.Join(added, name)})
+		require.NoError(t, err)
+		cmd.Dir = e.workspace
+		out, err := cmd.CombinedOutput()
+		cleanup()
+		require.Error(t, err, name)
+		assert.Contains(t, string(out), refused(readOnly), name)
+		assert.NoFileExists(t, filepath.Join(added, name))
+	}
+}
+
+func TestOpenSandboxSetDirsKeepsBothPoliciesOnAnError(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	e := newSandboxedEnv(t)
+	execute, plan, setDirs, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
+	require.NoError(t, err)
+	require.NotNil(t, setDirs)
+	argv := func(sb *sandbox.Sandbox) []string {
+		cmd, cleanup, err := sb.Command([]string{"/bin/true"})
+		require.NoError(t, err)
+		defer cleanup()
+		return cmd.Args
+	}
+	wantExecute, wantPlan := argv(execute), argv(plan)
+
+	err = setDirs([]string{"relative"})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "is not absolute")
+	assert.Equal(t, wantExecute, argv(execute))
+	assert.Equal(t, wantPlan, argv(plan))
 }
 
 func TestCovers(t *testing.T) {
@@ -2913,6 +2949,20 @@ func TestRootAddDirAddsEachFolderOnce(t *testing.T) {
 	require.NoError(t, err)
 	messages := fmt.Sprint(server.next(t).body["messages"])
 	assert.Contains(t, messages, "The workspace also includes "+canonical(t, one)+", "+canonical(t, two)+".")
+}
+
+func TestRootAddDirExpandsTheHomeBeforeDeduplicating(t *testing.T) {
+	e := newTestEnv(t)
+	one := filepath.Join(e.home, "p")
+	require.NoError(t, os.MkdirAll(one, 0o755))
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi", "--add-dir=~/p", "--add-dir=~/p")
+
+	require.NoError(t, err)
+	messages := fmt.Sprint(server.next(t).body["messages"])
+	assert.Contains(t, messages, "The workspace also includes "+canonical(t, one)+".")
 }
 
 func TestRootAddDirFailsTheStartBeforeAnySessionOpens(t *testing.T) {

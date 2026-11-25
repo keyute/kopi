@@ -177,7 +177,7 @@ func (c *Controller) applyDir(p *pendingDir, trusted bool) error {
 	c.dirsMu.Lock()
 	defer c.dirsMu.Unlock()
 	c.mu.Lock()
-	prev := slices.Clone(c.dirs)
+	prev := c.dirs
 	c.mu.Unlock()
 	next := append(slices.Clone(prev), addedDir{dir: p.dir})
 	// A failure puts the previous directories back.

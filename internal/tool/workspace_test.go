@@ -1263,6 +1263,26 @@ func TestAddRefusesARealPathReplacedBySymlink(t *testing.T) {
 	assert.ErrorIs(t, err, ErrOutsideWorkspace)
 }
 
+func TestAddedDirectoryRefusesSiblingPrefixAndSymlinkOut(t *testing.T) {
+	parent := realPath(t, t.TempDir())
+	proj := filepath.Join(parent, "proj")
+	outside := realPath(t, t.TempDir())
+	writeFile(t, filepath.Join(parent, "proj-x", "f"), "sibling")
+	writeFile(t, filepath.Join(outside, "secret"), "secret")
+	require.NoError(t, os.Mkdir(proj, 0o755))
+	require.NoError(t, os.Symlink(outside, filepath.Join(proj, "out")))
+	ws := newWorkspace(t, t.TempDir(), nil)
+	require.NoError(t, ws.Add(Dir{Given: proj, Real: proj}))
+
+	_, err := ws.Open(filepath.Join(parent, "proj-x", "f"))
+	assert.ErrorIs(t, err, ErrOutsideWorkspace)
+	_, err = ws.Open(filepath.Join(proj, "out", "secret"))
+	assert.ErrorIs(t, err, ErrOutsideWorkspace)
+	err = ws.WriteFile(filepath.Join(proj, "out", "new"), []byte("x"))
+	assert.ErrorIs(t, err, ErrOutsideWorkspace)
+	assert.NoFileExists(t, filepath.Join(outside, "new"))
+}
+
 func TestAddedDirectoryIsReachedThroughBothCaseSpellings(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("only darwin respells names as on disk")

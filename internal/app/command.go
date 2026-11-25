@@ -22,7 +22,8 @@ type Command struct {
 	// Typed reports that the candidates depend on the argument typed so far:
 	// Arguments is asked again whenever it changes and returns the candidates
 	// already filtered and ordered. Otherwise it returns every candidate once
-	// and the frontend filters them.
+	// and the frontend filters them. Arguments runs it without the lifecycle
+	// lock held, so it must not touch the runtime.
 	Typed bool
 	// Optional reports that the command also runs without that argument.
 	Optional bool

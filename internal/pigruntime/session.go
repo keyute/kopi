@@ -122,6 +122,10 @@ func modeMessage(text string) extension.CustomMessageRef {
 // Send queued, which Send counts on to match them with Prompt.ModeRead.
 const recallType = "kopi.recall"
 
+func recallMessage(text string) extension.CustomMessageRef {
+	return extension.CustomMessageRef{CustomType: recallType, Content: text, Display: false}
+}
+
 // recallAfterCompaction sends text() as a recall message after every compaction that
 // succeeded, for the session's lifetime.
 //
@@ -140,7 +144,7 @@ func (s *Session) recallAfterCompaction(text func() string) {
 		if line == "" {
 			return
 		}
-		if err := s.inner.SendCustomMessage(context.Background(), extension.CustomMessageRef{CustomType: recallType, Content: line, Display: false}, &extension.SendMessageOptions{TriggerTurn: &passive}); err != nil {
+		if err := s.inner.SendCustomMessage(context.Background(), recallMessage(line), &extension.SendMessageOptions{TriggerTurn: &passive}); err != nil {
 			slog.Warn("failed to recall after compaction", "error", err)
 		}
 	})

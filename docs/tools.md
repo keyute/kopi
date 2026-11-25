@@ -12,7 +12,7 @@
 - Sessions start and resume in the configured [`mode`](configuration.md#mode), including ones opened with `/new` and `/resume`.
 - `--mode` overrides the config file.
 - A mode switched to while the first session is opening is the mode it starts in.
-- The model is told of the directories added to the [workspace](#file-tools) in a hidden message sent with the next prompt, and again after a compaction. It is not part of the system prompt.
+- The model is told of the directories added to the [workspace](#file-tools) in a hidden message sent with the next prompt, and for the main session again after a compaction. It is not part of the system prompt.
 - The model is told the session's mode in one hidden message sent with the first prompt of a session and with the first prompt after the mode changes. It is not part of the system prompt.
 - In plan mode where [`ExitPlanMode`](#exitplanmode) is offered, that message also tells the model not to change the workspace and, when it ends with changes to propose, whether or not the request asked for them, to write them as a plan to the plan file and call `ExitPlanMode` instead of ending its turn; with none, to just answer. Where `ExitPlanMode` is not offered (`kopi -p`, or a `deny` rule removed it) the message only states the mode, and the plan file's path when there is one.
 - No message follows an approved plan: the tool's result tells the model that the session is in execute mode and to carry out the plan.
