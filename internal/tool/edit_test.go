@@ -258,3 +258,21 @@ func TestEditDisplayOutcome(t *testing.T) {
 
 	assert.Equal(t, "a.go", d.Subject(json.RawMessage(`{"file_path":"a.go","old_string":"x","new_string":"y"}`), ""))
 }
+
+func TestEditReachesAnAddedDirectory(t *testing.T) {
+	dir := t.TempDir()
+	ws := newWorkspace(t, dir, nil)
+	other := t.TempDir()
+	path := filepath.Join(other, "a.txt")
+	writeFile(t, path, "one two")
+	tool := NewEdit(ws)
+
+	_, err := runEdit(t, tool, path, "one", "1", false)
+	require.ErrorIs(t, err, ErrOutsideWorkspace)
+	require.NoError(t, ws.Add(other, realPath(t, other)))
+
+	out, err := runEdit(t, tool, path, "one", "1", false)
+	require.NoError(t, err)
+	assert.Equal(t, "replaced 1 occurrence in "+path, out)
+	assert.Equal(t, "1 two", readContent(t, path))
+}

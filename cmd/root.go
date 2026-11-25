@@ -66,7 +66,7 @@ func newRoot() *cobra.Command {
 func rootCmd() *cobra.Command {
 	var resumeID string
 	var cont, printOnly bool
-	var allowed, disallowed []string
+	var allowed, disallowed, addDirs []string
 	cmd := &cobra.Command{
 		Use:           "kopi [prompt]",
 		Short:         "Kopi coding agent",
@@ -81,7 +81,7 @@ func rootCmd() *cobra.Command {
 				{Name: "--allowed-tools", Allow: splitRules(allowed)},
 				{Name: "--disallowed-tools", Deny: splitRules(disallowed)},
 			}
-			return run(cmd, args, printOnly, flagRules, app.OpenRequest{ResumeID: resumeID, Continue: cont})
+			return run(cmd, args, printOnly, flagRules, addDirs, app.OpenRequest{ResumeID: resumeID, Continue: cont})
 		},
 	}
 	cmd.PersistentFlags().String("model", "", "model as provider/id (overrides the config file)")
@@ -92,6 +92,7 @@ func rootCmd() *cobra.Command {
 	cmd.PersistentFlags().String("mode", "", "mode sessions start in: plan or execute (overrides the config file)")
 	cmd.Flags().StringArrayVar(&allowed, "allowed-tools", nil, "permission rules to allow, comma-separated or repeated, e.g. \"Edit(docs/**)\"")
 	cmd.Flags().StringArrayVar(&disallowed, "disallowed-tools", nil, "permission rules to deny, comma-separated or repeated")
+	cmd.Flags().StringArrayVar(&addDirs, "add-dir", nil, "directory to add to the workspace, repeatable")
 	cmd.MarkFlagsMutuallyExclusive("continue", "resume")
 	return cmd
 }
@@ -240,7 +241,7 @@ func readPrompt(in io.Reader, args []string) (string, error) {
 	return strings.Join(prompt, "\n\n"), nil
 }
 
-func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.Source, req app.OpenRequest) (err error) {
+func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.Source, addDirs []string, req app.OpenRequest) (err error) {
 	paths, err := config.ResolvePaths()
 	if err != nil {
 		return err
@@ -336,7 +337,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// and a call they are serving can fail as the process exits anyway.
 	defer servers.Close()
 
-	sb, planSB, unavailable, err := openSandbox(cmd.Context(), resolved.Config.Sandbox, cwd, userHome, paths.Home)
+	sb, planSB, setDirs, unavailable, err := openSandbox(cmd.Context(), resolved.Config.Sandbox, cwd, userHome, paths.Home)
 	if err != nil {
 		return err
 	}
@@ -480,6 +481,8 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// Only the fullscreen interface has a human to answer approvals.
 	cfg := app.Config{
 		Model: resolved.Config.Model, SmallModel: resolved.Config.SmallModel, ConfigFile: paths.ConfigFile, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
+		SandboxDirs: setDirs, TrustFile: paths.TrustFile, UserHome: userHome, InstructionFallbacks: resolved.Config.InstructionFallbacks,
+		Covers: func(dir string) ([]string, []string) { return covers(dir, canonicalHome) },
 		Errors: slices.Concat(set.errs, instructionErrs, skillErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review, Outputs: outputs,
 		Skills: skills, SkillPrefix: resolved.Config.Skills.Prefix,
 		WorkflowModel: resolved.Config.Workflows.Model, MaxWorkflows: resolved.Config.Workflows.MaxWorkflows, MaxAgents: resolved.Config.Workflows.MaxAgents,
@@ -522,6 +525,13 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		})
 	} else {
 		f = headless.New(c, prompt, cmd.OutOrStdout())
+	}
+	// After the frontend subscribes, so a trust question reaches it, and before
+	// the first session opens, so its first prompt carries the directories.
+	for _, dir := range addDirs {
+		if err := c.AddDir(dir); err != nil {
+			return fmt.Errorf("failed to use --add-dir: %w", err)
+		}
 	}
 	if fullscreen {
 		err = c.Start(startCtx, req)
@@ -723,18 +733,15 @@ func decideTrust(store *trust.Store, cwd, userHome string, project map[string]co
 	if err != nil {
 		return 0, err
 	}
-	broad := cwd == userHome || filepath.Dir(cwd) == cwd
+	broad, err := trust.Broad(cwd, userHome)
+	if err != nil {
+		return 0, err
+	}
 	req := tui.TrustRequest{Folder: cwd, Instructions: instructions, Skills: skills}
 	if parent := filepath.Dir(cwd); !broad && parent != filepath.Dir(parent) && parent != userHome {
 		req.Parent = parent
 	}
-	for _, name := range slices.Sorted(maps.Keys(project)) {
-		target := serverTarget(project[name])
-		if invalid[name] != nil {
-			target = "invalid, will not start"
-		}
-		req.Servers = append(req.Servers, name+": "+target)
-	}
+	req.Servers = serverLines(project, invalid)
 	choice, err := ask(req)
 	if err != nil {
 		return 0, err
@@ -761,6 +768,33 @@ func decideTrust(store *trust.Store, cwd, userHome string, project map[string]co
 	return d, nil
 }
 
+// serverLines lists project's servers by name as the trust question shows them.
+func serverLines(project map[string]config.MCPServer, invalid map[string]error) []string {
+	var lines []string
+	for _, name := range slices.Sorted(maps.Keys(project)) {
+		target := serverTarget(project[name])
+		if invalid[name] != nil {
+			target = "invalid, will not start"
+		}
+		lines = append(lines, name+": "+target)
+	}
+	return lines
+}
+
+// covers is what a trust answer saved for dir would cover when Kopi starts
+// there: its .mcp.json servers and project skill folders. An unreadable
+// .mcp.json lists no servers.
+func covers(dir, canonicalHome string) (servers, skills []string) {
+	project, invalid, err := config.ProjectServers(filepath.Join(dir, policy.ProjectMCPFile))
+	if err == nil {
+		for name := range invalid {
+			project[name] = config.MCPServer{}
+		}
+		servers = serverLines(project, invalid)
+	}
+	return servers, skill.Find(dir, filepath.Join(canonicalHome, ".agents", "skills"))
+}
+
 // serverTarget is what a server runs or connects to, as configured: the
 // command and its arguments, or the URL, then the names, never the values, of
 // the environment variables and headers it sets.
@@ -781,38 +815,49 @@ func serverTarget(s config.MCPServer) string {
 // openSandbox returns the sandboxes Bash runs under in execute and in plan
 // mode, both or neither; neither when sandbox.enabled is false. With enabled
 // unset, a machine without a usable sandbox is not an error: the sandboxes
-// are nil and unavailable says why.
-func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHome string) (sb, plan *sandbox.Sandbox, unavailable, err error) {
+// are nil and unavailable says why. setDirs makes the added directories the
+// workspace's other roots in both; it is nil without the sandboxes.
+func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHome string) (sb, plan *sandbox.Sandbox, setDirs func(dirs []string) error, unavailable, err error) {
 	if cfg.Enabled != nil && !*cfg.Enabled {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
-	p := sandboxPolicy(cfg, cwd, userHome, kopiHome)
+	p := sandboxPolicy(cfg, cwd, nil, userHome, kopiHome)
 	if len(cfg.AllowDomains) > 0 {
 		exe, err := os.Executable()
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("failed to start the sandbox: failed to find the kopi binary: %w", err)
+			return nil, nil, nil, nil, fmt.Errorf("failed to start the sandbox: failed to find the kopi binary: %w", err)
 		}
 		if p.Proxy, err = sandbox.NewProxy(cfg.AllowDomains, cfg.DenyDomains, []string{exe, "sandbox-listen", "--"}); err != nil {
-			return nil, nil, nil, fmt.Errorf("failed to start the sandbox: %w", err)
+			return nil, nil, nil, nil, fmt.Errorf("failed to start the sandbox: %w", err)
 		}
 	}
-	sandboxes, err := sandbox.New(ctx, filepath.Join(kopiHome, "sandbox"), p, planPolicy(p, cwd))
+	sandboxes, err := sandbox.New(ctx, filepath.Join(kopiHome, "sandbox"), p, planPolicy(p, cwd, nil))
 	switch {
 	case cfg.Enabled == nil && errors.Is(err, sandbox.ErrUnavailable):
-		return nil, nil, err, nil
+		return nil, nil, nil, err, nil
 	case err != nil:
-		return nil, nil, nil, fmt.Errorf("failed to start the sandbox: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to start the sandbox: %w", err)
 	}
-	return sandboxes[0], sandboxes[1], nil, nil
+	// The plan sandbox first: a failure between the two leaves the directory
+	// read-only rather than writable.
+	setDirs = func(dirs []string) error {
+		p := sandboxPolicy(cfg, cwd, dirs, userHome, kopiHome)
+		if err := sandboxes[1].SetPolicy(planPolicy(p, cwd, dirs)); err != nil {
+			return err
+		}
+		return sandboxes[0].SetPolicy(p)
+	}
+	return sandboxes[0], sandboxes[1], setDirs, nil, nil
 }
 
-// sandboxPolicy lets commands write only the workspace, temporary
-// directories and the paths the user allowed, never read Kopi's home, and
-// never write the git files that decide which config and hooks git runs (on
-// Linux, nothing in the start directory's .git), nor
-// any .mcp.json or what the start directory's .mcp.json resolves to, either of
-// which would run code outside the sandbox.
-func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.Policy {
+// sandboxPolicy lets commands write only the workspace (the start directory
+// and dirs, the directories added to it), temporary directories and the paths
+// the user allowed, never read Kopi's home, and never write the git files that
+// decide which config and hooks git runs (on Linux, nothing in a workspace
+// directory's .git), nor any .mcp.json or what a workspace directory's
+// .mcp.json resolves to, either of which would run code outside the sandbox.
+// Relative paths in cfg start at cwd.
+func sandboxPolicy(cfg config.Sandbox, cwd string, dirs []string, userHome, kopiHome string) sandbox.Policy {
 	expand := func(paths []string) []string {
 		out := make([]string, 0, len(paths))
 		for _, p := range paths {
@@ -829,7 +874,26 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 		}
 		return out
 	}
-	gitDir := filepath.Join(cwd, ".git")
+	denyWrite := protectedWrites(cwd)
+	write := []string{cwd, "/tmp", os.TempDir()}
+	write = append(write, expand(cfg.AllowWrite)...)
+	for _, dir := range dirs {
+		denyWrite = append(denyWrite, protectedWrites(dir)...)
+		write = append(write, dir)
+	}
+	return sandbox.Policy{
+		Write:          write,
+		DenyRead:       append([]string{kopiHome}, expand(cfg.DenyRead)...),
+		DenyWrite:      denyWrite,
+		DenyWriteNames: []string{policy.ProjectMCPFile},
+		Network:        cfg.Network,
+	}
+}
+
+// protectedWrites are the paths under a workspace directory that commands may
+// not write.
+func protectedWrites(dir string) []string {
+	gitDir := filepath.Join(dir, ".git")
 	// The names stay listed on Linux, though gitDir covers them: with paths
 	// listed beneath it, a missing .git gets a directory placeholder rather than
 	// an empty file, so git in a subdirectory of another repository still walks
@@ -846,7 +910,7 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 		// Git takes a directory holding HEAD, objects and refs for a git
 		// directory and runs its config. On Linux another command's .git
 		// placeholder can hide that .git was missing.
-		denyWrite = append(denyWrite, filepath.Join(cwd, "HEAD"))
+		denyWrite = append(denyWrite, filepath.Join(dir, "HEAD"))
 	}
 	if runtime.GOOS == "linux" {
 		denyWrite = append(denyWrite, gitDir)
@@ -856,22 +920,14 @@ func sandboxPolicy(cfg config.Sandbox, cwd, userHome, kopiHome string) sandbox.P
 	}
 	// Unconditional: the sandbox also denies what a link resolves to, and a
 	// linked directory is denied whole rather than left to be swapped for a file.
-	denyWrite = append(denyWrite, filepath.Join(cwd, policy.ProjectMCPFile))
-	write := []string{cwd, "/tmp", os.TempDir()}
-	return sandbox.Policy{
-		Write:          append(write, expand(cfg.AllowWrite)...),
-		DenyRead:       append([]string{kopiHome}, expand(cfg.DenyRead)...),
-		DenyWrite:      denyWrite,
-		DenyWriteNames: []string{policy.ProjectMCPFile},
-		Network:        cfg.Network,
-	}
+	return append(denyWrite, filepath.Join(dir, policy.ProjectMCPFile))
 }
 
 // planPolicy is p with the workspace denied rather than dropped from the write
 // roots: a workspace under /tmp, the temporary directory or an allowWrite path
 // would stay writable through that root.
-func planPolicy(p sandbox.Policy, cwd string) sandbox.Policy {
-	p.DenyWrite = slices.Concat(p.DenyWrite, []string{cwd})
+func planPolicy(p sandbox.Policy, cwd string, dirs []string) sandbox.Policy {
+	p.DenyWrite = slices.Concat(p.DenyWrite, []string{cwd}, dirs)
 	return p
 }
 

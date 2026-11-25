@@ -227,3 +227,24 @@ func TestGlobDisplay(t *testing.T) {
 		assert.Equal(t, tc.want, tool.Display.Summary(out))
 	}
 }
+
+func TestGlobSearchesAnAddedDirectoryWithAbsoluteResults(t *testing.T) {
+	dir := t.TempDir()
+	ws := newWorkspace(t, dir, nil)
+	other := t.TempDir()
+	writeFile(t, filepath.Join(other, "sub", "a.go"), "")
+	writeFile(t, filepath.Join(dir, "start.go"), "")
+	tool := NewGlob(ws, nil)
+	args := fmt.Sprintf(`{"pattern":"*.go","path":%q}`, other)
+
+	_, err := runGlob(t, tool, args)
+	require.ErrorIs(t, err, ErrOutsideWorkspace)
+	require.NoError(t, ws.Add(other, realPath(t, other)))
+
+	out, err := runGlob(t, tool, args)
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 file\n"+filepath.Join(realPath(t, other), "sub", "a.go"), out)
+	out, err = runGlob(t, tool, `{"pattern":"*.go"}`)
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 file\nstart.go", out)
+}

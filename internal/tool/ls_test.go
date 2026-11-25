@@ -196,3 +196,25 @@ func TestLSDisplay(t *testing.T) {
 		assert.Equal(t, tc.want, tool.Display.Summary(out))
 	}
 }
+
+func TestLSListsAnAddedDirectory(t *testing.T) {
+	dir := t.TempDir()
+	ws := newWorkspace(t, dir, nil)
+	other := t.TempDir()
+	writeFile(t, filepath.Join(other, "b.txt"), "")
+	writeFile(t, filepath.Join(other, "sub", "c.txt"), "")
+	writeFile(t, filepath.Join(dir, "start.txt"), "")
+	tool := NewLS(ws, nil)
+	args := fmt.Sprintf(`{"path":%q}`, other)
+
+	_, err := runLS(t, tool, args)
+	require.ErrorIs(t, err, ErrOutsideWorkspace)
+	require.NoError(t, ws.Add(other, realPath(t, other)))
+
+	out, err := runLS(t, tool, args)
+	require.NoError(t, err)
+	assert.Equal(t, "b.txt\nsub/", out)
+	out, err = runLS(t, tool, `{}`)
+	require.NoError(t, err)
+	assert.Equal(t, "start.txt", out)
+}

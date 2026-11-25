@@ -654,7 +654,10 @@ func (m *model) apply(ev event.Event) *view {
 	case event.LoginRequested:
 		m.open(promptLogin, newLoginDialog(ev, &m.keys, m.th))
 		return nil
-	case event.QuestionEnded, event.PlanEnded, event.LoginEnded, event.ApprovalEnded:
+	case event.DirRequested:
+		m.open(promptDir, newDirDialog(ev, &m.keys))
+		return nil
+	case event.QuestionEnded, event.PlanEnded, event.LoginEnded, event.DirEnded, event.ApprovalEnded:
 		return nil
 	}
 	v := m.viewOf(id)

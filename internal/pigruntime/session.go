@@ -75,8 +75,9 @@ type Prompt struct {
 	// FromAgent marks a prompt another agent sent rather than the human typed;
 	// it is carried only so input a run never read goes back to its sender.
 	FromAgent bool
-	// Mode is a line about the session's mode, read after Text and Skills; the
-	// transcript does not draw it. Empty sends none.
+	// Mode is the hidden line Kopi tells the model with a prompt: the session's
+	// mode and the directories added to the workspace. It is read after Text and
+	// Skills; the transcript does not draw it. Empty sends none.
 	Mode string
 	// Tools names the deferred tools the prompt makes callable, from the
 	// model request that carries it. Names the session does not have are

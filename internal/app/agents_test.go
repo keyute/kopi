@@ -24,6 +24,7 @@ import (
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/subagent"
 	"github.com/keyute/kopi/internal/tool"
+	"github.com/keyute/kopi/internal/trust"
 )
 
 // childProvider serves the subagents, so the root's and their scripted
@@ -1960,4 +1961,35 @@ func TestMessageToAChildTheHumanRestartedQueuesWhileItsNoticeWasUnread(t *testin
 
 	assert.Equal(t, tool.MessageQueued, outcome)
 	assert.Contains(t, receive(t, requests).UserTexts, "note")
+}
+
+func TestSubagentIsToldTheAddedDirectoriesWithItsFirstPromptAndItsNextMessage(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	cfg, _, _ := dirConfig(t, sb, Config{})
+	a := newAgentHarness(t, sb, cfg, agentDef("explorer"))
+	first, second := otherDir(t), otherDir(t)
+	for _, dir := range []string{first, second} {
+		decide(t, a.c, dir, trust.Untrusted)
+	}
+	require.NoError(t, a.c.AddDir(first))
+	firstText := inJSON(t, "The workspace also includes "+first+". Give a path there as an absolute path; relative paths and Bash still start from "+sb.Workspace+".")
+	secondText := inJSON(t, "The workspace also includes "+second+". Give a path there as an absolute path; relative paths and Bash still start from "+sb.Workspace+".")
+	one, two, gate := make(chan childRequest, 1), make(chan childRequest, 1), make(chan struct{})
+	a.child.SetResponses([]ai.FauxResponseStep{captureChild(one, gate, "first"), captureChild(two, nil, "second")})
+	a.rootAcks(1)
+
+	id := a.launch(t, "explorer", "look", "go")
+	req := receiveChild(t, one)
+	assert.Equal(t, 1, strings.Count(req.raw, firstText), "the first prompt carries it")
+	assert.NotContains(t, req.raw, secondText)
+
+	require.NoError(t, a.c.AddDir(second))
+	_, err := a.c.message(t.Context(), id, "more")
+	require.NoError(t, err)
+	close(gate)
+	req = receiveChild(t, two)
+
+	assert.Equal(t, 1, strings.Count(req.raw, firstText), "it is not told again")
+	assert.Equal(t, 1, strings.Count(req.raw, secondText), "the next message carries what is new")
+	a.untilStatus(t, id, tool.TaskCompleted)
 }

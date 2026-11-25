@@ -88,18 +88,26 @@ func modeLine(mode policy.Mode, planPath string, approval bool) string {
 }
 
 // recall is what the main session's model is told again after a compaction,
-// which may have summarised the mode line away: that line, and in execute mode
-// the plan file when it has content. It does not count as told.
+// which may have summarised the mode line away: that line, in execute mode the
+// plan file when it has content, and the directories it was told. It does not
+// count as told.
 func (c *Controller) recall() string {
 	mode, path := c.mode(), c.cfg.Plans.Path()
 	line := modeLine(mode, path, c.planApproval())
-	if mode != policy.Execute || path == "" {
-		return line
+	if mode == policy.Execute && path != "" {
+		if plan, err := c.cfg.Plans.Read(); err == nil && strings.TrimSpace(plan) != "" {
+			line += " Its plan file is " + path + "."
+		}
 	}
-	if plan, err := c.cfg.Plans.Read(); err != nil || strings.TrimSpace(plan) == "" {
-		return line
+	// The runtime calls recall during a compaction, with queue free; the
+	// directories not yet told arrive with the next prompt.
+	c.queue.Lock()
+	told := c.main.dirsTold
+	c.queue.Unlock()
+	if text := c.dirsText(0, told); text != "" {
+		line += "\n" + text
 	}
-	return line + " Its plan file is " + path + "."
+	return line
 }
 
 // planApproval reports whether the session offers ExitPlanMode.
@@ -107,36 +115,48 @@ func (c *Controller) planApproval() bool {
 	return c.cfg.Plans != nil && !c.cfg.Unattended && !c.cfg.Rules.Removes("ExitPlanMode")
 }
 
-// tell attaches the current mode line to the last of ps unless the model
-// already read it, and records it as told. ps carry no line of their own: an
-// earlier one that was not delivered has been taken back by untell. Only the
-// main session is told its mode. It must be called with queue held.
+// tell attaches to the last of ps what the model has not read yet and records
+// it as told: the current mode line, for the main session only, and the
+// directories added to the workspace since the session was told. ps carry no
+// line of their own: an earlier one that was not delivered has been taken back
+// by untell. It must be called with queue held.
 //
 // Every prompt about to be sent to the main session's model passes through tell,
 // so it is also where the session's first human prompt is noticed for its title.
 func (r *runner) tell(ps []pigruntime.Prompt) []pigruntime.Prompt {
-	if len(ps) == 0 || r != r.c.main {
+	if len(ps) == 0 {
 		return ps
 	}
-	r.c.nameSessionLocked(ps)
+	main := r == r.c.main
+	if main {
+		r.c.nameSessionLocked(ps)
+	}
 	ps = append([]pigruntime.Prompt(nil), ps...)
 	for i := range ps {
 		ps[i].Mode = ""
 	}
-	if line := modeLine(r.c.mode(), r.c.cfg.Plans.Path(), r.c.planApproval()); line != r.told {
-		ps[len(ps)-1].Mode = line
-		r.told = line
+	var lines []string
+	if main {
+		if line := modeLine(r.c.mode(), r.c.cfg.Plans.Path(), r.c.planApproval()); line != r.told {
+			lines = append(lines, line)
+			r.told = line
+		}
 	}
+	if n := r.c.dirCount(); n > r.dirsTold {
+		lines = append(lines, r.c.dirsText(r.dirsTold, n))
+		r.dirsBefore, r.dirsTold = r.dirsTold, n
+	}
+	ps[len(ps)-1].Mode = strings.Join(lines, "\n")
 	return ps
 }
 
-// untell forgets what was told when a prompt that carried the line was not
+// untell forgets what was told when a prompt that carried it was not
 // delivered. It must be called with queue held.
 func (r *runner) untell(ps ...[]pigruntime.Prompt) {
 	for _, group := range ps {
 		for _, p := range group {
 			if p.Mode != "" {
-				r.told = ""
+				r.told, r.dirsTold = "", r.dirsBefore
 			}
 		}
 	}

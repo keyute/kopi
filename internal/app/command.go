@@ -19,6 +19,11 @@ type Command struct {
 	Name, Summary string
 	// Argument reports that the command's argument is chosen from Arguments.
 	Argument bool
+	// Typed reports that the candidates depend on the argument typed so far:
+	// Arguments is asked again whenever it changes and returns the candidates
+	// already filtered and ordered. Otherwise it returns every candidate once
+	// and the frontend filters them.
+	Typed bool
 	// Optional reports that the command also runs without that argument.
 	Optional bool
 	// Skill reports that the command is a skill, which loads with the prompt it
@@ -28,8 +33,11 @@ type Command struct {
 
 type command struct {
 	Command
-	run  func(c *Controller, ctx context.Context, args string) error
-	args func(c *Controller) ([]Candidate, error)
+	run func(c *Controller, ctx context.Context, args string) error
+	// args lists the argument's candidates, and complete finds them for the text
+	// typed so far; a command has at most one of them.
+	args     func(c *Controller) ([]Candidate, error)
+	complete func(c *Controller, typed string) ([]Candidate, error)
 }
 
 func commandTable() []command {
@@ -41,6 +49,9 @@ func commandTable() []command {
 		}},
 		{Command: Command{Name: "effort", Summary: "set the reasoning effort for this session"}, run: (*Controller).effortCommand, args: (*Controller).effortCandidates},
 		{Command: Command{Name: "model", Summary: "switch the model until kopi exits"}, run: (*Controller).modelCommand, args: (*Controller).modelCandidates},
+		{Command: Command{Name: "add-dir", Summary: "add a directory to the workspace until kopi exits"}, run: func(c *Controller, _ context.Context, arg string) error {
+			return c.AddDir(arg)
+		}, complete: (*Controller).dirCandidates},
 		{Command: Command{Name: "new", Summary: "start a new session"}, run: func(c *Controller, ctx context.Context, _ string) error {
 			return c.switchTo(ctx, OpenRequest{})
 		}},
@@ -263,12 +274,13 @@ func (c *Controller) endModelChange() {
 	c.main.advanceLocked(true)
 }
 
-// Arguments returns the candidates for command name's argument; nil when it takes
-// none. It may read every session file, so frontends call it off their event loop.
-func (c *Controller) Arguments(name string) ([]Candidate, error) {
+// Arguments returns the candidates for command name's argument, given the text
+// typed so far, which only a Typed command reads; nil when it takes none. It may
+// read every session file, so frontends call it off their event loop.
+func (c *Controller) Arguments(name, typed string) ([]Candidate, error) {
 	cmds := commandTable()
 	i := slices.IndexFunc(cmds, func(cmd command) bool { return cmd.Name == name })
-	if i < 0 || cmds[i].args == nil {
+	if i < 0 || cmds[i].args == nil && cmds[i].complete == nil {
 		return nil, nil
 	}
 	// Held so that it cannot touch the runtime after Close.
@@ -279,6 +291,9 @@ func (c *Controller) Arguments(name string) ([]Candidate, error) {
 	c.mu.Unlock()
 	if closed {
 		return nil, nil
+	}
+	if cmds[i].complete != nil {
+		return cmds[i].complete(c, typed)
 	}
 	return cmds[i].args(c)
 }

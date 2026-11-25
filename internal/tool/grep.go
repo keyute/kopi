@@ -102,6 +102,7 @@ func NewGrep(ws *Workspace, hidden Hidden) Tool {
 			if args.Path == "" {
 				args.Path = "."
 			}
+			ws := ws.in(args.Path)
 			var (
 				root  policy.Target
 				rel   string
@@ -327,6 +328,7 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 	)
 	// searchFile reports whether the search goes on past p.
 	searchFile := func(p string, f *os.File, fi fs.FileInfo) bool {
+		name := ws.named(p)
 		switch mode {
 		case grepFiles:
 			hit := false
@@ -336,7 +338,7 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 			})
 			if hit {
 				files++
-				kept = keepNewest(kept, found{path: p, modTime: fi.ModTime()}, limit)
+				kept = keepNewest(kept, found{path: name, modTime: fi.ModTime()}, limit)
 			}
 		case grepCount:
 			n := 0
@@ -349,13 +351,13 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 			if n > 0 {
 				matches += n
 				files++
-				kept = keepNewest(kept, found{path: p, modTime: fi.ModTime(), count: n}, limit)
+				kept = keepNewest(kept, found{path: name, modTime: fi.ModTime(), count: n}, limit)
 			}
 		case grepContent:
 			var before []grepLine
 			last, after, counted := 0, 0, false
 			emit := func(l grepLine, sep string) bool {
-				s := p + sep + fmt.Sprint(l.n) + sep + l.text
+				s := name + sep + fmt.Sprint(l.n) + sep + l.text
 				if l.cut {
 					s += lineCutMarker
 				}
@@ -381,19 +383,19 @@ func grep(ctx context.Context, ws *Workspace, hidden Hidden, args grepArgs, re *
 						return false
 					}
 					// Reserve the match and a possible group separator before context.
-					needed := len(p) + 2 + len(fmt.Sprint(l.n)) + len(l.text) + 1 + 3
+					needed := len(name) + 2 + len(fmt.Sprint(l.n)) + len(l.text) + 1 + 3
 					if l.cut {
 						needed += len(lineCutMarker)
 					}
 					for _, b := range before {
-						needed += len(p) + 2 + len(fmt.Sprint(b.n)) + len(b.text) + 1
+						needed += len(name) + 2 + len(fmt.Sprint(b.n)) + len(b.text) + 1
 						if b.cut {
 							needed += len(lineCutMarker)
 						}
 					}
 					for len(before) > 0 && out.Len()+needed > maxReadBytes-noticeReserve {
 						b := before[0]
-						needed -= len(p) + 2 + len(fmt.Sprint(b.n)) + len(b.text) + 1
+						needed -= len(name) + 2 + len(fmt.Sprint(b.n)) + len(b.text) + 1
 						if b.cut {
 							needed -= len(lineCutMarker)
 						}

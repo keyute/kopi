@@ -329,7 +329,8 @@ func (r *workflowRun) send(ctx context.Context, run *runner, emit func(event.Eve
 	c.mu.Unlock()
 	emit(event.TurnStart{Prompt: prompt})
 	start := time.Now()
-	res, err := run.sess.Send(sendCtx, pigruntime.Prompt{Text: prompt, FromAgent: true}, nil, nil)
+	dirs := c.dirsText(0, c.dirCount())
+	res, err := run.sess.Send(sendCtx, pigruntime.Prompt{Text: prompt, FromAgent: true, Mode: dirs}, nil, nil)
 	if err != nil {
 		res.Outcome = event.Outcome{Status: event.Failed, Message: err.Error()}
 	}

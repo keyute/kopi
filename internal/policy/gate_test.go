@@ -931,3 +931,19 @@ func TestUnsandboxedFlagIsPartOfTheBoundCall(t *testing.T) {
 
 	assert.ErrorIs(t, admitArgs(g, "c1", optOutCall), ErrChangedCall)
 }
+
+func TestGateDecidesByDirectoriesSetAfterItWasBuilt(t *testing.T) {
+	d := newDirs(t)
+	extra, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	rules := d.rules(t, Source{Name: "config", Deny: []string{"Read(.env)"}})
+	_, g := newTestGate(rules, nil)
+	args := pathArgs(filepath.Join(extra, ".env"))
+	require.NoError(t, g.Before(t.Context(), "c1", "Read", args))
+
+	rules.SetDirs([]string{extra})
+
+	assert.ErrorIs(t, g.Before(t.Context(), "c2", "Read", args), ErrDenied)
+	rules.SetDirs(nil)
+	assert.NoError(t, g.Before(t.Context(), "c3", "Read", args))
+}

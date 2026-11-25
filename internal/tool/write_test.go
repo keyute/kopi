@@ -252,3 +252,28 @@ func TestWriteDisplayOutcome(t *testing.T) {
 	_, action = d.Outcome(json.RawMessage(`{"file_path":"plan"}`), "")
 	assert.Equal(t, Action{}, action)
 }
+
+func TestWriteReachesAnAddedDirectory(t *testing.T) {
+	_, dir := newWriteTool(t)
+	ws := newWorkspace(t, dir, nil)
+	other := t.TempDir()
+	path := filepath.Join(other, "sub", "a.txt")
+	args := fmt.Sprintf(`{"file_path":%q,"content":"hi"}`, path)
+	tool := NewWrite(ws)
+
+	_, err := tool.Run(context.Background(), json.RawMessage(args), allowTarget)
+	require.ErrorIs(t, err, ErrOutsideWorkspace)
+	require.NoError(t, ws.Add(other, realPath(t, other)))
+
+	var admitted policy.Target
+	res, err := tool.Run(context.Background(), json.RawMessage(args), func(t policy.Target) (policy.Mode, error) {
+		admitted = t
+		return policy.Execute, nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "wrote 1 line to "+path, res.Text)
+	assert.Equal(t, "hi", readContent(t, path))
+	before, err := tool.Target(json.RawMessage(args))
+	require.NoError(t, err)
+	assert.Equal(t, before, admitted)
+}

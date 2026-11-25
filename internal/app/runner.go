@@ -72,6 +72,10 @@ type runner struct {
 	// "" when none was, or when one was not delivered. Only the main session's
 	// is used.
 	told string
+	// dirsTold is how many of the added directories the session has been told,
+	// and dirsBefore what it was before the last tell that told any, which a
+	// prompt that was not delivered puts back.
+	dirsTold, dirsBefore int
 }
 
 // entry is one item of runner.queued: a prompt, or a command when cmd is set.
@@ -605,7 +609,7 @@ func (r *runner) runTurn(ctx context.Context, sess *pigruntime.Session, emit fun
 			}))
 		}
 		if res.ModeUndelivered {
-			r.told = ""
+			r.told, r.dirsTold = "", r.dirsBefore
 		}
 		// A turn that went on may be continued; one that failed or stopped hands
 		// back every prompt still waiting.

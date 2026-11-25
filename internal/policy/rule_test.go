@@ -846,3 +846,155 @@ func TestHidesWithNilRules(t *testing.T) {
 	var r *Rules
 	assert.False(t, r.Hides("Read", Target{}, Target{}))
 }
+
+// addedDir is a new resolved directory, as SetDirs takes it.
+func addedDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	return dir
+}
+
+func TestSetDirsExtendsRelativeAndBareRulesOnly(t *testing.T) {
+	d := newDirs(t)
+	extra := addedDir(t)
+	r := d.rules(t,
+		Source{Name: "config", Deny: []string{"Read(.env)", "Read(/etc/passwd)", "Read(~/.ssh)"}, Allow: []string{"Edit(docs/**)"}})
+	deny := []string{filepath.Join(extra, ".env"), filepath.Join(extra, "a/.env")}
+	allow := filepath.Join(extra, "docs/a.md")
+
+	for _, p := range deny {
+		eff, _, _ := r.decide("Read", at(p))
+		assert.Equal(t, effectNone, eff, p)
+	}
+	eff, _, _ := r.decide("Edit", at(allow))
+	assert.Equal(t, effectNone, eff)
+
+	r.SetDirs([]string{extra})
+
+	for _, p := range deny {
+		eff, _, _ := r.decide("Read", at(p))
+		assert.Equal(t, effectDeny, eff, p)
+	}
+	eff, _, _ = r.decide("Edit", at(allow))
+	assert.Equal(t, effectAllow, eff)
+	eff, _, _ = r.decide("Edit", at(filepath.Join(extra, "src/a.md")))
+	assert.Equal(t, effectNone, eff)
+	for _, p := range []string{filepath.Join(extra, "etc/passwd"), filepath.Join(extra, ".ssh/id_rsa")} {
+		eff, _, _ := r.decide("Read", at(p))
+		assert.Equal(t, effectNone, eff, p)
+	}
+	eff, _, _ = r.decide("Read", at("/etc/passwd"))
+	assert.Equal(t, effectDeny, eff)
+	eff, _, _ = r.decide("Read", at(filepath.Join(d.home, ".ssh/id_rsa")))
+	assert.Equal(t, effectDeny, eff)
+}
+
+func TestSetDirsKeepsExceptionsInAddedDirectory(t *testing.T) {
+	d := newDirs(t)
+	extra := addedDir(t)
+	r := d.rules(t, Source{Name: "config", Deny: []string{"Read(.env*)", "Read(!.env.example)"}}, Source{Name: "other", Ask: []string{"Read(.env.example)"}})
+	r.SetDirs([]string{extra})
+
+	eff, _, _ := r.decide("Read", at(filepath.Join(extra, ".env")))
+	assert.Equal(t, effectDeny, eff)
+	eff, _, src := r.decide("Read", at(filepath.Join(extra, ".env.example")))
+	assert.Equal(t, effectAsk, eff)
+	assert.Equal(t, "other", src)
+	assert.True(t, r.Hides("Read", *at(extra), *at(filepath.Join(extra, ".env"))))
+}
+
+func TestSetDirsReplacesWhatAnEarlierCallSet(t *testing.T) {
+	d := newDirs(t)
+	first, second := addedDir(t), addedDir(t)
+	r := d.rules(t, Source{Name: "config", Deny: []string{"Read(.env)"}})
+	inFirst, inSecond := at(filepath.Join(first, ".env")), at(filepath.Join(second, ".env"))
+
+	r.SetDirs([]string{first})
+	eff, _, _ := r.decide("Read", inFirst)
+	assert.Equal(t, effectDeny, eff)
+
+	r.SetDirs([]string{second})
+	eff, _, _ = r.decide("Read", inFirst)
+	assert.Equal(t, effectNone, eff)
+	eff, _, _ = r.decide("Read", inSecond)
+	assert.Equal(t, effectDeny, eff)
+
+	r.SetDirs([]string{first, second})
+	eff, _, _ = r.decide("Read", inFirst)
+	assert.Equal(t, effectDeny, eff)
+
+	r.SetDirs(nil)
+	for _, p := range []*Target{inFirst, inSecond} {
+		eff, _, _ := r.decide("Read", p)
+		assert.Equal(t, effectNone, eff)
+	}
+	eff, _, _ = r.decide("Read", at(filepath.Join(d.ws, ".env")))
+	assert.Equal(t, effectDeny, eff)
+}
+
+func TestSetDirsGuardsAddedDirectoryMCPFile(t *testing.T) {
+	d := newDirs(t)
+	extra := addedDir(t)
+	require.NoError(t, os.WriteFile(filepath.Join(extra, "servers.json"), []byte("{}"), 0o600))
+	require.NoError(t, os.Symlink("servers.json", filepath.Join(extra, ".mcp.json")))
+	r := d.rules(t, Source{Name: "config", Allow: []string{"*"}})
+	r.SetDirs([]string{extra})
+
+	for _, tool := range []string{"Edit", "Write"} {
+		for _, name := range []string{".mcp.json", "servers.json"} {
+			eff, text, src := r.decide(tool, at(filepath.Join(extra, name)))
+			assert.Equal(t, effectAsk, eff, tool+" "+name)
+			assert.Equal(t, tool+"("+ProjectMCPFile+")", text)
+			assert.Equal(t, "built-in", src)
+		}
+		eff, _, _ := r.decide(tool, at(filepath.Join(extra, "other.json")))
+		assert.Equal(t, effectAllow, eff)
+	}
+
+	r.SetDirs(nil)
+	eff, _, _ := r.decide("Edit", at(filepath.Join(extra, "servers.json")))
+	assert.Equal(t, effectAllow, eff)
+}
+
+func TestSetDirsMatchesGlobMetacharactersLiterally(t *testing.T) {
+	d := newDirs(t)
+	extra := filepath.Join(addedDir(t), "p[1]*")
+	require.NoError(t, os.Mkdir(extra, 0o755))
+	r := d.rules(t, Source{Name: "config", Deny: []string{"Read(docs/*.md)"}})
+	r.SetDirs([]string{extra})
+
+	eff, _, _ := r.decide("Read", at(filepath.Join(extra, "docs/a.md")))
+	assert.Equal(t, effectDeny, eff)
+	eff, _, _ = r.decide("Read", at(filepath.Join(filepath.Dir(extra), "p1/docs/a.md")))
+	assert.Equal(t, effectNone, eff)
+}
+
+func TestSetDirsOnNilRules(t *testing.T) {
+	var r *Rules
+	assert.NotPanics(t, func() { r.SetDirs([]string{"/x"}) })
+}
+
+func TestSetDirsWhileReading(t *testing.T) {
+	d := newDirs(t)
+	extra := addedDir(t)
+	r := d.rules(t, Source{Name: "config", Deny: []string{"Read(.env)"}})
+	target := at(filepath.Join(extra, ".env"))
+	started, done := make(chan struct{}), make(chan struct{})
+
+	go func() {
+		defer close(done)
+		close(started)
+		for range 100 {
+			r.decide("Read", target)
+			r.Hides("Read", *at(extra), *target)
+			r.Removes("Read")
+		}
+	}()
+	<-started
+	for range 100 {
+		r.SetDirs([]string{extra})
+		r.SetDirs(nil)
+	}
+	<-done
+}

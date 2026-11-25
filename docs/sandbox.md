@@ -52,6 +52,7 @@ On macOS and Linux, `Bash` runs inside an OS sandbox when it is available (unles
   - Linux: anything.
 - A command cannot write `HEAD` in the start directory on Linux, or on macOS when it has no `.git`.
 - In plan mode nothing in the start directory is writable, including `sandbox.allowWrite` paths inside it.
+- A directory added with [`/add-dir`](usage.md#commands) is a write root like the start directory, with the same `.git`, `HEAD` and `.mcp.json` protection, and is read-only in plan mode. A command already running keeps the profile it started with.
 - A command cannot create, write, rename or remove the start directory's `.mcp.json`, nor what it resolves to when it is a symlink.
   - On macOS this holds for a file named `.mcp.json` in any letter case and in any directory.
   - Git operations that change a protected `.mcp.json` therefore fail in the sandbox.
@@ -95,10 +96,10 @@ On macOS and Linux, `Bash` runs inside an OS sandbox when it is available (unles
 
 ### Linux
 
-- Only the start directory's `.mcp.json` is protected by name: a command can create or change a `.mcp.json` in any other directory.
+- Only the `.mcp.json` of the start directory and of added directories is protected by name: a command can create or change a `.mcp.json` in any other directory.
 - A denied directory reads as empty in the sandbox, and opening a denied file fails with "Permission denied".
 - Sandboxed commands refuse policies whose deny-write self-bind would overlap `/proc` or `/dev`, including an ancestor or descendant, to preserve the private process and device mounts.
-  - This includes plan mode when the start directory is `/`.
+  - This includes plan mode when the start directory is `/`, and adding `/` with `/add-dir`.
   - Read-deny masks over those mounts remain supported.
   - A refused command does not run unsandboxed.
 - While sandboxed commands run, a program outside the sandbox that removes a protected path or replaces it by renaming over it, such as an editor's save, lifts the protection on that path for those commands.
@@ -135,8 +136,8 @@ On macOS and Linux, `Bash` runs inside an OS sandbox when it is available (unles
   - Not protected: another symlink on the way to it, a link that is broken at startup, a hard link that already exists, and the link targets of `.mcp.json` files in other folders.
 - A command can move into a write root a directory that already holds a `.mcp.json`, and a folder moved in takes the [trust](trust.md#folder-trust) of its new parent.
 - The files a `.mcp.json` server runs, such as `./server.sh` or `node_modules/.bin/…`, stay writable.
-- In execute mode, sandboxed commands can write anything else in the start directory, so starting Kopi in a directory holding files other programs run, such as the home directory, lets commands change them.
-- Plan mode keeps only the start directory read-only:
+- In execute mode, sandboxed commands can write anything else in the start directory or an added one, so starting Kopi in a directory holding files other programs run, such as the home directory, lets commands change them.
+- Plan mode keeps only the workspace read-only:
   - Commands can still write `/tmp`, the temp directory and `sandbox.allowWrite` paths outside it, and act over the network when `sandbox.network` is true or for hosts in `sandbox.allowDomains`.
   - `kopi -p` runs sandboxed `Bash` without asking in plan mode.
   - Commands started in execute mode, including background tasks and processes they leave running, keep their execute-mode access after a switch to plan mode.

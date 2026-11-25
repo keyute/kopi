@@ -1860,7 +1860,7 @@ func TestSandboxPolicyProtectsHEADWithConcurrentLinuxPlaceholder(t *testing.T) {
 			if exists {
 				e.writeFile(t, head, original)
 			}
-			first, _, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
+			first, _, _, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
 			require.NoError(t, err)
 			require.NotNil(t, first)
 			cmd, done, err := first.Command([]string{"/bin/bash", "-c", `echo ready; read -r _ || true`})
@@ -1883,9 +1883,9 @@ func TestSandboxPolicyProtectsHEADWithConcurrentLinuxPlaceholder(t *testing.T) {
 			require.Equal(t, "ready\n", line)
 			assert.DirExists(t, filepath.Join(e.workspace, ".git"))
 
-			p := sandboxPolicy(config.Sandbox{}, e.workspace, e.home, e.kopiHome)
+			p := sandboxPolicy(config.Sandbox{}, e.workspace, nil, e.home, e.kopiHome)
 			assert.Contains(t, p.DenyWrite, head)
-			second, _, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
+			second, _, _, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
 			require.NoError(t, err)
 			require.NotNil(t, second)
 			attempt, cleanup, err := second.Command([]string{"/bin/bash", "-c", `/bin/mkdir -p objects refs && printf '[core]\n' > config && printf changed > HEAD`})
@@ -1921,7 +1921,7 @@ func TestOpenSandboxFiltersNetworkOnlyWithAllowDomains(t *testing.T) {
 		{"no lists", config.Sandbox{}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			execute, plan, _, err := openSandbox(t.Context(), tc.cfg, e.workspace, e.home, e.kopiHome)
+			execute, plan, _, _, err := openSandbox(t.Context(), tc.cfg, e.workspace, e.home, e.kopiHome)
 			require.NoError(t, err)
 			require.NotNil(t, execute)
 			require.NotNil(t, plan)
@@ -2112,7 +2112,7 @@ func TestSandboxPolicy(t *testing.T) {
 		expanded := []string{absolute, filepath.Join(home, "x"), home, filepath.Join(cwd, "rel")}
 		write := []string{cwd, "/tmp", os.TempDir()}
 
-		p := sandboxPolicy(cfg, cwd, home, kopiHome)
+		p := sandboxPolicy(cfg, cwd, nil, home, kopiHome)
 
 		assert.Equal(t, append(write, expanded...), p.Write)
 		for _, path := range append(p.Write, p.DenyRead...) {
@@ -2128,7 +2128,7 @@ func TestSandboxPolicy(t *testing.T) {
 		cwd := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(cwd, ".git"), []byte("gitdir: /elsewhere\n"), 0o600))
 
-		p := sandboxPolicy(cfg, cwd, home, kopiHome)
+		p := sandboxPolicy(cfg, cwd, nil, home, kopiHome)
 
 		git := linuxGit(cwd)
 		if runtime.GOOS != "linux" {
@@ -2141,7 +2141,7 @@ func TestSandboxPolicy(t *testing.T) {
 	t.Run("no git", func(t *testing.T) {
 		cwd := t.TempDir()
 
-		p := sandboxPolicy(cfg, cwd, home, kopiHome)
+		p := sandboxPolicy(cfg, cwd, nil, home, kopiHome)
 
 		git := linuxGit(cwd)
 		if runtime.GOOS != "linux" {
@@ -2155,7 +2155,7 @@ func TestSandboxPolicy(t *testing.T) {
 		cwd := t.TempDir()
 		require.NoError(t, os.Symlink(t.TempDir(), filepath.Join(cwd, ".git")))
 
-		p := sandboxPolicy(cfg, cwd, home, kopiHome)
+		p := sandboxPolicy(cfg, cwd, nil, home, kopiHome)
 
 		assert.Equal(t, slices.Concat(gitFiles(cwd), linuxGit(cwd), []string{filepath.Join(cwd, ".mcp.json")}), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
@@ -2164,9 +2164,9 @@ func TestSandboxPolicy(t *testing.T) {
 	t.Run("plan", func(t *testing.T) {
 		cwd := t.TempDir()
 		require.NoError(t, os.Mkdir(filepath.Join(cwd, ".git"), 0o755))
-		p := sandboxPolicy(cfg, cwd, home, kopiHome)
+		p := sandboxPolicy(cfg, cwd, nil, home, kopiHome)
 
-		plan := planPolicy(p, cwd)
+		plan := planPolicy(p, cwd, nil)
 
 		assert.Equal(t, slices.Concat(gitFiles(cwd), linuxGit(cwd), []string{filepath.Join(cwd, ".mcp.json"), cwd}), plan.DenyWrite)
 		assert.Equal(t, p.DenyWriteNames, plan.DenyWriteNames)
@@ -2175,6 +2175,109 @@ func TestSandboxPolicy(t *testing.T) {
 		assert.Equal(t, p.Network, plan.Network)
 		plan.DenyWrite[0] = "changed"
 		assert.Equal(t, slices.Concat(gitFiles(cwd), linuxGit(cwd), []string{filepath.Join(cwd, ".mcp.json")}), p.DenyWrite)
+	})
+}
+
+func TestSandboxPolicyAddedDirectories(t *testing.T) {
+	cwd, home, kopiHome := t.TempDir(), t.TempDir(), t.TempDir()
+	first, second := t.TempDir(), t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(first, ".git"), 0o755))
+	cfg := config.Sandbox{AllowWrite: []string{"rel"}}
+
+	p := sandboxPolicy(cfg, cwd, []string{first, second}, home, kopiHome)
+
+	assert.Equal(t, []string{cwd, "/tmp", os.TempDir(), filepath.Join(cwd, "rel"), first, second}, p.Write)
+	for _, dir := range []string{cwd, first, second} {
+		assert.Subset(t, p.DenyWrite, protectedWrites(dir))
+		assert.Contains(t, p.DenyWrite, filepath.Join(dir, ".mcp.json"))
+		assert.Contains(t, p.DenyWrite, filepath.Join(dir, ".git", "config"))
+	}
+	assert.Equal(t, sandboxPolicy(cfg, cwd, nil, home, kopiHome).DenyRead, p.DenyRead)
+
+	plan := planPolicy(p, cwd, []string{first, second})
+
+	assert.Subset(t, plan.DenyWrite, []string{cwd, first, second})
+	assert.Equal(t, p.Write, plan.Write)
+}
+
+func TestOpenSandboxSetDirsIsNilWithoutTheSandbox(t *testing.T) {
+	e := newTestEnv(t)
+	off := false
+
+	sb, plan, setDirs, unavailable, err := openSandbox(t.Context(), config.Sandbox{Enabled: &off}, e.workspace, e.home, e.kopiHome)
+
+	require.NoError(t, err)
+	assert.Nil(t, sb)
+	assert.Nil(t, plan)
+	assert.Nil(t, setDirs)
+	assert.NoError(t, unavailable)
+}
+
+func TestOpenSandboxSetDirsMakesTheDirectoryWritableOnlyInExecuteMode(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	if runtime.GOOS == "linux" {
+		// t.TempDir() is under /tmp there, which is always a write root.
+		t.Setenv("TMPDIR", "/var/tmp")
+	}
+	e := newSandboxedEnv(t)
+	// The temporary directory is a write root, so it must not contain the added one.
+	temp := filepath.Join(e.root, "tmp")
+	require.NoError(t, os.Mkdir(temp, 0o700))
+	t.Setenv("TMPDIR", temp)
+	added := filepath.Join(e.root, "added")
+	require.NoError(t, os.Mkdir(added, 0o700))
+	added = canonical(t, added)
+	execute, plan, setDirs, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
+	require.NoError(t, err)
+	require.NotNil(t, setDirs)
+	attempt := func(sb *sandbox.Sandbox) (string, error) {
+		cmd, cleanup, err := sb.Command([]string{"/bin/bash", "-c", "printf x > " + filepath.Join(added, "f")})
+		require.NoError(t, err)
+		defer cleanup()
+		cmd.Dir = e.workspace
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	_, err = attempt(execute)
+	require.Error(t, err, "before it is added the directory is outside the write roots")
+
+	require.NoError(t, setDirs([]string{added}))
+
+	out, err := attempt(plan)
+	require.Error(t, err, out)
+	assert.Contains(t, out, refused(readOnly))
+	out, err = attempt(execute)
+	require.NoError(t, err, out)
+	assert.FileExists(t, filepath.Join(added, "f"))
+}
+
+func TestCovers(t *testing.T) {
+	home := t.TempDir()
+	t.Run("servers and skills", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(`{"mcpServers":{"b":{"command":"run","args":["x","y"]},"a":{"url":"https://example.com/mcp"},"bad":"nope"}}`), 0o600))
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".agents", "skills"), 0o700))
+
+		servers, skills := covers(dir, home)
+
+		assert.Equal(t, []string{"a: https://example.com/mcp", "b: run x y", "bad: invalid, will not start"}, servers)
+		assert.Equal(t, []string{filepath.Join(dir, ".agents", "skills")}, skills)
+	})
+	t.Run("neither", func(t *testing.T) {
+		servers, skills := covers(t.TempDir(), home)
+
+		assert.Empty(t, servers)
+		assert.Empty(t, skills)
+	})
+	t.Run("unreadable .mcp.json", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte("{"), 0o600))
+
+		servers, _ := covers(dir, home)
+
+		assert.Empty(t, servers)
 	})
 }
 
@@ -2191,7 +2294,7 @@ func TestSandboxPolicyPreservesSymlinkParent(t *testing.T) {
 		{"absolute", cwd + string(filepath.Separator) + "link/../target", cwd + string(filepath.Separator) + "link/../target"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := sandboxPolicy(config.Sandbox{AllowWrite: []string{tc.path}, DenyRead: []string{tc.path}}, cwd, home, kopiHome)
+			p := sandboxPolicy(config.Sandbox{AllowWrite: []string{tc.path}, DenyRead: []string{tc.path}}, cwd, nil, home, kopiHome)
 			assert.Equal(t, tc.want, p.Write[len(p.Write)-1])
 			assert.Equal(t, tc.want, p.DenyRead[len(p.DenyRead)-1])
 		})
@@ -2739,6 +2842,84 @@ func TestRootPrintLoadsInstructionFilesOfATrustedFolder(t *testing.T) {
 	global, project := strings.Index(prompt, "global rule 51c2"), strings.Index(prompt, "project rule 8e07")
 	require.GreaterOrEqual(t, global, 0)
 	assert.Greater(t, project, global)
+}
+
+// addDirRun runs kopi -p with --add-dir dir, the model reading file with Read,
+// and returns the requests the provider got.
+func addDirRun(t *testing.T, e testEnv, dir, file string) (first, second mockRequest) {
+	t.Helper()
+	var calls atomic.Int32
+	server := newMockProvider(t, func(w http.ResponseWriter) {
+		if calls.Add(1) == 1 {
+			streamReads(w, file)
+			return
+		}
+		streamText(w, "done")
+	})
+	e.writeMockModels(t, server.URL)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi", "--add-dir", dir)
+
+	require.NoError(t, err)
+	return server.next(t), server.next(t)
+}
+
+func TestRootPrintAddDirReadsAFileThere(t *testing.T) {
+	e := newTestEnv(t)
+	other := filepath.Join(e.root, "other")
+	file := filepath.Join(other, "note.txt")
+	e.writeFile(t, file, "synthetic note 7c1d\n")
+
+	first, second := addDirRun(t, e, other, file)
+
+	assert.Contains(t, fmt.Sprint(first.body["messages"]), "The workspace also includes "+canonical(t, other))
+	assert.Contains(t, fmt.Sprint(second.body["messages"]), "synthetic note 7c1d")
+}
+
+func TestRootPrintAddDirInstructionFilesFollowTheTrustDecision(t *testing.T) {
+	for _, decision := range []string{"trusted", "untrusted", ""} {
+		t.Run("decision="+decision, func(t *testing.T) {
+			e := newTestEnv(t)
+			other := filepath.Join(e.root, "other")
+			e.writeFile(t, filepath.Join(other, "AGENTS.md"), "other rule 3b9e")
+			e.writeFile(t, filepath.Join(other, "note.txt"), "note")
+			if decision != "" {
+				e.writeTrust(t, other, decision)
+			}
+			trustFile := filepath.Join(e.kopiHome, "trust.json")
+			before, _ := os.ReadFile(trustFile)
+
+			first, _ := addDirRun(t, e, other, filepath.Join(other, "note.txt"))
+
+			assert.Equal(t, decision == "trusted", strings.Contains(fmt.Sprint(first.body["messages"]), "other rule 3b9e"))
+			after, _ := os.ReadFile(trustFile)
+			assert.Equal(t, string(before), string(after))
+		})
+	}
+}
+
+func TestRootAddDirFailsTheStartBeforeAnySessionOpens(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+	file := filepath.Join(e.root, "file")
+	e.writeFile(t, file, "x")
+	require.NoError(t, os.Mkdir(filepath.Join(e.workspace, "sub"), 0o755))
+	for _, tt := range []struct{ name, arg, reason string }{
+		{"missing", filepath.Join(e.root, "missing"), "file does not exist"},
+		{"file", file, "not a directory"},
+		{"inside the start directory", filepath.Join(e.workspace, "sub"), "already in the workspace"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := execute(t, "", "--model", mockModel, "-p", "hi", "--add-dir", tt.arg)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "failed to use --add-dir: failed to add "+tt.arg+": ")
+			assert.Contains(t, err.Error(), tt.reason)
+			assert.Empty(t, server.requests)
+			assert.NoDirExists(t, filepath.Join(e.agentDir, "sessions"))
+		})
+	}
 }
 
 func TestRootPrintSkipsInstructionFilesOfAnUntrustedFolderSilently(t *testing.T) {

@@ -9,7 +9,7 @@
 - A trusted folder's project instruction files are added to the system prompt after the home's `AGENTS.md`.
 - One file per directory, from the directory holding `.git` (a directory or a file) down to the start directory (its symlinks resolved first), outermost first. The start directory alone when none holds `.git`.
 - Each directory's file is `AGENTS.md`, else the first [`instructionFallbacks`](configuration.md#instructionfallbacks) name present. A symlinked file is followed.
-- Instruction files are read once at startup and have no size limit.
+- Instruction files are read once at startup, except an [added directory's](#added-directories), and have no size limit.
 
 ## Folder trust
 
@@ -38,6 +38,19 @@ Answers:
 - Cancelling saves nothing and skips the servers, instruction files and skills for this run.
 - Print mode never asks: in a folder with no decision it skips the `.mcp.json` servers, project instruction files and project skills and warns on stderr.
 - To change a saved answer, remove the folder's entry from `trust.json`.
+
+## Added directories
+
+A folder added with [`/add-dir` or `--add-dir`](usage.md#commands) is trusted or not by the same saved decisions.
+
+- A folder a saved decision covers is added without a question. Trusted, its instruction files go to the model. Untrusted, it has file access only.
+- Any other folder, in the fullscreen interface, asks first. The dialog lists the folder's instruction files and, when the answer is saved, the `.mcp.json` servers and skill folders that the answer would also cover whenever Kopi starts in that folder:
+  - `Yes, and trust this folder` adds it with its instruction files and saves it as trusted in `trust.json`.
+  - `Yes, but don't trust it` adds it with file access only and saves it as not trusted.
+  - `No, don't add` and Esc add nothing and save nothing.
+- For your home directory or the root the dialog does not say the answer is saved, and it holds for this run only.
+- Print mode never asks: it adds a folder no decision covers with file access only and saves nothing.
+- The instruction files are found as for the start directory, one per directory from the one holding `.git` down to the folder. They reach the model in a message, not the system prompt, and only when the folder is trusted. A file the model already has is not sent again.
 
 ## Limitations
 

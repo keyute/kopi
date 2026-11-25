@@ -191,6 +191,75 @@ func TestCommandDoesNotAliasPrefix(t *testing.T) {
 	assert.Equal(t, want[0], b.Args[0])
 }
 
+func TestSetPolicySeatbelt(t *testing.T) {
+	base := t.TempDir()
+	first, second := filepath.Join(base, "first"), filepath.Join(base, "second")
+	s := &Sandbox{prefix: seatbeltPrefix(Policy{Write: []string{first}})}
+	before, doneBefore, err := s.Command([]string{"a"})
+	require.NoError(t, err)
+	defer doneBefore()
+	want := append([]string(nil), before.Args...)
+
+	require.NoError(t, s.SetPolicy(Policy{Write: []string{first, second}}))
+
+	after, doneAfter, err := s.Command([]string{"a"})
+	require.NoError(t, err)
+	defer doneAfter()
+	assert.Equal(t, want, before.Args)
+	assert.Equal(t, append(seatbeltPrefix(Policy{Write: []string{first, second}}), "a"), after.Args)
+	assert.NotEqual(t, want, after.Args)
+}
+
+func TestSetPolicyRejectsRelativePath(t *testing.T) {
+	first := t.TempDir()
+	proxy, err := NewProxy([]string{"example.com"}, nil, nil)
+	require.NoError(t, err)
+	s := &Sandbox{prefix: seatbeltPrefix(Policy{Write: []string{first}}), proxy: proxy}
+	want := append([]string(nil), s.prefix...)
+
+	for _, p := range []Policy{{Write: []string{"rel"}}, {DenyRead: []string{"a/b"}}, {DenyWrite: []string{""}}} {
+		err := s.SetPolicy(p)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "is not absolute")
+	}
+
+	assert.Equal(t, want, s.prefix)
+}
+
+func TestSetPolicyKeepsProxy(t *testing.T) {
+	proxy, err := NewProxy([]string{"example.com"}, nil, nil)
+	require.NoError(t, err)
+	other, err := NewProxy([]string{"other.example"}, nil, nil)
+	require.NoError(t, err)
+	s := &Sandbox{prefix: seatbeltPrefix(Policy{Proxy: proxy}), proxy: proxy}
+	plain := &Sandbox{prefix: seatbeltPrefix(Policy{})}
+	root := t.TempDir()
+
+	require.NoError(t, s.SetPolicy(Policy{Write: []string{root}, Proxy: other}))
+	require.NoError(t, plain.SetPolicy(Policy{Proxy: other}))
+
+	assert.Same(t, proxy, s.proxy)
+	assert.Equal(t, seatbeltPrefix(Policy{Write: []string{root}, Proxy: proxy}), s.prefix)
+	assert.Nil(t, plain.proxy)
+	assert.Equal(t, seatbeltPrefix(Policy{}), plain.prefix)
+}
+
+func TestSetPolicyWriteRoots(t *testing.T) {
+	base := t.TempDir()
+	first, second := filepath.Join(base, "first"), filepath.Join(base, "second")
+	require.NoError(t, os.Mkdir(first, 0o700))
+	require.NoError(t, os.Mkdir(second, 0o700))
+	sb := newSandbox(t, Policy{Write: []string{first}})
+	env := []string{"SECOND=" + second}
+
+	require.Error(t, bash(t, sb, `echo x >"$SECOND/f"`, env...))
+	assert.NoFileExists(t, filepath.Join(second, "f"))
+	require.NoError(t, sb.SetPolicy(Policy{Write: []string{first, second}}))
+
+	require.NoError(t, bash(t, sb, `echo x >"$SECOND/f"`, env...))
+	assert.FileExists(t, filepath.Join(second, "f"))
+}
+
 // newSandbox skips where the platform sandbox cannot run: off macOS and
 // Linux, when the test itself already runs inside a Seatbelt sandbox, or
 // where bubblewrap is missing or cannot make its namespaces.

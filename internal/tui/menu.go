@@ -36,6 +36,13 @@ type menu struct {
 	picked bool
 	// seq numbers the latest load; an older candidatesMsg is dropped.
 	seq int
+	// typed reports that q's command is asked again for every change of the
+	// argument and returns candidates already filtered: items are shown as
+	// given.
+	typed bool
+	// pending reports that a typed load for q.Text has not arrived: the rows
+	// shown are for older text, so none is lit.
+	pending bool
 	// dismissed is the token, Text cleared, that the menu was closed on; it
 	// stays closed until the token changes. Zero means none.
 	dismissed app.Query
@@ -72,7 +79,7 @@ func (m *model) followMenu() tea.Cmd {
 	}
 	var cmd tea.Cmd
 	if !mn.open || q.Kind != prev.Kind || q.Command != prev.Command {
-		mn.items, mn.sel, mn.picked, mn.optional = nil, 0, false, false
+		mn.items, mn.sel, mn.picked, mn.optional, mn.typed, mn.pending = nil, 0, false, false, false, false
 		mn.seq++
 		seq, c := mn.seq, m.c
 		switch q.Kind {
@@ -82,10 +89,8 @@ func (m *model) followMenu() tea.Cmd {
 			}
 		case app.KindArgument:
 			mn.optional = slices.ContainsFunc(c.Commands(), func(cm app.Command) bool { return cm.Name == q.Command && cm.Optional })
-			cmd = func() tea.Msg {
-				cs, err := c.Arguments(q.Command)
-				return candidatesMsg{seq, cs, err}
-			}
+			mn.typed = slices.ContainsFunc(c.Commands(), func(cm app.Command) bool { return cm.Name == q.Command && cm.Typed })
+			cmd = m.ask()
 		case app.KindReference:
 			cmd = func() tea.Msg {
 				cs, err := c.Files()
@@ -94,15 +99,36 @@ func (m *model) followMenu() tea.Cmd {
 		}
 	} else if q.Text != prev.Text || mn.arg != prevArg {
 		mn.sel, mn.picked = 0, false
+		// The rows stay until the reply, so the menu does not blink between keys.
+		if mn.typed && q.Text != prev.Text {
+			mn.seq++
+			cmd = m.ask()
+		}
 	}
 	mn.open = true
 	m.rematch()
 	return cmd
 }
 
+// ask loads the candidates of the argument's command for the text typed so
+// far, as load number seq.
+func (m *model) ask() tea.Cmd {
+	mn := &m.menu
+	mn.pending = mn.typed
+	seq, c, q := mn.seq, m.c, mn.q
+	return func() tea.Msg {
+		cs, err := c.Arguments(q.Command, q.Text)
+		return candidatesMsg{seq, cs, err}
+	}
+}
+
 func (m *model) rematch() {
 	mn := &m.menu
-	mn.shown = app.Match(mn.q, mn.items)
+	if mn.typed {
+		mn.shown = mn.items
+	} else {
+		mn.shown = app.Match(mn.q, mn.items)
+	}
 	mn.sel = min(mn.sel, max(0, len(mn.shown)-1))
 }
 
@@ -110,8 +136,15 @@ func (m *model) loaded(msg candidatesMsg) {
 	if msg.seq != m.menu.seq || !m.menu.open {
 		return
 	}
+	if m.menu.typed {
+		m.menu.pending, m.menu.sel, m.menu.picked = false, 0, false
+	}
 	if msg.err != nil {
 		slog.Warn("failed to load completions", "err", msg.err)
+		if m.menu.typed {
+			m.menu.items = nil
+			m.rematch()
+		}
 		return
 	}
 	m.menu.items = msg.cs
@@ -135,8 +168,12 @@ func (mn *menu) want() int {
 
 // lit reports whether the selected row is the one Enter takes. It is not when
 // the draft already runs as typed: an optional argument left out, or an
-// argument typed in full. Up, Down or Tab lights it.
+// argument typed in full, nor while the rows are for older text. Up, Down or
+// Tab lights it.
 func (mn *menu) lit() bool {
+	if mn.pending {
+		return false
+	}
 	if mn.picked || mn.q.Kind != app.KindArgument {
 		return true
 	}
@@ -248,8 +285,9 @@ func (m *model) menuKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 }
 
 // accept puts the selected candidate in place of the token; with run it then
-// submits, except for a file reference or a command that needs an argument
-// or a skill, which are only ever filled in.
+// submits, except for a file reference, a candidate ending in "/" that is not
+// already the argument as typed, or a command that needs an argument or a
+// skill, which are only ever filled in.
 func (m *model) accept(run bool) tea.Cmd {
 	q, cd := m.menu.q, m.menu.shown[m.menu.sel]
 	var ins string
@@ -264,6 +302,9 @@ func (m *model) accept(run bool) tea.Cmd {
 		}
 	case app.KindArgument:
 		ins = cd.Value
+		if strings.HasSuffix(cd.Value, "/") && cd.Value != m.menu.arg {
+			run = false
+		}
 	case app.KindReference:
 		run = false
 		ins = app.Reference(cd.Value)

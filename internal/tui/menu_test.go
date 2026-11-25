@@ -314,6 +314,129 @@ func TestReferenceMenu(t *testing.T) {
 	})
 }
 
+// loads runs cmd and returns the completions it loads, in order, leaving them
+// undelivered. Run it inside synctest.
+func loads(cmd tea.Cmd) []candidatesMsg {
+	if cmd == nil {
+		return nil
+	}
+	switch msg := cmd().(type) {
+	case tea.BatchMsg:
+		var out []candidatesMsg
+		for _, c := range msg {
+			out = append(out, loads(c)...)
+		}
+		return out
+	case candidatesMsg:
+		return []candidatesMsg{msg}
+	}
+	return nil
+}
+
+func deliver(m *model, msgs ...candidatesMsg) {
+	for _, msg := range msgs {
+		m.Update(msg)
+	}
+}
+
+func newTypedMenuModel(t *testing.T) (*model, *fakeController) {
+	t.Helper()
+	m, c := newMenuModel(t, 60, 30)
+	c.commands = append(c.commands, app.Command{Name: "add-dir", Argument: true, Typed: true})
+	dirs := map[string][]string{
+		"":                {"../kopi.sandbox/", "../pig/", "../tap/"},
+		"../pi":           {"../pig/"},
+		"../pig":          {"../pig/"},
+		"../pig/":         {"../pig/", "../pig/docs/", "../pig/internal/"},
+		"../pig/docs/":    {"../pig/docs/"},
+		"../pig/internal": {"../pig/internal/"},
+	}
+	c.typedArgs = map[string]func(string) []app.Candidate{"add-dir": func(typed string) []app.Candidate {
+		var cs []app.Candidate
+		for _, d := range dirs[typed] {
+			cs = append(cs, app.Candidate{Value: d})
+		}
+		return cs
+	}}
+	return m, c
+}
+
+func TestTypedArgumentMenu(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTypedMenuModel(t)
+		settle(m, keys(m, "/add-dir "))
+		assert.Equal(t, []string{"❭ ../kopi.sandbox/", "  ../pig/", "  ../tap/"}, menuText(m))
+		assert.Equal(t, []string{"add-dir "}, c.asks)
+
+		settle(m, keys(m, "../pi"))
+		assert.Equal(t, []string{"❭ ../pig/"}, menuText(m), "the reply is shown as given")
+		assert.Equal(t, "add-dir ../pi", c.asks[len(c.asks)-1], "every change asks again")
+
+		// A step fills in without running, and the next level is asked.
+		cmd := press(m, tab)
+		assert.Equal(t, "/add-dir ../pig/", m.composer.value())
+		assert.Empty(t, c.submitted)
+		assert.Equal(t, []string{"  ../pig/"}, menuText(m), "the rows stay, unlit, until the reply")
+
+		press(m, tab)
+		assert.Equal(t, "/add-dir ../pig/", m.composer.value(), "no row is taken while the reply is pending")
+
+		settle(m, cmd)
+		assert.Equal(t, "add-dir ../pig/", c.asks[len(c.asks)-1])
+		assert.Equal(t, []string{"  ../pig/", "  ../pig/docs/", "  ../pig/internal/"}, menuText(m), "the typed directory is first and runs as typed")
+		assert.Zero(t, m.menu.sel)
+		assert.False(t, m.menu.picked)
+
+		press(m, down)
+		press(m, down)
+		settle(m, press(m, enter))
+		assert.Equal(t, "/add-dir ../pig/docs/", m.composer.value(), "enter on a step fills it in")
+		assert.Empty(t, c.submitted)
+		assert.Equal(t, "add-dir ../pig/docs/", c.asks[len(c.asks)-1])
+	})
+}
+
+func TestTypedArgumentMenuDropsAStaleReply(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTypedMenuModel(t)
+		settle(m, keys(m, "/add-dir ../pi"))
+		older := loads(press(m, tea.KeyPressMsg{Code: 'g', Text: "g"}))
+		newer := loads(press(m, tea.KeyPressMsg{Code: '/', Text: "/"}))
+		require.Len(t, older, 1)
+		require.Len(t, newer, 1)
+
+		deliver(m, newer...)
+		deliver(m, older...)
+
+		assert.Equal(t, []string{"  ../pig/", "  ../pig/docs/", "  ../pig/internal/"}, menuText(m))
+	})
+}
+
+func TestTypedArgumentMenuEnterSendsTheDraftWhilePendingAndWhenTypedInFull(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTypedMenuModel(t)
+		settle(m, keys(m, "/add-dir ../pi"))
+		keys(m, "g/")
+
+		press(m, enter)
+		assert.Equal(t, []string{"/add-dir ../pig/"}, c.submitted, "the row listed for older text is not taken")
+
+		m, c = newTypedMenuModel(t)
+		settle(m, keys(m, "/add-dir ../pig/"))
+		press(m, enter)
+		assert.Equal(t, []string{"/add-dir ../pig/"}, c.submitted, "a directory typed in full is added as typed")
+	})
+}
+
+func TestListArgumentIsLoadedOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTypedMenuModel(t)
+		settle(m, keys(m, "/resume d"))
+		assert.Equal(t, []string{"❭ 1d ago      add tests"}, menuText(m))
+		assert.Equal(t, []string{"resume "}, c.asks)
+	})
+}
+
 func TestMidTokenReferenceCompletionKeepsFollowingLine(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, c := newMenuModel(t, 60, 30)

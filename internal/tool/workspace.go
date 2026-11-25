@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/keyute/kopi/internal/policy"
@@ -43,6 +44,16 @@ type Workspace struct {
 	// outputs, when set, makes the session's saved output files reachable, read
 	// only, although they lie in a protected store.
 	outputs *Outputs
+	// more lists the directories added after start; copies of the base
+	// workspace share it, so a copy made before an add reaches them too.
+	more *added
+	// extra marks a view of an added directory: results give absolute paths.
+	extra bool
+}
+
+type added struct {
+	mu   sync.Mutex
+	dirs []*Workspace
 }
 
 // WithOutputs returns a copy of w that also reaches o's saved output files.
@@ -77,7 +88,7 @@ func NewWorkspace(dir string, protected []string) (*Workspace, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open workspace %s: %w", dir, err)
 	}
-	return &Workspace{root: root, given: given, realDir: realDir, protected: protected}, nil
+	return &Workspace{root: root, given: given, realDir: realDir, protected: protected, more: &added{}}, nil
 }
 
 func (w *Workspace) Open(path string) (*os.File, error) {
@@ -121,7 +132,128 @@ func (w *Workspace) absolute(path string) string {
 	return filepath.Join(w.given, path)
 }
 
-func (w *Workspace) Close() error { return w.root.Close() }
+// Close closes the start directory and every added one.
+func (w *Workspace) Close() error {
+	w.more.mu.Lock()
+	defer w.more.mu.Unlock()
+	errs := []error{w.root.Close()}
+	for _, d := range w.more.dirs {
+		errs = append(errs, d.root.Close())
+	}
+	return errors.Join(errs...)
+}
+
+// CanAdd reports why dir, an absolute path as typed, cannot join the workspace:
+// ErrInWorkspace when it lies in the start directory or an added one,
+// ErrProtected when it is or lies in a protected path, ErrNotDirectory, or a
+// stat error such as fs.ErrNotExist. A parent of an existing root is accepted.
+func (w *Workspace) CanAdd(dir string) error {
+	w.more.mu.Lock()
+	defer w.more.mu.Unlock()
+	return w.canAdd(dir)
+}
+
+// Add makes a directory part of the workspace after the checks of CanAdd,
+// which share its lock section so concurrent adds of one directory cannot both
+// pass. given is the absolute path as the human spelled it and real its
+// canonical path (symlinks resolved, names as on disk), which is what results
+// name; either spelling reaches the directory.
+func (w *Workspace) Add(given, real string) error {
+	if !filepath.IsAbs(real) {
+		return fmt.Errorf("directory %q is not absolute", real)
+	}
+	w.more.mu.Lock()
+	defer w.more.mu.Unlock()
+	if err := w.canAdd(given); err != nil {
+		return err
+	}
+	a, err := os.Stat(given)
+	if err != nil {
+		return fmt.Errorf("failed to stat %s: %w", given, err)
+	}
+	b, err := os.Stat(real)
+	if err != nil {
+		return fmt.Errorf("failed to stat %s: %w", real, err)
+	}
+	if !os.SameFile(a, b) {
+		return fmt.Errorf("%s is not the directory %s", real, given)
+	}
+	d, err := NewWorkspace(real, w.protected)
+	if err != nil {
+		return err
+	}
+	d.given = filepath.Clean(given)
+	w.more.dirs = append(w.more.dirs, d)
+	return nil
+}
+
+func (w *Workspace) canAdd(dir string) error {
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err == nil {
+		var info os.FileInfo
+		if info, err = os.Stat(resolved); err == nil && !info.IsDir() {
+			return ErrNotDirectory
+		}
+	}
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return fs.ErrNotExist
+	case errors.Is(err, syscall.ENOTDIR):
+		return ErrNotDirectory
+	case err != nil:
+		return fmt.Errorf("failed to resolve %s: %w", dir, err)
+	}
+	for _, root := range append([]*Workspace{w}, w.more.dirs...) {
+		// APFS is case-insensitive, so darwin compares case-folded.
+		base, target := root.realDir, resolved
+		if runtime.GOOS == "darwin" {
+			base, target = strings.ToLower(base), strings.ToLower(target)
+		}
+		if rel, err := filepath.Rel(base, target); err == nil && filepath.IsLocal(rel) {
+			return ErrInWorkspace
+		}
+	}
+	stores, err := w.statProtected()
+	if err != nil {
+		return err
+	}
+	if _, ok, err := insideStore(resolved, stores); err != nil {
+		return err
+	} else if ok {
+		return ErrProtected
+	}
+	return nil
+}
+
+// in returns the view whose directory holds path: w for a relative path or one
+// in the start directory, else a copy of the first added directory that holds
+// it, else w, which refuses the path as outside the workspace. A view keeps the
+// plan and output files reachable.
+func (w *Workspace) in(path string) *Workspace {
+	if _, err := w.relative(path); err == nil {
+		return w
+	}
+	w.more.mu.Lock()
+	dirs := slices.Clone(w.more.dirs)
+	w.more.mu.Unlock()
+	for _, d := range dirs {
+		if _, err := d.relative(path); err == nil {
+			v := *d
+			v.plans, v.outputs, v.more, v.extra = w.plans, w.outputs, w.more, true
+			return &v
+		}
+	}
+	return w
+}
+
+// named is p, a slash-separated path below the workspace directory, as a result
+// names it: absolute in a view of an added directory.
+func (w *Workspace) named(p string) string {
+	if !w.extra {
+		return p
+	}
+	return filepath.Join(w.realDir, filepath.FromSlash(p))
+}
 
 // Target applies no confinement: the permission rules and the tool's own Run
 // decide what may be touched. Real is walked as Open and WriteFile walk it, so
@@ -603,19 +735,26 @@ func (w *Workspace) resolve(rel string) (string, bool, error) {
 	isProtected := func(info os.FileInfo) bool { return isStore(stores, info) }
 	// The workspace may itself lie inside a store. Every ancestor of a later
 	// step is one of these or an earlier step, so steps need no ancestor walk.
-	for p := w.realDir; ; p = filepath.Dir(p) {
+	if p, ok, err := insideStore(w.realDir, stores); err != nil || ok {
+		return p, ok, err
+	}
+	return walk(w.realDir, rel, isProtected)
+}
+
+// insideStore returns the first of dir and its ancestors that is one of stores.
+func insideStore(dir string, stores []os.FileInfo) (string, bool, error) {
+	for p := dir; ; p = filepath.Dir(p) {
 		info, err := os.Stat(p)
 		if err != nil {
 			return "", false, fmt.Errorf("failed to stat %s: %w", p, err)
 		}
-		if isProtected(info) {
+		if isStore(stores, info) {
 			return p, true, nil
 		}
 		if filepath.Dir(p) == p {
-			break
+			return "", false, nil
 		}
 	}
-	return walk(w.realDir, rel, isProtected)
 }
 
 // walk follows path from dir, a real directory, one component at a time as

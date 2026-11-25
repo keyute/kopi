@@ -3234,7 +3234,7 @@ func assertInertAfterClose(t *testing.T, h *harness) {
 		_, err := h.c.Submit(t.Context(), Main, cmd)
 		assert.ErrorIs(t, err, ErrNoSession, cmd)
 	}
-	cs, err := h.c.Arguments("resume")
+	cs, err := h.c.Arguments("resume", "")
 	require.NoError(t, err)
 	assert.Nil(t, cs)
 	h.c.EnterExecute()

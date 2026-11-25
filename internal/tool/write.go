@@ -45,7 +45,8 @@ func NewWrite(ws *Workspace) Tool {
 			if err := ctx.Err(); err != nil {
 				return Result{}, err
 			}
-			dest, err := ws.prepare(args.FilePath)
+			v := ws.in(args.FilePath)
+			dest, err := v.prepare(args.FilePath)
 			if err != nil {
 				return Result{}, err
 			}
@@ -53,7 +54,7 @@ func NewWrite(ws *Workspace) Tool {
 			if _, err := admit(dest.target); err != nil {
 				return Result{}, err
 			}
-			if err := dest.write(ws, []byte(*args.Content)); err != nil {
+			if err := dest.write(v, []byte(*args.Content)); err != nil {
 				return Result{}, err
 			}
 			return Result{Text: fmt.Sprintf("wrote %s to %s", lineCount(countLines(*args.Content)), args.FilePath)}, nil

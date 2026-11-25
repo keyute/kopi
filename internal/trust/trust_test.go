@@ -121,6 +121,57 @@ func TestLookupMatchesAFolderTypedInAnotherCase(t *testing.T) {
 	assert.Equal(t, child, got)
 }
 
+func TestBroadIsHomeOrRoot(t *testing.T) {
+	root := tempDir(t)
+	home := mkdir(t, root, "home")
+	project := mkdir(t, home, "project")
+	link := filepath.Join(root, "homelink")
+	require.NoError(t, os.Symlink(home, link))
+	slash := string(filepath.Separator)
+
+	for _, tc := range []struct {
+		name, dir string
+		want      bool
+	}{
+		{"home", home, true},
+		{"home through a symlink", link, true},
+		{"root", slash, true},
+		{"folder under home", project, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Broad(tc.dir, home)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+
+	t.Run("home given through a symlink", func(t *testing.T) {
+		got, err := Broad(home, link)
+		require.NoError(t, err)
+		assert.True(t, got)
+	})
+	t.Run("missing folder", func(t *testing.T) {
+		_, err := Broad(filepath.Join(root, "absent"), home)
+		assert.Error(t, err)
+	})
+}
+
+func TestBroadMatchesHomeTypedInAnotherCase(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("case-insensitive folders are checked on darwin")
+	}
+	root := tempDir(t)
+	home := mkdir(t, root, "home")
+	if _, err := os.Stat(filepath.Join(root, "HOME")); err != nil {
+		t.Skip("the temporary directory is on a case-sensitive volume")
+	}
+
+	got, err := Broad(filepath.Join(root, "HOME"), home)
+
+	require.NoError(t, err)
+	assert.True(t, got)
+}
+
 func TestSymlinkedPathResolvesToSameEntry(t *testing.T) {
 	root := tempDir(t)
 	project := mkdir(t, root, "project")

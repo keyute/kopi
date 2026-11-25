@@ -677,3 +677,28 @@ func TestGrepRefusesSameInodeSwapDuringHiddenCheck(t *testing.T) {
 		})
 	}
 }
+
+func TestGrepSearchesAnAddedDirectoryWithAbsoluteResults(t *testing.T) {
+	dir := t.TempDir()
+	ws := newWorkspace(t, dir, nil)
+	other := t.TempDir()
+	writeFile(t, filepath.Join(other, "sub", "a.txt"), "needle\n")
+	writeFile(t, filepath.Join(dir, "start.txt"), "needle\n")
+	tool := NewGrep(ws, nil)
+	file := filepath.Join(realPath(t, other), "sub", "a.txt")
+	args := fmt.Sprintf(`{"pattern":"needle","path":%q}`, other)
+
+	_, err := runGrep(t, tool, args)
+	require.ErrorIs(t, err, ErrOutsideWorkspace)
+	require.NoError(t, ws.Add(other, realPath(t, other)))
+
+	out, err := runGrep(t, tool, args)
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 file\n"+file+"\n", out)
+	out, err = runGrep(t, tool, fmt.Sprintf(`{"pattern":"needle","path":%q,"output_mode":"content"}`, filepath.Join(other, "sub", "a.txt")))
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 match in 1 file\n"+file+":1:needle\n", out)
+	out, err = runGrep(t, tool, `{"pattern":"needle","output_mode":"count"}`)
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 match in 1 file\nstart.txt:1\n", out)
+}

@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"sync"
 
 	"github.com/keyute/kopi/internal/policy"
 )
@@ -36,9 +37,10 @@ type Policy struct {
 
 // Sandbox runs commands under one Policy.
 type Sandbox struct {
-	prefix []string // macOS: the sandbox-exec argv
-	bwrap  *bwrap   // Linux
-	proxy  *Proxy   // the policy's Proxy
+	mu     sync.Mutex // guards prefix and bwrap, which SetPolicy replaces
+	prefix []string   // macOS: the sandbox-exec argv
+	bwrap  *bwrap     // Linux
+	proxy  *Proxy     // the policy's Proxy
 }
 
 // New checks once that the platform sandbox works and builds one Sandbox per
@@ -138,11 +140,14 @@ func (s *Sandbox) FiltersNetwork() bool { return s.proxy != nil }
 // reaped or if it never starts. done returns the destinations the policy's
 // proxy refused for this command, nil without a proxy.
 func (s *Sandbox) Command(argv []string) (cmd *exec.Cmd, done func() []string, err error) {
-	if s.bwrap != nil {
-		return s.bwrap.command(argv)
+	s.mu.Lock()
+	b, sbPrefix := s.bwrap, s.prefix
+	s.mu.Unlock()
+	if b != nil {
+		return b.command(argv)
 	}
 	if s.proxy == nil {
-		full := slices.Concat(s.prefix, argv)
+		full := slices.Concat(sbPrefix, argv)
 		return exec.Command(full[0], full[1:]...), func() []string { return nil }, nil
 	}
 	l4, l6, err := listenLoopback()
@@ -152,11 +157,38 @@ func (s *Sandbox) Command(argv []string) (cmd *exec.Cmd, done func() []string, e
 	port := l4.Addr().(*net.TCPAddr).Port
 	session := s.proxy.serve(l4, l6)
 	// The profile's PROXY parameter is the last one before the trailing "--".
-	prefix := slices.Insert(slices.Clone(s.prefix), len(s.prefix)-1, "-DPROXY=localhost:"+strconv.Itoa(port))
+	prefix := slices.Insert(slices.Clone(sbPrefix), len(sbPrefix)-1, "-DPROXY=localhost:"+strconv.Itoa(port))
 	full := slices.Concat(prefix, argv)
 	cmd = exec.Command(full[0], full[1:]...)
 	cmd.Env = append(os.Environ(), proxyEnv(port)...)
 	return cmd, session.close, nil
+}
+
+// SetPolicy makes p the policy of commands started from now on; a running one
+// keeps its own. The proxy stays the one the sandbox was made with. On an
+// error the sandbox keeps its policy.
+func (s *Sandbox) SetPolicy(p Policy) error {
+	if err := checkAbsolute([]Policy{p}); err != nil {
+		return err
+	}
+	p.Proxy = s.proxy
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.bwrap == nil {
+		s.prefix = seatbeltPrefix(p)
+		return nil
+	}
+	if err := checkHelper([]Policy{p}); err != nil {
+		return err
+	}
+	// Only the argument building: placeholders are made by a command's start.
+	if _, _, err := bwrapArgs(p); err != nil {
+		return err
+	}
+	next := *s.bwrap
+	next.policy = p
+	s.bwrap = &next
+	return nil
 }
 
 // listenLoopback listens on the same port on 127.0.0.1 and [::1]: Seatbelt's

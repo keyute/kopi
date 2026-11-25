@@ -52,6 +52,7 @@ func NewLS(ws *Workspace, hidden Hidden) Tool {
 			if err := ctx.Err(); err != nil {
 				return Result{}, err
 			}
+			ws := ws.in(args.Path)
 			root, rel, info, err := ws.searchRoot(args.Path)
 			if err != nil {
 				return Result{}, err
