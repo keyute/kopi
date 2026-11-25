@@ -155,13 +155,13 @@ Each tool call is a row. It names the call by the tool while it runs, while it w
       b.go
 ▾ Read 1 file, ran 1 command
   ↳ Read a.go:98-101 · 4 lines
-         98  func a() {
-         99      b()
-        100  }
-        101
+       98  func a() {
+       99      b()
+      100  }
+      101
   ↳ Ran ls · 2 lines
-        a.go
-        b.go
+      a.go
+      b.go
 • Edited a.go
   ↳ +1 -1
       - old line

@@ -123,7 +123,7 @@ func (o *outline) title(glyph string, gs lipgloss.Style, text string, ts lipglos
 
 func (o *outline) under(text string, style lipgloss.Style, h hit) {
 	o.rows = append(o.rows, withHit(h, under(text, style, o.width))...)
-	o.col = 2 * step
+	o.col = step + lipgloss.Width("↳ ")
 }
 
 // bodyWidth is the width for drawing rows that body places.
@@ -228,18 +228,18 @@ func renderRow(c transcript.Call, f blockFolds, width int, th theme) *outline {
 		switch {
 		case text == "":
 		case omitted == 0 || f.expanded[0]:
-			o.body(bodyLines(text, w, th))
+			o.body(bodyLines(text, fg(th.muted), w))
 		default:
-			o.body(bodyLines(strings.Join(head, "\n"), w, th))
-			o.body(moreRow(fmt.Sprintf("… %d more lines", omitted), w, th))
-			o.body(bodyLines(strings.Join(tail, "\n"), w, th))
+			o.body(bodyLines(strings.Join(head, "\n"), fg(th.muted), w))
+			o.body(bodyLines(fmt.Sprintf("… %d more lines", omitted), fg(th.dim), w))
+			o.body(bodyLines(strings.Join(tail, "\n"), fg(th.muted), w))
 		}
 	default:
 		if f.expanded[0] {
 			o.body(commandLines(c, w, th))
 		}
 		if c.State == transcript.Rejected {
-			o.body(bodyLines(bodyText(c.Body), w, th))
+			o.body(bodyLines(bodyText(c.Body), fg(th.muted), w))
 		}
 	}
 	return o
@@ -301,7 +301,7 @@ func under(text string, style lipgloss.Style, width int) []string {
 func opened(c transcript.Call, width int, th theme) []line {
 	out := commandLines(c, width, th)
 	if len(c.Preview) == 0 {
-		return append(out, bodyLines(bodyText(c.Body), width, th)...)
+		return append(out, bodyLines(bodyText(c.Body), fg(th.muted), width)...)
 	}
 	return append(out, plain(previewRows(c.Preview, width, th))...)
 }
@@ -317,16 +317,11 @@ func commandLines(c transcript.Call, width int, th theme) []line {
 }
 
 // bodyLines draws text flush left.
-func bodyLines(text string, width int, th theme) []line {
+func bodyLines(text string, style lipgloss.Style, width int) []line {
 	if text == "" {
 		return nil
 	}
-	return plain(hang("", fg(th.muted), text, fg(th.muted), width))
-}
-
-// moreRow is the row that says how many lines of a body are not drawn.
-func moreRow(text string, width int, th theme) []line {
-	return plain(hang("", fg(th.dim), text, fg(th.dim), width))
+	return plain(hang("", style, text, style, width))
 }
 
 // bodyText prepares a command's output for drawing: a carriage return redraws
@@ -380,7 +375,7 @@ func renderTurn(t transcript.Turn, v verb, width int, th theme) []line {
 	o := &outline{width: width}
 	o.title("κ ", c, text, c, hit{})
 	if t.Outcome.Message != "" {
-		o.body(plain(hang("", fg(th.error), t.Outcome.Message, fg(th.error), o.bodyWidth())))
+		o.body(bodyLines(t.Outcome.Message, fg(th.error), o.bodyWidth()))
 	}
 	return o.rows
 }
@@ -419,7 +414,7 @@ func renderTask(t transcript.Task, expanded bool, width int, th theme) []line {
 		o.under(strings.Join(parts, " · "), lineStyle, hit{})
 	}
 	if expanded {
-		o.body(bodyLines(result, o.bodyWidth(), th))
+		o.body(bodyLines(result, fg(th.muted), o.bodyWidth()))
 	}
 	return o.rows
 }
@@ -455,7 +450,13 @@ func commandRows(c event.UserCommand, o commandOptions, width int, th theme) []l
 	if output != "" {
 		h = o.Hit
 	}
-	commandHint(out, h, c, o, th)
+	text, style, exit := commandHint(c, o, th)
+	first := len(out.rows)
+	out.under(text, style, h)
+	if exit != nil {
+		// The exit text leads the hint, so it sits on the first row unless the width cuts it.
+		out.rows[first].text = lipgloss.StyleRanges(out.rows[first].text, lipgloss.NewRange(out.col, out.col+lipgloss.Width(c.Exit), *exit))
+	}
 
 	if output == "" {
 		return out.rows
@@ -463,14 +464,16 @@ func commandRows(c event.UserCommand, o commandOptions, width int, th theme) []l
 	ls := strings.Split(output, "\n")
 	if !o.Expanded && len(ls) > o.Lines {
 		omitted := len(ls) - o.Lines
-		out.body(moreRow(fmt.Sprintf("… %d earlier lines", omitted), out.bodyWidth(), th))
+		out.body(bodyLines(fmt.Sprintf("… %d earlier lines", omitted), fg(th.dim), out.bodyWidth()))
 		ls = ls[omitted:]
 	}
-	out.body(bodyLines(strings.Join(ls, "\n"), out.bodyWidth(), th))
+	out.body(bodyLines(strings.Join(ls, "\n"), fg(th.muted), out.bodyWidth()))
 	return out.rows
 }
 
-func commandHint(out *outline, h hit, c event.UserCommand, o commandOptions, th theme) {
+// commandHint is the hint row's text and style; exit is the style of the exit
+// word when it is coloured apart from the rest.
+func commandHint(c event.UserCommand, o commandOptions, th theme) (text string, style lipgloss.Style, exit *lipgloss.Style) {
 	// since is " · 12s" or "" under a second.
 	since := func(sep string, d time.Duration) string {
 		if d < time.Second {
@@ -485,7 +488,7 @@ func commandHint(out *outline, h hit, c event.UserCommand, o commandOptions, th 
 	_, running := toneRunning.styles(th)
 	switch c.State {
 	case event.CommandQueued:
-		out.under("queued", running, h)
+		return "queued", running, nil
 	case event.CommandRunning:
 		text := "running" + since(" ", o.Elapsed)
 		if o.BackgroundKey != "" {
@@ -494,27 +497,20 @@ func commandHint(out *outline, h hit, c event.UserCommand, o commandOptions, th 
 		if o.StopKey != "" {
 			text += " · " + o.StopKey + " to stop"
 		}
-		out.under(text, running, h)
+		return text, running, nil
 	case event.CommandExited:
 		text := c.Exit + since(" · ", c.Elapsed) + unread
 		if c.Failed {
 			_, failed := toneFailed.styles(th)
-			out.under(text, failed, h)
-			return
+			return text, failed, nil
 		}
 		word, okLine := toneOK.styles(th)
-		first := len(out.rows)
-		out.under(text, okLine, h)
-		// The exit text leads the hint, so it sits on the first row unless the width cuts it.
-		start := 2 * step
-		out.rows[first].text = lipgloss.StyleRanges(out.rows[first].text, lipgloss.NewRange(start, start+lipgloss.Width(c.Exit), word))
+		return text, okLine, &word
 	case event.CommandStopped:
-		text := "stopped" + since(" after ", c.Elapsed) + unread
 		_, stopped := toneRefused.styles(th)
-		out.under(text, stopped, h)
-	default:
-		out.under("moved to background"+since(" after ", c.Elapsed), running, h)
+		return "stopped" + since(" after ", c.Elapsed) + unread, stopped, nil
 	}
+	return "moved to background" + since(" after ", c.Elapsed), running, nil
 }
 
 // formatDuration renders d as "41s", "1m 12s" or "1h 2m".

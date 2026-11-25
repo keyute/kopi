@@ -422,6 +422,17 @@ func TestFailedTurnShowsItsReason(t *testing.T) {
 	}
 }
 
+func TestFailedTurnWrapsItsReasonFourIn(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	send(m, event.TurnEnd{Outcome: event.Outcome{Status: event.Failed, Message: strings.Repeat("rate limited ", 6)}})
+	rows := body(m)
+	require.Greater(t, len(rows), 3)
+	for _, l := range rows[2:] {
+		assert.True(t, strings.HasPrefix(l, "    ") && !strings.HasPrefix(l, "     "), "%q is four in", l)
+		assert.LessOrEqual(t, ansi.StringWidth(l), 40, "%q fits the width", l)
+	}
+}
+
 func TestNoticeAndErrorContinueTwoIn(t *testing.T) {
 	m, _ := newTestModel(t, 40, 30)
 

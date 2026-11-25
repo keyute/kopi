@@ -206,6 +206,13 @@ func TestShellRowOpensToItsOutput(t *testing.T) {
 	assert.Equal(t, []string{"", "• shell finished · make build · 12s", "    step 2", "    built"}, body(m))
 }
 
+func TestTaskRowWithAReasonOpensToItsResultSixIn(t *testing.T) {
+	m, _ := newTestModel(t, 60, 20)
+	send(m, event.TaskEnded{ID: "t1", Command: "make build", Status: "failed", Elapsed: 12 * time.Second, Reason: "exit 2", Result: "boom"})
+	clickText(t, m, "• shell failed · make build · 12s")
+	assert.Equal(t, []string{"", "• shell failed · make build · 12s", "  ↳ exit 2", "      boom"}, body(m))
+}
+
 func TestAgentTaskRowOpensToItsReply(t *testing.T) {
 	m, _ := newTestModel(t, 60, 20)
 	send(m, event.TaskEnded{ID: "t3", Agent: "explore", Command: "look around", Status: "completed", Elapsed: 134 * time.Second, Result: "found it"})
@@ -362,7 +369,7 @@ func TestTaskRowCutsALongCommand(t *testing.T) {
 func TestPlanRowDrawsItsPlanWhileRunningAndOnlyWhenOpenedAfter(t *testing.T) {
 	var tr transcript.Transcript
 	tr.Apply(event.ToolStart{CallID: "p", Name: "ExitPlanMode", Title: "Plan approval", Solo: true})
-	tr.Apply(event.PlanRequested{Token: 1, Plan: "# Heading\n\n- first step"})
+	tr.Apply(event.PlanRequested{Token: 1, Plan: "# Heading\n\nfirst step " + strings.Repeat("word ", 30)})
 	var c renderCache
 	text := func(f blockFolds) []string {
 		var out []string
@@ -384,7 +391,7 @@ func TestPlanRowDrawsItsPlanWhileRunningAndOnlyWhenOpenedAfter(t *testing.T) {
 	assert.Contains(t, joined, "Heading")
 	assert.Contains(t, joined, "first step")
 
-	tr.Apply(event.PlanRequested{Token: 1, Plan: "# Heading\n\n- second step"})
+	tr.Apply(event.PlanRequested{Token: 1, Plan: "# Heading\n\nsecond step " + strings.Repeat("word ", 30)})
 	joined = strings.Join(text(blockFolds{}), "\n")
 	assert.Contains(t, joined, "second step")
 	assert.NotContains(t, joined, "first step")
@@ -402,6 +409,12 @@ func TestPlanRowDrawsItsPlanWhileRunningAndOnlyWhenOpenedAfter(t *testing.T) {
 	assert.Equal(t, []string{"• Plan approval", "  ↳ revision requested", "      split step 2"}, opened[:3])
 	assert.Contains(t, strings.Join(opened[3:], "\n"), "second step", "the plan follows the feedback")
 	assert.Equal(t, []string{"• Plan approval", "  ↳ revision requested", "      split step 2"}, text(closed), "closing takes the plan away")
+	for _, l := range opened[3:] {
+		if l != "" {
+			assert.True(t, strings.HasPrefix(l, "      "), "%q is six in", l)
+			assert.LessOrEqual(t, ansi.StringWidth(l), 40, "%q fits the width", l)
+		}
+	}
 
 	var bare transcript.Transcript
 	bare.Apply(event.ToolStart{CallID: "q", Name: "ExitPlanMode", Title: "Plan approval", Solo: true})
@@ -464,7 +477,7 @@ func TestPlanRowRewrapsWhenTheWidthChanges(t *testing.T) {
 	narrow, wide := planLines(40), planLines(80)
 	assert.Less(t, len(wide), len(narrow))
 	for _, l := range wide {
-		assert.LessOrEqual(t, ansi.StringWidth(l), 74, "%q fits the width less the indent", l)
+		assert.LessOrEqual(t, ansi.StringWidth(l), 76, "%q fits the width less the indent", l)
 	}
 }
 
@@ -755,9 +768,9 @@ func TestFailedRowWithACommandAndAShortBodyOpens(t *testing.T) {
 }
 
 func commandHintRows(c event.UserCommand, o commandOptions, th theme) []string {
-	out := &outline{width: 80}
-	commandHint(out, hit{}, c, o, th)
-	return lineTexts(out.rows)
+	rows := lineTexts(commandRows(c, o, 80, th))
+	blank := slices.Index(rows, "")
+	return rows[blank+1:]
 }
 
 func lineTexts(ls []line) []string {
@@ -857,6 +870,7 @@ func TestCommandRowsBox(t *testing.T) {
 	assert.Contains(t, got[1].text, commandShade(th).Foreground(th.text).Render("ls -la"+strings.Repeat(" ", 12)))
 	assert.Equal(t, line{}, got[3], "a blank row follows the box")
 	assert.Equal(t, "  ↳ exit 0", ansi.Strip(got[4].text))
+	assert.Contains(t, got[4].text, fg(th.success).Render("exit 0"))
 	assert.Len(t, got, 5, "no output, no rows")
 }
 
