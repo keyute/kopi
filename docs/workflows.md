@@ -79,7 +79,7 @@ The 1000 calls and the memory limit are fixed.
 ### Viewing an agent
 
 - The transcript switches to that agent's session, drawn like any session. The view is watch-only: nothing can be typed, sent or queued to the agent, and Esc returns to the dialog on the same agent.
-- The status line shows that agent's model and context while it is viewed.
+- The status line is hidden while the agent is viewed, as under any dialog.
 - A running agent's view follows it live; an ended agent's is read from its saved transcript.
 - An agent that never started (still queued, or failed before its session opened) has no transcript: Enter shows why instead.
 
