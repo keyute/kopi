@@ -890,6 +890,34 @@ func TestSetDirsExtendsRelativeAndBareRulesOnly(t *testing.T) {
 	assert.Equal(t, effectDeny, eff)
 }
 
+func TestSetDirsDoesNotExtendRulesThatClimbOut(t *testing.T) {
+	d := newDirs(t)
+	extra := filepath.Join(addedDir(t), "proj") // its parent is not the start directory's
+	require.NoError(t, os.Mkdir(extra, 0o755))
+	r := d.rules(t, Source{Name: "config", Allow: []string{"Edit(../shared/**)", "Edit(a/../../x)", "Edit(docs/**)"}})
+	r.SetDirs([]string{extra})
+
+	for _, p := range []string{filepath.Join(extra, "../shared/a"), filepath.Join(extra, "../x")} {
+		eff, _, _ := r.decide("Edit", at(p))
+		assert.Equal(t, effectNone, eff, p)
+	}
+	eff, _, _ := r.decide("Edit", at(filepath.Join(extra, "docs/a.md")))
+	assert.Equal(t, effectAllow, eff)
+}
+
+func TestSetDirsDenyBeatsAllowOnSamePathInAddedDirectory(t *testing.T) {
+	d := newDirs(t)
+	extra := addedDir(t)
+	r := d.rules(t, Source{Name: "a", Allow: []string{"Read"}}, Source{Name: "b", Deny: []string{"Read(.env)"}})
+	r.SetDirs([]string{extra})
+
+	eff, _, _ := r.decide("Read", at(filepath.Join(extra, ".env")))
+	assert.Equal(t, effectDeny, eff)
+	eff, _, _ = r.decide("Read", at(filepath.Join(extra, "a.txt")))
+	assert.Equal(t, effectAllow, eff)
+	assert.True(t, r.Hides("Read", *at(extra), *at(filepath.Join(extra, ".env"))))
+}
+
 func TestSetDirsAppliesRulesThroughASymlinkedSpelling(t *testing.T) {
 	d := newDirs(t)
 	real := filepath.Join(addedDir(t), "proj")

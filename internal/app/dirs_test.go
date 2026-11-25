@@ -860,3 +860,42 @@ func TestAddDirResolvesSymlinkBeforeDotDot(t *testing.T) {
 		})
 	}
 }
+
+func TestAddDirNoticeLeavesOutInstructionFilesAnotherAddAlreadySent(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	root := canonicalTemp(t)
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("SHARED_RULE\n"), 0o600))
+	a, b := filepath.Join(root, "a"), filepath.Join(root, "b")
+	require.NoError(t, os.Mkdir(a, 0o700))
+	require.NoError(t, os.Mkdir(b, 0o700))
+	requests := subscribeTo[event.DirRequested](d.c)
+	notices := subscribeTo[event.Notice](d.c)
+
+	require.NoError(t, d.c.AddDir(a))
+	require.NoError(t, d.c.AddDir(b))
+	first, second := receiveEvent(t, requests), receiveEvent(t, requests)
+	assert.True(t, d.c.AnswerDir(first.Token, true, true))
+	assert.True(t, d.c.AnswerDir(second.Token, true, true))
+
+	assert.Equal(t, event.Notice{Text: "Added " + a + " to the workspace, with its instruction files."}, receiveEvent(t, notices))
+	assert.Equal(t, event.Notice{Text: "Added " + b + " to the workspace."}, receiveEvent(t, notices))
+}
+
+func TestAddDirsAddsAFolderNamedTwiceOrThroughASymlinkOnce(t *testing.T) {
+	d := newDirHarness(t, Config{}, false)
+	dir := otherDir(t)
+	link := filepath.Join(canonicalTemp(t), "link")
+	require.NoError(t, os.Symlink(dir, link))
+	requests := subscribeTo[event.DirRequested](d.c)
+
+	require.NoError(t, d.c.AddDirs([]string{dir, dir, link}))
+
+	assert.Equal(t, dir, receiveEvent(t, requests).Dir)
+	select {
+	case ev := <-requests:
+		t.Fatalf("asked again: %+v", ev)
+	default:
+	}
+	assert.Zero(t, d.c.dirCount(), "nothing joins before the answer")
+}

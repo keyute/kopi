@@ -161,7 +161,7 @@ func (r *runner) tell(ps []pigruntime.Prompt) []pigruntime.Prompt {
 		c.queue.Lock()
 		defer c.queue.Unlock()
 		c.mu.Lock()
-		current := r.sess == sess
+		current, id := r.sess == sess, c.sessID
 		c.mu.Unlock()
 		if !current {
 			return
@@ -170,6 +170,12 @@ func (r *runner) tell(ps []pigruntime.Prompt) []pigruntime.Prompt {
 			r.told = line
 		}
 		r.dirsTold = max(r.dirsTold, n)
+		if main {
+			if c.dirsToldBy == nil {
+				c.dirsToldBy = map[string]int{}
+			}
+			c.dirsToldBy[id] = r.dirsTold
+		}
 	}
 	return ps
 }

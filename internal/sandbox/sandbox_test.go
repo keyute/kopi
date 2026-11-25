@@ -100,8 +100,8 @@ func TestFiltersNetwork(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.False(t, (&Sandbox{}).FiltersNetwork())
-	assert.False(t, (&Sandbox{prefix: seatbeltPrefix(Policy{Network: true})}).FiltersNetwork())
-	assert.True(t, (&Sandbox{prefix: seatbeltPrefix(Policy{Proxy: proxy}), proxy: proxy}).FiltersNetwork())
+	assert.False(t, (&Sandbox{prefix: freshPrefix(Policy{Network: true})}).FiltersNetwork())
+	assert.True(t, (&Sandbox{prefix: freshPrefix(Policy{Proxy: proxy}), proxy: proxy}).FiltersNetwork())
 }
 
 func TestCommandWithProxy(t *testing.T) {
@@ -113,7 +113,7 @@ func TestCommandWithProxy(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://corp.example:8080")
 	proxy, err := NewProxy([]string{"example.com"}, nil, nil)
 	require.NoError(t, err)
-	s := &Sandbox{prefix: seatbeltPrefix(Policy{Write: []string{t.TempDir()}, Proxy: proxy}), proxy: proxy}
+	s := &Sandbox{prefix: freshPrefix(Policy{Write: []string{t.TempDir()}, Proxy: proxy}), proxy: proxy}
 	want := append([]string(nil), s.prefix...)
 
 	cmd, done, err := s.Command([]string{"a"})
@@ -170,7 +170,7 @@ func TestNewUnavailableElsewhere(t *testing.T) {
 }
 
 func TestCommandDoesNotAliasPrefix(t *testing.T) {
-	s := &Sandbox{prefix: seatbeltPrefix(Policy{Write: []string{t.TempDir()}})}
+	s := &Sandbox{prefix: freshPrefix(Policy{Write: []string{t.TempDir()}})}
 	want := append([]string(nil), s.prefix...)
 
 	a, doneA, err := s.Command([]string{"a"})
@@ -194,7 +194,7 @@ func TestCommandDoesNotAliasPrefix(t *testing.T) {
 func TestSetPolicySeatbelt(t *testing.T) {
 	base := t.TempDir()
 	first, second := filepath.Join(base, "first"), filepath.Join(base, "second")
-	s := &Sandbox{prefix: seatbeltPrefix(Policy{Write: []string{first}})}
+	s := &Sandbox{prefix: freshPrefix(Policy{Write: []string{first}}), forms: map[string][]string{}}
 	before, doneBefore, err := s.Command([]string{"a"})
 	require.NoError(t, err)
 	defer doneBefore()
@@ -206,7 +206,7 @@ func TestSetPolicySeatbelt(t *testing.T) {
 	require.NoError(t, err)
 	defer doneAfter()
 	assert.Equal(t, want, before.Args)
-	assert.Equal(t, append(seatbeltPrefix(Policy{Write: []string{first, second}}), "a"), after.Args)
+	assert.Equal(t, append(freshPrefix(Policy{Write: []string{first, second}}), "a"), after.Args)
 	assert.NotEqual(t, want, after.Args)
 }
 
@@ -214,7 +214,7 @@ func TestSetPolicyRejectsRelativePath(t *testing.T) {
 	first := t.TempDir()
 	proxy, err := NewProxy([]string{"example.com"}, nil, nil)
 	require.NoError(t, err)
-	s := &Sandbox{prefix: seatbeltPrefix(Policy{Write: []string{first}}), proxy: proxy}
+	s := &Sandbox{prefix: freshPrefix(Policy{Write: []string{first}}), proxy: proxy, forms: map[string][]string{}}
 	want := append([]string(nil), s.prefix...)
 
 	for _, p := range []Policy{{Write: []string{"rel"}}, {DenyRead: []string{"a/b"}}, {DenyWrite: []string{""}}} {
@@ -231,17 +231,17 @@ func TestSetPolicyKeepsProxy(t *testing.T) {
 	require.NoError(t, err)
 	other, err := NewProxy([]string{"other.example"}, nil, nil)
 	require.NoError(t, err)
-	s := &Sandbox{prefix: seatbeltPrefix(Policy{Proxy: proxy}), proxy: proxy}
-	plain := &Sandbox{prefix: seatbeltPrefix(Policy{})}
+	s := &Sandbox{prefix: freshPrefix(Policy{Proxy: proxy}), proxy: proxy, forms: map[string][]string{}}
+	plain := &Sandbox{prefix: freshPrefix(Policy{}), forms: map[string][]string{}}
 	root := t.TempDir()
 
 	require.NoError(t, s.SetPolicy(Policy{Write: []string{root}, Proxy: other}))
 	require.NoError(t, plain.SetPolicy(Policy{Proxy: other}))
 
 	assert.Same(t, proxy, s.proxy)
-	assert.Equal(t, seatbeltPrefix(Policy{Write: []string{root}, Proxy: proxy}), s.prefix)
+	assert.Equal(t, freshPrefix(Policy{Write: []string{root}, Proxy: proxy}), s.prefix)
 	assert.Nil(t, plain.proxy)
-	assert.Equal(t, seatbeltPrefix(Policy{}), plain.prefix)
+	assert.Equal(t, freshPrefix(Policy{}), plain.prefix)
 }
 
 func TestSetPolicyWriteRoots(t *testing.T) {

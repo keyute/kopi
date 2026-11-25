@@ -87,6 +87,25 @@ func (c *Controller) AddDir(arg string) error {
 	return nil
 }
 
+// AddDirs adds each of the --add-dir args once: a folder named twice, or
+// through a symlink, joins once and asks once. Shells leave ~ literal after =,
+// as typedDir expands it. An error stops at the arg that caused it.
+func (c *Controller) AddDirs(args []string) error {
+	added := map[string]bool{}
+	for _, arg := range args {
+		if real, err := trust.Canonical(c.typedDir(arg)); err == nil {
+			if added[real] {
+				continue
+			}
+			added[real] = true
+		}
+		if err := c.AddDir(arg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // prepareDir checks that arg can join the workspace and looks up the trust
 // decision for it.
 func (c *Controller) prepareDir(arg string) (p *pendingDir, decision trust.Decision, decided bool, err error) {
@@ -204,10 +223,6 @@ func (c *Controller) endDirRequests() {
 
 // applyDir makes p's directory reachable and reports it.
 func (c *Controller) applyDir(p *pendingDir, trusted bool) error {
-	var files []instruction.File
-	if trusted {
-		files = p.files
-	}
 	c.dirsMu.Lock()
 	defer c.dirsMu.Unlock()
 	c.mu.Lock()
@@ -229,12 +244,15 @@ func (c *Controller) applyDir(p *pendingDir, trusted bool) error {
 	// Another pending add under the same git root may have been applied since
 	// files were listed.
 	sent := c.sentFilesLocked()
-	next[len(next)-1].files = slices.DeleteFunc(slices.Clone(files), func(f instruction.File) bool { return sent[f.Path] })
+	fresh := slices.DeleteFunc(slices.Clone(p.files), func(f instruction.File) bool { return sent[f.Path] })
+	if trusted {
+		next[len(next)-1].files = fresh
+	}
 	c.dirs = next
 	c.mu.Unlock()
 	text := fmt.Sprintf("Added %s to the workspace.", p.dir.Real)
 	switch {
-	case len(p.files) == 0:
+	case len(fresh) == 0:
 	case trusted:
 		text = fmt.Sprintf("Added %s to the workspace, with its instruction files.", p.dir.Real)
 	default:

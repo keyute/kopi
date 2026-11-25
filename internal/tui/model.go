@@ -364,7 +364,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	if m.shown == app.Main && key.Matches(msg, km.background) && m.c.Background() {
 		return nil
 	}
-	pendingNav := m.menu.open && m.menu.pending && (key.Matches(msg, km.menuUp) || key.Matches(msg, km.menuDown) || key.Matches(msg, km.complete))
+	pendingNav := m.menu.open && m.menu.pending && m.navKey(msg)
 	if (m.menuHeight() > 0 || pendingNav) && !m.holding() {
 		if cmd, ok := m.menuKey(msg); ok {
 			return cmd

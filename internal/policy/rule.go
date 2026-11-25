@@ -259,7 +259,7 @@ func (r *Rules) SetDirs(dirs []string) {
 			escaped := escape(filepath.ToSlash(dir))
 			r.eachRule(func(ru *rule) {
 				var extra []string
-				if rest, ok := underWorkspace(ru.spec); ok && ru.patterns != nil {
+				if rest, ok := underWorkspace(ru.spec); ok && ru.patterns != nil && !slices.Contains(strings.Split(ru.spec, "/"), "..") {
 					extra = forms(escaped + rest)
 				}
 				entry.extras = append(entry.extras, extra)

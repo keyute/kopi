@@ -1145,16 +1145,16 @@ func TestSendDoesNotReadAModeLineThatFailedToQueue(t *testing.T) {
 	assert.Equal(t, []string{"M1"}, read)
 }
 
-func TestSendDoesNotReadTheModeLineWhenTheRunNeverStarts(t *testing.T) {
+func TestSendDoesNotReadTheModeLineWhenItFailsToQueue(t *testing.T) {
 	sb := newSandbox(t)
 	r, _ := newTestRuntime(t, sb)
 	sess := openTestSession(t, r)
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
+	// Closing the session makes queueing the mode line fail after Send has
+	// counted it, so the run never starts.
+	require.NoError(t, sess.inner.Close())
 
-	res, err := sess.Send(ctx, Prompt{Text: "prompt", Mode: "M", ModeRead: func() { t.Error("read") }}, nil, nil)
-	require.NoError(t, err)
-	assert.False(t, res.Sent)
+	_, err := sess.Send(t.Context(), Prompt{Text: "prompt", Mode: "M", ModeRead: func() { t.Error("read") }}, nil, nil)
+	require.Error(t, err)
 }
 
 func TestRootAndChildSessionsSendConcurrently(t *testing.T) {

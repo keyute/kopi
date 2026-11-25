@@ -63,22 +63,19 @@ func probe(ctx context.Context) error {
 // seatbeltPrefix returns the sandbox-exec argv that applies p. Paths and name
 // patterns reach the profile only as -D parameters, so the profile text never
 // needs escaping. PROXY is the one parameter defined later, by Command, for
-// each command when the policy has a proxy.
+// each command when the policy has a proxy. cache holds each path's resolved
+// forms from the first time it is seen, so a symlink repointed later cannot
+// move protection.
 // Seatbelt applies the last matching rule: each section may only narrow the
 // ones before it, and the rename protection stays last.
-func seatbeltPrefix(p Policy) []string {
-	return seatbeltPrefixCached(p, make(map[string][]string))
-}
-
-func seatbeltPrefixCached(p Policy, cache map[string][]string) []string {
-	resolve := func(kind string, paths []string) []string {
+func seatbeltPrefix(p Policy, cache map[string][]string) []string {
+	resolve := func(paths []string) []string {
 		var out []string
 		for _, path := range paths {
-			key := kind + "\x00" + path
-			f, ok := cache[key]
+			f, ok := cache[path]
 			if !ok {
 				f = forms([]string{path})
-				cache[key] = f
+				cache[path] = f
 			}
 			out = appendNew(out, f...)
 		}
@@ -93,9 +90,9 @@ func seatbeltPrefixCached(p Policy, cache map[string][]string) []string {
 		}
 		return keys
 	}
-	read := resolve("read", p.DenyRead)
-	protected := appendNew(slices.Clone(read), resolve("deny-write", p.DenyWrite)...)
-	write := define("WRITE", resolve("write", p.Write))
+	read := resolve(p.DenyRead)
+	protected := appendNew(slices.Clone(read), resolve(p.DenyWrite)...)
+	write := define("WRITE", resolve(p.Write))
 	denyRead := define("DENY_READ", read)
 	denyWrite := define("DENY_WRITE", protected)
 	ancestors := define("ANCESTOR", ancestors(protected))

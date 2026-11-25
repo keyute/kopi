@@ -235,6 +235,9 @@ type Controller struct {
 	// model is the session model: Config.Model, or the runtime's default once resolved.
 	model  string
 	sessID string
+	// dirsToldBy is how many added directories each session of this run has
+	// read, so a session resumed later is not told them again; queue guards it.
+	dirsToldBy map[string]int
 	// titled is set once the current main session's title has been decided on,
 	// whether or not it was asked for.
 	titled bool
@@ -1398,7 +1401,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		stopCommand = c.main.clearQueueLocked()
 	}
 	c.main.sess, c.sessID, c.main.emit, c.main.bound, c.main.unsubscribe = sess, id, emit, bound, unsubscribe
-	c.main.told, c.main.dirsTold = "", 0
+	c.main.told, c.main.dirsTold = "", c.dirsToldBy[id]
 	c.titled = sess.Name() != ""
 	c.spent = pigruntime.Usage{}
 	c.deferred = nil

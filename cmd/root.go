@@ -528,26 +528,8 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	}
 	// After the frontend subscribes, so a trust question reaches it, and before
 	// the first session opens, so its first prompt carries the directories.
-	added := map[string]bool{}
-	for _, dir := range addDirs {
-		// A folder named twice, or through a symlink, joins once, and asks once.
-		// Shells leave ~ literal after =, as the controller expands it.
-		spelled := dir
-		switch {
-		case dir == "~":
-			spelled = userHome
-		case strings.HasPrefix(dir, "~/"):
-			spelled = userHome + string(filepath.Separator) + dir[2:]
-		}
-		if canonical, err := trust.Canonical(spelled); err == nil {
-			if added[canonical] {
-				continue
-			}
-			added[canonical] = true
-		}
-		if err := c.AddDir(dir); err != nil {
-			return fmt.Errorf("failed to use --add-dir: %w", err)
-		}
+	if err := c.AddDirs(addDirs); err != nil {
+		return fmt.Errorf("failed to use --add-dir: %w", err)
 	}
 	if fullscreen {
 		err = c.Start(startCtx, req)

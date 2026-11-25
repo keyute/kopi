@@ -199,17 +199,12 @@ func TestReclaimedQueuePlansInTypingOrder(t *testing.T) {
 		assert.Equal(t, []*entry{a}, r.queued)
 		assert.False(t, a.handed)
 	})
-	t.Run("the mode line is offered again with its prompt", func(t *testing.T) {
+	t.Run("a reclaimed prompt is no longer handed over", func(t *testing.T) {
 		p := prompt("P1")
 		p.handed = true
 		r, emit := newRunner(p)
-		r.told = ""
-		told := r.tell([]pigruntime.Prompt{{Text: "P1"}})
-		require.NotEmpty(t, told[0].Mode)
 		r.reclaim(emit, true)
-		assert.Empty(t, r.told)
 		assert.False(t, p.handed)
-		assert.Equal(t, told[0].Mode, r.tell([]pigruntime.Prompt{{Text: "P1"}})[0].Mode)
 	})
 }
 

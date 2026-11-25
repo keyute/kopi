@@ -490,6 +490,39 @@ func TestTypedArgumentMenuTabWhilePendingFillsTheRepliesFirstRow(t *testing.T) {
 	})
 }
 
+func TestTypedArgumentMenuKeepsKeysLeftAfterOneChangedTheDraft(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTypedMenuModel(t)
+		settle(m, keys(m, "/add-dir ../p"))
+		cmd := keys(m, "i")
+		press(m, tab)
+		press(m, tab)
+		settle(m, cmd)
+
+		assert.Equal(t, "/add-dir ../pig/", m.composer.value())
+		assert.Equal(t, "add-dir ../pig/", c.asks[len(c.asks)-1])
+		assert.Equal(t, []string{"❭ ../pig/", "  ../pig/docs/", "  ../pig/internal/"}, menuText(m), "the second Tab lit the typed directory, as typed slowly")
+		assert.True(t, m.menu.picked)
+		assert.Empty(t, m.menu.held)
+		assert.Empty(t, c.submitted)
+	})
+}
+
+func TestTypedArgumentMenuGivesHeldKeysToTheComposerWhenTheReplyHasNoRows(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTypedMenuModel(t)
+		queueTwo(m, c)
+		cmd := keys(m, "/add-dir xyz")
+		press(m, up)
+		require.Zero(t, c.takes, "the Up is held")
+		settle(m, cmd)
+
+		assert.Empty(t, m.menu.shown)
+		assert.Empty(t, m.menu.held)
+		assert.Equal(t, 1, c.takes, "the held Up went where it goes with no menu")
+	})
+}
+
 func TestTypedArgumentMenuDropsKeysHeldForOlderText(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, _ := newTypedMenuModel(t)

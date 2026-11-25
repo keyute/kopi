@@ -63,7 +63,7 @@ func New(ctx context.Context, dir string, policies ...Policy) ([]*Sandbox, error
 		sandboxes := make([]*Sandbox, len(policies))
 		for i, p := range policies {
 			cache := make(map[string][]string)
-			sandboxes[i] = &Sandbox{prefix: seatbeltPrefixCached(p, cache), proxy: p.Proxy, forms: cache}
+			sandboxes[i] = &Sandbox{prefix: seatbeltPrefix(p, cache), proxy: p.Proxy, forms: cache}
 		}
 		return sandboxes, nil
 	case "linux":
@@ -197,10 +197,7 @@ func (s *Sandbox) SetPolicy(p Policy) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.bwrap == nil {
-		if s.forms == nil {
-			s.forms = make(map[string][]string)
-		}
-		s.prefix = seatbeltPrefixCached(p, s.forms)
+		s.prefix = seatbeltPrefix(p, s.forms)
 		return nil
 	}
 	// Only the argument building: placeholders are made by a command's start.

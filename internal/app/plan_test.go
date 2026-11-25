@@ -355,7 +355,7 @@ func TestPlanApprovalSurvivesCancellation(t *testing.T) {
 	})
 }
 
-func TestAddedDirectoryIsToldOnceAndAgainToANewSessionAndAResumedOne(t *testing.T) {
+func TestAddedDirectoryIsToldOnceAndAgainToANewSessionButNotToAResumedOne(t *testing.T) {
 	d := newDirHarness(t, Config{}, true)
 	dir := otherDir(t)
 	decide(t, d.c, dir, trust.Trusted)
@@ -377,7 +377,8 @@ func TestAddedDirectoryIsToldOnceAndAgainToANewSessionAndAResumedOne(t *testing.
 	d.read = 0
 	got := d.userTexts(t, "four")
 	require.Len(t, got, 1)
-	assert.Equal(t, []string{"four", text}, got[0][len(got[0])-2:], "the resumed session is told again")
+	assert.Equal(t, "four", got[0][len(got[0])-1], "the resumed session is not told again")
+	assert.Equal(t, 1, strings.Count(strings.Join(got[0], "\n"), text), "only its history holds the text")
 	assert.ErrorIs(t, d.ws.CanAdd(dir), tool.ErrInWorkspace)
 }
 

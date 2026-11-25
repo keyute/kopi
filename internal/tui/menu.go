@@ -47,6 +47,9 @@ type menu struct {
 	// held is the Up, Down and Tab presses made while pending, run against the
 	// reply's rows when it arrives.
 	held []tea.KeyPressMsg
+	// carry is the held keys a replayed key left unreplayed by changing the
+	// draft: followMenu hands them to the load that change asks.
+	carry []tea.KeyPressMsg
 	// dismissed is the token, Text cleared, that the menu was closed on; it
 	// stays closed until the token changes. Zero means none.
 	dismissed app.Query
@@ -83,7 +86,7 @@ func (m *model) followMenu() tea.Cmd {
 	}
 	var cmd tea.Cmd
 	if !mn.open || q.Kind != prev.Kind || q.Command != prev.Command {
-		mn.items, mn.sel, mn.picked, mn.optional, mn.typed, mn.pending, mn.held = nil, 0, false, false, false, false, nil
+		mn.items, mn.sel, mn.picked, mn.optional, mn.typed, mn.pending, mn.held, mn.carry = nil, 0, false, false, false, false, nil, nil
 		mn.seq++
 		seq, c := mn.seq, m.c
 		switch q.Kind {
@@ -109,7 +112,9 @@ func (m *model) followMenu() tea.Cmd {
 		if mn.typed && q.Text != prev.Text {
 			mn.seq++
 			cmd = m.ask()
+			mn.held = mn.carry
 		}
+		mn.carry = nil
 	}
 	mn.open = true
 	m.rematch()
@@ -157,25 +162,37 @@ func (m *model) loaded(msg candidatesMsg) tea.Cmd {
 			mn.items = nil
 			m.rematch()
 		}
-		return nil
+		return m.replay(held)
 	}
 	mn.items = msg.cs
 	if m.holding() {
 		return nil
 	}
 	m.rematch()
+	if len(mn.shown) == 0 {
+		return m.replay(held)
+	}
 	var cmds []tea.Cmd
-	for _, k := range held {
-		if len(mn.shown) == 0 {
-			break
-		}
+	for i, k := range held {
 		draft := m.composer.value()
 		cmd, _ := m.menuKey(k)
 		cmds = append(cmds, cmd)
-		// The rows no longer belong to a draft a key changed.
+		// The rows no longer belong to a draft a key changed: the keys left wait
+		// for the reply to the new draft, as if pressed after the change.
 		if m.composer.value() != draft {
+			mn.carry = held[i+1:]
 			break
 		}
+	}
+	return tea.Batch(cmds...)
+}
+
+// replay runs keys held for a reply with no rows as the composer takes them
+// with no menu, so an Up held for history recall is not lost.
+func (m *model) replay(keys []tea.KeyPressMsg) tea.Cmd {
+	var cmds []tea.Cmd
+	for _, k := range keys {
+		cmds = append(cmds, m.key(k))
 	}
 	return tea.Batch(cmds...)
 }
@@ -278,13 +295,22 @@ func oneLine(s string) string {
 	return strings.Join(wrap(s, beyond), " ")
 }
 
+// navKey reports whether k picks a row of the menu.
+func (m *model) navKey(k tea.KeyPressMsg) bool {
+	km := &m.keys
+	return key.Matches(k, km.menuUp) || key.Matches(k, km.menuDown) || key.Matches(k, km.complete)
+}
+
 // menuKey handles k while the menu shows, reporting whether it did. Up, Down
 // and Tab while a reply is pending are only held for it.
 func (m *model) menuKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 	km, mn := &m.keys, &m.menu
-	if mn.pending && (key.Matches(k, km.menuUp) || key.Matches(k, km.menuDown) || key.Matches(k, km.complete)) {
+	if mn.pending && m.navKey(k) {
 		mn.held = append(mn.held, k)
 		return nil, true
+	}
+	if len(mn.shown) == 0 {
+		return nil, false
 	}
 	switch {
 	case key.Matches(k, km.menuUp):

@@ -2325,6 +2325,65 @@ func TestOpenSandboxSetDirsKeepsBothPoliciesOnAnError(t *testing.T) {
 	assert.Equal(t, wantPlan, argv(plan))
 }
 
+func TestOpenSandboxValidateDirsChangesNeitherSandbox(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	e := newSandboxedEnv(t)
+	execute, plan, _, validateDirs, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
+	require.NoError(t, err)
+	require.NotNil(t, validateDirs)
+	argv := func(sb *sandbox.Sandbox) []string {
+		cmd, cleanup, err := sb.Command([]string{"/bin/true"})
+		require.NoError(t, err)
+		defer cleanup()
+		return cmd.Args
+	}
+	wantExecute, wantPlan := argv(execute), argv(plan)
+	added := filepath.Join(e.root, "added")
+	require.NoError(t, os.Mkdir(added, 0o700))
+
+	require.NoError(t, validateDirs([]string{canonical(t, added)}))
+
+	assert.Equal(t, wantExecute, argv(execute))
+	assert.Equal(t, wantPlan, argv(plan))
+	if runtime.GOOS == "linux" {
+		err := validateDirs([]string{"/"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "overlaps /proc")
+		assert.Equal(t, wantExecute, argv(execute))
+		assert.Equal(t, wantPlan, argv(plan))
+	}
+}
+
+func TestOpenSandboxSetDirsKeepsAnAddedDirectorysProtections(t *testing.T) {
+	if runtime.GOOS != "darwin" || !sandboxAvailable(t) {
+		t.Skip("requires Seatbelt")
+	}
+	e := newSandboxedEnv(t)
+	execute, plan, setDirs, _, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
+	require.NoError(t, err)
+	added, second := filepath.Join(e.root, "added"), filepath.Join(e.root, "second")
+	require.NoError(t, os.Mkdir(added, 0o700))
+	require.NoError(t, os.Mkdir(second, 0o700))
+	added = canonical(t, added)
+	require.NoError(t, setDirs([]string{added}))
+	require.NoError(t, os.Mkdir(filepath.Join(added, ".git"), 0o700))
+
+	require.NoError(t, setDirs([]string{added, canonical(t, second)}))
+
+	for _, sb := range []*sandbox.Sandbox{execute, plan} {
+		cmd, done, err := sb.Command([]string{"/bin/true"})
+		require.NoError(t, err)
+		done()
+		var denied bool
+		for _, arg := range cmd.Args {
+			denied = denied || (strings.HasPrefix(arg, "-DDENY_WRITE_") && strings.HasSuffix(arg, "="+filepath.Join(added, "HEAD")))
+		}
+		assert.True(t, denied, "HEAD of the added directory stays denied")
+	}
+}
+
 func TestCovers(t *testing.T) {
 	home := t.TempDir()
 	t.Run("servers and skills", func(t *testing.T) {

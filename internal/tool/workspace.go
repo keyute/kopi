@@ -177,7 +177,7 @@ type Dir struct {
 // Add makes d part of the workspace after the checks of CanAdd, which share its
 // lock section so concurrent adds of one directory cannot both pass. Either
 // name reaches the directory; results name Real.
-func (w *Workspace) Add(d Dir) error {
+func (w *Workspace) Add(d Dir) (err error) {
 	w.more.mu.Lock()
 	defer w.more.mu.Unlock()
 	if err := w.canAdd(d.Given); err != nil {
@@ -190,31 +190,31 @@ func (w *Workspace) Add(d Dir) error {
 	if err != nil {
 		return fmt.Errorf("failed to open %s: %w", d.Real, err)
 	}
+	defer func() {
+		if err != nil {
+			root.Close()
+		}
+	}()
 	// Real may have been replaced by a symlink since the caller resolved it, and
 	// OpenRoot follows symlinks, so the opened root must still be Real itself and
 	// the directory Given names.
 	opened, err := root.Stat(".")
 	if err != nil {
-		root.Close()
 		return fmt.Errorf("failed to stat %s: %w", d.Real, err)
 	}
 	resolved, err := filepath.EvalSymlinks(d.Real)
 	if err != nil {
-		root.Close()
 		return fmt.Errorf("failed to resolve %s: %w", d.Real, err)
 	}
 	real, err := os.Lstat(d.Real)
 	if err != nil {
-		root.Close()
 		return fmt.Errorf("failed to stat %s: %w", d.Real, err)
 	}
 	given, err := os.Stat(d.Given)
 	if err != nil {
-		root.Close()
 		return fmt.Errorf("failed to stat %s: %w", d.Given, err)
 	}
 	if resolved != d.Real || !os.SameFile(opened, real) || !os.SameFile(opened, given) {
-		root.Close()
 		return fmt.Errorf("%s is not the directory %s", d.Real, d.Given)
 	}
 	cleanReal, err := filepath.EvalSymlinks(filepath.Clean(d.Given))
