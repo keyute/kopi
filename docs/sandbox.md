@@ -1,6 +1,6 @@
 # Sandbox
 
-On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, bubblewrap's `bwrap` on Linux. See [tools](tools.md#bash) for `Bash` itself.
+On macOS and Linux, `Bash` runs inside an OS sandbox when it is available (unless `sandbox.enabled` is `false`): `sandbox-exec` on macOS, bubblewrap's `bwrap` on Linux. See [tools](tools.md#bash) for `Bash` itself.
 
 ## Requirements
 
@@ -32,6 +32,7 @@ On macOS and Linux, `Bash` runs inside an OS sandbox: `sandbox-exec` on macOS, b
   - `true` refuses to start when the sandbox is unavailable.
   - `false` runs `Bash` without it.
   - Unset uses it when available and otherwise logs a warning and runs `Bash` without it.
+- Without the sandbox, a `Bash` command runs only after approval, or when an allow rule or the [classifier](permissions.md#classifier) allows it, and plan mode refuses `Bash`. `Read`, `Glob`, `Grep` and `LS` work the same with and without it.
 - `sandbox.allowWrite` and `sandbox.denyRead` take plain paths, no globs: `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory. So `.env` means only `<start directory>/.env`, unlike in a [rule](permissions.md#rules).
 - A later layer's `sandbox.allowWrite` or `sandbox.denyRead` replaces an earlier one's whole.
 - `sandbox.network` (default `false`) allows IP networking in the sandbox.

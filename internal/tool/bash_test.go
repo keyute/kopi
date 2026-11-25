@@ -33,9 +33,10 @@ func TestBashDescribesItself(t *testing.T) {
 	assert.False(t, tool.Sandboxed)
 	assert.False(t, tool.PlanSandboxed)
 	assert.NotContains(t, tool.Description, "sandbox")
-	for _, s := range []string{"run_in_background", "the file its output is saved to", "TaskStop"} {
+	for _, s := range []string{"the file its output is saved to", "TaskStop"} {
 		assert.Contains(t, tool.Description, s)
 	}
+	assert.NotContains(t, tool.Description, "run_in_background")
 	assert.Equal(t, []string{"command"}, tool.Parameters["required"])
 	assert.Equal(t, false, tool.Parameters["additionalProperties"])
 	properties, ok := tool.Parameters["properties"].(map[string]any)
@@ -230,6 +231,8 @@ func TestBashDisplayBackgroundNotifications(t *testing.T) {
 		{"timeout moved without a file", "Background task t123: this command did not finish within its 1m30s timeout and keeps running in the background" + BackgroundTail("", true), "after 1m 30s"},
 		{"millisecond timeout", "Background task t1: this command did not finish within its 1ms timeout and keeps running in the background" + BackgroundTail("", true), "after 1ms"},
 		{"fractional timeout", "Background task t1: this command did not finish within its 1.001s timeout and keeps running in the background" + BackgroundTail("", true), "after 1.001s"},
+		{"started, saved before the read hint", "Background task t1 started, writing its output to /outputs/s1/a.txt.", ""},
+		{"timeout moved, saved before the read hint", "Background task t2: this command did not finish within its 10s timeout and keeps running in the background, writing its output to /outputs/s1/a.txt.", "after 10s"},
 		{"started, saved before the tail", "Background task t1 started.", ""},
 		{"user moved, saved before the tail", "Background task t12: the user moved this command to the background, where it keeps running.", ""},
 		{"timeout moved, saved before the tail", "Background task t123: this command did not finish within its 2m0s timeout and keeps running in the background.", "after 2m"},
@@ -249,7 +252,7 @@ func TestBashDisplayBackgroundNotifications(t *testing.T) {
 func TestBackgroundTailPromisesAReportOnlyWhereTheEndWakes(t *testing.T) {
 	assert.Equal(t, ", writing its output to /o/a.txt. You are told when it ends: do not poll the file.", BackgroundTail("/o/a.txt", true))
 	assert.Equal(t, ". You are told when it ends.", BackgroundTail("", true))
-	assert.Equal(t, ", writing its output to /o/a.txt.", BackgroundTail("/o/a.txt", false))
+	assert.Equal(t, ", writing its output to /o/a.txt; use Read to read it.", BackgroundTail("/o/a.txt", false))
 	assert.Equal(t, ".", BackgroundTail("", false))
 }
 
@@ -419,8 +422,8 @@ func TestBashOffersUnsandboxedOnlyWhenSandboxed(t *testing.T) {
 				assert.Nil(t, tool.Unsandboxed)
 				return
 			}
-			assert.Equal(t, map[string]any{"type": "boolean", "description": "Run this command outside the OS sandbox; plan mode refuses such a call."}, properties["unsandboxed"])
-			assert.Contains(t, tool.Description, "unsandboxed runs one command outside it; that call asks for approval unless a rule allows it.")
+			assert.Equal(t, map[string]any{"type": "boolean", "description": "Run this command outside the OS sandbox, which asks for approval unless a rule allows it; plan mode refuses such a call."}, properties["unsandboxed"])
+			assert.NotContains(t, tool.Description, "unsandboxed")
 			require.NotNil(t, tool.Unsandboxed)
 			_, err := json.Marshal(tool.Parameters)
 			require.NoError(t, err)

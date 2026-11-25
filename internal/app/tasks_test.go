@@ -1092,8 +1092,8 @@ func TestTaskNoticeNamesTheSavedOutput(t *testing.T) {
 
 	info.OutputFile = "/kopi/outputs/s1/a.txt"
 	n := notice(info, head)
-	assert.Equal(t, endText("t1")+"\n[Output saved to /kopi/outputs/s1/a.txt]", n.Text)
-	assert.Equal(t, "built t1\n[Output saved to /kopi/outputs/s1/a.txt]", n.Shown.(event.TaskEnded).Result)
+	assert.Equal(t, endText("t1")+"\n[Output saved to /kopi/outputs/s1/a.txt; use Read to read it.]", n.Text)
+	assert.Equal(t, "built t1\n[Output saved to /kopi/outputs/s1/a.txt; use Read to read it.]", n.Shown.(event.TaskEnded).Result)
 
 	info.Output = "[… 9 bytes cut; full output: /kopi/outputs/s1/a.txt; use Read with offset=3 to continue …]\nbuilt t1"
 	text := notice(info, head).Text

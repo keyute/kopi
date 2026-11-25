@@ -55,7 +55,7 @@ func notice(info tool.TaskInfo, head string) pigruntime.Notice {
 	}
 	// A tail that still holds the output's cut marker already names the file.
 	if info.OutputFile != "" && !strings.Contains(tail, info.OutputFile) {
-		lines = append(lines, "[Output saved to "+info.OutputFile+"]")
+		lines = append(lines, "[Output saved to "+info.OutputFile+"; use Read to read it.]")
 	}
 	body := strings.Join(lines, "\n")
 	shown := taskEnded(info)

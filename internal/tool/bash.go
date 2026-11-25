@@ -32,6 +32,7 @@ const (
 	timeoutFormat = "Background task %s: this command did not finish within its %v timeout and keeps running in the background"
 
 	backgroundFile = ", writing its output to %s"
+	backgroundRead = "; use Read to read it"
 	backgroundTold = ". You are told when it ends."
 	backgroundPoll = ". You are told when it ends: do not poll the file."
 )
@@ -44,20 +45,22 @@ var (
 
 // resultPattern matches the text format produces, with the task id as the
 // first group and any further verbs matching args, then one of BackgroundTail's
-// tails; a result saved before those existed ends like the shortest of them.
+// tails, including the no-wake one that says to use Read; a result saved before
+// those existed ends like the shortest of them.
 func resultPattern(format string, args ...string) *regexp.Regexp {
 	verbs := append([]any{`(t\d+)`}, make([]any, len(args))...)
 	for i, a := range args {
 		verbs[i+1] = a
 	}
-	tail := "(?:" + fmt.Sprintf(regexp.QuoteMeta(backgroundFile), `[^\n]+`) + ")?" +
+	tail := "(?:" + fmt.Sprintf(regexp.QuoteMeta(backgroundFile), `[^\n]+`) + "(?:" + regexp.QuoteMeta(backgroundRead) + ")?)?" +
 		`(?:\.|` + regexp.QuoteMeta(backgroundTold) + "|" + regexp.QuoteMeta(backgroundPoll) + ")"
 	return regexp.MustCompile("^" + fmt.Sprintf(regexp.QuoteMeta(format), verbs...) + tail + "$")
 }
 
 // BackgroundTail ends a background result with where the command's output is
 // saved, when it is, and, when the command's end reaches the model whatever
-// its turn does, that it need not read the file to wait.
+// its turn does, that it need not read the file to wait; when it does not, that
+// the file is read with Read.
 func BackgroundTail(file string, wakes bool) string {
 	var tail string
 	if file != "" {
@@ -65,6 +68,9 @@ func BackgroundTail(file string, wakes bool) string {
 	}
 	switch {
 	case !wakes:
+		if file != "" {
+			tail += backgroundRead
+		}
 		return tail + "."
 	case file == "":
 		return tail + backgroundTold
@@ -108,9 +114,8 @@ func backgroundTask(output string) (started, ok bool) {
 // that a background command's end starts a turn when none runs; without it a
 // background result promises no report of the end.
 func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed, wakes bool) Tool {
-	description := "Runs a shell command (bash, else sh) in the workspace and returns its combined stdout and stderr; " +
-		"long output keeps its start and end. Every call starts a fresh shell in the workspace with no input: " +
-		"cd and variables do not carry over. A non-zero exit status is an error that reports the exit code. "
+	description := "Runs a shell command (bash, else sh) in the workspace and returns its combined stdout and stderr. " +
+		"Every call starts a fresh shell with no input: cd and variables do not carry over. "
 	timeoutText := "Milliseconds before the command is stopped; default 120000, at most 600000."
 	properties := map[string]any{
 		"command": map[string]any{
@@ -122,8 +127,7 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed, wakes bool) Tool {
 		description += "A command still running at its timeout is stopped; the error then holds the output so far."
 	} else {
 		description += "A command still running at its timeout, or one the user moves to the background, keeps running as a background task; " +
-			"run_in_background starts it as one at once. The result then gives the task id and, when one is saved, the file its output is saved to: " +
-			"Read reads it and TaskStop stops the task."
+			"the result then gives the task id and, when one is saved, the file its output is saved to, and TaskStop stops the task."
 		timeoutText = "Milliseconds to wait for the command before it moves to the background; default 120000, at most 600000. " +
 			"Set it only for a command that needs longer than the default."
 		properties["run_in_background"] = map[string]any{
@@ -142,17 +146,16 @@ func NewBash(sh, plan *Shell, tasks *Tasks, allowUnsandboxed, wakes bool) Tool {
 	if sh.Sandboxed() {
 		description += " Commands run in an OS sandbox that allows writing only in temporary directories, paths the user allowed " +
 			"and, in execute mode, the workspace; it may block reading some paths and the network. " +
-			"A blocked operation fails, typically with \"Operation not permitted\" or \"Read-only file system\". " +
-			"A directory it blocks reading may instead appear empty."
+			"A blocked operation fails, typically with \"Operation not permitted\" or \"Read-only file system\", " +
+			"and a directory it blocks reading may appear empty."
 		if sh.FiltersNetwork() {
 			description += " The network is reachable only through the HTTP proxy named in HTTP_PROXY and HTTPS_PROXY, " +
 				"and only for hosts the user listed; the command's output then ends with the hosts the proxy refused."
 		}
 		if allowUnsandboxed {
-			description += " unsandboxed runs one command outside it; that call asks for approval unless a rule allows it."
 			properties["unsandboxed"] = map[string]any{
 				"type":        "boolean",
-				"description": "Run this command outside the OS sandbox; plan mode refuses such a call.",
+				"description": "Run this command outside the OS sandbox, which asks for approval unless a rule allows it; plan mode refuses such a call.",
 			}
 			open = NewShell(sh.dir, nil).WithOutputs(sh.outputs)
 			unsandboxedHook = bashUnsandboxed

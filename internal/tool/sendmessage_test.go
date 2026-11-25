@@ -27,16 +27,17 @@ func TestSendMessageDescribesItself(t *testing.T) {
 	assert.Equal(t, Action{Verb: "Messaged", One: "agent", Many: "agents"}, tool.Display.Action)
 }
 
-func TestSendMessageQueuesAndResumes(t *testing.T) {
+func TestSendMessageQueuesResumesAndRefusesAnEndedAgent(t *testing.T) {
 	to := TaskInfo{ID: "t3", Agent: "explore", Command: "look"}
 	for _, tc := range []struct {
-		resumed bool
+		outcome MessageOutcome
 		text    string
 	}{
-		{false, "Message queued for t3. [named task]\nAgent: explore › look"},
-		{true, "Agent t3 continued. [named task]\nAgent: explore › look"},
+		{MessageQueued, "Message queued for t3. [named task]\nAgent: explore › look"},
+		{MessageResumed, "Agent t3 continued. [named task]\nAgent: explore › look"},
+		{MessageEnded, "Agent t3 has ended; this message was not delivered. Its report follows. [named task]\nAgent: explore › look"},
 	} {
-		agents := &fakeAgents{resumed: tc.resumed, to: to}
+		agents := &fakeAgents{outcome: tc.outcome, to: to}
 		admit := func(target policy.Target) (policy.Mode, error) {
 			assert.Equal(t, policy.Target{}, target)
 			assert.Empty(t, agents.messages)
@@ -91,6 +92,7 @@ func TestSendMessageDisplay(t *testing.T) {
 	assert.Nil(t, tool.Display.Body)
 	assert.Equal(t, "queued", tool.Display.Summary("Message queued for t3. [named task]\nAgent: explore › look"))
 	assert.Equal(t, "continued", tool.Display.Summary("Agent t3 continued. [named task]\nAgent: explore › look"))
+	assert.Equal(t, "ended", tool.Display.Summary("Agent t3 has ended; this message was not delivered. Its report follows. [named task]\nAgent: explore › look"))
 	assert.Equal(t, "queued", tool.Display.Summary("Message queued for t3."))
 	assert.Equal(t, "continued", tool.Display.Summary("Agent t3 continued."))
 
@@ -106,6 +108,16 @@ func TestSendMessageOutcome(t *testing.T) {
 	assert.Equal(t, "Messaged explore › look", done)
 	assert.Equal(t, Action{Verb: "Messaged", One: "agent", Many: "agents"}, action)
 	assert.Equal(t, "t3", tool.Display.Subject(args, "Agent t3 continued. [named task]\nAgent: explore › look"))
+
+	ended := "Agent t3 has ended; this message was not delivered. Its report follows. [named task]\nAgent: explore › look"
+	done, action = tool.Display.Outcome(args, ended)
+	assert.Equal(t, "SendMessage explore › look", done, "nothing was delivered, so the row keeps the call's name")
+	assert.Equal(t, Action{Verb: "Tried to message", One: "agent", Many: "agents"}, action)
+	assert.Equal(t, "t3", tool.Display.Subject(args, ended))
+
+	done, action = tool.Display.Outcome(args, "Agent t3 has ended; this message was not delivered. Its report follows.")
+	assert.Empty(t, done)
+	assert.Equal(t, Action{}, action)
 
 	done, action = tool.Display.Outcome(args, "Message queued for t3.")
 	assert.Empty(t, done)

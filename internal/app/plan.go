@@ -82,9 +82,9 @@ func modeLine(mode policy.Mode, planPath string, approval bool) string {
 	case !approval:
 		return "The session is in plan mode. Its plan file is " + planPath + "; Read, Write and Edit work on that file in both modes."
 	}
-	return "Plan mode is on: do not change the workspace. When the request needs changes, research it, write a plan to " + planPath +
-		" (Read, Write and Edit work on that file in both modes) and call ExitPlanMode for the user's approval instead of ending your turn; " +
-		"a request that needs no changes is just answered."
+	return "Plan mode is on: do not change the workspace. Research the request; if you end with changes to propose, asked for or not, write them as a plan to " + planPath +
+		" (Read, Write and Edit work on that file in both modes) and call ExitPlanMode for the user's approval instead of ending your turn. " +
+		"With no changes to propose, just answer."
 }
 
 // recall is what the main session's model is told again after a compaction,

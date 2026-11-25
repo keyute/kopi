@@ -224,7 +224,7 @@ func TestBashBackgroundResultWithoutWakePromisesNoReport(t *testing.T) {
 
 	require.NoError(t, err)
 	running := waitChange(t, changes)
-	assert.Equal(t, "Background task t1 started, writing its output to "+running.OutputFile+".", out.Text)
+	assert.Equal(t, "Background task t1 started, writing its output to "+running.OutputFile+"; use Read to read it.", out.Text)
 	waitFor(t, started, "the command to start")
 }
 
@@ -305,6 +305,6 @@ func TestBashDescribesTheProxy(t *testing.T) {
 
 	tool := NewBash(sh, sh, nil, false, true)
 
-	assert.Contains(t, tool.Description, "may instead appear empty. The network is reachable only through the HTTP proxy named in HTTP_PROXY and HTTPS_PROXY, "+
+	assert.Contains(t, tool.Description, "may appear empty. The network is reachable only through the HTTP proxy named in HTTP_PROXY and HTTPS_PROXY, "+
 		"and only for hosts the user listed; the command's output then ends with the hosts the proxy refused.")
 }

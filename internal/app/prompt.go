@@ -28,11 +28,10 @@ type mcpServer struct {
 	tools              []string
 }
 
-// buildPrompt lists only tools that are not deferred as available; the
-// read-only and execute-mode sentence still counts the deferred ones, which
-// the model can load and call. The parts run from what changes least to
-// most: Kopi's own text, the instruction groups, then what the MCP servers
-// report.
+// buildPrompt builds the parts, from what changes least to most: Kopi's own
+// text, the instruction groups, then what the MCP servers report. The
+// read-only and execute-mode sentence counts deferred tools too, which the
+// model can load and call.
 //
 // def is nil for the root session and for the default workflow agent; a
 // subagent's or a workflow agent's preamble says who it is, and a definition's
@@ -40,20 +39,7 @@ type mcpServer struct {
 //
 // joining reports that MCP servers may give the session tools after it opens,
 // so the preamble speaks of tools that are not read-only whatever tools has.
-func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group, servers []mcpServer, reviewed bool, def *subagent.Definition, workflow, joining bool) []pigruntime.PromptPart {
-	names := make([]string, 0, len(tools))
-	for _, t := range tools {
-		if !t.Deferred {
-			names = append(names, t.Name)
-		}
-	}
-	var available string
-	switch {
-	case len(names) > 0:
-		available = "Tools available: " + strings.Join(names, ", ") + "."
-	case len(tools) == 0:
-		available = "No tools are available."
-	}
+func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group, servers []mcpServer, def *subagent.Definition, workflow, joining bool) []pigruntime.PromptPart {
 	lines := []string{
 		fmt.Sprintf("You are Kopi, a coding agent working in %s.", workspace),
 	}
@@ -69,9 +55,6 @@ func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group
 		modes = "You stay in plan mode, whatever mode the user is in."
 		works = "Read-only tools work, the others do not"
 	}
-	if available != "" {
-		lines = append(lines, available)
-	}
 	lines = append(lines, modes)
 	if joining || slices.ContainsFunc(tools, func(t tool.Tool) bool { return t.Capability != policy.Read }) {
 		line := works + ", and any tool call may need the user's approval."
@@ -82,14 +65,6 @@ func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group
 			}
 		}
 		lines = append(lines, line)
-		if reviewed {
-			lines = append(lines, "Tool calls that would need the user's approval and that no permission rule decides are first reviewed by a classifier model, which can allow them, deny them with a reason, or leave them to the user.")
-		}
-	}
-	lines = append(lines, "A tool call that is refused or that the user rejects returns an error saying so, with the user's feedback when they gave any.")
-	if slices.ContainsFunc(tools, func(t tool.Tool) bool { return t.Name == "ToolSearch" }) {
-		lines = append(lines, "Tools of MCP servers are deferred: they are listed below by name and cannot be called until ToolSearch loads them. "+
-			"Call ToolSearch with keywords for what you need, or with exact tool names; the tools it loads can be called in your next response, not in the one that calls ToolSearch.")
 	}
 	parts := []pigruntime.PromptPart{{Name: "preamble", Text: strings.Join(lines, "\n")}}
 	if def != nil && strings.TrimSpace(def.Prompt) != "" {
@@ -110,7 +85,7 @@ func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group
 	servers = slices.SortedFunc(slices.Values(servers), func(a, b mcpServer) int { return strings.Compare(a.name, b.name) })
 	for _, s := range servers {
 		if len(s.tools) > 0 {
-			serverLines = append(serverLines, "MCP server "+s.name+" tools: "+strings.Join(s.tools, ", ")+".")
+			serverLines = append(serverLines, "MCP server "+s.name+" tools, loaded by ToolSearch: "+strings.Join(s.tools, ", ")+".")
 		}
 		if text := strings.TrimSpace(s.instructions); text != "" {
 			serverLines = append(serverLines, "Instructions from MCP server "+s.name+":", truncate(text, maxServerInstructions))

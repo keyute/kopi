@@ -891,8 +891,9 @@ func TestStopWhileTheCommandIsBeginningStopsItOnceItBegan(t *testing.T) {
 				return live, err
 			}
 			u := newUserHarness(t, Config{Tasks: tasks})
+			a := u.cmd("a", "out-a")
 
-			u.submit(t, "!sleep 30")
+			u.run(t, a)
 			wait(t, entered)
 			if closing {
 				closed := make(chan error, 1)

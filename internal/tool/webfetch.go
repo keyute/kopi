@@ -36,12 +36,11 @@ func newWebFetch(f *fetcher, answer func(ctx context.Context, system, prompt str
 	return Tool{
 		Name:  "WebFetch",
 		Label: "WebFetch",
-		Description: "Fetches a public web page over HTTP or HTTPS, converts it to markdown and has a small model answer prompt from that page alone; " +
+		Description: "Fetches a public web page over HTTP or HTTPS without running JavaScript, converts it to markdown and has a small model answer prompt from that page alone; " +
 			"returns the answer and the page's final URL, not the page itself. " +
-			"url must be a full http or https URL on a public host. " +
-			"Redirects within the same host are followed; any other redirect is returned instead of followed, so you can call WebFetch again with the new URL. " +
-			"Pages are fetched without running JavaScript, up to 5 MiB, and 100,000 characters of the page are read per call, starting at offset. " +
-			"prompt says what to extract or answer; the answer quotes code, commands, numbers and short passages verbatim where they answer it.",
+			"A redirect to another host is returned instead of followed. " +
+			"Pages up to 5 MiB are fetched, and 100,000 characters are read per call, starting at offset. " +
+			"The answer quotes code, commands, numbers and short passages verbatim where they answer prompt.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

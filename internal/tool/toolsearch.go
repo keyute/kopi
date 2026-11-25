@@ -31,8 +31,7 @@ func NewToolSearch(deferred func() []Tool, connecting func() []string, rank func
 		Name:  "ToolSearch",
 		Label: "ToolSearch",
 		Description: "Loads deferred tools, such as the MCP server tools the system prompt lists by name, so that they can be called. " +
-			"query is keywords for what you need, or exact tool names separated by spaces to load just those. " +
-			"Returns the name and description of each tool it loaded; call them in your next response.",
+			"Returns the name and description of each tool it loaded; they can be called in your next response, not in this one.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

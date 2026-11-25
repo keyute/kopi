@@ -13,7 +13,7 @@
 - `--mode` overrides the config file.
 - A mode switched to while the first session is opening is the mode it starts in.
 - The model is told the session's mode in one hidden message sent with the first prompt of a session and with the first prompt after the mode changes. It is not part of the system prompt.
-- In plan mode where [`ExitPlanMode`](#exitplanmode) is offered, that message also tells the model not to change the workspace and, when the request needs changes, to research it, write a plan to the plan file and call `ExitPlanMode` instead of ending its turn. Where `ExitPlanMode` is not offered (`kopi -p`, or a `deny` rule removed it) the message only states the mode, and the plan file's path when there is one.
+- In plan mode where [`ExitPlanMode`](#exitplanmode) is offered, that message also tells the model not to change the workspace and, when it ends with changes to propose, whether or not the request asked for them, to write them as a plan to the plan file and call `ExitPlanMode` instead of ending its turn; with none, to just answer. Where `ExitPlanMode` is not offered (`kopi -p`, or a `deny` rule removed it) the message only states the mode, and the plan file's path when there is one.
 - No message follows an approved plan: the tool's result tells the model that the session is in execute mode and to carry out the plan.
 - After a [compaction](providers.md#models) the main session's model is told the mode again, as the summary may not carry it. In execute mode that message also names the plan file when it has content. For a compaction between the steps of a run it arrives after the model's next response; for one that retries a reply too long for the context window, before the retry.
 - [Rules](permissions.md#rules) decide which calls ask, run or are refused.
@@ -49,7 +49,7 @@
 - Runs a command with `bash -c` (`/bin/sh` when `bash` is not on `PATH`) in the start directory, with Kopi's environment.
 - Every call is a fresh shell with no input; `cd` and variables do not carry over.
 - `timeout` is in milliseconds, default 120000, at most 600000. The main agent is told to set it only for a command that needs longer than the default; a [subagent's](subagents.md) command is stopped at its timeout instead of moving to the background.
-- A command still running at its timeout keeps running as a [background task](#background-tasks), as does one started with `run_in_background` or moved with the `background` key. The result names the task and the [file its output is saved to](#saved-output). In the fullscreen interface it also tells the model that it is told when the command ends and not to poll the file; `kopi -p` starts no turn for a command's end, so its result names only the task and the file. The row reads `Started <command> in background` for a command started there, with nothing under it, and `Moved <command> to background` for one moved there, with the time the call waited under it when its timeout moved it (`↳ after 2m`). Both rows end `· unsandboxed` when the call set `unsandboxed`.
+- A command still running at its timeout keeps running as a [background task](#background-tasks), as does one started with `run_in_background` or moved with the `background` key. The result names the task and the [file its output is saved to](#saved-output). In the fullscreen interface it also tells the model that it is told when the command ends and not to poll the file; `kopi -p` starts no turn for a command's end, so its result names only the task and the file, and says `Read` reads it. The row reads `Started <command> in background` for a command started there, with nothing under it, and `Moved <command> to background` for one moved there, with the time the call waited under it when its timeout moved it (`↳ after 2m`). Both rows end `· unsandboxed` when the call set `unsandboxed`.
 - On interrupt a foreground command's whole process group is killed (on Windows, only the shell).
 - The row's title is the command's first line, at most 80 characters, ending ` …` when the command is longer or has more lines.
 - Returns stdout and stderr combined, keeping the first and last 15,000 bytes; when more was printed, the rest is [saved to a file](#saved-output).
@@ -64,7 +64,7 @@
 - `Read` reaches the file with `offset` and `limit`, and `Grep` searches it when `path` names it. Only the session's own files are reachable, one at a time, and read only: `Write` and `Edit` refuse them, and so does everything else in Kopi's home, including the `outputs/` folder itself. The root session, its [subagents](subagents.md) and [workflow agents](workflows.md#workflow-agents) share one folder, and its files show as `output <name>` in a row.
 - A resumed session keeps its folder; a new session gets a new one. Kopi removes files older than a week, and the folders left empty, when it starts, so a resumed session older than that names a file that is gone.
 - Output of [your own commands](usage.md#your-own-commands) that is long, or that you moved to the background, is saved in the same folder.
-- The end notice of a background command ends with `[Output saved to <path>]`.
+- The end notice of a background command ends with `[Output saved to <path>; use Read to read it.]`.
 
 ## Background tasks
 
@@ -85,14 +85,14 @@
 
 ## Agent and SendMessage
 
-- `Agent` starts a [subagent](subagents.md) on a prompt and returns its task id at once; the subagent runs in the background, and the result tells the model that it is told when the subagent ends. Its row reads `explorer › <description>` and opens to the prompt.
-- `SendMessage` sends a further message to a subagent by task id. Its result has the name line `Agent: <name> › <description>`; its row reads `Messaged <name> › <description>` with `↳ queued`, and opens to the message. A running subagent reads it when its current step ends; one that has ended, or whose run is being stopped, starts again with its earlier context, and the call does not wait for the stopping run to end.
+- `Agent` starts a [subagent](subagents.md) on a prompt and returns its task id at once; the subagent runs in the background, and the result tells the model that it is told when the subagent ends, in a new turn if its own has ended, and not to do the subagent's task itself meanwhile. Its row reads `explorer › <description>` and opens to the prompt.
+- `SendMessage` sends a further message to a subagent by task id. Its result has the name line `Agent: <name> › <description>`; its row reads `Messaged <name> › <description>` with `↳ queued`, and opens to the message. A running subagent reads it when its current step ends; one that has ended, or whose run is being stopped, starts again with its earlier context, and the call does not wait for the stopping run to end. Until the agent has read a subagent's completion or failure notice, a message to that subagent is not delivered and the subagent does not run: the result says it has ended and that its report follows, and the row reads `SendMessage <name> › <description>` with `↳ ended`. A subagent stopped by you or by the agent's `TaskStop` starts again at once, and one you restart from its view accepts messages again.
 - The notice the agent receives when a subagent's run completes or fails, or when you stop it, lists the messages queued for it that it never read as undelivered. When the agent stops a subagent with `TaskStop` it receives no notice, and those messages are dropped.
 - Both exist only when a subagent is defined.
 
 ## Workflow
 
-- `Workflow` runs a JavaScript script that starts agents and combines their results, and returns a task id at once; the script runs in the background as a [workflow](workflows.md).
+- `Workflow` runs a JavaScript script that starts agents and combines their results, and returns a task id at once; the script runs in the background as a [workflow](workflows.md); the result says the same of its end as `Agent`'s does.
 - It is offered only in the fullscreen interface and becomes callable when a prompt you type in the main session contains `ultracode`.
 - It only reads, so it works in plan mode and does not ask by default; a bare `Workflow` rule in `deny` removes it.
 
