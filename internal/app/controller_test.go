@@ -3704,16 +3704,16 @@ func TestUnattendedPlanModeLineDoesNotNameExitPlanMode(t *testing.T) {
 	assert.Equal(t, [][]string{{"hi", line}}, h.userTexts(t, "hi"))
 }
 
-func TestModeLineIsToldAgainWhenItsPromptWasNotDelivered(t *testing.T) {
+func TestModeLineIsToldAgainWhenItsPromptWasNotRead(t *testing.T) {
 	c := &Controller{authority: policy.NewAuthority()}
 	c.main = &runner{c: c}
 	line := modeLine(policy.Plan, "", false)
 	sent := c.main.tell([]pigruntime.Prompt{{Text: "a"}})
 	assert.Equal(t, line, sent[0].Mode)
-	assert.Empty(t, c.main.tell([]pigruntime.Prompt{{Text: "b"}})[0].Mode)
+	assert.Equal(t, line, c.main.tell([]pigruntime.Prompt{{Text: "b"}})[0].Mode)
 
-	c.main.untell(sent)
-	assert.Equal(t, line, c.main.tell([]pigruntime.Prompt{{Text: "c"}})[0].Mode)
+	sent[0].ModeRead()
+	assert.Empty(t, c.main.tell([]pigruntime.Prompt{{Text: "c"}})[0].Mode)
 }
 
 func TestOpenReportsPlanFileSelectionFailure(t *testing.T) {

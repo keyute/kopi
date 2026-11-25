@@ -153,45 +153,53 @@ func (w *Workspace) CanAdd(dir string) error {
 	return w.canAdd(dir)
 }
 
-// Add makes a directory part of the workspace after the checks of CanAdd,
-// which share its lock section so concurrent adds of one directory cannot both
-// pass. given is the absolute path as the human spelled it and real its
-// canonical path (symlinks resolved, names as on disk), which is what results
-// name; either spelling reaches the directory.
-func (w *Workspace) Add(given, real string) error {
+// Dir is a directory under its two names.
+type Dir struct {
+	Given string // absolute, as it was spelled
+	Real  string // canonical: symlinks resolved, names as on disk
+}
+
+// Add makes d part of the workspace after the checks of CanAdd, which share its
+// lock section so concurrent adds of one directory cannot both pass. Either
+// name reaches the directory; results name Real.
+func (w *Workspace) Add(d Dir) error {
 	w.more.mu.Lock()
 	defer w.more.mu.Unlock()
-	if err := w.canAdd(given); err != nil {
+	if err := w.canAdd(d.Real); err != nil {
 		return err
 	}
-	a, err := os.Stat(given)
+	root, err := os.OpenRoot(d.Real)
 	if err != nil {
-		return fmt.Errorf("failed to stat %s: %w", given, err)
+		return fmt.Errorf("failed to open %s: %w", d.Real, err)
 	}
-	b, err := os.Stat(real)
+	// Real may have been replaced by a symlink since the caller resolved it, and
+	// OpenRoot follows symlinks, so the opened root must still be Real itself and
+	// the directory Given names.
+	opened, err := root.Stat(".")
 	if err != nil {
-		return fmt.Errorf("failed to stat %s: %w", real, err)
+		root.Close()
+		return fmt.Errorf("failed to stat %s: %w", d.Real, err)
 	}
-	if !os.SameFile(a, b) {
-		return fmt.Errorf("%s is not the directory %s", real, given)
-	}
-	d, err := NewWorkspace(real, w.protected)
+	resolved, err := filepath.EvalSymlinks(d.Real)
 	if err != nil {
-		return err
+		root.Close()
+		return fmt.Errorf("failed to resolve %s: %w", d.Real, err)
 	}
-	// real may have been replaced by a symlink since the caller resolved it, and
-	// NewWorkspace follows symlinks, so the opened root must still be b.
-	info, err := d.root.Stat(".")
+	real, err := os.Lstat(d.Real)
 	if err != nil {
-		d.root.Close()
-		return fmt.Errorf("failed to stat %s: %w", real, err)
+		root.Close()
+		return fmt.Errorf("failed to stat %s: %w", d.Real, err)
 	}
-	if d.realDir != real || !os.SameFile(info, b) {
-		d.root.Close()
-		return fmt.Errorf("%s is not the directory %s", real, given)
+	given, err := os.Stat(d.Given)
+	if err != nil {
+		root.Close()
+		return fmt.Errorf("failed to stat %s: %w", d.Given, err)
 	}
-	d.given = filepath.Clean(given)
-	w.more.dirs = append(w.more.dirs, d)
+	if resolved != d.Real || !os.SameFile(opened, real) || !os.SameFile(opened, given) {
+		root.Close()
+		return fmt.Errorf("%s is not the directory %s", d.Real, d.Given)
+	}
+	w.more.dirs = append(w.more.dirs, &Workspace{root: root, given: filepath.Clean(d.Given), realDir: d.Real, protected: w.protected, more: &added{}})
 	return nil
 }
 
@@ -211,10 +219,18 @@ func (w *Workspace) canAdd(dir string) error {
 	case err != nil:
 		return fmt.Errorf("failed to resolve %s: %w", dir, err)
 	}
+	var roots []os.FileInfo
 	for _, root := range append([]*Workspace{w}, w.more.dirs...) {
-		if within(root.realDir, resolved) {
-			return ErrInWorkspace
+		info, err := root.root.Stat(".")
+		if err != nil {
+			return fmt.Errorf("failed to stat %s: %w", root.realDir, err)
 		}
+		roots = append(roots, info)
+	}
+	if _, ok, err := insideStore(resolved, roots); err != nil {
+		return err
+	} else if ok {
+		return ErrInWorkspace
 	}
 	stores, err := w.statProtected()
 	if err != nil {

@@ -1025,7 +1025,7 @@ func TestWorkspaceFileSubject(t *testing.T) {
 func addedDir(t *testing.T, ws *Workspace) string {
 	t.Helper()
 	dir := t.TempDir()
-	require.NoError(t, ws.Add(dir, realPath(t, dir)))
+	require.NoError(t, ws.Add(Dir{Given: dir, Real: realPath(t, dir)}))
 	return dir
 }
 
@@ -1037,7 +1037,7 @@ func TestAddedDirectoryIsReachedThroughItsView(t *testing.T) {
 
 	_, err := ws.in(path).Open(path)
 	require.ErrorIs(t, err, ErrOutsideWorkspace)
-	require.NoError(t, ws.Add(dir, realPath(t, dir)))
+	require.NoError(t, ws.Add(Dir{Given: dir, Real: realPath(t, dir)}))
 
 	assert.Equal(t, "hello", readAll(t, ws.in(path), path))
 	assert.Equal(t, "hello", readAll(t, ws.in(path), filepath.Join(realPath(t, dir), "a.txt")))
@@ -1063,7 +1063,7 @@ func realPath(t *testing.T, dir string) string {
 func TestAddedDirectoryRefusesProtectedStores(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
 	ws := newWorkspace(t, t.TempDir(), protectedStores(home, kopiHome))
-	require.NoError(t, ws.Add(home, realPath(t, home)))
+	require.NoError(t, ws.Add(Dir{Given: home, Real: realPath(t, home)}))
 
 	for _, path := range []string{
 		filepath.Join(home, ".ssh", "id_x"),
@@ -1087,7 +1087,7 @@ func TestAddedDirectoryPreparedWritePinsParent(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
 	require.NoError(t, os.Mkdir(filepath.Join(home, "ordinary"), 0o755))
 	ws := newWorkspace(t, t.TempDir(), []string{kopiHome})
-	require.NoError(t, ws.Add(home, realPath(t, home)))
+	require.NoError(t, ws.Add(Dir{Given: home, Real: realPath(t, home)}))
 	path := filepath.Join(home, "ordinary", "missing", "file")
 	view := ws.in(path)
 	dest, err := view.prepare(path)
@@ -1110,7 +1110,7 @@ func TestAddedDirectoryTargetFollowsItsSymlinkAfterRepoint(t *testing.T) {
 	link := filepath.Join(parent, "proj")
 	require.NoError(t, os.Symlink("data", link))
 	ws := newWorkspace(t, t.TempDir(), nil)
-	require.NoError(t, ws.Add(link, realPath(t, link)))
+	require.NoError(t, ws.Add(Dir{Given: link, Real: realPath(t, link)}))
 	require.NoError(t, os.Remove(link))
 	require.NoError(t, os.Symlink("other", link))
 
@@ -1128,7 +1128,7 @@ func TestAddedDirectoryTargetFollowsItsSymlinkAfterRepoint(t *testing.T) {
 func TestAddedDirectoryTargetIsTheFileOpenReads(t *testing.T) {
 	dir, realDir := symlinkDotDotLayout(t)
 	ws := newWorkspace(t, t.TempDir(), nil)
-	require.NoError(t, ws.Add(dir, realPath(t, dir)))
+	require.NoError(t, ws.Add(Dir{Given: dir, Real: realPath(t, dir)}))
 	path := filepath.Join(dir, "docs", "link") + "/../key"
 
 	view := ws.in(path)
@@ -1145,7 +1145,7 @@ func TestCanAdd(t *testing.T) {
 	ws := newWorkspace(t, start, protectedStores(home, kopiHome))
 	other := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(other, "inner"), 0o755))
-	require.NoError(t, ws.Add(other, realPath(t, other)))
+	require.NoError(t, ws.Add(Dir{Given: other, Real: realPath(t, other)}))
 	writeFile(t, filepath.Join(other, "file.txt"), "")
 
 	for name, tc := range map[string]struct {
@@ -1180,11 +1180,25 @@ func TestCanAdd(t *testing.T) {
 	require.ErrorIs(t, ws.CanAdd(filepath.Join(other, "link")), ErrProtected)
 }
 
+func TestCanAddRefusesAnAddedDirectoryInAnotherCase(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("only darwin respells names as on disk")
+	}
+	parent := realPath(t, t.TempDir())
+	onDisk := filepath.Join(parent, "Other")
+	require.NoError(t, os.MkdirAll(filepath.Join(onDisk, "inner"), 0o755))
+	ws := newWorkspace(t, t.TempDir(), nil)
+	require.NoError(t, ws.Add(Dir{Given: onDisk, Real: onDisk}))
+
+	require.ErrorIs(t, ws.CanAdd(filepath.Join(parent, "other")), ErrInWorkspace)
+	require.ErrorIs(t, ws.CanAdd(filepath.Join(parent, "OTHER", "inner")), ErrInWorkspace)
+}
+
 func TestAddRefusesWhatCanAddRefuses(t *testing.T) {
 	ws := newWorkspace(t, t.TempDir(), nil)
 	dir := addedDir(t, ws)
 
-	require.ErrorIs(t, ws.Add(dir, realPath(t, dir)), ErrInWorkspace)
+	require.ErrorIs(t, ws.Add(Dir{Given: dir, Real: realPath(t, dir)}), ErrInWorkspace)
 	assert.Len(t, ws.more.dirs, 1)
 }
 
@@ -1195,7 +1209,7 @@ func TestAddOfTheSameDirectoryRacesOnce(t *testing.T) {
 	errs := make(chan error, 8)
 	var wg sync.WaitGroup
 	for range cap(errs) {
-		wg.Go(func() { errs <- ws.Add(dir, real) })
+		wg.Go(func() { errs <- ws.Add(Dir{Given: dir, Real: real}) })
 	}
 	wg.Wait()
 	close(errs)
@@ -1217,7 +1231,7 @@ func TestAddedDirectorySpellings(t *testing.T) {
 	alias := filepath.Join(t.TempDir(), "alias")
 	require.NoError(t, os.Symlink(given, alias))
 	writeFile(t, filepath.Join(given, "a.txt"), "hello")
-	require.NoError(t, ws.Add(alias, realPath(t, given)))
+	require.NoError(t, ws.Add(Dir{Given: alias, Real: realPath(t, given)}))
 
 	for _, path := range []string{filepath.Join(alias, "a.txt"), filepath.Join(realPath(t, given), "a.txt")} {
 		assert.Equal(t, "hello", readAll(t, ws.in(path), path), path)
@@ -1228,7 +1242,7 @@ func TestAddRefusesARealPathOfAnotherDirectory(t *testing.T) {
 	ws := newWorkspace(t, t.TempDir(), nil)
 	given, other := t.TempDir(), t.TempDir()
 
-	require.Error(t, ws.Add(given, realPath(t, other)))
+	require.Error(t, ws.Add(Dir{Given: given, Real: realPath(t, other)}))
 	assert.Empty(t, ws.more.dirs)
 }
 
@@ -1242,7 +1256,7 @@ func TestAddRefusesARealPathReplacedBySymlink(t *testing.T) {
 	require.NoError(t, os.Symlink(b, a))
 	ws := newWorkspace(t, t.TempDir(), nil)
 
-	require.Error(t, ws.Add(a, canonical))
+	require.Error(t, ws.Add(Dir{Given: a, Real: canonical}))
 	assert.Empty(t, ws.more.dirs)
 	path := filepath.Join(canonical, "secret.txt")
 	_, err := ws.Open(path)
@@ -1258,7 +1272,7 @@ func TestAddedDirectoryIsReachedThroughBothCaseSpellings(t *testing.T) {
 	typed := filepath.Join(parent, "other")
 	writeFile(t, filepath.Join(onDisk, "a.txt"), "hello")
 	ws := newWorkspace(t, t.TempDir(), nil)
-	require.NoError(t, ws.Add(typed, onDisk))
+	require.NoError(t, ws.Add(Dir{Given: typed, Real: onDisk}))
 
 	for _, dir := range []string{typed, onDisk} {
 		path := filepath.Join(dir, "a.txt")
@@ -1279,7 +1293,7 @@ func TestNestedRootsPickTheStartDirectoryFirst(t *testing.T) {
 	start := filepath.Join(parent, "b")
 	require.NoError(t, os.Mkdir(start, 0o755))
 	ws := newWorkspace(t, start, nil)
-	require.NoError(t, ws.Add(parent, realPath(t, parent)))
+	require.NoError(t, ws.Add(Dir{Given: parent, Real: realPath(t, parent)}))
 
 	assert.Same(t, ws, ws.in(filepath.Join(start, "x")))
 	assert.Same(t, ws, ws.in("x"))
@@ -1316,7 +1330,7 @@ func TestCopiesMadeBeforeTheAddReachTheAddedDirectory(t *testing.T) {
 func TestAddedDirectoryViewKeepsPlanAndOutputFiles(t *testing.T) {
 	ws, plan, outputs := newPlanWorkspace(t, t.TempDir())
 	home := t.TempDir()
-	require.NoError(t, ws.Add(home, realPath(t, home)))
+	require.NoError(t, ws.Add(Dir{Given: home, Real: realPath(t, home)}))
 	view := ws.in(filepath.Join(home, "x"))
 
 	assert.Same(t, view.plans, ws.plans)
@@ -1331,7 +1345,7 @@ func TestInSkipsAViewWhoseMatchClimbsOut(t *testing.T) {
 	require.NoError(t, os.Mkdir(start, 0o755))
 	writeFile(t, filepath.Join(parent, "other", "f"), "hello")
 	ws := newWorkspace(t, start, nil)
-	require.NoError(t, ws.Add(parent, parent))
+	require.NoError(t, ws.Add(Dir{Given: parent, Real: parent}))
 	path := filepath.Join(start, "..", "other", "f")
 
 	view := ws.in(path)

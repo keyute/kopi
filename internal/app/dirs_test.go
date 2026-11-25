@@ -57,7 +57,7 @@ func dirConfig(t *testing.T, sb pigruntimetest.Sandbox, cfg Config) (Config, *to
 	cfg.Files, cfg.Rules, cfg.Tools = ws, rules, append(cfg.Tools, read)
 	home, err := trust.Canonical(sb.Home)
 	require.NoError(t, err)
-	cfg.TrustFile, cfg.UserHome = filepath.Join(sb.KopiHome, "trust.json"), home
+	cfg.TrustFile, cfg.Home = filepath.Join(sb.KopiHome, "trust.json"), tool.Dir{Given: sb.Home, Real: home}
 	cfg.Plans = tool.NewPlans(filepath.Join(sb.Home, "plans"))
 	gate := policy.NewGate(policy.NewAuthority(), specs, rules, answer(policy.Allow, ""), nil)
 	return cfg, ws, gate
@@ -293,6 +293,64 @@ func TestAddDirNeverSavesAnAnswerForTheUsersHome(t *testing.T) {
 
 	assert.True(t, d.c.AnswerDir(req.Token, true, true))
 	assert.Equal(t, event.Notice{Text: "Added " + home + " to the workspace."}, receiveEvent(t, notices))
+	assert.NoFileExists(t, d.c.cfg.TrustFile)
+}
+
+// symlinkedHome makes d's user home a symlink to a real directory and returns
+// the real one.
+func symlinkedHome(t *testing.T, d *dirHarness) string {
+	t.Helper()
+	real := canonicalTemp(t)
+	link := filepath.Join(canonicalTemp(t), "home")
+	require.NoError(t, os.Symlink(real, link))
+	d.c.cfg.Home = tool.Dir{Given: link, Real: real}
+	return real
+}
+
+func TestAddDirExpandsTheHomeAsSpelled(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	real := symlinkedHome(t, d)
+	link := d.c.cfg.Home.Given
+	proj := filepath.Join(real, "proj")
+	require.NoError(t, os.Mkdir(proj, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(proj, "f.txt"), []byte("hello"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(proj, ".env"), nil, 0o600))
+	requests := subscribeTo[event.DirRequested](d.c)
+
+	require.NoError(t, d.c.AddDir("~/proj"))
+	req := receiveEvent(t, requests)
+	assert.Equal(t, proj, req.Dir)
+	assert.True(t, d.c.AnswerDir(req.Token, true, false))
+
+	for _, dir := range []string{filepath.Join(link, "proj"), proj} {
+		args, err := json.Marshal(map[string]string{"file_path": filepath.Join(dir, "f.txt")})
+		require.NoError(t, err)
+		require.NoError(t, d.gate.Before(t.Context(), "c1", "Read", args), dir)
+		res, err := tool.NewRead(d.ws).Run(t.Context(), args, func(target policy.Target) (policy.Mode, error) {
+			return d.gate.Admit("c1", "Read", args, &target)
+		})
+		require.NoError(t, err, dir)
+		assert.Contains(t, res.Text, "hello", dir)
+		assert.True(t, d.denied(t, filepath.Join(dir, ".env")), dir)
+	}
+	decision, ok := saved(t, d.c, proj)
+	assert.True(t, ok, "the decision is saved under the real path")
+	assert.Equal(t, trust.Untrusted, decision)
+	_, ok = saved(t, d.c, filepath.Join(link, "proj"))
+	assert.True(t, ok, "the trust store resolves the spelling")
+}
+
+func TestAddDirNeverSavesAnAnswerForAHomeSpelledThroughASymlink(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	real := symlinkedHome(t, d)
+	requests := subscribeTo[event.DirRequested](d.c)
+
+	require.NoError(t, d.c.AddDir("~"))
+	req := receiveEvent(t, requests)
+	assert.Equal(t, real, req.Dir)
+	assert.False(t, req.Saved)
+
+	assert.True(t, d.c.AnswerDir(req.Token, true, true))
 	assert.NoFileExists(t, d.c.cfg.TrustFile)
 }
 

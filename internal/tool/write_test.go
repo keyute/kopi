@@ -263,7 +263,7 @@ func TestWriteReachesAnAddedDirectory(t *testing.T) {
 
 	_, err := tool.Run(context.Background(), json.RawMessage(args), allowTarget)
 	require.ErrorIs(t, err, ErrOutsideWorkspace)
-	require.NoError(t, ws.Add(other, realPath(t, other)))
+	require.NoError(t, ws.Add(Dir{Given: other, Real: realPath(t, other)}))
 
 	var admitted policy.Target
 	res, err := tool.Run(context.Background(), json.RawMessage(args), func(t policy.Target) (policy.Mode, error) {

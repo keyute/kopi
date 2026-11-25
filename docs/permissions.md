@@ -18,7 +18,7 @@ Permission rules in `config.json` allow, ask about or deny calls:
 - The name is a tool name (`Read`, `Glob`, `Grep`, `LS`, `Write`, `Edit`, `Bash`, `Agent`, `SendMessage`, `Workflow`, `StructuredOutput`, `TaskStop`, `ToolSearch`, `Skill`, `WebFetch`, `WebSearch`, `AskUserQuestion`, `ExitPlanMode`), an [MCP tool name](mcp.md#plan-mode-and-rules) or `*` for every tool.
 - An unknown name or a malformed rule is rejected at start.
 - Paths:
-  - `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory, and applies in each directory added with [`/add-dir`](usage.md#commands) too: `Edit(docs/**)` allows in an added directory's `docs/` as well. A rule reaches an added directory through its real path, so for a directory added through a symlink an allow rule asks instead of allowing when the call names the file through the symlink. Deny and ask rules still apply.
+  - `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory, and applies in each directory added with [`/add-dir`](usage.md#commands) too: `Edit(docs/**)` allows in an added directory's `docs/` as well. A rule reaches an added directory through the path it was added by and through its real path, so for a directory added through a symlink it applies whichever of the two the call names the file by.
   - `*` and `**` glob.
   - A name with no slash (`.env`) matches at any depth, and a directory covers everything in it.
   - Paths match case-insensitively on macOS and Windows.

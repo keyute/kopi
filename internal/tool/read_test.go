@@ -447,7 +447,7 @@ func TestReadReachesAnAddedDirectory(t *testing.T) {
 	_, err := runRead(t, tool, args)
 	require.ErrorIs(t, err, ErrOutsideWorkspace)
 	ws := newWorkspace(t, dir, nil)
-	require.NoError(t, ws.Add(other, realPath(t, other)))
+	require.NoError(t, ws.Add(Dir{Given: other, Real: realPath(t, other)}))
 	tool = NewRead(ws)
 
 	out, err := runRead(t, tool, args)

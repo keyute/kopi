@@ -79,6 +79,11 @@ type Prompt struct {
 	// mode and the directories added to the workspace. It is read after Text and
 	// Skills; the transcript does not draw it. Empty sends none.
 	Mode string
+	// ModeRead is called once the model has read Mode, that is once its message
+	// is in the session. It runs on PiG's event executor with no Session lock
+	// held and must not call back into the Session. It is never called when the
+	// mode line does not reach the model. Nil is no callback.
+	ModeRead func()
 	// Tools names the deferred tools the prompt makes callable, from the
 	// model request that carries it. Names the session does not have are
 	// ignored.
@@ -112,7 +117,12 @@ func modeMessage(text string) extension.CustomMessageRef {
 	return extension.CustomMessageRef{CustomType: modeType, Content: text, Display: false}
 }
 
-// recallAfterCompaction sends text() as a mode line after every compaction that
+// recallType is the PiG custom type of the text sent after a compaction. It is
+// not modeType so that every mode message that starts during a Send is one the
+// Send queued, which Send counts on to match them with Prompt.ModeRead.
+const recallType = "kopi.recall"
+
+// recallAfterCompaction sends text() as a recall message after every compaction that
 // succeeded, for the session's lifetime.
 //
 // The message does not trigger a turn: PiG appends such a message at the end of
@@ -130,7 +140,7 @@ func (s *Session) recallAfterCompaction(text func() string) {
 		if line == "" {
 			return
 		}
-		if err := s.inner.SendCustomMessage(context.Background(), modeMessage(line), &extension.SendMessageOptions{TriggerTurn: &passive}); err != nil {
+		if err := s.inner.SendCustomMessage(context.Background(), extension.CustomMessageRef{CustomType: recallType, Content: line, Display: false}, &extension.SendMessageOptions{TriggerTurn: &passive}); err != nil {
 			slog.Warn("failed to recall after compaction", "error", err)
 		}
 	})
@@ -215,6 +225,11 @@ func (n Notice) label() string {
 func isNotice(m agent.AgentMessage) bool {
 	t, _ := m.Custom["customType"].(string)
 	return t == noticeType || t == commandType
+}
+
+func isMode(m agent.AgentMessage) bool {
+	t, _ := m.Custom["customType"].(string)
+	return t == modeType
 }
 
 func toAI(images []Image) []ai.ImageContent {
@@ -467,9 +482,6 @@ type SendResult struct {
 	// UndeliveredNotices are the notices, given or handed over, the model
 	// never read, in delivery order.
 	UndeliveredNotices []Notice
-	// ModeUndelivered are the handed-over prompts whose mode line failed to
-	// reach the model, as given; the caller must offer it again.
-	ModeUndelivered []Prompt
 	// Continuation keeps this send's raise for a continuation of the turn.
 	// SetEffort invalidates it, including after Send returns. A pre-cancelled
 	// send passes its prompt's continuation through without applying it.
@@ -555,7 +567,10 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	// producer into PiG's queue and PiG delivers in queue order, after p, so
 	// each user message after p's is the head.
 	var handed []Prompt
-	var modeUndelivered []Prompt
+	// modes is the ModeRead of each mode line queued and not yet read; PiG
+	// delivers them in the order Send queues them. The caller's goroutine appends
+	// the send's own before the run starts, the event executor the rest.
+	var modes []func()
 	// pending is the notices not yet delivered. PiG delivers them in the
 	// order Send gives them, so each notice message is the head.
 	pending := slices.Clone(notices)
@@ -569,6 +584,16 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 		abortInLoop(ev)
 		switch ev := ev.(type) {
 		case agent.MessageStartEvent:
+			if isMode(ev.Message) {
+				if len(modes) > 0 {
+					read := modes[0]
+					modes = modes[1:]
+					if read != nil {
+						read()
+					}
+				}
+				return
+			}
 			if isNotice(ev.Message) {
 				sent = true
 				if len(pending) > 0 {
@@ -636,7 +661,8 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 				if q.Mode != "" {
 					if err := s.inner.SendCustomMessage(pigCtx, modeMessage(q.Mode), &extension.SendMessageOptions{DeliverAs: extension.DeliverAsSteer}); err != nil {
 						slog.Warn("failed to hand over mode line", "error", err)
-						modeUndelivered = append(modeUndelivered, q)
+					} else {
+						modes = append(modes, q.ModeRead)
 					}
 				}
 			}
@@ -651,7 +677,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	s.loadTools(p.Tools)
 	defer s.restoreEffort()
 	s.raise(p.Effort, p.Continuation)
-	err := s.deliver(pigCtx, p, notices)
+	err := s.deliver(pigCtx, p, notices, &modes)
 	// An abort already under way must finish before Send returns, or its
 	// RequestAbort could land on the following turn.
 	if !stop() {
@@ -662,7 +688,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	_, _ = s.inner.ClearQueue()
 	s.inner.Agent().ClearSteeringQueue()
 	s.inner.Agent().TakePendingNextTurn()
-	res := SendResult{Sent: sent, Undelivered: handed, UndeliveredNotices: pending, ModeUndelivered: modeUndelivered}
+	res := SendResult{Sent: sent, Undelivered: handed, UndeliveredNotices: pending}
 	s.effortMu.Lock()
 	if s.raised != DefaultEffort {
 		res.Continuation = &EffortContinuation{revision: s.effortRevision, effort: s.raised}
@@ -724,8 +750,9 @@ func (s *Session) RecordNotices(notices []Notice) error {
 
 // deliver runs p with notices queued as next-turn context after it, or, when p
 // is empty, a run started by the first notice with the rest after it. Either
-// call blocks until the run settles.
-func (s *Session) deliver(ctx context.Context, p Prompt, notices []Notice) error {
+// call blocks until the run settles. It appends p's ModeRead to modes when it
+// queues the mode line.
+func (s *Session) deliver(ctx context.Context, p Prompt, notices []Notice, modes *[]func()) error {
 	wake := p.Text == "" && len(p.Images) == 0 && len(notices) > 0
 	queued := notices
 	if wake {
@@ -738,6 +765,7 @@ func (s *Session) deliver(ctx context.Context, p Prompt, notices []Notice) error
 			}
 		}
 		if p.Mode != "" {
+			*modes = append(*modes, p.ModeRead)
 			if err := s.inner.SendCustomMessage(ctx, modeMessage(p.Mode), &extension.SendMessageOptions{DeliverAs: extension.DeliverAsNextTurn}); err != nil {
 				return fmt.Errorf("failed to send mode line: %w", reword(err))
 			}

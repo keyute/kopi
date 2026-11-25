@@ -338,8 +338,8 @@ func TestSearchRootRefusesProtectedAndOutsideInAnAddedDirectory(t *testing.T) {
 	ws := newWorkspace(t, t.TempDir(), protectedStores(home, kopiHome))
 	other := t.TempDir()
 	writeFile(t, filepath.Join(other, "sub", "a.go"), "")
-	require.NoError(t, ws.Add(other, realPath(t, other)))
-	require.NoError(t, ws.Add(home, realPath(t, home)))
+	require.NoError(t, ws.Add(Dir{Given: other, Real: realPath(t, other)}))
+	require.NoError(t, ws.Add(Dir{Given: home, Real: realPath(t, home)}))
 	for _, path := range []string{filepath.Join(home, ".ssh"), filepath.Join(kopiHome, "config.json")} {
 		_, _, _, err := ws.in(path).searchRoot(path)
 		require.ErrorIs(t, err, ErrProtected, path)

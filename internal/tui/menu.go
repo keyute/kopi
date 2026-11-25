@@ -32,7 +32,8 @@ type menu struct {
 	// arg is q's whole argument, trimmed: q.Text stops at the cursor, but Enter
 	// sends or replaces all of it.
 	arg string
-	// picked reports that Up, Down or Tab chose the row since the token's text changed.
+	// picked reports that Up, Down or Tab chose the row since the token's text
+	// changed; while pending they are held instead.
 	picked bool
 	// seq numbers the latest load; an older candidatesMsg is dropped.
 	seq int
@@ -43,6 +44,9 @@ type menu struct {
 	// pending reports that a typed load for q.Text has not arrived: the rows
 	// shown are for older text, so none is lit.
 	pending bool
+	// held is the Up, Down and Tab presses made while pending, run against the
+	// reply's rows when it arrives.
+	held []tea.KeyPressMsg
 	// dismissed is the token, Text cleared, that the menu was closed on; it
 	// stays closed until the token changes. Zero means none.
 	dismissed app.Query
@@ -79,7 +83,7 @@ func (m *model) followMenu() tea.Cmd {
 	}
 	var cmd tea.Cmd
 	if !mn.open || q.Kind != prev.Kind || q.Command != prev.Command {
-		mn.items, mn.sel, mn.picked, mn.optional, mn.typed, mn.pending = nil, 0, false, false, false, false
+		mn.items, mn.sel, mn.picked, mn.optional, mn.typed, mn.pending, mn.held = nil, 0, false, false, false, false, nil
 		mn.seq++
 		seq, c := mn.seq, m.c
 		switch q.Kind {
@@ -100,7 +104,7 @@ func (m *model) followMenu() tea.Cmd {
 			}
 		}
 	} else if q.Text != prev.Text || mn.arg != prevArg {
-		mn.sel, mn.picked = 0, false
+		mn.sel, mn.picked, mn.held = 0, false, nil
 		// The rows stay until the reply, so the menu does not blink between keys.
 		if mn.typed && q.Text != prev.Text {
 			mn.seq++
@@ -134,26 +138,46 @@ func (m *model) rematch() {
 	mn.sel = min(mn.sel, max(0, len(mn.shown)-1))
 }
 
-func (m *model) loaded(msg candidatesMsg) {
-	if msg.seq != m.menu.seq || !m.menu.open {
-		return
+// loaded takes a reply. For a typed menu its rows start unpicked, then the
+// keys held while it was pending run against them.
+func (m *model) loaded(msg candidatesMsg) tea.Cmd {
+	mn := &m.menu
+	if msg.seq != mn.seq || !mn.open {
+		return nil
 	}
-	if m.menu.typed {
-		// Up, Down and Tab pressed while the reply was pending stay in force.
-		m.menu.pending = false
+	held := mn.held
+	mn.held = nil
+	if mn.typed {
+		mn.pending = false
+		mn.sel, mn.picked = 0, false
 	}
 	if msg.err != nil {
 		slog.Warn("failed to load completions", "err", msg.err)
-		if m.menu.typed {
-			m.menu.items = nil
+		if mn.typed {
+			mn.items = nil
 			m.rematch()
 		}
-		return
+		return nil
 	}
-	m.menu.items = msg.cs
-	if !m.holding() {
-		m.rematch()
+	mn.items = msg.cs
+	if m.holding() {
+		return nil
 	}
+	m.rematch()
+	var cmds []tea.Cmd
+	for _, k := range held {
+		if len(mn.shown) == 0 {
+			break
+		}
+		draft := m.composer.value()
+		cmd, _ := m.menuKey(k)
+		cmds = append(cmds, cmd)
+		// The rows no longer belong to a draft a key changed.
+		if m.composer.value() != draft {
+			break
+		}
+	}
+	return tea.Batch(cmds...)
 }
 
 // want is the rows the menu would take with room for all of them: its
@@ -254,9 +278,14 @@ func oneLine(s string) string {
 	return strings.Join(wrap(s, beyond), " ")
 }
 
-// menuKey handles k while the menu shows, reporting whether it did.
+// menuKey handles k while the menu shows, reporting whether it did. Up, Down
+// and Tab while a reply is pending are only held for it.
 func (m *model) menuKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 	km, mn := &m.keys, &m.menu
+	if mn.pending && (key.Matches(k, km.menuUp) || key.Matches(k, km.menuDown) || key.Matches(k, km.complete)) {
+		mn.held = append(mn.held, k)
+		return nil, true
+	}
 	switch {
 	case key.Matches(k, km.menuUp):
 		mn.sel = (mn.sel - 1 + len(mn.shown)) % len(mn.shown)
@@ -281,6 +310,7 @@ func (m *model) menuKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 		mn.dismissed = mn.q
 		mn.dismissed.Text = ""
 		mn.open = false
+		mn.held = nil
 	default:
 		return nil, false
 	}

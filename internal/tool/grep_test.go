@@ -690,7 +690,7 @@ func TestGrepSearchesAnAddedDirectoryWithAbsoluteResults(t *testing.T) {
 
 	_, err := runGrep(t, tool, args)
 	require.ErrorIs(t, err, ErrOutsideWorkspace)
-	require.NoError(t, ws.Add(other, realPath(t, other)))
+	require.NoError(t, ws.Add(Dir{Given: other, Real: realPath(t, other)}))
 
 	out, err := runGrep(t, tool, args)
 	require.NoError(t, err)
@@ -708,7 +708,7 @@ func TestGrepOmitsHiddenInAnAddedDirectory(t *testing.T) {
 	other := t.TempDir()
 	writeFile(t, filepath.Join(other, "a.txt"), "needle\n")
 	writeFile(t, filepath.Join(other, "secret.txt"), "needle\n")
-	require.NoError(t, ws.Add(other, realPath(t, other)))
+	require.NoError(t, ws.Add(Dir{Given: other, Real: realPath(t, other)}))
 	hidden, _ := recordHidden(func(t policy.Target) bool { return filepath.Base(t.Real) == "secret.txt" })
 
 	out, err := runGrep(t, NewGrep(ws, hidden), fmt.Sprintf(`{"pattern":"needle","path":%q}`, other))
@@ -721,7 +721,7 @@ func TestGrepNamesASavedOutputFileAsGivenInAnAddedDirectory(t *testing.T) {
 	writeFile(t, filepath.Join(outputs, "o.txt"), "needle\n")
 	ws := newWorkspace(t, t.TempDir(), nil).WithOutputs(saved)
 	parent := filepath.Dir(filepath.Dir(outputs))
-	require.NoError(t, ws.Add(parent, realPath(t, parent)))
+	require.NoError(t, ws.Add(Dir{Given: parent, Real: realPath(t, parent)}))
 	file := filepath.Join(outputs, "o.txt")
 
 	out, err := runGrep(t, NewGrep(ws, nil), fmt.Sprintf(`{"pattern":"needle","path":%q}`, file))
@@ -735,7 +735,7 @@ func TestGrepLeavesKopiHomeOutOfAnAddedDirectory(t *testing.T) {
 	writeFile(t, filepath.Join(home, "a.txt"), "needle\n")
 	writeFile(t, filepath.Join(kopiHome, "config.json"), "needle\n")
 	ws := newWorkspace(t, t.TempDir(), protectedStores(home, kopiHome))
-	require.NoError(t, ws.Add(home, realPath(t, home)))
+	require.NoError(t, ws.Add(Dir{Given: home, Real: realPath(t, home)}))
 
 	out, err := runGrep(t, NewGrep(ws, nil), fmt.Sprintf(`{"pattern":"needle","path":%q}`, home))
 

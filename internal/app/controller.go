@@ -52,9 +52,11 @@ type Config struct {
 	// SandboxDirs sets the directories added to the workspace as the sandbox's
 	// write roots; nil when there is no sandbox.
 	SandboxDirs func(dirs []string) error
-	// TrustFile is the trust store /add-dir reads and saves decisions in, and
-	// UserHome the home it expands ~ with and never saves a decision for.
-	TrustFile, UserHome string
+	// TrustFile is the trust store /add-dir reads and saves decisions in.
+	TrustFile string
+	// Home is the user's home: /add-dir expands ~ with its Given name and never
+	// saves a decision for its Real one.
+	Home tool.Dir
 	// InstructionFallbacks are the file names read where AGENTS.md is missing,
 	// in an added directory too.
 	InstructionFallbacks []string
@@ -1394,7 +1396,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		stopCommand = c.main.clearQueueLocked()
 	}
 	c.main.sess, c.sessID, c.main.emit, c.main.bound, c.main.unsubscribe = sess, id, emit, bound, unsubscribe
-	c.main.told, c.main.dirsTold, c.main.dirsLeft = "", 0, nil
+	c.main.told, c.main.dirsTold = "", 0
 	c.titled = sess.Name() != ""
 	c.spent = pigruntime.Usage{}
 	c.deferred = nil

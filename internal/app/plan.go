@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"log/slog"
-	"slices"
 	"strings"
 
 	"github.com/keyute/kopi/internal/event"
@@ -90,7 +89,7 @@ func modeLine(mode policy.Mode, planPath string, approval bool) string {
 
 // recall is what the main session's model is told again after a compaction,
 // which may have summarised the mode line away: that line, in execute mode the
-// plan file when it has content, and the directories it was told. It does not
+// plan file when it has content, and the directories it has read. It does not
 // count as told.
 func (c *Controller) recall() string {
 	mode, path := c.mode(), c.cfg.Plans.Path()
@@ -101,7 +100,7 @@ func (c *Controller) recall() string {
 		}
 	}
 	// The runtime calls recall during a compaction, with queue free; the
-	// directories not yet told arrive with the next prompt.
+	// directories not yet read arrive with the next prompt.
 	c.queue.Lock()
 	told := c.main.dirsTold
 	c.queue.Unlock()
@@ -116,11 +115,12 @@ func (c *Controller) planApproval() bool {
 	return c.cfg.Plans != nil && !c.cfg.Unattended && !c.cfg.Rules.Removes("ExitPlanMode")
 }
 
-// tell attaches to the last of ps what the model has not read yet and records
-// it as told: the current mode line, for the main session only, and the
-// directories added to the workspace since the session was told. ps carry no
-// line of their own: an earlier one that was not delivered has been taken back
-// by untell. It must be called with queue held.
+// tell attaches to the last of ps what the model has not read yet: the current
+// mode line, for the main session only, and the directories added to the
+// workspace since the model last read any. ps carry no line of their own. It
+// records nothing as told: the prompt's ModeRead does once the model reads the
+// line, so text that was not read is offered again by the next tell. It must be
+// called with queue held.
 //
 // Every prompt about to be sent to the main session's model passes through tell,
 // so it is also where the session's first human prompt is noticed for its title.
@@ -128,65 +128,48 @@ func (r *runner) tell(ps []pigruntime.Prompt) []pigruntime.Prompt {
 	if len(ps) == 0 {
 		return ps
 	}
-	main := r == r.c.main
+	c := r.c
+	main := r == c.main
 	if main {
-		r.c.nameSessionLocked(ps)
+		c.nameSessionLocked(ps)
 	}
 	ps = append([]pigruntime.Prompt(nil), ps...)
 	for i := range ps {
-		ps[i].Mode = ""
+		ps[i].Mode, ps[i].ModeRead = "", nil
 	}
-	var carried delivery
 	var lines []string
+	var line string
 	if main {
-		if line := modeLine(r.c.mode(), r.c.cfg.Plans.Path(), r.c.planApproval()); line != r.told {
-			lines = append(lines, line)
-			r.told, carried.line = line, true
+		if l := modeLine(c.mode(), c.cfg.Plans.Path(), c.planApproval()); l != r.told {
+			line = l
+			lines = append(lines, l)
 		}
 	}
-	spans := r.dirsLeft
-	r.dirsLeft = nil
-	if n := r.c.dirCount(); n > r.dirsTold {
-		spans = append(spans, span{r.dirsTold, n})
-		r.dirsTold = n
+	n := c.dirCount()
+	if n > r.dirsTold {
+		lines = append(lines, c.dirsText(r.dirsTold, n, !r.noFiles))
 	}
-	slices.SortFunc(spans, func(a, b span) int { return a.from - b.from })
-	for _, s := range spans {
-		// Spans of prompts that were not delivered may touch or repeat.
-		if last := len(carried.dirs) - 1; last >= 0 && s.from <= carried.dirs[last].to {
-			carried.dirs[last].to = max(carried.dirs[last].to, s.to)
-		} else {
-			carried.dirs = append(carried.dirs, s)
+	if len(lines) == 0 {
+		return ps
+	}
+	c.mu.Lock()
+	sess := r.sess
+	c.mu.Unlock()
+	last := &ps[len(ps)-1]
+	last.Mode = strings.Join(lines, "\n")
+	last.ModeRead = func() {
+		c.queue.Lock()
+		defer c.queue.Unlock()
+		c.mu.Lock()
+		current := r.sess == sess
+		c.mu.Unlock()
+		if !current {
+			return
 		}
-	}
-	for _, s := range carried.dirs {
-		lines = append(lines, r.c.dirsText(s.from, s.to, !r.noFiles))
-	}
-	mode := strings.Join(lines, "\n")
-	ps[len(ps)-1].Mode = mode
-	if carried.line || len(carried.dirs) > 0 {
-		if r.toldBy == nil {
-			r.toldBy = map[string]delivery{}
+		if line != "" {
+			r.told = line
 		}
-		r.toldBy[mode] = carried
+		r.dirsTold = max(r.dirsTold, n)
 	}
 	return ps
-}
-
-// untell forgets what was told when a prompt that carried it was not
-// delivered: the mode line if it carried it, and the directories it carried. It
-// must be called with queue held.
-func (r *runner) untell(ps ...[]pigruntime.Prompt) {
-	for _, group := range ps {
-		for _, p := range group {
-			t, ok := r.toldBy[p.Mode]
-			if !ok {
-				continue
-			}
-			if t.line {
-				r.told = ""
-			}
-			r.dirsLeft = append(r.dirsLeft, t.dirs...)
-		}
-	}
 }

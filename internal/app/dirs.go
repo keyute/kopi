@@ -12,26 +12,26 @@ import (
 
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/instruction"
+	"github.com/keyute/kopi/internal/tool"
 	"github.com/keyute/kopi/internal/trust"
 )
 
 // maxDirCandidates bounds the directories /add-dir offers.
 const maxDirCandidates = 50
 
-// addedDir is a directory added to the workspace: its canonical path, the
-// absolute spelling the human typed, which the rules match too, and the
-// instruction files the model is sent with it.
+// addedDir is a directory added to the workspace and the instruction files the
+// model is sent with it.
 type addedDir struct {
-	path, typed string
-	files       []instruction.File
+	dir   tool.Dir
+	files []instruction.File
 }
 
 // pendingDir is an add waiting for the human's answer. arg is the argument as
-// written and typed its absolute spelling, which the workspace keeps; dir is
-// canonical. files are every instruction file trusting dir would send.
+// written. files are every instruction file trusting dir would send.
 type pendingDir struct {
-	arg, typed, dir string
-	files           []instruction.File
+	arg   string
+	dir   tool.Dir
+	files []instruction.File
 	// saved is false when the answer is never written to the trust store.
 	saved bool
 }
@@ -59,12 +59,12 @@ func (c *Controller) AddDir(arg string) error {
 	if decided || c.cfg.Unattended {
 		return c.applyDir(p, decided && decision == trust.Trusted)
 	}
-	req := event.DirRequested{Dir: p.dir, Saved: p.saved}
+	req := event.DirRequested{Dir: p.dir.Real, Saved: p.saved}
 	for _, f := range p.files {
 		req.Instructions = append(req.Instructions, f.Path)
 	}
 	if c.cfg.Covers != nil {
-		req.Servers, req.Skills = c.cfg.Covers(p.dir)
+		req.Servers, req.Skills = c.cfg.Covers(p.dir.Real)
 	}
 	// The registration and its event stay ordered against the end of the
 	// request, or a dialog could open after its DirEnded.
@@ -89,23 +89,24 @@ func (c *Controller) AddDir(arg string) error {
 // prepareDir checks that arg can join the workspace and looks up the trust
 // decision for it.
 func (c *Controller) prepareDir(arg string) (p *pendingDir, decision trust.Decision, decided bool, err error) {
-	typed := c.typedDir(arg)
-	if err := c.cfg.Files.CanAdd(typed); err != nil {
+	given := c.typedDir(arg)
+	if err := c.cfg.Files.CanAdd(given); err != nil {
 		return nil, 0, false, err
 	}
-	dir, err := trust.Canonical(typed)
+	real, err := trust.Canonical(given)
 	if err != nil {
 		return nil, 0, false, err
 	}
+	dir := tool.Dir{Given: given, Real: real}
 	store, err := trust.Open(c.cfg.TrustFile)
 	if err != nil {
 		return nil, 0, false, err
 	}
-	decision, decided, err = store.Lookup(dir)
+	decision, decided, err = store.Lookup(dir.Real)
 	if err != nil {
 		return nil, 0, false, err
 	}
-	p = &pendingDir{arg: arg, typed: typed, dir: dir, files: c.newInstructionFiles(dir), saved: !trust.Broad(dir, c.cfg.UserHome)}
+	p = &pendingDir{arg: arg, dir: dir, files: c.newInstructionFiles(dir.Real), saved: !trust.Broad(dir.Real, c.cfg.Home.Real)}
 	return p, decision, decided, nil
 }
 
@@ -130,7 +131,7 @@ func (c *Controller) AnswerDir(token uint64, add, trusted bool) bool {
 		return true
 	}
 	// Another pending add of the folder may have been answered first.
-	if err := c.cfg.Files.CanAdd(p.typed); err != nil {
+	if err := c.cfg.Files.CanAdd(p.dir.Real); err != nil {
 		c.report(event.Error{Err: fmt.Errorf("failed to add %s: %w", p.arg, err)})
 		return true
 	}
@@ -141,7 +142,7 @@ func (c *Controller) AnswerDir(token uint64, add, trusted bool) bool {
 		}
 		store, err := trust.Open(c.cfg.TrustFile)
 		if err == nil {
-			err = store.Set(p.dir, decision)
+			err = store.Set(p.dir.Real, decision)
 		}
 		if err != nil {
 			c.report(event.Error{Err: fmt.Errorf("failed to save the trust decision: %w", err)})
@@ -178,11 +179,11 @@ func (c *Controller) applyDir(p *pendingDir, trusted bool) error {
 	c.mu.Lock()
 	prev := slices.Clone(c.dirs)
 	c.mu.Unlock()
-	next := append(slices.Clone(prev), addedDir{path: p.dir, typed: p.typed})
+	next := append(slices.Clone(prev), addedDir{dir: p.dir})
 	// A failure puts the previous directories back.
 	err := c.setReach(next)
 	if err == nil {
-		err = c.cfg.Files.Add(p.typed, p.dir)
+		err = c.cfg.Files.Add(p.dir)
 	}
 	if err != nil {
 		if restoreErr := c.setReach(prev); restoreErr != nil {
@@ -197,11 +198,11 @@ func (c *Controller) applyDir(p *pendingDir, trusted bool) error {
 	next[len(next)-1].files = slices.DeleteFunc(slices.Clone(files), func(f instruction.File) bool { return sent[f.Path] })
 	c.dirs = next
 	c.mu.Unlock()
-	text := fmt.Sprintf("Added %s to the workspace.", p.dir)
+	text := fmt.Sprintf("Added %s to the workspace.", p.dir.Real)
 	switch {
 	case len(p.files) == 0:
 	case trusted:
-		text = fmt.Sprintf("Added %s to the workspace, with its instruction files.", p.dir)
+		text = fmt.Sprintf("Added %s to the workspace, with its instruction files.", p.dir.Real)
 	default:
 		text += " Its instruction files were not loaded: the folder is not trusted."
 	}
@@ -209,30 +210,34 @@ func (c *Controller) applyDir(p *pendingDir, trusted bool) error {
 	return nil
 }
 
-// setReach makes dirs the added directories of the rules, which match the
-// spelling typed, and of the sandbox, which takes the canonical paths. The rules
-// go first, so no deny or ask rule lags behind the reach.
+// setReach makes dirs the added directories of the rules, which take both names
+// of each, and of the sandbox, which takes the real one. The rules go first, so
+// no deny or ask rule lags behind the reach.
 func (c *Controller) setReach(dirs []addedDir) error {
-	typed := make([]string, len(dirs))
-	canonical := make([]string, len(dirs))
+	var names []string
+	real := make([]string, len(dirs))
 	for i, d := range dirs {
-		typed[i], canonical[i] = d.typed, d.path
+		names = append(names, d.dir.Given)
+		if d.dir.Real != d.dir.Given {
+			names = append(names, d.dir.Real)
+		}
+		real[i] = d.dir.Real
 	}
-	c.cfg.Rules.SetDirs(typed)
+	c.cfg.Rules.SetDirs(names)
 	if c.cfg.SandboxDirs == nil {
 		return nil
 	}
-	return c.cfg.SandboxDirs(canonical)
+	return c.cfg.SandboxDirs(real)
 }
 
-// typedDir is arg as the absolute path the human spelled: ~ is the user's home,
-// and a relative path starts at the start directory.
+// typedDir is arg as the absolute path the human spelled: ~ is the user's home as
+// spelled, and a relative path starts at the start directory.
 func (c *Controller) typedDir(arg string) string {
 	switch {
 	case arg == "~":
-		arg = c.cfg.UserHome
+		arg = c.cfg.Home.Given
 	case strings.HasPrefix(arg, "~/"):
-		arg = filepath.Join(c.cfg.UserHome, arg[2:])
+		arg = filepath.Join(c.cfg.Home.Given, arg[2:])
 	case !filepath.IsAbs(arg):
 		arg = filepath.Join(c.cfg.Workspace, arg)
 	}
@@ -336,7 +341,7 @@ func (c *Controller) dirsText(from, to int, files bool) string {
 	}
 	var paths, blocks []string
 	for _, d := range dirs[from:to] {
-		paths = append(paths, d.path)
+		paths = append(paths, d.dir.Real)
 		if files {
 			for _, f := range d.files {
 				blocks = append(blocks, instructionText(f))

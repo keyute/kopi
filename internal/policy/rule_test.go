@@ -908,6 +908,13 @@ func TestSetDirsAppliesRulesThroughASymlinkedSpelling(t *testing.T) {
 	r.SetDirs([]string{real})
 	eff, _, _ := r.decide("Edit", viaReal)
 	assert.Equal(t, effectAllow, eff)
+	r.SetDirs([]string{link, real})
+	for _, tg := range []*Target{viaLink, viaReal, at(filepath.Join(link, "src/a.go"))} {
+		eff, _, _ := r.decide("Edit", tg)
+		assert.Equal(t, effectAllow, eff, tg.Path)
+	}
+	eff, _, _ = r.decide("Edit", at(filepath.Join(real, "other/a.go")))
+	assert.Equal(t, effectNone, eff)
 }
 
 func TestSetDirsKeepsExceptionsInAddedDirectory(t *testing.T) {

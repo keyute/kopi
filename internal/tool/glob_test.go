@@ -239,7 +239,7 @@ func TestGlobSearchesAnAddedDirectoryWithAbsoluteResults(t *testing.T) {
 
 	_, err := runGlob(t, tool, args)
 	require.ErrorIs(t, err, ErrOutsideWorkspace)
-	require.NoError(t, ws.Add(other, realPath(t, other)))
+	require.NoError(t, ws.Add(Dir{Given: other, Real: realPath(t, other)}))
 
 	out, err := runGlob(t, tool, args)
 	require.NoError(t, err)
@@ -254,7 +254,7 @@ func TestGlobOmitsHiddenInAnAddedDirectory(t *testing.T) {
 	other := t.TempDir()
 	writeFile(t, filepath.Join(other, "a.go"), "")
 	writeFile(t, filepath.Join(other, "secret.go"), "")
-	require.NoError(t, ws.Add(other, realPath(t, other)))
+	require.NoError(t, ws.Add(Dir{Given: other, Real: realPath(t, other)}))
 	hidden, _ := recordHidden(func(t policy.Target) bool { return filepath.Base(t.Real) == "secret.go" })
 
 	out, err := runGlob(t, NewGlob(ws, hidden), fmt.Sprintf(`{"pattern":"*.go","path":%q}`, other))
@@ -266,7 +266,7 @@ func TestGlobLeavesKopiHomeOutOfAnAddedDirectory(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
 	writeFile(t, filepath.Join(home, "a.json"), "")
 	ws := newWorkspace(t, t.TempDir(), protectedStores(home, kopiHome))
-	require.NoError(t, ws.Add(home, realPath(t, home)))
+	require.NoError(t, ws.Add(Dir{Given: home, Real: realPath(t, home)}))
 
 	out, err := runGlob(t, NewGlob(ws, nil), fmt.Sprintf(`{"pattern":"**/*.json","path":%q}`, home))
 

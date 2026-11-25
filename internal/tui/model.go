@@ -299,7 +299,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case pasteFailedMsg:
 		return m.flash("paste failed")
 	case candidatesMsg:
-		m.loaded(msg)
+		return m.loaded(msg)
 	}
 	return nil
 }

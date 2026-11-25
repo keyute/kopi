@@ -345,6 +345,7 @@ func newTypedMenuModel(t *testing.T) (*model, *fakeController) {
 	c.commands = append(c.commands, app.Command{Name: "add-dir", Argument: true, Typed: true})
 	dirs := map[string][]string{
 		"":                {"../kopi.sandbox/", "../pig/", "../tap/"},
+		"../p":            {"../pig/", "../pix/"},
 		"../pi":           {"../pig/"},
 		"../pig":          {"../pig/"},
 		"../pig/":         {"../pig/", "../pig/docs/", "../pig/internal/"},
@@ -405,8 +406,64 @@ func TestTypedArgumentMenuKeepsKeysPressedWhilePending(t *testing.T) {
 		press(m, tab)
 		settle(m, cmd)
 
-		assert.True(t, m.menu.picked)
-		assert.Equal(t, 2, m.menu.sel)
+		assert.Equal(t, "/add-dir ../pig/internal/", m.composer.value(), "the held Up lit the last row and the held Tab filled it")
+	})
+}
+
+func TestTypedArgumentMenuUpWhilePendingLightsTheRepliesLastRow(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTypedMenuModel(t)
+		settle(m, keys(m, "/add-dir ../pi"))
+		cmd := keys(m, "g/")
+		press(m, up)
+		assert.Equal(t, []string{"  ../pig/"}, menuText(m), "the rows stay, unlit, until the reply")
+		settle(m, cmd)
+		assert.Equal(t, []string{"  ../pig/", "  ../pig/docs/", "❭ ../pig/internal/"}, menuText(m), "a longer reply")
+
+		m, _ = newTypedMenuModel(t)
+		settle(m, keys(m, "/add-dir ../pig/"))
+		cmd = keys(m, "docs/")
+		press(m, up)
+		settle(m, cmd)
+		assert.Equal(t, []string{"❭ ../pig/docs/"}, menuText(m), "a shorter reply")
+	})
+}
+
+func TestTypedArgumentMenuDownWhilePendingLightsTheRepliesFirstRow(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTypedMenuModel(t)
+		settle(m, keys(m, "/add-dir ../pi"))
+		cmd := keys(m, "g/")
+		press(m, down)
+		settle(m, cmd)
+		assert.Equal(t, []string{"❭ ../pig/", "  ../pig/docs/", "  ../pig/internal/"}, menuText(m))
+	})
+}
+
+func TestTypedArgumentMenuTabWhilePendingFillsTheRepliesFirstRow(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTypedMenuModel(t)
+		settle(m, keys(m, "/add-dir ../p"))
+		cmd := keys(m, "i")
+		press(m, tab)
+		assert.Equal(t, "/add-dir ../pi", m.composer.value())
+		settle(m, cmd)
+		assert.Equal(t, "/add-dir ../pig/", m.composer.value())
+		assert.Empty(t, c.submitted)
+	})
+}
+
+func TestTypedArgumentMenuDropsKeysHeldForOlderText(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTypedMenuModel(t)
+		settle(m, keys(m, "/add-dir ../pi"))
+		cmd := keys(m, "g/")
+		press(m, up)
+		settle(m, tea.Batch(cmd, press(m, backspace)))
+
+		assert.Empty(t, m.menu.held)
+		assert.False(t, m.menu.picked)
+		assert.Equal(t, []string{"  ../pig/"}, menuText(m))
 	})
 }
 

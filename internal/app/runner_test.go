@@ -178,7 +178,7 @@ func TestReclaimedQueuePlansInTypingOrder(t *testing.T) {
 				undelivered = append(undelivered, e.prompt)
 			}
 
-			r.reclaim(emit, true, undelivered)
+			r.reclaim(emit, true)
 			require.Empty(t, r.lead(), "the command is ahead of the prompts")
 			turn := r.plan(nil, emit)
 
@@ -195,18 +195,21 @@ func TestReclaimedQueuePlansInTypingOrder(t *testing.T) {
 		a, p := exited(), prompt("P1")
 		a.handed, p.handed = true, true
 		r, emit := newRunner(a, p)
-		r.reclaim(emit, false, []pigruntime.Prompt{p.prompt})
+		r.reclaim(emit, false)
 		assert.Equal(t, []*entry{a}, r.queued)
 		assert.False(t, a.handed)
 	})
-	t.Run("the mode line goes back with its prompt", func(t *testing.T) {
+	t.Run("the mode line is offered again with its prompt", func(t *testing.T) {
 		p := prompt("P1")
 		p.handed = true
 		r, emit := newRunner(p)
-		r.told, r.toldBy = "line", map[string]delivery{"line": {line: true}}
-		r.reclaim(emit, true, []pigruntime.Prompt{{Text: "P1", Mode: "line"}})
+		r.told = ""
+		told := r.tell([]pigruntime.Prompt{{Text: "P1"}})
+		require.NotEmpty(t, told[0].Mode)
+		r.reclaim(emit, true)
 		assert.Empty(t, r.told)
 		assert.False(t, p.handed)
+		assert.Equal(t, told[0].Mode, r.tell([]pigruntime.Prompt{{Text: "P1"}})[0].Mode)
 	})
 }
 

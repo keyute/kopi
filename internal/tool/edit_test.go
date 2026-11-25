@@ -269,7 +269,7 @@ func TestEditReachesAnAddedDirectory(t *testing.T) {
 
 	_, err := runEdit(t, tool, path, "one", "1", false)
 	require.ErrorIs(t, err, ErrOutsideWorkspace)
-	require.NoError(t, ws.Add(other, realPath(t, other)))
+	require.NoError(t, ws.Add(Dir{Given: other, Real: realPath(t, other)}))
 
 	out, err := runEdit(t, tool, path, "one", "1", false)
 	require.NoError(t, err)
