@@ -134,14 +134,14 @@ type workflowDialog struct {
 	clock bool
 
 	watching bool
-	// prev is the view shown before watching began, watchN the watched agent's
-	// number.
-	prev   string
-	watchN int
+	// prev is the view shown before watching began.
+	prev string
 	// hint is the dialog shown while watching, and watchWhat the watched
 	// agent's agentWhat.
 	hint      *dialog
 	watchWhat string
+	// watchID is the watched agent's session.
+	watchID string
 }
 
 // drawnAgent is an agent's row as drawn for the agent's state at one second.
@@ -172,6 +172,7 @@ func (w *workflowDialog) dialog(width int, th theme) *dialog {
 		if w.stale {
 			w.read()
 		}
+		w.hint.note = cut("watching "+w.watchWhat, width-2)
 		return w.hint
 	}
 	w.sync(width, th)
@@ -179,7 +180,7 @@ func (w *workflowDialog) dialog(width int, th theme) *dialog {
 	return w.d
 }
 
-// read takes a new snapshot of the run; the watched agent's status follows it.
+// read takes a new snapshot of the run.
 func (w *workflowDialog) read() {
 	w.stale = false
 	run, agents, ok := w.m.c.Workflow(w.id)
@@ -187,9 +188,6 @@ func (w *workflowDialog) read() {
 		return
 	}
 	w.run, w.agents = run, agents
-	if i := findAgent(w.agents, w.watchN); w.watching && i >= 0 {
-		w.m.watched = w.agents[i].AgentStatus
-	}
 }
 
 // findAgent is the index of call n in agents, -1 when there is none.
@@ -451,19 +449,18 @@ func (w *workflowDialog) watchSelected(m *model) tea.Cmd {
 		v.closed = true
 		m.views[a.ID] = v
 	}
-	w.watching, w.prev, w.watchN = true, m.shown, a.N
+	w.watching, w.prev = true, m.shown
 	w.watchWhat = agentWhat(a)
-	w.hint.note, w.hint.hints = "watching "+w.watchWhat, []string{binding(m.keys.dismiss, "go back")}
-	m.watched = a.AgentStatus
+	w.watchID = a.ID
+	w.hint.hints = []string{binding(m.keys.dismiss, "go back")}
 	return m.show(a.ID)
 }
 
 // leave ends watching: the view shown before comes back, and the watched one
 // goes if its session had closed.
 func (w *workflowDialog) leave(m *model) tea.Cmd {
-	id := m.watched.ID
-	w.watching, w.stale = false, true
-	m.watched = app.AgentStatus{}
+	id := w.watchID
+	w.watching, w.stale, w.watchID = false, true, ""
 	cmd := m.show(w.prev)
 	if v := m.views[id]; v != nil && v.closed {
 		delete(m.views, id)
@@ -477,7 +474,6 @@ func (w *workflowDialog) leave(m *model) tea.Cmd {
 func (w *workflowDialog) seen(m *model, msg tea.Msg) bool {
 	switch msg.(type) {
 	case event.SessionChanged:
-		m.watched = app.AgentStatus{}
 		return false
 	case event.TasksChanged, event.ToolEnd, event.TurnEnd:
 		if w.watching {

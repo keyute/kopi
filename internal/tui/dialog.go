@@ -62,7 +62,7 @@ type dialog struct {
 	// hints is the dialog's own key hints, Enter's first and the way out last;
 	// empty entries are dropped.
 	hints []string
-	// notice is the last part of the hint row, always shown.
+	// notice is the last part of the hint row, hidden while warn shows.
 	notice string
 	// warn is drawn in place of the hint row; the next key clears it.
 	warn string
@@ -122,7 +122,7 @@ func (d *dialog) rows(width, maxRows, limit int, th theme) []string {
 	s.opts = d.blocks(s.col, th)
 	scroll := d.scroll
 	row := func(scrollHint string) []string {
-		return slices.DeleteFunc(slices.Concat([]string{scrollHint}, d.hints, []string{d.notice}), isEmpty)
+		return slices.DeleteFunc(slices.Concat([]string{scrollHint}, d.hints), isEmpty)
 	}
 	rows, cut := d.fit(s, row(""), maxRows, limit, th)
 	if !cut || d.scrollHint == "" {
@@ -222,13 +222,13 @@ func (d *dialog) fit(s *shape, hints []string, maxRows, limit int, th theme) ([]
 	// gap is 1 when a blank row separates the options from the foot.
 	gap := 0
 	if d.note != "" {
-		noteRows = hintRows(d.note, nil, s.width, th)
+		noteRows = hintRows(d.note, nil, "", s.width, th)
 	}
 	switch {
 	case d.warn != "":
 		footRows = hang("  ", none, d.warn, fg(th.warning), s.width)
-	case len(hints) > 0:
-		footRows = hintRows("", hints, s.width, th)
+	case len(hints) > 0 || d.notice != "":
+		footRows = hintRows("", hints, d.notice, s.width, th)
 	}
 	// Without options the blank row after the body already separates the foot.
 	if len(footRows) > 0 && len(s.opts) > 0 {
@@ -315,10 +315,11 @@ func (d *dialog) fit(s *shape, hints []string, maxRows, limit int, th theme) ([]
 	return rows, cut
 }
 
-// hintRows wraps text and the key hints after it for width, two columns in.
-// All of it is dim but the key of each hint, written "<key> to <verb>" as
-// binding writes it, which is muted. A hint holding " · " is still one hint.
-func hintRows(text string, hints []string, width int, th theme) []string {
+// hintRows wraps text, the key hints after it and the notice last for width,
+// two columns in. All of it is dim but the key of each hint, written
+// "<key> to <verb>" as binding writes it, which is muted. A hint holding " · "
+// is still one hint; the notice is dim whole.
+func hintRows(text string, hints []string, notice string, width int, th theme) []string {
 	dim, muted := fg(th.dim), fg(th.muted)
 	var parts []string
 	if text = clean(text); text != "" {
@@ -331,6 +332,9 @@ func hintRows(text string, hints []string, width int, th theme) []string {
 		} else {
 			parts = append(parts, dim.Render(hint))
 		}
+	}
+	if notice = clean(notice); notice != "" {
+		parts = append(parts, dim.Render(notice))
 	}
 	rows := strings.Split(lipgloss.Wrap(strings.Join(parts, dim.Render(" · ")), max(1, width-2), ""), "\n")
 	for i := range rows {

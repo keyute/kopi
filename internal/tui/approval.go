@@ -54,7 +54,6 @@ func approvalNote(a *event.ApprovalRequested) string {
 type approvalDialog struct {
 	req *event.ApprovalRequested
 	d   *dialog
-	km  *keyMap
 	// preview is the call's preview rows.
 	preview approvalPreview
 }
@@ -74,7 +73,7 @@ func newApprovalDialog(a *event.ApprovalRequested, km *keyMap, th theme) *approv
 		}
 		d.options = append(d.options, opt)
 	}
-	return &approvalDialog{req: a, d: d, km: km}
+	return &approvalDialog{req: a, d: d}
 }
 
 // dialog has the preview as its body, windowed from d's scroll.

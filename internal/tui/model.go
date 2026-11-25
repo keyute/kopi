@@ -140,9 +140,6 @@ type model struct {
 	// workflowSel is the number of the agent last selected in each workflow's
 	// dialog.
 	workflowSel map[string]int
-	// watched is the status of the workflow agent being watched, which the status
-	// line shows while its view is shown; its ID is empty when none is.
-	watched app.AgentStatus
 	// focus is the agent rows' key focus.
 	focus agentFocus
 	// agentFrom is the index of the first entry the agent rows' window shows.
@@ -216,9 +213,6 @@ func (m *model) Init() tea.Cmd {
 func (m *model) statusInput() statusInput {
 	in := statusInput{Status: m.status, notice: m.flashText, home: m.home, commands: m.commandOut, added: m.added, removed: m.removed}
 	a, ok := m.agent(m.shown)
-	if m.watched.ID != "" && m.watched.ID == m.shown {
-		a, ok = m.watched, true
-	}
 	if ok {
 		in.Model, in.ContextTokens, in.ContextWindow = a.Model, a.ContextTokens, a.ContextWindow
 		in.Effort, in.ToolCalls, in.Cost = a.Effort, a.ToolCalls, a.Cost

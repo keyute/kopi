@@ -70,14 +70,16 @@ func TestHintRowsDrawTheKeysMuted(t *testing.T) {
 	dim, muted := fg(th.dim), fg(th.muted)
 
 	assert.Equal(t, []string{"  " + muted.Render("enter") + dim.Render(" to view") + dim.Render(" · ") + muted.Render("esc") + dim.Render(" to close")},
-		hintRows("", []string{"enter to view", "esc to close"}, 40, th))
+		hintRows("", []string{"enter to view", "esc to close"}, "", 40, th))
 	assert.Equal(t, []string{"  " + dim.Render("watching reviewer › pay.ts") + dim.Render(" · ") + muted.Render("←/→") + dim.Render(" to switch questions")},
-		hintRows("", []string{"watching reviewer › pay.ts", "←/→ to switch questions"}, 80, th), "a part that names no key is dim")
+		hintRows("", []string{"watching reviewer › pay.ts", "←/→ to switch questions"}, "", 80, th), "a part that names no key is dim")
 	assert.Equal(t, []string{"  " + dim.Render("denied: push to main") + dim.Render(" · ") + muted.Render("esc") + dim.Render(" to close")},
-		hintRows("denied: push to main", []string{"esc to close"}, 40, th), "the text before the hints names no key")
+		hintRows("denied: push to main", []string{"esc to close"}, "", 40, th), "the text before the hints names no key")
 	assert.Equal(t, []string{"  " + muted.Render("pgup/pgdown") + dim.Render(" to"), "  " + dim.Render("scroll") + dim.Render(" · ") + muted.Render("esc") + dim.Render(" to"), "  " + dim.Render("close")},
-		hintRows("", []string{"pgup/pgdown to scroll", "esc to close"}, 18, th), "a key stays muted where its row breaks")
-	assert.Equal(t, []string{"  " + dim.Render("a · b")}, hintRows("", []string{"a · b"}, 40, th), "a hint holding the separator is one part")
+		hintRows("", []string{"pgup/pgdown to scroll", "esc to close"}, "", 18, th), "a key stays muted where its row breaks")
+	assert.Equal(t, []string{"  " + dim.Render("a · b")}, hintRows("", []string{"a · b"}, "", 40, th), "a hint holding the separator is one part")
+	assert.Equal(t, []string{"  " + muted.Render("esc") + dim.Render(" to close") + dim.Render(" · ") + dim.Render("failed to x")},
+		hintRows("", []string{"esc to close"}, "failed to x", 40, th), "the notice is dim whole")
 }
 
 func TestDialogRowsOrderTheHintRow(t *testing.T) {

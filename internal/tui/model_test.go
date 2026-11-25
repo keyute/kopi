@@ -1833,6 +1833,21 @@ func TestPromptHidesTheFooterAndTheDialogEndsTheScreen(t *testing.T) {
 	}
 }
 
+func TestPromptNoticeJoinsTheHintsAndLeavesWithTheFlash(t *testing.T) {
+	m, _ := newTestModel(t, 60, 20)
+	send(m, editApproval())
+	before := lastRows(m, len(m.prompt))
+
+	m.flash("Copied")
+	m.arrange()
+	rows := lastRows(m, len(m.prompt))
+	assert.Equal(t, "  enter to choose · esc to reject · Copied", ansi.Strip(strings.TrimRight(rows[len(rows)-2], " ")))
+
+	m.Update(flashMsg{m.flashSeq})
+	m.arrange()
+	assert.Equal(t, before, lastRows(m, len(m.prompt)))
+}
+
 func TestPromptKeepsEveryDialogRowWhenAgentRowsComeAndGo(t *testing.T) {
 	m, c := subagentLineModel(t, 60, config.DefaultSubagentLine())
 	send(m, editApproval())

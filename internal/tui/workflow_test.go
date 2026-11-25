@@ -255,8 +255,24 @@ func TestWorkflowDialogEnterWatchesARunningAgent(t *testing.T) {
 		assert.True(t, w.watching)
 		assert.Equal(t, "s2", m.shown)
 		assert.Contains(t, body(m), "❯ review users.ts")
-		assert.Contains(t, statusLine(m.statusInput(), m.layout, m.width, m.th), "rev-1", "the status line is the agent's")
 		assert.Equal(t, []string{"  watching reviewer › users.ts", "", "  esc to go back"}, workflowBoxFoot(t, m))
+	})
+}
+
+func TestWorkflowDialogWatchNoteKeepsOneRow(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := workflowModel(t, 30)
+		send(m, sub("s2", event.TurnStart{Prompt: "review"}))
+		setRun(m, c, func(r *fakeRun) { r.agents[1].Description = strings.Repeat("long ", 20) })
+		openFromRow(t, m)
+		press(m, down)
+
+		press(m, enter)
+
+		foot := workflowBoxFoot(t, m)
+		require.Len(t, foot, 3)
+		assert.Contains(t, foot[0], "watching")
+		assert.Contains(t, foot[0], "…")
 	})
 }
 
@@ -350,7 +366,6 @@ func TestWorkflowDialogDismissWhileWatchingReturnsToTheListOnTheSameAgent(t *tes
 		assert.False(t, w.watching)
 		assert.Equal(t, app.Main, m.shown)
 		assert.Equal(t, 2, m.workflowSel[w.id])
-		assert.Zero(t, m.watched.ID)
 		assert.Contains(t, strings.Join(workflowBox(t, m), "\n"), "❭   • reviewer › users.ts")
 		assert.Contains(t, m.views, "s2", "a running agent's view stays")
 
@@ -508,7 +523,6 @@ func TestSessionChangeClosesTheWorkflowDialogAndWatching(t *testing.T) {
 
 		assert.Nil(t, workflowOf(m))
 		assert.Equal(t, app.Main, m.shown)
-		assert.Zero(t, m.watched.ID)
 		assert.Empty(t, m.workflowSel)
 		assert.Empty(t, m.workflows)
 	})
@@ -571,44 +585,6 @@ func TestApprovalCoversTheWorkflowDialogAndItReturns(t *testing.T) {
 
 		assert.Equal(t, promptWorkflow, frontKind(m))
 		assert.Contains(t, screen(m), "  Workflow › audit route handlers")
-	})
-}
-
-func TestWorkflowDialogStatusFollowsTheWatchedAgentWhileAnotherPromptCoversIt(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		m, c := workflowModel(t, 60)
-		send(m, sub("s2", event.TurnStart{Prompt: "review"}))
-		openFromRow(t, m)
-		press(m, down)
-		press(m, enter)
-		send(m, editApproval())
-		require.Equal(t, promptApproval, frontKind(m))
-
-		setRun(m, c, func(r *fakeRun) { r.agents[1].Model = "mock/rev-2" })
-
-		assert.Equal(t, "mock/rev-2", m.watched.Model)
-	})
-}
-
-func TestWorkflowDialogStatusFollowsTheWatchedAgent(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		m, c := workflowModel(t, 60)
-		// The dialog hides the status line, so it is drawn directly.
-		status := func() string { return statusLine(m.statusInput(), m.layout, m.width, m.th) }
-		send(m, sub("s2", event.TurnStart{Prompt: "review"}))
-		openFromRow(t, m)
-		require.Contains(t, status(), "model-1")
-		press(m, down)
-		press(m, enter)
-		assert.Contains(t, status(), "rev-1")
-		assert.Contains(t, status(), "18.2%")
-
-		setRun(m, c, func(r *fakeRun) { r.agents[1].Model = "mock/rev-2" })
-		m.arrange()
-
-		assert.Contains(t, status(), "rev-2")
-		press(m, escape)
-		assert.Contains(t, status(), "model-1")
 	})
 }
 
