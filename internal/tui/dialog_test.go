@@ -70,18 +70,41 @@ func TestHintRowsDrawTheKeysMuted(t *testing.T) {
 	dim, muted := fg(th.dim), fg(th.muted)
 
 	assert.Equal(t, []string{"  " + muted.Render("enter") + dim.Render(" to view") + dim.Render(" · ") + muted.Render("esc") + dim.Render(" to close")},
-		hintRows("", "enter to view · esc to close", 40, th))
+		hintRows("", []string{"enter to view", "esc to close"}, "", 40, th))
 	assert.Equal(t, []string{"  " + dim.Render("watching reviewer › pay.ts") + dim.Render(" · ") + muted.Render("←/→") + dim.Render(" to switch questions")},
-		hintRows("", "watching reviewer › pay.ts · ←/→ to switch questions", 80, th), "a part that names no key is dim")
+		hintRows("", []string{"watching reviewer › pay.ts", "←/→ to switch questions"}, "", 80, th), "a part that names no key is dim")
 	assert.Equal(t, []string{"  " + dim.Render("denied: push to main") + dim.Render(" · ") + muted.Render("esc") + dim.Render(" to close")},
-		hintRows("denied: push to main", "esc to close", 40, th), "the text before the hints names no key")
+		hintRows("denied: push to main", []string{"esc to close"}, "", 40, th), "the text before the hints names no key")
 	assert.Equal(t, []string{"  " + muted.Render("pgup/pgdown") + dim.Render(" to"), "  " + dim.Render("scroll") + dim.Render(" · ") + muted.Render("esc") + dim.Render(" to"), "  " + dim.Render("close")},
-		hintRows("", "pgup/pgdown to scroll · esc to close", 18, th), "a key stays muted where its row breaks")
+		hintRows("", []string{"pgup/pgdown to scroll", "esc to close"}, "", 18, th), "a key stays muted where its row breaks")
+	assert.Equal(t, []string{"  " + dim.Render("a · b")}, hintRows("", []string{"a · b"}, "", 40, th), "a hint holding the separator is one part")
+	assert.Equal(t, []string{"  " + muted.Render("esc") + dim.Render(" to close") + dim.Render(" · ") + dim.Render("failed to x")},
+		hintRows("", []string{"esc to close"}, "failed to x", 40, th), "the notice is dim whole")
+}
 
-	d := dialog{title: "Pick", note: "push to main", keys: "ctrl+g to edit", foot: "esc to close", options: []option{{label: "Yes"}}}
+func TestDialogRowsOrderTheHintRow(t *testing.T) {
+	th := mocha()
+	dim, muted := fg(th.dim), fg(th.muted)
+
+	d := dialog{title: "Pick", note: "why", scrollHint: "pgup to scroll", hints: []string{"enter to choose", "", "esc to close"}, notice: "Copied", options: []option{{label: "Yes"}}}
+	for i := range 10 {
+		d.body = append(d.body, fmt.Sprintf("l%d", i+1))
+	}
+	rows := d.rows(60, 100, 4, th)
+	assert.Equal(t, "  "+dim.Render("why"), rows[len(rows)-6], "the note is text only")
+	assert.Equal(t, "  "+muted.Render("pgup")+dim.Render(" to scroll")+dim.Render(" · ")+muted.Render("enter")+dim.Render(" to choose")+dim.Render(" · ")+muted.Render("esc")+dim.Render(" to close")+dim.Render(" · ")+dim.Render("Copied"),
+		rows[len(rows)-2], "scroll hint, hints without the empty one, notice")
+
+	d.body = d.body[:2]
+	rows = plainRows(d.rows(60, 100, 4, th))
+	assert.Equal(t, "  enter to choose · esc to close · Copied", rows[len(rows)-2], "no scroll hint while the body is whole")
+}
+
+func TestDialogRowsWarnReplacesTheHintRow(t *testing.T) {
+	th := mocha()
+	d := dialog{title: "Pick", hints: []string{"esc to close"}, notice: "Copied", warn: "denied", options: []option{{label: "Yes"}}}
 	rows := d.rows(40, 100, 1, th)
-	assert.Equal(t, "  "+dim.Render("push to main")+dim.Render(" · ")+muted.Render("ctrl+g")+dim.Render(" to edit"), rows[2])
-	assert.Equal(t, "  "+muted.Render("esc")+dim.Render(" to close"), rows[len(rows)-2])
+	assert.Equal(t, "  "+fg(th.warning).Render("denied"), rows[len(rows)-2])
 }
 
 func TestDialogKey(t *testing.T) {
@@ -369,23 +392,24 @@ func scrollDialog(n int) *dialog {
 	return d
 }
 
-func TestDialogScrollRowsJoinsTheHintToTheNoteWhenCut(t *testing.T) {
+func TestDialogScrollRowsPutsTheHintInTheHintRowWhenCut(t *testing.T) {
 	const hint = "pgup/pgdn to scroll"
 	d := scrollDialog(10)
-	d.hint = hint
+	d.scrollHint = hint
 	body := d.body
 	rows := plainRows(d.rows(40, 100, 4, mocha()))
-	assert.Contains(t, rows, "  why · pgup/pgdn to scroll")
+	assert.Contains(t, rows, "  why")
+	assert.Contains(t, rows, "  pgup/pgdn to scroll")
 	assert.Contains(t, rows, "  … 7 more lines")
 	assert.Equal(t, body, d.body)
 	assert.Equal(t, "why", d.note)
 
 	d = scrollDialog(2)
-	d.hint = hint
+	d.scrollHint = hint
 	assert.NotContains(t, strings.Join(plainRows(d.rows(40, 100, 4, mocha())), "\n"), "pgup")
 
 	d = scrollDialog(10)
-	d.hint = hint
+	d.scrollHint = hint
 	d.note = ""
 	assert.Contains(t, plainRows(d.rows(40, 100, 4, mocha())), "  pgup/pgdn to scroll")
 	assert.Empty(t, d.note)
@@ -394,14 +418,14 @@ func TestDialogScrollRowsJoinsTheHintToTheNoteWhenCut(t *testing.T) {
 func TestDialogScrollRowsWithNoBodyIsRows(t *testing.T) {
 	d := scrollDialog(0)
 	want := d.rows(40, 100, 4, mocha())
-	d.hint = "pgup/pgdn to scroll"
+	d.scrollHint = "pgup/pgdn to scroll"
 	assert.Equal(t, want, d.rows(40, 100, 4, mocha()))
 }
 
 func TestDialogScrollRowsKeepTheMarkerWithoutTheHintWhenTheHintWouldStarveTheBody(t *testing.T) {
 	d := scrollDialog(10)
 	d.note = ""
-	d.hint = "pgup/pgdn to scroll"
+	d.scrollHint = "pgup/pgdn to scroll"
 	rows := plainRows(d.rows(40, 6, 4, mocha()))
 	assert.Equal(t, []string{"  Pick", "  … 10 more lines"}, rows[1:3])
 	assert.NotContains(t, strings.Join(rows, "\n"), "pgup")
@@ -426,11 +450,11 @@ func TestDialogRowsResetTheScrollWhenNothingIsWindowed(t *testing.T) {
 
 func TestDialogScrollRowsReachesTheEndWhenTheBudgetBinds(t *testing.T) {
 	d := scrollDialog(10)
-	d.note = "" // the hint takes a row of its own
-	d.hint = "pgup/pgdn to scroll"
+	d.note = "" // the hint takes a row of its own, and the blank row above it
+	d.scrollHint = "pgup/pgdn to scroll"
 	d.scroll.off = 100
-	rows := plainRows(d.rows(40, 8, 100, mocha()))
-	assert.LessOrEqual(t, len(rows), 8)
+	rows := plainRows(d.rows(40, 9, 100, mocha()))
+	assert.LessOrEqual(t, len(rows), 9)
 	assert.Contains(t, rows, "  l10")
 	assert.Equal(t, 9, d.scroll.off)
 }
@@ -464,7 +488,7 @@ func TestDialogRowsShrinkTheBodyBeforeTheFields(t *testing.T) {
 }
 
 func TestDialogRowsKeepEveryOptionThatFitsAndGiveTheRestToTheText(t *testing.T) {
-	d := &dialog{head: []string{"tabs"}, title: "Title", note: "note", foot: "foot", options: []option{{label: "A"}, {label: "B"}, {label: "C"}}}
+	d := &dialog{head: []string{"tabs"}, title: "Title", note: "note", hints: []string{"foot"}, options: []option{{label: "A"}, {label: "B"}, {label: "C"}}}
 	rule := strings.Repeat("─", 20)
 	opts := []string{"❭ 1. A", "  2. B", "  3. C"}
 	for height, want := range map[int][]string{
@@ -481,7 +505,7 @@ func TestDialogRowsKeepEveryOptionThatFitsAndGiveTheRestToTheText(t *testing.T) 
 }
 
 func TestDialogRowsDrawTheFootWholeOrNotAtAll(t *testing.T) {
-	d := &dialog{title: "Pick", foot: strings.Repeat("hint ", 4), sel: 3}
+	d := &dialog{title: "Pick", hints: []string{strings.Repeat("hint ", 4)}, sel: 3}
 	for i := range 8 {
 		d.options = append(d.options, option{label: fmt.Sprintf("o%d", i+1)})
 	}
@@ -537,7 +561,7 @@ func TestDialogRowsNeverPassTheHeightAndRecordWhatIsDrawn(t *testing.T) {
 		"body and note": scrollDialog(20),
 	} {
 		d.title = strings.Repeat("Long title ", 4)
-		d.head, d.foot = []string{"tabs"}, "enter to choose"
+		d.head, d.hints = []string{"tabs"}, []string{"enter to choose"}
 		if name != "body and note" {
 			d.move(1)
 		}
@@ -576,7 +600,7 @@ func TestDialogRowsWithAPaneNeverPassTheHeight(t *testing.T) {
 	}
 	for _, list := range []int{0, 12} {
 		d := fieldDialog("Later", "More")
-		d.head, d.foot = []string{"tabs"}, "enter to choose"
+		d.head, d.hints = []string{"tabs"}, []string{"enter to choose"}
 		d.pane = &pane{lines: lines, width: 10, most: 30, list: list}
 		for height := 2; height < 40; height++ {
 			rows := plainRows(d.rows(30, height, 5, th))
@@ -622,7 +646,7 @@ func TestDialogRowsSecondFrameAllocationsDoNotGrowWithTheBody(t *testing.T) {
 	}
 	allocs := func(n int) float64 {
 		d := scrollDialog(n)
-		d.hint = "pgup/pgdn to scroll"
+		d.scrollHint = "pgup/pgdn to scroll"
 		d.rows(40, 20, 5, mocha())
 		return testing.AllocsPerRun(10, func() { d.rows(40, 20, 5, mocha()) })
 	}

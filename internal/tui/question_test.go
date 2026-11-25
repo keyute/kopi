@@ -793,7 +793,7 @@ func TestQuestionWaitsForAChildApprovalAlreadyShown(t *testing.T) {
 	sent(t, c, qs)
 }
 
-func TestQuestionResizeKeepsTheBottomRuleAboveTheFooter(t *testing.T) {
+func TestQuestionResizeKeepsTheBottomRuleLast(t *testing.T) {
 	m, _ := openQuestion(t, choice("one", false, "A", "B", "C", "D"), choice("two", false, "C", "D"))
 	press(m, digit('5'))
 	typeKeys(m, "x")
@@ -801,7 +801,7 @@ func TestQuestionResizeKeepsTheBottomRuleAboveTheFooter(t *testing.T) {
 		m.Update(tea.WindowSizeMsg{Width: 40, Height: height})
 		rows := screen(m)
 		require.Len(t, rows, height)
-		assert.Equal(t, strings.Repeat("─", 40), rows[height-2])
+		assert.Equal(t, strings.Repeat("─", 40), rows[height-1])
 		if height >= 8 {
 			assert.Contains(t, strings.Join(rows, "\n"), "5. x")
 		}
@@ -815,12 +815,20 @@ func TestQuestionRowsHintScrollingOnlyWhenSomethingIsCut(t *testing.T) {
 		lines = append(lines, fmt.Sprintf("line %d", i))
 	}
 	q := newQuestionDialog(event.QuestionRequested{Questions: previewQuestion(strings.Join(lines, "\n\n"))}, &km, mocha())
-	rows := plainRows(q.dialog(80, mocha()).rows(80, 100, 6, mocha()))
+	d := q.dialog(80, mocha())
+	d.scrollHint = scrollHint(&km)
+	rows := plainRows(d.rows(80, 100, 6, mocha()))
 	assert.Equal(t, "  pgup/pgdown to scroll · enter to choose · tab to add a note · esc to dismiss", rows[len(rows)-2])
 	assert.Regexp(t, `│ … \d+ more lines +│$`, rows[len(rows)-5], "markers sit inside the box")
 
 	rows = plainRows(q.dialog(80, mocha()).rows(80, 100, 100, mocha()))
 	assert.Equal(t, "  enter to choose · tab to add a note · esc to dismiss", rows[len(rows)-2])
+
+	q.pages[0].openNote()
+	d = q.dialog(80, mocha())
+	d.scrollHint = scrollHint(&km)
+	rows = plainRows(d.rows(80, 100, 6, mocha()))
+	assert.Equal(t, "  pgup/pgdown to scroll · enter to save · esc to go back", rows[len(rows)-2], "the page keys scroll the preview while a note is edited")
 }
 
 func TestQuestionRowsMarkTheChosenOptionAndCustomAnswer(t *testing.T) {

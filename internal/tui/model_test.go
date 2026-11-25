@@ -1331,9 +1331,9 @@ func TestApprovalDigitAnswersDirectly(t *testing.T) {
 	assert.Equal(t, []answer{{1, policy.Decision{Answer: policy.Allow}}}, c.answers)
 
 	press(m, digit('3'))
-	assert.Contains(t, screen(m), "❭ 3. No (esc)  What should change?", "the No digit moves to its field")
+	assert.Contains(t, screen(m), "❭ 3. No  What should change?", "the No digit moves to its field")
 	press(m, digit('1'))
-	assert.Contains(t, screen(m), "❭ 3. No (esc)  1", "digits in the field are text")
+	assert.Contains(t, screen(m), "❭ 3. No  1", "digits in the field are text")
 	assert.Len(t, c.answers, 1)
 }
 
@@ -1355,7 +1355,7 @@ func TestApprovalNoSendsTheReason(t *testing.T) {
 	press(m, down)
 	press(m, down)
 	keys(m, "use b.go")
-	assert.Contains(t, screen(m), "❭ 3. No (esc)  use b.go")
+	assert.Contains(t, screen(m), "❭ 3. No  use b.go")
 
 	press(m, enter)
 
@@ -1369,7 +1369,7 @@ func TestApprovalPasteReachesTheField(t *testing.T) {
 	press(m, digit('3'))
 	big := strings.Repeat("line\r\n", 20)
 	pasteText(m, big)
-	assert.Contains(t, screen(m), "❭ 3. No (esc)  [paste #1 +20 lines]")
+	assert.Contains(t, screen(m), "❭ 3. No  [paste #1 +20 lines]")
 
 	cmd := press(m, ctrlV)
 	require.NotNil(t, cmd)
@@ -1523,12 +1523,12 @@ func TestApprovalFieldGrowsWithinTheScreen(t *testing.T) {
 	s := screen(m)
 	assert.Len(t, s, 30)
 	assert.Greater(t, len(m.prompt), before)
-	want := []string{"❭ 3. No (esc)"}
+	want := []string{"❭ 3. No"}
 	for _, r := range "bcdefghijk" {
 		want = append(want, "  "+string(r))
 	}
-	want = append(want, strings.Repeat("─", 60))
-	assert.Equal(t, want, s[len(s)-len(want)-1:len(s)-1], "the field grows to a third of the screen, then scrolls")
+	want = append(want, "", "  enter to choose · esc to reject", strings.Repeat("─", 60))
+	assert.Equal(t, want, s[len(s)-len(want):], "the field grows to a third of the screen, then scrolls")
 }
 
 func TestApprovalTallDraftKeepsOptionsOnASmallScreen(t *testing.T) {
@@ -1548,7 +1548,7 @@ func TestApprovalTallDraftKeepsOptionsOnASmallScreen(t *testing.T) {
 	assert.Len(t, s, 10)
 	assert.Contains(t, s, "❭ 1. Yes")
 	assert.Contains(t, s, "  2. Yes, allow all edits this session")
-	assert.Contains(t, s, "  3. No (esc)")
+	assert.Contains(t, s, "  3. No")
 	press(m, enter)
 	assert.Equal(t, []answer{{1, policy.Decision{Answer: policy.Allow}}}, c.answers)
 }
@@ -1576,7 +1576,7 @@ func TestApprovalUpLeavesTheFieldKeepingTheDraft(t *testing.T) {
 
 	press(m, up)
 	assert.Contains(t, screen(m), "❭ 2. Yes, allow all edits this session")
-	assert.Contains(t, screen(m), "  3. No (esc)  draft")
+	assert.Contains(t, screen(m), "  3. No  draft")
 	press(m, down)
 	press(m, enter)
 
@@ -1658,7 +1658,7 @@ func TestApprovalSurvivesTinyTerminalResizes(t *testing.T) {
 	press(m, down)
 	prompt := append([]string(nil), m.prompt...)
 
-	for height := 0; height <= 4; height++ {
+	for height := 0; height <= 3; height++ {
 		require.NotPanics(t, func() {
 			m.Update(tea.WindowSizeMsg{Width: 60, Height: height})
 			m.View()
@@ -1674,7 +1674,7 @@ func TestApprovalSurvivesTinyTerminalResizes(t *testing.T) {
 	assert.Contains(t, s, "  Edit a.go")
 	assert.Contains(t, s, "  - old")
 	assert.Contains(t, s, "  + new")
-	assert.Equal(t, []string{"  1. Yes", "❭ 2. Yes, allow all edits this session", "  3. No (esc)  What should change?", strings.Repeat("─", 60)}, s[len(s)-5:len(s)-1])
+	assert.Equal(t, []string{"  1. Yes", "❭ 2. Yes, allow all edits this session", "  3. No  What should change?", "", "  enter to choose · esc to reject", strings.Repeat("─", 60)}, s[len(s)-6:])
 	assert.Empty(t, c.answers)
 	press(m, enter)
 	assert.Equal(t, []answer{{1, policy.Decision{Answer: policy.AllowEdits}}}, c.answers)
@@ -1690,9 +1690,9 @@ func TestApprovalWithLongPreviewFitsTheTerminal(t *testing.T) {
 
 	s := screen(m)
 	assert.Len(t, s, 20)
-	assert.Equal(t, []string{"❭ 1. Yes", "  2. Yes, allow all edits this session", "  3. No (esc)  What should change?", strings.Repeat("─", 40)}, s[len(s)-5:len(s)-1])
+	assert.Equal(t, []string{"❭ 1. Yes", "  2. Yes, allow all edits this session", "  3. No  What should change?", "", "  pgup/pgdown to scroll · enter to", "  choose · esc to reject", strings.Repeat("─", 40)}, s[len(s)-7:])
 	assert.Contains(t, s, "  … 47 more lines")
-	assert.Contains(t, s, "  "+scrollHint(&m.keys))
+	assert.Contains(t, strings.Join(s, "\n"), scrollHint(&m.keys))
 	assert.Contains(t, s, "  Edit a.go")
 }
 
@@ -1747,8 +1747,11 @@ func TestRowsFillTheScreenStatusLast(t *testing.T) {
 			s := screen(m)
 			require.Len(t, s, m.height)
 			assert.Equal(t, m.height, m.transcriptHeight()+len(m.below))
-			status := strings.TrimRight(ansi.Strip(statusLine(m.statusInput(), m.layout, m.width, m.th)), " ")
-			assert.Equal(t, status, s[m.height-1])
+			last := strings.TrimRight(ansi.Strip(statusLine(m.statusInput(), m.layout, m.width, m.th)), " ")
+			if m.front() != nil {
+				last = strings.Repeat("─", m.width)
+			}
+			assert.Equal(t, last, s[m.height-1])
 			if approvalOf(m) == nil && tasksOf(m) == nil {
 				assert.True(t, strings.HasPrefix(s[m.composerTop()], "❯"), "row %d: %q", m.composerTop(), s[m.composerTop()])
 			}
@@ -1791,4 +1794,87 @@ func TestPageKeyDropsAgentFocusAndScrollsTheTranscript(t *testing.T) {
 
 	assert.False(t, m.focus.on)
 	assert.False(t, m.view().follow)
+}
+
+func TestPromptHidesTheFooterAndTheDialogEndsTheScreen(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		open func(m *model, c *fakeController)
+	}{
+		{"approval", func(m *model, _ *fakeController) { send(m, editApproval()) }},
+		{"tasks", func(m *model, c *fakeController) {
+			c.tasks = []tool.TaskInfo{{ID: "t1", Command: "sleep 30", Started: time.Now(), Status: tool.TaskRunning}}
+			c.submitErr = app.ErrShowTasks
+			submitText(m, "/tasks")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, c := subagentLineModel(t, 60, config.DefaultSubagentLine(), explorer("t1"))
+			status := strings.TrimRight(ansi.Strip(statusLine(m.statusInput(), m.layout, m.width, m.th)), " ")
+			require.Contains(t, screen(m), "  ○ explorer › Find the config loader · gpt-5.6")
+			require.Equal(t, status, statusText(m))
+			tc.open(m, c)
+
+			require.NotNil(t, m.front())
+			s := screen(m)
+			require.Len(t, s, m.height)
+			assert.Equal(t, strings.Repeat("─", 60), s[len(s)-1], "the dialog's bottom rule is the last row")
+			assert.NotContains(t, s, status)
+			assert.NotContains(t, strings.Join(s, "\n"), "Find the config loader")
+			assert.Zero(t, m.geo.agents)
+			below := len(m.prompt) + 1
+			if m.geo.working >= 0 {
+				below += busyRows
+			}
+			assert.Len(t, m.below, below, "only the blank row, the working row and the dialog are below the transcript")
+			assert.Equal(t, m.height-below, m.transcriptHeight())
+			assert.Equal(t, plainRows(m.prompt), s[len(s)-len(m.prompt):])
+		})
+	}
+}
+
+func TestPromptNoticeJoinsTheHintsAndLeavesWithTheFlash(t *testing.T) {
+	m, _ := newTestModel(t, 60, 20)
+	send(m, editApproval())
+	before := lastRows(m, len(m.prompt))
+
+	m.flash("Copied")
+	m.arrange()
+	rows := lastRows(m, len(m.prompt))
+	assert.Equal(t, "  enter to choose · esc to reject · Copied", ansi.Strip(strings.TrimRight(rows[len(rows)-2], " ")))
+
+	m.Update(flashMsg{m.flashSeq})
+	m.arrange()
+	assert.Equal(t, before, lastRows(m, len(m.prompt)))
+}
+
+func TestPromptKeepsEveryDialogRowWhenAgentRowsComeAndGo(t *testing.T) {
+	m, c := subagentLineModel(t, 60, config.DefaultSubagentLine())
+	send(m, editApproval())
+	dialog := func() []string { return lastRows(m, len(m.prompt)) }
+	want := dialog()
+	require.Equal(t, plainRows(m.prompt), want)
+
+	c.agents = []app.AgentStatus{mainAgent, explorer("t1")}
+	m.viewOf("t1").busy = true
+	send(m, event.TasksChanged{})
+	assert.Equal(t, want, dialog(), "an agent row arriving")
+	assert.Zero(t, m.geo.agents)
+
+	c.agents = []app.AgentStatus{mainAgent}
+	send(m, event.TasksChanged{})
+	assert.Equal(t, want, dialog(), "an agent row leaving")
+}
+
+func TestClosingTheLastPromptBringsTheFooterBack(t *testing.T) {
+	m, _ := subagentLineModel(t, 60, config.DefaultSubagentLine(), explorer("t1"))
+	send(m, editApproval())
+	require.Zero(t, m.geo.agents)
+
+	send(m, event.ApprovalEnded{Token: 1})
+
+	require.Nil(t, m.front())
+	assert.Positive(t, m.geo.agents)
+	assert.Contains(t, screen(m), "  ○ explorer › Find the config loader · gpt-5.6")
+	assert.Equal(t, strings.TrimRight(ansi.Strip(statusLine(m.statusInput(), m.layout, m.width, m.th)), " "), statusText(m))
 }

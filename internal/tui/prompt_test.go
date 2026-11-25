@@ -207,7 +207,7 @@ func TestTheFrontPromptStillAnswersAfterTheOneUnderItEnds(t *testing.T) {
 			assert.Equal(t, 1, tc.front.answers(c))
 			assert.Zero(t, tc.under.answers(c))
 			if req, ok := tc.front.open.(event.ApprovalRequested); ok {
-				first := approvalOptions(&req, &m.keys)[0].answer
+				first := approvalOptions(&req)[0].answer
 				assert.Equal(t, []answer{{req.Token, policy.Decision{Answer: first}}}, c.answers)
 			}
 		}

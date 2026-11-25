@@ -133,7 +133,7 @@ func TestUsageShowsEveryRow(t *testing.T) {
 		assert.Equal(t, 1, c.usageReads)
 		s := screen(m)
 		assert.Len(t, s, usageRows)
-		assert.Contains(t, s[len(s)-1], "plan", "the status line stays last")
+		assert.Equal(t, rule, s[len(s)-1], "the status line is hidden")
 	})
 }
 

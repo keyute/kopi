@@ -194,17 +194,16 @@ func (t *taskDialog) dialog(width int, th theme) *dialog {
 		t.width, t.th = width, th
 		t.setOptions()
 	}
-	t.d.body, t.d.tail, t.d.hint = nil, t.open != "", scrollHint(t.km)
+	t.d.body, t.d.tail = nil, t.open != ""
 	if t.open != "" {
-		t.d.body, t.d.foot = t.wrapped(width-2, th), binding(t.km.dismiss, "go back")
+		t.d.body, t.d.hints = t.wrapped(width-2, th), []string{binding(t.km.dismiss, "go back")}
 		return t.d
 	}
-	parts := []string{binding(t.km.submit, "view")}
+	t.d.hints = []string{binding(t.km.submit, "view")}
 	if info := t.list[t.d.sel]; info.Agent != "" && info.Status == tool.TaskRunning {
-		parts = append(parts, binding(t.km.stopAgent, "stop agent"))
+		t.d.hints = append(t.d.hints, binding(t.km.stopAgent, "stop agent"))
 	}
-	parts = append(parts, binding(t.km.dismiss, "close"))
-	t.d.foot = strings.Join(slices.DeleteFunc(parts, isEmpty), " · ")
+	t.d.hints = append(t.d.hints, binding(t.km.dismiss, "close"))
 	return t.d
 }
 

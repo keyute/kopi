@@ -57,7 +57,7 @@ func assertCopied(t *testing.T, m *model, cmd tea.Cmd, want string) {
 	t.Helper()
 	assert.Contains(t, runCopy(t, cmd), tea.SetClipboard(want)(), "copied through OSC 52")
 	assert.Equal(t, []string{want}, m.clip.(*fakeClipboard).written, "and the system clipboard")
-	assert.Contains(t, statusText(m), "Copied")
+	assert.Contains(t, strings.Join(screen(m), "\n"), "Copied", "on the status line, or with the key hints of the dialog in front")
 }
 
 // reversedRows is the screen rows drawn with reverse video, leaving out the
@@ -409,7 +409,7 @@ func reasonField(t *testing.T, m *model, draft string) fieldArea {
 func TestReasonFieldDragCopies(t *testing.T) {
 	m, _ := newTestModel(t, 60, 30)
 	a := reasonField(t, m, "alpha beta")
-	require.True(t, strings.HasPrefix(screen(m)[a.y], "❭ 3. No (esc)  alpha beta"))
+	require.True(t, strings.HasPrefix(screen(m)[a.y], "❭ 3. No  alpha beta"))
 
 	assertCopied(t, m, dragRow(m, a.x, a.x+5, a.y), "alpha")
 	assert.Equal(t, "alpha", m.frontDialog().field().ta.SelectedText())
@@ -442,13 +442,13 @@ func TestPressOnUnselectedFieldSelectsItsOption(t *testing.T) {
 	send(m, editApproval())
 	require.Len(t, m.geo.fields, 1)
 	a := m.geo.fields[0]
-	require.Equal(t, "  3. No (esc)  What should change?", screen(m)[a.y])
+	require.Equal(t, "  3. No  What should change?", screen(m)[a.y])
 
 	pressAt(m, a.x, a.y)
 	releaseAt(m, a.x, a.y)
 
 	assert.Equal(t, 2, m.frontDialog().sel)
-	assert.True(t, strings.HasPrefix(screen(m)[a.y], "❭ 3. No (esc)"))
+	assert.True(t, strings.HasPrefix(screen(m)[a.y], "❭ 3. No"))
 	keys(m, "hi")
 	assert.Equal(t, "hi", m.frontDialog().text(), "the cursor is in the field")
 }

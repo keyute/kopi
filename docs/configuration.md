@@ -116,6 +116,7 @@ What each key does is in [usage](usage.md#keys); `interrupt`, `cancel` and `back
 - Defaults: left `$model`, `$context`, `$branch( $changes)`; right `$notice`, `$shells`, `$ultracode`, `$sandbox`, `$mode`.
 - `separator` goes between entries (default ` · `, `""` for none). An entry that draws nothing is left out with its separator. Nothing is trimmed.
 - On a narrow terminal the left side drops whole entries from its right end. When the line still does not fit, the left side is cleared and the right side is cut, keeping the entry that names `mode` whole at the right end when it fits.
+- The status line and the rows under it are hidden while a dialog is open; a notice then shows with the dialog's key hints.
 
 ### Formats
 

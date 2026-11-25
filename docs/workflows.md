@@ -62,7 +62,7 @@ The 1000 calls and the memory limit are fixed.
 
 ### Footer row
 
-- While a workflow runs, a row shows under the status line with the [agent rows](subagents.md#agent-rows): `○ workflow › <description>`, a 16-cell bar, completed/total, `N failed` when any call ended without completing (stopped ones included), the phase of the latest running call when there is one, and the run's elapsed time.
+- While a workflow runs, a row shows under the status line (hidden [while a dialog is open](configuration.md#status-line)) with the [agent rows](subagents.md#agent-rows): `○ workflow › <description>`, a 16-cell bar, completed/total, `N failed` when any call ended without completing (stopped ones included), the phase of the latest running call when there is one, and the run's elapsed time.
 - Each `agent()` call has an equal share of the bar, coloured by state: completed, failed or stopped, running; queued calls are empty cells.
 - When the row is too narrow the description shortens first, then the bar is left out. Its format is fixed: [`subagentline`](configuration.md#subagent-rows) and `statusline` do not configure it.
 - Down from the composer reaches it like an agent row; Enter opens the progress dialog; `x` (`stop-agent`) stops the workflow. The row leaves when the workflow ends.
@@ -79,7 +79,7 @@ The 1000 calls and the memory limit are fixed.
 ### Viewing an agent
 
 - The transcript switches to that agent's session, drawn like any session. The view is watch-only: nothing can be typed, sent or queued to the agent, and Esc returns to the dialog on the same agent.
-- The status line shows that agent's model and context while it is viewed.
+- The status line is hidden while the agent is viewed, as under any dialog.
 - A running agent's view follows it live; an ended agent's is read from its saved transcript.
 - An agent that never started (still queued, or failed before its session opened) has no transcript: Enter shows why instead.
 

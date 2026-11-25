@@ -36,14 +36,14 @@ func TestLoginRowsListOptionsWithDescriptions(t *testing.T) {
 		"❭ 1. Account - sign in with a browser",
 		"  2. API key",
 		"",
-		"  esc to cancel",
+		"  enter to choose · esc to cancel",
 		rule40,
 	}, plainLoginRows(ev, 0))
 }
 
 func TestLoginRowsShowATextFieldWithItsPlaceholder(t *testing.T) {
 	ev := event.LoginRequested{Message: "Paste the code", Placeholder: "code"}
-	assert.Equal(t, []string{rule40, "  Paste the code", "", "❭ code", "", "  esc to cancel", rule40}, plainLoginRows(ev, 0))
+	assert.Equal(t, []string{rule40, "  Paste the code", "", "❭ code", "", "  enter to submit · esc to cancel", rule40}, plainLoginRows(ev, 0))
 }
 
 func TestLoginRowsMaskASecret(t *testing.T) {
@@ -147,7 +147,7 @@ func TestLoginRowsWindowIsContiguousAndCentredOnTheSelection(t *testing.T) {
 		"  22. Provider 22",
 		"  21 of 40",
 		"",
-		"  esc to cancel",
+		"  enter to choose · esc to cancel",
 		rule40,
 	}, rows)
 }
@@ -186,7 +186,7 @@ func TestLoginResizeKeepsRulesAboveFooterAndFieldGeometry(t *testing.T) {
 				m.Update(tea.WindowSizeMsg{Width: 40, Height: height})
 				rows := screen(m)
 				require.Len(t, rows, height)
-				assert.Equal(t, rule40, rows[height-2], "bottom rule immediately above footer")
+				assert.Equal(t, rule40, rows[height-1], "bottom rule is the last row")
 				assert.Equal(t, rule40, plainRows(m.prompt)[0])
 				assert.Contains(t, strings.Join(rows, "\n"), "❭ ", "field row visible")
 				if secret {
@@ -198,7 +198,7 @@ func TestLoginResizeKeepsRulesAboveFooterAndFieldGeometry(t *testing.T) {
 					fa := m.geo.fields[0]
 					assert.Equal(t, 2, fa.x)
 					assert.Greater(t, fa.h, 0)
-					assert.LessOrEqual(t, fa.y+fa.h, height-2)
+					assert.LessOrEqual(t, fa.y+fa.h, height-1)
 					assert.Contains(t, []string{"❭ private", "❭ answer", "  answer"}, rows[fa.y])
 				}
 			}

@@ -1,9 +1,6 @@
 package tui
 
 import (
-	"slices"
-	"strings"
-
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
@@ -21,10 +18,10 @@ type planDialog struct {
 func newPlanDialog(ev event.PlanRequested, km *keyMap, th theme) *planDialog {
 	d := &dialog{title: "Approve this plan?", options: []option{
 		{label: "Yes"},
-		{label: rejectLabel(km), field: newFeedbackField(km, th)},
+		{label: "No", field: newFeedbackField(km, th)},
 	}}
-	parts := []string{binding(km.editPlan, "edit"), scrollHint(km), binding(km.interrupt, "dismiss")}
-	d.note, d.keys = ev.Path, strings.Join(slices.DeleteFunc(parts, isEmpty), " · ")
+	d.note = ev.Path
+	d.hints = []string{binding(km.submit, "choose"), binding(km.editPlan, "edit"), scrollHint(km), binding(km.dismiss, "dismiss")}
 	return &planDialog{token: ev.Token, d: d}
 }
 

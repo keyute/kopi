@@ -33,8 +33,7 @@ func tasksModel(t *testing.T) (*model, *fakeController) {
 	return m, c
 }
 
-// dialogRows is the screen from the dialog's top rule down to the status line,
-// which it leaves out.
+// dialogRows is the screen from the dialog's top rule down to its last row.
 func dialogRows(t *testing.T, m *model) []string {
 	t.Helper()
 	s := screen(m)
@@ -47,7 +46,7 @@ func dialogRows(t *testing.T, m *model) []string {
 		}
 	}
 	require.GreaterOrEqual(t, top, 0, "no dialog on screen")
-	return s[top : len(s)-1]
+	return s[top:]
 }
 
 // listRow is a /tasks list row as plain text: what the task is and, flush right
@@ -74,7 +73,7 @@ func TestTasksWithNoTasksFlashesAndOpensNothing(t *testing.T) {
 	})
 }
 
-func TestTasksOpensTheListAboveTheStatusLine(t *testing.T) {
+func TestTasksOpensTheListAtTheBottom(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, _ := tasksModel(t)
 		typeText(m, "/tasks")
@@ -95,7 +94,7 @@ func TestTasksOpensTheListAboveTheStatusLine(t *testing.T) {
 		assert.Empty(t, m.composer.value(), "the draft is accepted")
 		s := screen(m)
 		assert.Len(t, s, 30)
-		assert.Contains(t, s[len(s)-1], "plan", "the status line stays last")
+		assert.Equal(t, rule, s[len(s)-1], "the dialog is the last rows, the status line is hidden")
 		assert.Equal(t, m.height, m.transcriptHeight()+len(m.below))
 	})
 }
@@ -519,7 +518,7 @@ func TestTasksOverflowKeepsTheSelectedOptionVisible(t *testing.T) {
 					assert.Contains(t, rows, listRow(true, fmt.Sprintf("job %d", number), "0s", m.width))
 					s := screen(m)
 					assert.Len(t, s, m.height)
-					assert.Contains(t, s[len(s)-1], "plan")
+					assert.Equal(t, rule, s[len(s)-1])
 					return rows
 				}
 				rows := check(1)
@@ -556,7 +555,7 @@ func TestTasksOverflowKeepsTheSelectedOptionVisible(t *testing.T) {
 					assert.Equal(t, "  Background tasks", rows[1])
 					assert.Equal(t, rows[0], rows[len(rows)-1])
 					assert.Len(t, screen(m), height)
-					assert.Contains(t, screen(m)[height-1], "plan")
+					assert.Equal(t, rows[0], screen(m)[height-1])
 				}
 
 				press(m, digit('2'))

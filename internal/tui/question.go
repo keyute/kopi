@@ -177,46 +177,27 @@ func (p *questionPage) closeNote(save bool) {
 	p.noting = -1
 }
 
-// binding is "<first key> to <verb>", empty when the binding has no keys.
-// hintRows finds the key by this form.
-func binding(b key.Binding, verb string) string {
-	if ks := b.Keys(); len(ks) > 0 {
-		return ks[0] + " to " + verb
-	}
-	return ""
-}
-
-// keys is the key hints row.
-func (q *questionDialog) keys() string {
+// keys is the page's own key hints.
+func (q *questionDialog) keys() []string {
 	km := q.km
 	var parts []string
 	switch {
 	case q.tab == len(q.qs):
-		parts = []string{binding(km.submit, "submit"), "← to go back", binding(km.interrupt, "dismiss")}
+		parts = []string{binding(km.submit, "submit"), "← to go back", binding(km.dismiss, "dismiss")}
 	case q.pages[q.tab].noting >= 0:
-		return strings.Join(slices.DeleteFunc([]string{binding(km.submit, "save"), binding(km.interrupt, "go back")}, isEmpty), " · ")
+		return []string{binding(km.submit, "save"), binding(km.dismiss, "go back")}
 	case q.pages[q.tab].onCustom():
-		parts = []string{binding(km.submit, "answer"), binding(km.interrupt, "dismiss")}
+		parts = []string{binding(km.submit, "answer"), binding(km.dismiss, "dismiss")}
 	case q.qs[q.tab].MultiSelect:
-		parts = []string{"space to toggle", binding(km.submit, "continue"), binding(km.complete, "add a note"), binding(km.interrupt, "dismiss")}
+		parts = []string{"space to toggle", binding(km.submit, "continue"), binding(km.complete, "add a note"), binding(km.dismiss, "dismiss")}
 	default:
-		parts = []string{binding(km.submit, "choose"), binding(km.complete, "add a note"), binding(km.interrupt, "dismiss")}
+		parts = []string{binding(km.submit, "choose"), binding(km.complete, "add a note"), binding(km.dismiss, "dismiss")}
 	}
 	if len(q.qs) > 1 && q.tab < len(q.qs) {
 		parts = append([]string{"←/→ to switch questions"}, parts...)
 	}
-	return strings.Join(slices.DeleteFunc(parts, isEmpty), " · ")
+	return parts
 }
-
-// scrollHint is "<page up>/<page down> to scroll", empty unless both are bound.
-func scrollHint(km *keyMap) string {
-	if up, down := km.pageUp.Keys(), km.pageDown.Keys(); len(up) > 0 && len(down) > 0 {
-		return up[0] + "/" + down[0] + " to scroll"
-	}
-	return ""
-}
-
-func isEmpty(s string) bool { return s == "" }
 
 // strip is the row of tabs, "" for a single question. When it is wider than
 // the dialog it starts at the active tab.
@@ -260,13 +241,12 @@ func (q *questionDialog) dialog(width int, th theme) *dialog {
 	if strip := q.strip(width, th); strip != "" {
 		d.head = []string{strip, ""}
 	}
-	d.hint = scrollHint(q.km)
 	if q.tab == len(q.qs) {
 		q.fillReview(width, th)
 	} else {
 		q.fillPage(width, th)
 	}
-	d.foot = q.keys()
+	d.hints = q.keys()
 	return d
 }
 
@@ -306,9 +286,6 @@ func (q *questionDialog) fillPage(width int, th theme) {
 		}
 	case preview:
 		d.pane = &pane{lines: q.previewLines(d.sel, width-6, th)}
-	}
-	if p.noting >= 0 {
-		d.hint = ""
 	}
 }
 

@@ -17,22 +17,12 @@ type approvalOption struct {
 }
 
 // approvalOptions are the prompt's choices in order; option i is digit i+1.
-func approvalOptions(a *event.ApprovalRequested, km *keyMap) []approvalOption {
+func approvalOptions(a *event.ApprovalRequested) []approvalOption {
 	opts := []approvalOption{{"Yes", policy.Allow}}
 	if a.Edits {
 		opts = append(opts, approvalOption{"Yes, allow all edits this session", policy.AllowEdits})
 	}
-	return append(opts, approvalOption{rejectLabel(km), policy.Reject})
-}
-
-// rejectLabel is the No row's label, naming the key that picks it without a
-// reason.
-func rejectLabel(km *keyMap) string {
-	no := "No"
-	if ks := km.interrupt.Keys(); len(ks) > 0 {
-		no += " (" + ks[0] + ")"
-	}
-	return no
+	return append(opts, approvalOption{"No", policy.Reject})
 }
 
 // newFeedbackField is the text field of a No row.
@@ -64,7 +54,6 @@ func approvalNote(a *event.ApprovalRequested) string {
 type approvalDialog struct {
 	req *event.ApprovalRequested
 	d   *dialog
-	km  *keyMap
 	// preview is the call's preview rows.
 	preview approvalPreview
 }
@@ -76,20 +65,20 @@ func newApprovalDialog(a *event.ApprovalRequested, km *keyMap, th theme) *approv
 	if a.Agent != "" {
 		d.title = a.Agent + " " + a.TaskID + " › " + a.Title
 	}
-	for _, o := range approvalOptions(a, km) {
+	d.hints = []string{binding(km.submit, "choose"), binding(km.dismiss, "reject")}
+	for _, o := range approvalOptions(a) {
 		opt := option{label: o.label}
 		if o.answer == policy.Reject {
 			opt.field = newFeedbackField(km, th)
 		}
 		d.options = append(d.options, opt)
 	}
-	return &approvalDialog{req: a, d: d, km: km}
+	return &approvalDialog{req: a, d: d}
 }
 
-// dialog has the preview as its body, windowed from d's scroll, and the scroll
-// hint for when it is cut.
+// dialog has the preview as its body, windowed from d's scroll.
 func (a *approvalDialog) dialog(width int, th theme) *dialog {
-	a.d.body, a.d.hint = a.preview.lines(a.req.Preview, width-2, th), scrollHint(a.km)
+	a.d.body = a.preview.lines(a.req.Preview, width-2, th)
 	return a.d
 }
 
@@ -103,7 +92,7 @@ func (a *approvalDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	}
 	picked, cmd := a.d.key(msg, &m.keys)
 	if picked {
-		opts := approvalOptions(a.req, &m.keys)
+		opts := approvalOptions(a.req)
 		m.c.Answer(a.req.Token, policy.Decision{Answer: opts[a.d.sel].answer, Reason: a.d.text()})
 	}
 	return cmd, true
