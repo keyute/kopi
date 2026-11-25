@@ -169,9 +169,6 @@ func (m *model) openWorkflow(id string) bool {
 
 func (w *workflowDialog) dialog(width int, th theme) *dialog {
 	if w.watching {
-		if w.stale {
-			w.read()
-		}
 		w.hint.note = cut("watching "+w.watchWhat, width-2)
 		return w.hint
 	}
@@ -476,11 +473,7 @@ func (w *workflowDialog) seen(m *model, msg tea.Msg) bool {
 	case event.SessionChanged:
 		return false
 	case event.TasksChanged, event.ToolEnd, event.TurnEnd:
-		if w.watching {
-			w.read()
-		} else {
-			w.stale = true
-		}
+		w.stale = true
 	case event.PlanRequested:
 		if w.watching {
 			w.leave(m)

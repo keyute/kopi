@@ -379,6 +379,26 @@ func TestWorkflowDialogDismissWhileWatchingReturnsToTheListOnTheSameAgent(t *tes
 	})
 }
 
+func TestWorkflowDialogDefersRefreshWhileWatching(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := workflowModel(t, 60)
+		w := openFromRow(t, m)
+		press(m, down)
+		press(m, enter)
+		require.True(t, w.watching)
+		reads := c.workflowReads
+
+		setRun(m, c, func(r *fakeRun) { r.agents[1].Description = "updated" })
+		send(m, sub("s2", ok("a", "x")), sub("s2", event.TurnEnd{}))
+		workflowBox(t, m)
+		assert.Equal(t, reads, c.workflowReads)
+
+		press(m, escape)
+		assert.Contains(t, strings.Join(workflowBox(t, m), "\n"), "reviewer › updated")
+		assert.Equal(t, reads+1, c.workflowReads)
+	})
+}
+
 func TestWorkflowDialogWatchingReturnsToTheViewShownBefore(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, c := workflowModel(t, 60)
