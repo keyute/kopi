@@ -266,11 +266,11 @@ func TestCloseEndsRunningLogin(t *testing.T) {
 
 func TestLoginAndLogoutArguments(t *testing.T) {
 	h := openLoginHarness(t, Config{})
-	cs, err := h.c.Arguments("login")
+	cs, err := h.c.Arguments("login", "")
 	require.NoError(t, err)
 	assert.Contains(t, cs, Candidate{Value: loginProvider, Description: "Test sign-in"})
 	assert.NotContains(t, values(cs), fauxProvider)
-	cs, err = h.c.Arguments("logout")
+	cs, err = h.c.Arguments("logout", "")
 	require.NoError(t, err)
 	assert.Empty(t, cs)
 
@@ -278,10 +278,10 @@ func TestLoginAndLogoutArguments(t *testing.T) {
 	require.True(t, h.c.AnswerLogin(req.Token, "synthetic-code"))
 	wait(t, run.done)
 
-	cs, err = h.c.Arguments("login")
+	cs, err = h.c.Arguments("login", "")
 	require.NoError(t, err)
 	assert.Contains(t, cs, Candidate{Value: loginProvider, Description: "Test sign-in (logged in)"})
-	cs, err = h.c.Arguments("logout")
+	cs, err = h.c.Arguments("logout", "")
 	require.NoError(t, err)
 	assert.Equal(t, []Candidate{{Value: loginProvider}}, cs)
 

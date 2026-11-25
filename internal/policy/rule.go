@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/bmatcuk/doublestar/v4"
 )
@@ -44,6 +45,10 @@ type rule struct {
 	// patterns are slash-separated absolute globs; nil for a bare rule, which
 	// matches every call of its tool.
 	patterns []string
+	// spec is the path as written, which SetDirs extends to added directories;
+	// extra holds those patterns. Only extra changes after NewRules.
+	spec  string
+	extra []string
 }
 
 type source struct {
@@ -52,13 +57,21 @@ type source struct {
 }
 
 type Rules struct {
+	// mu guards each rule's extra, dirs and mcpFiles.
+	mu      sync.RWMutex
 	sources []source
+	dirs    map[string]dirRules
 	// fold matches case-insensitively, as the file systems of darwin and
 	// windows do by default.
 	fold bool
-	// mcpFile is the file the workspace's .mcp.json resolves to when the
-	// rules are built.
-	mcpFile string
+	// mcpFiles are the files the .mcp.json of the workspace, then of each added
+	// directory, resolves to when the rules or the directories are set.
+	mcpFiles []string
+}
+
+type dirRules struct {
+	mcp    string
+	extras [][]string
 }
 
 type effect int
@@ -143,8 +156,8 @@ func NewRules(workspace, home string, tools map[string]ToolSpec, sources ...Sour
 	}
 	ws, hm := escape(filepath.ToSlash(filepath.Clean(workspace))), escape(filepath.ToSlash(filepath.Clean(home)))
 	r := &Rules{
-		fold:    runtime.GOOS == "darwin" || runtime.GOOS == "windows",
-		mcpFile: Resolve(filepath.Join(workspace, ProjectMCPFile)),
+		fold:     runtime.GOOS == "darwin" || runtime.GOOS == "windows",
+		mcpFiles: []string{Resolve(filepath.Join(workspace, ProjectMCPFile))},
 	}
 	for _, src := range sources {
 		s := source{name: src.Name}
@@ -168,7 +181,7 @@ func NewRules(workspace, home string, tools map[string]ToolSpec, sources ...Sour
 				}
 				ru := rule{text: text, name: name, except: except}
 				if spec != "" {
-					ru.patterns = forms(expand(spec, ws, hm))
+					ru.patterns, ru.spec = forms(expand(spec, ws, hm)), spec
 				}
 				*l.out = append(*l.out, ru)
 			}
@@ -191,17 +204,82 @@ func escape(s string) string {
 
 // expand makes spec an absolute glob; ws and home are already escaped.
 func expand(spec, ws, home string) string {
-	switch {
-	case strings.HasPrefix(spec, "/"):
+	if rest, ok := underWorkspace(spec); ok {
+		return ws + rest
+	}
+	if strings.HasPrefix(spec, "/") {
 		return spec
-	case spec == "~" || strings.HasPrefix(spec, "~/"):
-		return home + strings.TrimPrefix(spec, "~")
+	}
+	return home + strings.TrimPrefix(spec, "~")
+}
+
+// underWorkspace reports whether spec is relative to the workspace and, if so,
+// what follows the workspace's path.
+func underWorkspace(spec string) (rest string, ok bool) {
+	switch {
+	case strings.HasPrefix(spec, "/"), spec == "~", strings.HasPrefix(spec, "~/"):
+		return "", false
 	case !strings.Contains(strings.TrimRight(spec, "/"), "/"):
 		// As in .gitignore, a name with at most a trailing slash matches at any depth.
-		return ws + "/**/" + spec
+		return "/**/" + spec, true
 	default:
-		return ws + "/" + spec
+		return "/" + spec, true
 	}
+}
+
+// eachRule calls f on every rule in order.
+func (r *Rules) eachRule(f func(*rule)) {
+	for i := range r.sources {
+		s := &r.sources[i]
+		for _, rules := range [][]rule{s.allow, s.ask, s.deny} {
+			for j := range rules {
+				f(&rules[j])
+			}
+		}
+	}
+}
+
+// SetDirs makes relative and bare-name rule paths apply in each of dirs as in
+// the workspace, and guards what each one's .mcp.json resolves to. It replaces
+// what an earlier call set; nil removes it. dirs are absolute and exist; a
+// directory is given under every name a path there may be spelled with, as the
+// workspace reaches it under both.
+func (r *Rules) SetDirs(dirs []string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	next := make(map[string]dirRules, len(dirs))
+	for _, dir := range dirs {
+		entry, ok := r.dirs[dir]
+		if !ok {
+			entry.mcp = Resolve(dir + string(filepath.Separator) + ProjectMCPFile)
+			escaped := escape(filepath.ToSlash(dir))
+			r.eachRule(func(ru *rule) {
+				var extra []string
+				if rest, ok := underWorkspace(ru.spec); ok && ru.patterns != nil && !slices.Contains(strings.Split(ru.spec, "/"), "..") {
+					extra = forms(escaped + rest)
+				}
+				entry.extras = append(entry.extras, extra)
+			})
+		}
+		next[dir] = entry
+	}
+	i := 0
+	r.eachRule(func(ru *rule) {
+		ru.extra = nil
+		for _, dir := range dirs {
+			ru.extra = append(ru.extra, next[dir].extras[i]...)
+		}
+		i++
+	})
+	r.mcpFiles = r.mcpFiles[:1]
+	for _, dir := range dirs {
+		r.mcpFiles = append(r.mcpFiles, next[dir].mcp)
+	}
+	r.dirs = next
 }
 
 // forms resolves the literal prefix before cleaning it. A cleaned lexical
@@ -280,6 +358,8 @@ func (r *Rules) Removes(tool string) bool {
 	if r == nil {
 		return false
 	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	for _, s := range r.sources {
 		bare, exempt := false, false
 		for _, ru := range s.deny {
@@ -299,6 +379,8 @@ func (r *Rules) Removes(tool string) bool {
 // decide returns the strongest effect any source's rules have on the call,
 // with the matching rule's text and source. t is nil for a call on no path.
 func (r *Rules) decide(tool string, t *Target) (eff effect, text, src string) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	for _, l := range []struct {
 		eff        effect
 		tightening bool
@@ -333,6 +415,8 @@ func (r *Rules) Hides(tool string, root, t Target) bool {
 	if r == nil {
 		return false
 	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	for _, s := range r.sources {
 		for _, rules := range [][]rule{s.deny, s.ask} {
 			if r.listHides(rules, tool, root, t) {
@@ -373,7 +457,7 @@ func (r *Rules) underGit(p string) bool {
 
 func (r *Rules) isMCPFile(p string) bool {
 	p = filepath.Clean(p)
-	if p == r.mcpFile || r.fold && strings.EqualFold(p, r.mcpFile) {
+	if slices.ContainsFunc(r.mcpFiles, func(f string) bool { return p == f || r.fold && strings.EqualFold(p, f) }) {
 		return true
 	}
 	base := path.Base(filepath.ToSlash(p))
@@ -437,12 +521,14 @@ func (r *Rules) matchPath(ru rule, p string) bool {
 		p = strings.ToLower(p)
 	}
 	for {
-		for _, pat := range ru.patterns {
-			if r.fold {
-				pat = strings.ToLower(pat)
-			}
-			if doublestar.MatchUnvalidated(pat, p) {
-				return true
+		for _, pats := range [2][]string{ru.patterns, ru.extra} {
+			for _, pat := range pats {
+				if r.fold {
+					pat = strings.ToLower(pat)
+				}
+				if doublestar.MatchUnvalidated(pat, p) {
+					return true
+				}
 			}
 		}
 		parent := path.Dir(p)

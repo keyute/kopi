@@ -1111,3 +1111,63 @@ func TestBwrapPlanProfile(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(ws, "f"))
 	assert.DirExists(t, ws)
 }
+
+func TestSetPolicyBwrap(t *testing.T) {
+	base := resolvedTemp(t)
+	first, second := filepath.Join(base, "first"), filepath.Join(base, "second")
+	mkdirs(t, first, second)
+	old := &bwrap{path: "/bin/bwrap", policy: Policy{Write: []string{first}}, shared: newPlaceholders(t.TempDir()), seccomp: []byte("filter")}
+	s := &Sandbox{bwrap: old}
+
+	require.NoError(t, s.SetPolicy(Policy{Write: []string{first, second}}))
+
+	assert.NotSame(t, old, s.bwrap)
+	assert.Equal(t, []string{first}, old.policy.Write)
+	assert.Equal(t, []string{first, second}, s.bwrap.policy.Write)
+	assert.Equal(t, old.path, s.bwrap.path)
+	assert.Same(t, old.shared, s.bwrap.shared)
+	assert.Equal(t, old.seccomp, s.bwrap.seccomp)
+}
+
+func TestSetPolicyBwrapRefusesSymlinkInWriteRoot(t *testing.T) {
+	base := resolvedTemp(t)
+	root, added := filepath.Join(base, "root"), filepath.Join(base, "added")
+	mkdirs(t, root, added)
+	require.NoError(t, os.Symlink(filepath.Join(base, "nowhere"), filepath.Join(added, ".mcp.json")))
+	old := &bwrap{policy: Policy{Write: []string{root}}}
+	s := &Sandbox{bwrap: old}
+
+	err := s.SetPolicy(Policy{Write: []string{root, added}, DenyWrite: []string{filepath.Join(added, ".mcp.json")}})
+
+	require.ErrorIs(t, err, ErrDeniedSymlink)
+	assert.Same(t, old, s.bwrap)
+	assert.Equal(t, []string{root}, s.bwrap.policy.Write)
+}
+
+func TestSetPolicyBwrapPlanProfile(t *testing.T) {
+	base := resolvedTemp(t)
+	first, second := filepath.Join(base, "first"), filepath.Join(base, "second")
+	mkdirs(t, first, second)
+	s := &Sandbox{bwrap: &bwrap{policy: Policy{Write: []string{first}, DenyWrite: []string{first}}}}
+
+	require.NoError(t, s.SetPolicy(Policy{Write: []string{first, second}, DenyWrite: []string{first, second}}))
+
+	args, made, err := bwrapArgs(s.bwrap.policy)
+	require.NoError(t, err)
+	assert.Equal(t, concat(rw(first), rw(second), ro(first), ro(second)), mounts(t, args))
+	assert.Empty(t, made)
+}
+
+func TestSetPolicyBwrapPlanProfileRefusesRootAsAWriteRoot(t *testing.T) {
+	base := resolvedTemp(t)
+	root := filepath.Join(base, "root")
+	mkdirs(t, root)
+	old := &bwrap{policy: Policy{Write: []string{root}, DenyWrite: []string{root}}}
+	s := &Sandbox{bwrap: old}
+
+	err := s.SetPolicy(Policy{Write: []string{root, "/"}, DenyWrite: []string{root, "/"}})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "overlaps /proc")
+	assert.Same(t, old, s.bwrap)
+}

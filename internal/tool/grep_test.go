@@ -677,3 +677,68 @@ func TestGrepRefusesSameInodeSwapDuringHiddenCheck(t *testing.T) {
 		})
 	}
 }
+
+func TestGrepSearchesAnAddedDirectoryWithAbsoluteResults(t *testing.T) {
+	dir := t.TempDir()
+	ws := newWorkspace(t, dir, nil)
+	other := t.TempDir()
+	writeFile(t, filepath.Join(other, "sub", "a.txt"), "needle\n")
+	writeFile(t, filepath.Join(dir, "start.txt"), "needle\n")
+	tool := NewGrep(ws, nil)
+	file := filepath.Join(realPath(t, other), "sub", "a.txt")
+	args := fmt.Sprintf(`{"pattern":"needle","path":%q}`, other)
+
+	_, err := runGrep(t, tool, args)
+	require.ErrorIs(t, err, ErrOutsideWorkspace)
+	require.NoError(t, ws.Add(Dir{Given: other, Real: realPath(t, other)}))
+
+	out, err := runGrep(t, tool, args)
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 file\n"+file+"\n", out)
+	out, err = runGrep(t, tool, fmt.Sprintf(`{"pattern":"needle","path":%q,"output_mode":"content"}`, filepath.Join(other, "sub", "a.txt")))
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 match in 1 file\n"+file+":1:needle\n", out)
+	out, err = runGrep(t, tool, `{"pattern":"needle","output_mode":"count"}`)
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 match in 1 file\nstart.txt:1\n", out)
+}
+
+func TestGrepOmitsHiddenInAnAddedDirectory(t *testing.T) {
+	ws := newWorkspace(t, t.TempDir(), nil)
+	other := t.TempDir()
+	writeFile(t, filepath.Join(other, "a.txt"), "needle\n")
+	writeFile(t, filepath.Join(other, "secret.txt"), "needle\n")
+	require.NoError(t, ws.Add(Dir{Given: other, Real: realPath(t, other)}))
+	hidden, _ := recordHidden(func(t policy.Target) bool { return filepath.Base(t.Real) == "secret.txt" })
+
+	out, err := runGrep(t, NewGrep(ws, hidden), fmt.Sprintf(`{"pattern":"needle","path":%q}`, other))
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 file\n"+filepath.Join(realPath(t, other), "a.txt")+"\n", out)
+}
+
+func TestGrepNamesASavedOutputFileAsGivenInAnAddedDirectory(t *testing.T) {
+	saved, outputs := newSavedOutputs(t)
+	writeFile(t, filepath.Join(outputs, "o.txt"), "needle\n")
+	ws := newWorkspace(t, t.TempDir(), nil).WithOutputs(saved)
+	parent := filepath.Dir(filepath.Dir(outputs))
+	require.NoError(t, ws.Add(Dir{Given: parent, Real: realPath(t, parent)}))
+	file := filepath.Join(outputs, "o.txt")
+
+	out, err := runGrep(t, NewGrep(ws, nil), fmt.Sprintf(`{"pattern":"needle","path":%q}`, file))
+
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 file\n"+file+"\n", out)
+}
+
+func TestGrepLeavesKopiHomeOutOfAnAddedDirectory(t *testing.T) {
+	home, kopiHome := syntheticHome(t)
+	writeFile(t, filepath.Join(home, "a.txt"), "needle\n")
+	writeFile(t, filepath.Join(kopiHome, "config.json"), "needle\n")
+	ws := newWorkspace(t, t.TempDir(), protectedStores(home, kopiHome))
+	require.NoError(t, ws.Add(Dir{Given: home, Real: realPath(t, home)}))
+
+	out, err := runGrep(t, NewGrep(ws, nil), fmt.Sprintf(`{"pattern":"needle","path":%q}`, home))
+
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 file\n"+filepath.Join(realPath(t, home), "a.txt")+"\n", out)
+}

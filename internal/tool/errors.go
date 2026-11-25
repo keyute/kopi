@@ -7,6 +7,7 @@ var (
 	ErrEditConflict         = errors.New("file changed during edit")
 	ErrTargetChanged        = errors.New("workspace traversal changed")
 	ErrOutsideWorkspace     = errors.New("path is outside the workspace")
+	ErrInWorkspace          = errors.New("directory is already in the workspace")
 	ErrProtected            = errors.New("path is protected")
 	ErrBinary               = errors.New("file is binary")
 	ErrIsDirectory          = errors.New("path is a directory")

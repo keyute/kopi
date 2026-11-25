@@ -32,10 +32,24 @@ type menu struct {
 	// arg is q's whole argument, trimmed: q.Text stops at the cursor, but Enter
 	// sends or replaces all of it.
 	arg string
-	// picked reports that Up, Down or Tab chose the row since the token's text changed.
+	// picked reports that Up, Down or Tab chose the row since the token's text
+	// changed; while pending they are held instead.
 	picked bool
 	// seq numbers the latest load; an older candidatesMsg is dropped.
 	seq int
+	// typed reports that q's command is asked again for every change of the
+	// argument and returns candidates already filtered: items are shown as
+	// given.
+	typed bool
+	// pending reports that a typed load for q.Text has not arrived: the rows
+	// shown are for older text, so none is lit.
+	pending bool
+	// held is the Up, Down and Tab presses made while pending, run against the
+	// reply's rows when it arrives.
+	held []tea.KeyPressMsg
+	// carry is the held keys a replayed key left unreplayed by changing the
+	// draft: followMenu hands them to the load that change asks.
+	carry []tea.KeyPressMsg
 	// dismissed is the token, Text cleared, that the menu was closed on; it
 	// stays closed until the token changes. Zero means none.
 	dismissed app.Query
@@ -72,7 +86,7 @@ func (m *model) followMenu() tea.Cmd {
 	}
 	var cmd tea.Cmd
 	if !mn.open || q.Kind != prev.Kind || q.Command != prev.Command {
-		mn.items, mn.sel, mn.picked, mn.optional = nil, 0, false, false
+		mn.items, mn.sel, mn.picked, mn.optional, mn.typed, mn.pending, mn.held, mn.carry = nil, 0, false, false, false, false, nil, nil
 		mn.seq++
 		seq, c := mn.seq, m.c
 		switch q.Kind {
@@ -81,11 +95,11 @@ func (m *model) followMenu() tea.Cmd {
 				mn.items = append(mn.items, app.Candidate{Value: cm.Name, Description: cm.Summary})
 			}
 		case app.KindArgument:
-			mn.optional = slices.ContainsFunc(c.Commands(), func(cm app.Command) bool { return cm.Name == q.Command && cm.Optional })
-			cmd = func() tea.Msg {
-				cs, err := c.Arguments(q.Command)
-				return candidatesMsg{seq, cs, err}
+			cms := c.Commands()
+			if i := slices.IndexFunc(cms, func(cm app.Command) bool { return cm.Name == q.Command }); i >= 0 {
+				mn.optional, mn.typed = cms[i].Optional, cms[i].Typed
 			}
+			cmd = m.ask()
 		case app.KindReference:
 			cmd = func() tea.Msg {
 				cs, err := c.Files()
@@ -93,31 +107,94 @@ func (m *model) followMenu() tea.Cmd {
 			}
 		}
 	} else if q.Text != prev.Text || mn.arg != prevArg {
-		mn.sel, mn.picked = 0, false
+		mn.sel, mn.picked, mn.held = 0, false, nil
+		// The rows stay until the reply, so the menu does not blink between keys.
+		if mn.typed && q.Text != prev.Text {
+			mn.seq++
+			cmd = m.ask()
+			mn.held = mn.carry
+		}
+		mn.carry = nil
 	}
 	mn.open = true
 	m.rematch()
 	return cmd
 }
 
+// ask loads the candidates of the argument's command for the text typed so
+// far, as load number seq.
+func (m *model) ask() tea.Cmd {
+	mn := &m.menu
+	mn.pending = mn.typed
+	seq, c, q := mn.seq, m.c, mn.q
+	return func() tea.Msg {
+		cs, err := c.Arguments(q.Command, q.Text)
+		return candidatesMsg{seq, cs, err}
+	}
+}
+
 func (m *model) rematch() {
 	mn := &m.menu
-	mn.shown = app.Match(mn.q, mn.items)
+	if mn.typed {
+		mn.shown = mn.items
+	} else {
+		mn.shown = app.Match(mn.q, mn.items)
+	}
 	mn.sel = min(mn.sel, max(0, len(mn.shown)-1))
 }
 
-func (m *model) loaded(msg candidatesMsg) {
-	if msg.seq != m.menu.seq || !m.menu.open {
-		return
+// loaded takes a reply. For a typed menu its rows start unpicked, then the
+// keys held while it was pending run against them.
+func (m *model) loaded(msg candidatesMsg) tea.Cmd {
+	mn := &m.menu
+	if msg.seq != mn.seq || !mn.open {
+		return nil
+	}
+	held := mn.held
+	mn.held = nil
+	if mn.typed {
+		mn.pending = false
+		mn.sel, mn.picked = 0, false
 	}
 	if msg.err != nil {
 		slog.Warn("failed to load completions", "err", msg.err)
-		return
+		if mn.typed {
+			mn.items = nil
+			m.rematch()
+		}
+		return m.replay(held)
 	}
-	m.menu.items = msg.cs
-	if !m.holding() {
-		m.rematch()
+	mn.items = msg.cs
+	if m.holding() {
+		return nil
 	}
+	m.rematch()
+	if len(mn.shown) == 0 {
+		return m.replay(held)
+	}
+	var cmds []tea.Cmd
+	for i, k := range held {
+		draft := m.composer.value()
+		cmd, _ := m.menuKey(k)
+		cmds = append(cmds, cmd)
+		// The rows no longer belong to a draft a key changed: the keys left wait
+		// for the reply to the new draft, as if pressed after the change.
+		if m.composer.value() != draft {
+			mn.carry = held[i+1:]
+			break
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+// replay runs keys held for a reply with no rows as the composer takes them
+// with no menu, so an Up held for history recall is not lost.
+func (m *model) replay(keys []tea.KeyPressMsg) tea.Cmd {
+	var cmds []tea.Cmd
+	for _, k := range keys {
+		cmds = append(cmds, m.key(k))
+	}
+	return tea.Batch(cmds...)
 }
 
 // want is the rows the menu would take with room for all of them: its
@@ -135,15 +212,19 @@ func (mn *menu) want() int {
 
 // lit reports whether the selected row is the one Enter takes. It is not when
 // the draft already runs as typed: an optional argument left out, or an
-// argument typed in full. Up, Down or Tab lights it.
+// argument typed in full, nor while the rows are for older text. Up, Down or
+// Tab lights it.
 func (mn *menu) lit() bool {
+	if mn.pending {
+		return false
+	}
 	if mn.picked || mn.q.Kind != app.KindArgument {
 		return true
 	}
 	if mn.arg == "" {
 		return !mn.optional
 	}
-	return !slices.ContainsFunc(mn.items, func(cd app.Candidate) bool { return cd.Value == mn.arg })
+	return !slices.ContainsFunc(mn.items, func(cd app.Candidate) bool { return cd.Value == mn.arg || cd.Value == mn.arg+"/" })
 }
 
 func (m *model) menuHeight() int { return m.geo.menu }
@@ -214,9 +295,23 @@ func oneLine(s string) string {
 	return strings.Join(wrap(s, beyond), " ")
 }
 
-// menuKey handles k while the menu shows, reporting whether it did.
+// navKey reports whether k picks a row of the menu.
+func (m *model) navKey(k tea.KeyPressMsg) bool {
+	km := &m.keys
+	return key.Matches(k, km.menuUp) || key.Matches(k, km.menuDown) || key.Matches(k, km.complete)
+}
+
+// menuKey handles k while the menu shows, reporting whether it did. Up, Down
+// and Tab while a reply is pending are only held for it.
 func (m *model) menuKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 	km, mn := &m.keys, &m.menu
+	if mn.pending && m.navKey(k) {
+		mn.held = append(mn.held, k)
+		return nil, true
+	}
+	if len(mn.shown) == 0 {
+		return nil, false
+	}
 	switch {
 	case key.Matches(k, km.menuUp):
 		mn.sel = (mn.sel - 1 + len(mn.shown)) % len(mn.shown)
@@ -241,6 +336,7 @@ func (m *model) menuKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 		mn.dismissed = mn.q
 		mn.dismissed.Text = ""
 		mn.open = false
+		mn.held = nil
 	default:
 		return nil, false
 	}
@@ -248,8 +344,9 @@ func (m *model) menuKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 }
 
 // accept puts the selected candidate in place of the token; with run it then
-// submits, except for a file reference or a command that needs an argument
-// or a skill, which are only ever filled in.
+// submits, except for a file reference, a candidate ending in "/" that is not
+// already the argument as typed, or a command that needs an argument or a
+// skill, which are only ever filled in.
 func (m *model) accept(run bool) tea.Cmd {
 	q, cd := m.menu.q, m.menu.shown[m.menu.sel]
 	var ins string
@@ -264,6 +361,9 @@ func (m *model) accept(run bool) tea.Cmd {
 		}
 	case app.KindArgument:
 		ins = cd.Value
+		if strings.HasSuffix(cd.Value, "/") && cd.Value != m.menu.arg {
+			run = false
+		}
 	case app.KindReference:
 		run = false
 		ins = app.Reference(cd.Value)

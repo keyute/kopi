@@ -7,11 +7,12 @@
   - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `Agent`, `SendMessage`, `Workflow`, `TaskStop`, `WebFetch`, `WebSearch`, `AskUserQuestion`, `ExitPlanMode`
   - read-only MCP tools
   - `Write` and `Edit` on the session's [plan file](#exitplanmode) only
-  - `Bash` only in the [sandbox](sandbox.md), where it cannot write the start directory
+  - `Bash` only in the [sandbox](sandbox.md), where it cannot write the workspace
 - `Write`, `Edit` on any other file and other MCP tools need execute mode.
 - Sessions start and resume in the configured [`mode`](configuration.md#mode), including ones opened with `/new` and `/resume`.
 - `--mode` overrides the config file.
 - A mode switched to while the first session is opening is the mode it starts in.
+- The model is told of the directories added to the [workspace](#file-tools) in a hidden message sent with the next prompt, and for the main session again after a compaction. It is not part of the system prompt.
 - The model is told the session's mode in one hidden message sent with the first prompt of a session and with the first prompt after the mode changes. It is not part of the system prompt.
 - In plan mode where [`ExitPlanMode`](#exitplanmode) is offered, that message also tells the model not to change the workspace and, when it ends with changes to propose, whether or not the request asked for them, to write them as a plan to the plan file and call `ExitPlanMode` instead of ending its turn; with none, to just answer. Where `ExitPlanMode` is not offered (`kopi -p`, or a `deny` rule removed it) the message only states the mode, and the plan file's path when there is one.
 - No message follows an approved plan: the tool's result tells the model that the session is in execute mode and to carry out the plan.
@@ -20,10 +21,12 @@
 
 ## File tools
 
-- `Read` reads text files inside the start directory: up to 2000 lines, 2000 characters per line and 100 KiB per call.
+- The workspace is the start directory and the directories added with [`/add-dir`](usage.md#commands) or `--add-dir`, until Kopi exits. A relative path, and the default `path` of `Glob`, `Grep` and `LS`, mean the start directory. A file in an added directory is named by its absolute path, and results there are absolute paths.
+- `/add-dir` and `--add-dir` refuse, with `failed to add <path>: ` and the reason, a path that does not exist (`file does not exist`), one that is not a directory (`path is not a directory`), one already in the workspace, the start directory, an added one or anything inside either (`directory is already in the workspace`), and Kopi's home or anything in it (`path is protected`). On Linux with the sandbox on, `/` is also refused, because its sandbox policy would overlap `/proc`. A parent of the start directory or of an added directory can be added.
+- `Read` reads text files inside the workspace: up to 2000 lines, 2000 characters per line and 100 KiB per call.
   - It returns PNG, JPEG, GIF and WebP images whole, up to 20 MiB; one that cannot be processed is left out with a note. `offset` and `limit` do not apply to them.
   - Other binary files and directories are refused.
-- `Glob` finds files under a directory inside the start directory by glob (`*`, `?`, `**`, `{a,b}`); a pattern without `/` matches names at any depth. Up to 100 paths, most recently modified first.
+- `Glob` finds files under a directory inside the workspace by glob (`*`, `?`, `**`, `{a,b}`); a pattern without `/` matches names at any depth. Up to 100 paths, most recently modified first.
 - `Grep` searches the contents of a file or the files under a directory with an RE2 regular expression.
   - `output_mode`: `files_with_matches` (default), `content` (with up to 10 `context` lines) or `count`.
   - `limit` is 100 by default, at most 1000.
@@ -40,7 +43,7 @@
 - `Write` creates a file or replaces its whole content.
 - A file tool's row shows its path relative to the start directory, `plan` for the session's [plan file](#exitplanmode), `output <name>` for a [saved output file](#saved-output), and the path as written outside the start directory. `Read` adds the lines it was asked for (`Read a.go:40-89`), `Write` its line count (`+40`) and `Edit` the lines removed and added (`+3 -1`, with `· 2 occurrences` when `replace_all` replaced several). See [Transcript](usage.md#transcript).
 - `Edit` replaces a string that must match exactly once unless `replace_all` is set, in a text file of up to 10 MiB.
-- `Write` and `Edit` work inside the start directory, replace the file atomically and keep its mode.
+- `Write` and `Edit` work inside the workspace, replace the file atomically and keep its mode.
 - `Read`, `Write` and `Edit` refuse Kopi's home, including paths there that do not exist yet, except the session's [plan file](#exitplanmode); `Read` also reaches the session's [saved output](#saved-output).
 - `Glob`, `Grep` and `LS` refuse a path there and leave Kopi's home out of what they search or list; `Grep` also searches one saved output file when `path` names it.
 

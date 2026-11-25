@@ -31,6 +31,9 @@ import (
 // thinkingLevelForModelSwitch picks, which otherwise carries over the level
 // the old model clamped (PiG v0.7.0; recheck on a bump). Session.setModel
 // applies the same default when PiG returned before setting a level.
+// "steeringMode":"all" is what Session.Send's mode-line bookkeeping rests on:
+// everything handed over at a turn boundary is in the session before the next
+// boundary (PiG v0.7.0; recheck on a bump).
 const pigSettings = `{"retry":{"enabled":true},"compaction":{"enabled":true},"cacheWarming":"off","defaultThinkingLevel":"medium","steeringMode":"all","enableInstallTelemetry":false}`
 
 type Options struct {

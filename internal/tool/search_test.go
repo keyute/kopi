@@ -332,3 +332,29 @@ func TestSearchToolsOpenResolvedSymlinkRoot(t *testing.T) {
 		})
 	}
 }
+
+func TestSearchRootRefusesProtectedAndOutsideInAnAddedDirectory(t *testing.T) {
+	home, kopiHome := syntheticHome(t)
+	ws := newWorkspace(t, t.TempDir(), protectedStores(home, kopiHome))
+	other := t.TempDir()
+	writeFile(t, filepath.Join(other, "sub", "a.go"), "")
+	require.NoError(t, ws.Add(Dir{Given: other, Real: realPath(t, other)}))
+	require.NoError(t, ws.Add(Dir{Given: home, Real: realPath(t, home)}))
+	for _, path := range []string{filepath.Join(home, ".ssh"), filepath.Join(kopiHome, "config.json")} {
+		_, _, _, err := ws.in(path).searchRoot(path)
+		require.ErrorIs(t, err, ErrProtected, path)
+		_, err = searchTarget(ws)(json.RawMessage(fmt.Sprintf(`{"path":%q}`, path)))
+		require.NoError(t, err, "Target applies no confinement")
+	}
+	_, _, _, err := ws.in(other).searchRoot(filepath.Join(other, ".."))
+	require.ErrorIs(t, err, ErrOutsideWorkspace)
+
+	path := filepath.Join(other, "sub")
+	target, rel, info, err := ws.in(path).searchRoot(path)
+	require.NoError(t, err)
+	assert.Equal(t, "sub", rel)
+	assert.True(t, info.IsDir())
+	got, err := searchTarget(ws)(json.RawMessage(fmt.Sprintf(`{"path":%q}`, path)))
+	require.NoError(t, err)
+	assert.Equal(t, target, got)
+}

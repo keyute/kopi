@@ -227,3 +227,49 @@ func TestGlobDisplay(t *testing.T) {
 		assert.Equal(t, tc.want, tool.Display.Summary(out))
 	}
 }
+
+func TestGlobSearchesAnAddedDirectoryWithAbsoluteResults(t *testing.T) {
+	dir := t.TempDir()
+	ws := newWorkspace(t, dir, nil)
+	other := t.TempDir()
+	writeFile(t, filepath.Join(other, "sub", "a.go"), "")
+	writeFile(t, filepath.Join(dir, "start.go"), "")
+	tool := NewGlob(ws, nil)
+	args := fmt.Sprintf(`{"pattern":"*.go","path":%q}`, other)
+
+	_, err := runGlob(t, tool, args)
+	require.ErrorIs(t, err, ErrOutsideWorkspace)
+	require.NoError(t, ws.Add(Dir{Given: other, Real: realPath(t, other)}))
+
+	out, err := runGlob(t, tool, args)
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 file\n"+filepath.Join(realPath(t, other), "sub", "a.go"), out)
+	out, err = runGlob(t, tool, `{"pattern":"*.go"}`)
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 file\nstart.go", out)
+}
+
+func TestGlobOmitsHiddenInAnAddedDirectory(t *testing.T) {
+	ws := newWorkspace(t, t.TempDir(), nil)
+	other := t.TempDir()
+	writeFile(t, filepath.Join(other, "a.go"), "")
+	writeFile(t, filepath.Join(other, "secret.go"), "")
+	require.NoError(t, ws.Add(Dir{Given: other, Real: realPath(t, other)}))
+	hidden, _ := recordHidden(func(t policy.Target) bool { return filepath.Base(t.Real) == "secret.go" })
+
+	out, err := runGlob(t, NewGlob(ws, hidden), fmt.Sprintf(`{"pattern":"*.go","path":%q}`, other))
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 file\n"+filepath.Join(realPath(t, other), "a.go"), out)
+}
+
+func TestGlobLeavesKopiHomeOutOfAnAddedDirectory(t *testing.T) {
+	home, kopiHome := syntheticHome(t)
+	writeFile(t, filepath.Join(home, "a.json"), "")
+	ws := newWorkspace(t, t.TempDir(), protectedStores(home, kopiHome))
+	require.NoError(t, ws.Add(Dir{Given: home, Real: realPath(t, home)}))
+
+	out, err := runGlob(t, NewGlob(ws, nil), fmt.Sprintf(`{"pattern":"**/*.json","path":%q}`, home))
+
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 file\n"+filepath.Join(realPath(t, home), "a.json"), out)
+}

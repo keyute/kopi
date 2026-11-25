@@ -19,6 +19,12 @@ type Command struct {
 	Name, Summary string
 	// Argument reports that the command's argument is chosen from Arguments.
 	Argument bool
+	// Typed reports that the candidates depend on the argument typed so far:
+	// Arguments is asked again whenever it changes and returns the candidates
+	// already filtered and ordered. Otherwise it returns every candidate once
+	// and the frontend filters them. Arguments runs it without the lifecycle
+	// lock held, so it must not touch the runtime.
+	Typed bool
 	// Optional reports that the command also runs without that argument.
 	Optional bool
 	// Skill reports that the command is a skill, which loads with the prompt it
@@ -28,8 +34,10 @@ type Command struct {
 
 type command struct {
 	Command
-	run  func(c *Controller, ctx context.Context, args string) error
-	args func(c *Controller) ([]Candidate, error)
+	run func(c *Controller, ctx context.Context, args string) error
+	// args lists the argument's candidates; typed is the text typed so far, which
+	// only a Typed command reads.
+	args func(c *Controller, typed string) ([]Candidate, error)
 }
 
 func commandTable() []command {
@@ -41,6 +49,9 @@ func commandTable() []command {
 		}},
 		{Command: Command{Name: "effort", Summary: "set the reasoning effort for this session"}, run: (*Controller).effortCommand, args: (*Controller).effortCandidates},
 		{Command: Command{Name: "model", Summary: "switch the model until kopi exits"}, run: (*Controller).modelCommand, args: (*Controller).modelCandidates},
+		{Command: Command{Name: "add-dir", Summary: "add a directory to the workspace until kopi exits", Typed: true}, run: func(c *Controller, _ context.Context, arg string) error {
+			return c.AddDir(arg)
+		}, args: (*Controller).dirCandidates},
 		{Command: Command{Name: "new", Summary: "start a new session"}, run: func(c *Controller, ctx context.Context, _ string) error {
 			return c.switchTo(ctx, OpenRequest{})
 		}},
@@ -100,7 +111,7 @@ func (c *Controller) planCommand(_ context.Context, arg string) error {
 	return fmt.Errorf("%w: /plan takes no argument or open, got %q", ErrUnknownArgument, arg)
 }
 
-func (c *Controller) planCandidates() ([]Candidate, error) {
+func (c *Controller) planCandidates(_ string) ([]Candidate, error) {
 	return []Candidate{{Value: "open", Description: "edit the plan file"}}, nil
 }
 
@@ -152,7 +163,7 @@ func (c *Controller) effortCommand(_ context.Context, arg string) error {
 	return nil
 }
 
-func (c *Controller) effortCandidates() ([]Candidate, error) {
+func (c *Controller) effortCandidates(_ string) ([]Candidate, error) {
 	c.mu.Lock()
 	sess := c.main.sess
 	c.mu.Unlock()
@@ -263,27 +274,30 @@ func (c *Controller) endModelChange() {
 	c.main.advanceLocked(true)
 }
 
-// Arguments returns the candidates for command name's argument; nil when it takes
-// none. It may read every session file, so frontends call it off their event loop.
-func (c *Controller) Arguments(name string) ([]Candidate, error) {
+// Arguments returns the candidates for command name's argument, given the text
+// typed so far, which only a Typed command reads; nil when it takes none. It may
+// read every session file, so frontends call it off their event loop.
+func (c *Controller) Arguments(name, typed string) ([]Candidate, error) {
 	cmds := commandTable()
 	i := slices.IndexFunc(cmds, func(cmd command) bool { return cmd.Name == name })
 	if i < 0 || cmds[i].args == nil {
 		return nil, nil
 	}
-	// Held so that it cannot touch the runtime after Close.
-	c.life.Lock()
-	defer c.life.Unlock()
+	if !cmds[i].Typed {
+		// Held so that it cannot touch the runtime after Close.
+		c.life.Lock()
+		defer c.life.Unlock()
+	}
 	c.mu.Lock()
 	closed := c.closed
 	c.mu.Unlock()
 	if closed {
 		return nil, nil
 	}
-	return cmds[i].args(c)
+	return cmds[i].args(c, typed)
 }
 
-func (c *Controller) modelCandidates() ([]Candidate, error) {
+func (c *Controller) modelCandidates(_ string) ([]Candidate, error) {
 	models, err := c.rt.Models(context.Background())
 	if err != nil {
 		return nil, err
@@ -300,7 +314,7 @@ func (c *Controller) modelCandidates() ([]Candidate, error) {
 	return out, nil
 }
 
-func (c *Controller) sessionCandidates() ([]Candidate, error) {
+func (c *Controller) sessionCandidates(_ string) ([]Candidate, error) {
 	sessions, err := c.Sessions()
 	if err != nil {
 		return nil, err

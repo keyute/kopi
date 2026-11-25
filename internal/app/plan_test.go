@@ -14,10 +14,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/instruction"
+	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/subagent"
 	"github.com/keyute/kopi/internal/tool"
+	"github.com/keyute/kopi/internal/trust"
 )
 
 func exitPlanCall(id string) pigruntimetest.Call {
@@ -350,4 +353,243 @@ func TestPlanApprovalSurvivesCancellation(t *testing.T) {
 		assert.Equal(t, policy.Execute, r.mode)
 		assert.Equal(t, policy.Execute, c.mode())
 	})
+}
+
+func TestAddedDirectoryIsToldOnceAndAgainToANewSessionButNotToAResumedOne(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	dir := otherDir(t)
+	decide(t, d.c, dir, trust.Trusted)
+	text := told(d.sb.Workspace, dir)
+	require.NoError(t, d.c.AddDir(dir))
+
+	assert.Equal(t, [][]string{{"one", text}, {"two"}}, d.userTexts(t, "one", "two"))
+	savedID := d.c.Status().SessionID
+
+	require.NoError(t, d.c.NewSession(t.Context()))
+	d.read = 0
+	assert.Equal(t, [][]string{{"three", text}}, d.userTexts(t, "three"), "the new session has not been told")
+
+	sessions := subscribeTo[event.SessionChanged](d.c)
+	_, err := d.c.Submit(t.Context(), Main, "/resume "+savedID)
+	require.NoError(t, err)
+	assert.Equal(t, savedID, receiveEvent(t, sessions).SessionID)
+	assertSwitchDone(t, d.harness)
+	d.read = 0
+	got := d.userTexts(t, "four")
+	require.Len(t, got, 1)
+	assert.Equal(t, "four", got[0][len(got[0])-1], "the resumed session is not told again")
+	assert.Equal(t, 1, strings.Count(strings.Join(got[0], "\n"), text), "only its history holds the text")
+	assert.ErrorIs(t, d.ws.CanAdd(dir), tool.ErrInWorkspace)
+}
+
+func TestModeLineAndDirectoriesAreOfferedUntilRead(t *testing.T) {
+	c := &Controller{authority: policy.NewAuthority()}
+	c.cfg.Workspace = "/ws"
+	c.main = &runner{c: c}
+	c.dirs = []addedDir{{dir: tool.Dir{Real: "/other"}}}
+	want := modeLine(policy.Plan, "", false) + "\n" + "The workspace also includes /other. Give a path there as an absolute path; relative paths and Bash still start from /ws."
+
+	first := c.main.tell([]pigruntime.Prompt{{Text: "a"}})
+	assert.Equal(t, want, first[0].Mode)
+	assert.Equal(t, want, c.main.tell([]pigruntime.Prompt{{Text: "b"}})[0].Mode, "handed over and not read is offered again")
+
+	first[0].ModeRead()
+	assert.Empty(t, c.main.tell([]pigruntime.Prompt{{Text: "c"}})[0].Mode)
+
+	c.dirs = append(c.dirs, addedDir{dir: tool.Dir{Real: "/another"}})
+	assert.Equal(t, "The workspace also includes /another. Give a path there as an absolute path; relative paths and Bash still start from /ws.", c.main.tell([]pigruntime.Prompt{{Text: "d"}})[0].Mode, "only what is new")
+}
+
+func TestOneReadRecordsEverythingItsPromptCarried(t *testing.T) {
+	c := &Controller{authority: policy.NewAuthority()}
+	c.cfg.Workspace = "/ws"
+	c.main = &runner{c: c}
+	c.main.tell([]pigruntime.Prompt{{Text: "a"}})[0].ModeRead()
+	c.dirs = []addedDir{{dir: tool.Dir{Real: "/one"}}}
+	c.authority.EnterExecute()
+	both := c.main.tell([]pigruntime.Prompt{{Text: "b"}})
+	require.Equal(t, modeLine(policy.Execute, "", false)+"\n"+c.dirsText(0, 1, true), both[0].Mode)
+	both[0].ModeRead()
+	assert.Empty(t, c.main.tell([]pigruntime.Prompt{{Text: "c"}})[0].Mode)
+}
+
+func TestReadingOnlyDirectoriesLeavesTheModeLineAlone(t *testing.T) {
+	c := &Controller{authority: policy.NewAuthority()}
+	c.cfg.Workspace = "/ws"
+	c.main = &runner{c: c}
+	c.main.tell([]pigruntime.Prompt{{Text: "a"}})[0].ModeRead()
+	c.dirs = []addedDir{{dir: tool.Dir{Real: "/one"}}}
+	dirsOnly := c.main.tell([]pigruntime.Prompt{{Text: "b"}})
+	require.Equal(t, c.dirsText(0, 1, true), dirsOnly[0].Mode)
+	dirsOnly[0].ModeRead()
+	assert.Equal(t, modeLine(policy.Plan, "", false), c.main.told)
+
+	c.authority.EnterExecute()
+	modeOnly := c.main.tell([]pigruntime.Prompt{{Text: "c"}})
+	require.Equal(t, modeLine(policy.Execute, "", false), modeOnly[0].Mode)
+	assert.Equal(t, modeOnly[0].Mode, c.main.tell([]pigruntime.Prompt{{Text: "d"}})[0].Mode, "not read")
+	assert.Equal(t, 1, c.main.dirsTold)
+}
+
+func TestDirectoryIsToldOnceWhenTheSendCompactsBeforeItsPromptIsRead(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	dir := canonicalTemp(t)
+	decide(t, d.c, dir, trust.Untrusted)
+	old, kept := strings.Repeat("a", 240_000), strings.Repeat("b", 240_000)
+	// An aborted turn is not checked for compaction at its end, so the next send's
+	// own check compacts, before its prompt is in the session.
+	aborted := ai.FauxAssistantMessage(ai.FauxContentString("second"), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonAborted)})
+	requests := make(chan pigruntimetest.Request, 1)
+	d.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.Text("first"), aborted, pigruntimetest.Text("the summary"), pigruntimetest.Capture(t, requests, "third"),
+	})
+
+	d.turn(t, old)
+	d.turn(t, kept)
+	require.NoError(t, d.c.AddDir(dir))
+	d.turn(t, "next")
+
+	text := inJSON(t, "The workspace also includes "+dir+". Give a path there as an absolute path; relative paths and Bash still start from "+d.sb.Workspace+".")
+	raw := receive(t, requests).Raw
+	assert.Contains(t, raw, "the summary")
+	assert.Equal(t, 1, strings.Count(raw, text), "told once, not also recalled")
+}
+
+func TestOnlyTheDirectoriesOfThePromptReadAreNotOfferedAgain(t *testing.T) {
+	c := &Controller{authority: policy.NewAuthority()}
+	c.cfg.Workspace = "/ws"
+	c.main = &runner{c: c}
+	c.dirs = []addedDir{{dir: tool.Dir{Real: "/one"}}}
+	first := c.main.tell([]pigruntime.Prompt{{Text: "a"}})
+	c.dirs = append(c.dirs, addedDir{dir: tool.Dir{Real: "/two"}})
+	second := c.main.tell([]pigruntime.Prompt{{Text: "b"}})
+	require.Contains(t, second[0].Mode, "/one", "the first was not read yet")
+	require.Contains(t, second[0].Mode, "/two")
+
+	first[0].ModeRead()
+	got := c.main.tell([]pigruntime.Prompt{{Text: "c"}})[0].Mode
+	assert.Equal(t, c.dirsText(1, 2, true), got)
+
+	second[0].ModeRead()
+	assert.Empty(t, c.main.tell([]pigruntime.Prompt{{Text: "d"}})[0].Mode)
+}
+
+func TestReadingNeverLowersTheDirectoriesTold(t *testing.T) {
+	c := &Controller{authority: policy.NewAuthority()}
+	c.cfg.Workspace = "/ws"
+	c.main = &runner{c: c}
+	c.dirs = []addedDir{{dir: tool.Dir{Real: "/one"}}}
+	first := c.main.tell([]pigruntime.Prompt{{Text: "a"}})
+	c.dirs = append(c.dirs, addedDir{dir: tool.Dir{Real: "/two"}})
+	second := c.main.tell([]pigruntime.Prompt{{Text: "b"}})
+
+	second[0].ModeRead()
+	first[0].ModeRead()
+
+	assert.Equal(t, 2, c.main.dirsTold)
+}
+
+func TestReadOfAReplacedSessionTellsNothing(t *testing.T) {
+	c := &Controller{authority: policy.NewAuthority()}
+	c.cfg.Workspace = "/ws"
+	c.main = &runner{c: c, sess: &pigruntime.Session{}}
+	c.dirs = []addedDir{{dir: tool.Dir{Real: "/one"}}}
+	sent := c.main.tell([]pigruntime.Prompt{{Text: "a"}})
+
+	c.main.sess = &pigruntime.Session{}
+	sent[0].ModeRead()
+
+	assert.Empty(t, c.main.told)
+	assert.Zero(t, c.main.dirsTold)
+}
+
+func TestRecallLeavesOutDirectoriesNotRead(t *testing.T) {
+	c := &Controller{authority: policy.NewAuthority()}
+	c.cfg.Workspace = "/ws"
+	c.main = &runner{c: c}
+	c.dirs = []addedDir{{dir: tool.Dir{Real: "/one"}}}
+	handed := c.main.tell([]pigruntime.Prompt{{Text: "a"}})
+	line := modeLine(policy.Plan, "", false)
+	assert.Equal(t, line, c.recall(), "handed over, not read")
+
+	handed[0].ModeRead()
+	assert.Equal(t, line+"\n"+c.dirsText(0, 1, true), c.recall())
+}
+
+func TestSubagentRunnerIsToldTheDirectoriesButNotTheMode(t *testing.T) {
+	c := &Controller{authority: policy.NewAuthority()}
+	c.cfg.Workspace = "/ws"
+	c.main = &runner{c: c}
+	c.dirs = []addedDir{{dir: tool.Dir{Real: "/other"}, files: []instruction.File{{Path: "/other/AGENTS.md", Text: "use tabs"}}}}
+	child := &runner{c: c}
+
+	first := child.tell([]pigruntime.Prompt{{Text: "a"}})
+	assert.Equal(t, "The workspace also includes /other. Give a path there as an absolute path; relative paths and Bash still start from /ws.\nInstructions from /other/AGENTS.md:\nuse tabs", first[0].Mode)
+	first[0].ModeRead()
+	assert.Empty(t, child.tell([]pigruntime.Prompt{{Text: "b"}})[0].Mode)
+	assert.Empty(t, child.told)
+}
+
+func TestRecallCarriesTheAddedDirectories(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	dir := otherDir(t)
+	decide(t, d.c, dir, trust.Trusted)
+	require.NoError(t, d.c.AddDir(dir))
+	assert.Equal(t, d.planLine(), d.c.recall(), "a directory the session has not been told arrives with the next prompt")
+
+	d.userTexts(t, "hi")
+	assert.Equal(t, d.planLine()+"\n"+told(d.sb.Workspace, dir), d.c.recall())
+}
+
+func TestCompactionRecallsTheAddedDirectories(t *testing.T) {
+	d := newDirHarness(t, Config{}, false)
+	d.showModeLine()
+	require.NoError(t, d.c.Open(t.Context(), OpenRequest{}))
+	dir := otherDir(t)
+	decide(t, d.c, dir, trust.Trusted)
+	require.NoError(t, d.c.AddDir(dir))
+	old, kept := strings.Repeat("a", 240_000), strings.Repeat("b", 240_000)
+	requests := make(chan pigruntimetest.Request, 1)
+	d.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.Text("first"), pigruntimetest.Text("second"), pigruntimetest.Text("the summary"), pigruntimetest.Capture(t, requests, "third"),
+	})
+
+	d.turn(t, old)
+	d.turn(t, kept)
+	d.turn(t, "next")
+
+	texts := receive(t, requests).UserTexts
+	require.NotEmpty(t, texts)
+	assert.Contains(t, texts[0], "the summary")
+	texts = texts[1:]
+	for i, text := range texts {
+		if text == kept {
+			texts[i] = "kept prompt"
+		}
+	}
+	assert.Equal(t, []string{"kept prompt", d.planLine() + "\n" + told(d.sb.Workspace, dir), "next"}, texts)
+}
+
+func TestCompactionDoesNotRecallADirectoryAddedDuringTheTurn(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	dir := canonicalTemp(t)
+	decide(t, d.c, dir, trust.Untrusted)
+	old, kept := strings.Repeat("a", 240_000), strings.Repeat("b", 240_000)
+	addsDuringTheTurn := ai.FauxFactoryStep(func(ai.TranscriptContext, ai.StreamOptions, *ai.FauxProviderState, *ai.Model) (ai.AssistantMessage, error) {
+		assert.NoError(t, d.c.AddDir(dir))
+		return ai.FauxAssistantMessage(ai.FauxContentString("second"), ai.FauxAssistantMessageOptions{}), nil
+	})
+	requests := make(chan pigruntimetest.Request, 1)
+	d.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.Text("first"), addsDuringTheTurn, pigruntimetest.Text("the summary"), pigruntimetest.Capture(t, requests, "third"),
+	})
+
+	d.turn(t, old)
+	d.turn(t, kept)
+	d.turn(t, "next")
+
+	text := inJSON(t, "The workspace also includes "+dir+". Give a path there as an absolute path; relative paths and Bash still start from "+d.sb.Workspace+".")
+	raw := receive(t, requests).Raw
+	assert.Contains(t, raw, "the summary")
+	assert.Equal(t, 1, strings.Count(raw, text), "told with the next prompt, not also recalled")
 }

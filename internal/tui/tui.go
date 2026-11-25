@@ -31,6 +31,9 @@ type Controller interface {
 	// AnswerLogin answers the pending login question for token; false when it
 	// is stale.
 	AnswerLogin(token uint64, answer string) bool
+	// AnswerDir answers the pending request to add a folder for token: add it,
+	// and trust it when trusted; false when it is not pending.
+	AnswerDir(token uint64, add, trusted bool) bool
 	// AnswerQuestion answers the pending questions for token, one answer per
 	// question; nil dismisses them. False when it is stale.
 	AnswerQuestion(token uint64, answers []tool.Answer) bool
@@ -50,7 +53,7 @@ type Controller interface {
 	Spans(session, text string) []app.Span
 	PromptSpans(session, text string) []app.Span
 	// Arguments and Files may read many files; call them off the event loop.
-	Arguments(name string) ([]app.Candidate, error)
+	Arguments(name, typed string) ([]app.Candidate, error)
 	Files() ([]app.Candidate, error)
 	// Background moves the live foreground command to the background; false
 	// when there was none.
