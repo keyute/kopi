@@ -81,7 +81,7 @@ func (u *usageDialog) dialog(width int, th theme) *dialog {
 	if u.bodyWidth != width || u.bodyTheme != th || u.expired != expired {
 		u.body, u.bodyWidth, u.bodyTheme, u.expired = usageBody(u.u, width-2, th, now), width, th, expired
 	}
-	u.d.body, u.d.hint, u.d.foot = u.body, scrollHint(u.km), binding(u.km.dismiss, "close")
+	u.d.body, u.d.hints = u.body, []string{binding(u.km.dismiss, "close")}
 	return u.d
 }
 

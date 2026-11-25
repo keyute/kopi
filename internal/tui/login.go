@@ -19,7 +19,7 @@ const secretMark = "•"
 // provider as the note. Options become one numbered choice each; otherwise
 // the one option is an unlabelled text field, masked when ev asks for a secret.
 func newLoginDialog(ev event.LoginRequested, km *keyMap, th theme) *loginDialog {
-	d := &dialog{title: ev.Message, note: ev.Provider, foot: binding(km.dismiss, "cancel")}
+	d := &dialog{title: ev.Message, note: ev.Provider}
 	l := &loginDialog{req: &ev, d: d}
 	if len(ev.Options) > 0 {
 		for _, o := range ev.Options {
@@ -29,12 +29,14 @@ func newLoginDialog(ev event.LoginRequested, km *keyMap, th theme) *loginDialog 
 			}
 			d.options = append(d.options, option{label: label})
 		}
+		d.hints = []string{binding(km.submit, "choose"), binding(km.dismiss, "cancel")}
 		return l
 	}
 	f := newField(th, km.newline, ev.Placeholder)
 	f.secret = ev.Secret
 	f.ta.Focus()
 	d.options = []option{{field: &f}}
+	d.hints = []string{binding(km.submit, "submit"), binding(km.dismiss, "cancel")}
 	return l
 }
 
