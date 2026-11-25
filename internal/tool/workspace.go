@@ -180,6 +180,9 @@ type Dir struct {
 func (w *Workspace) Add(d Dir) error {
 	w.more.mu.Lock()
 	defer w.more.mu.Unlock()
+	if err := w.canAdd(d.Given); err != nil {
+		return err
+	}
 	if err := w.canAdd(d.Real); err != nil {
 		return err
 	}
@@ -254,6 +257,13 @@ func (w *Workspace) canAdd(dir string) error {
 		return err
 	}
 	if _, ok, err := insideStore(resolved, stores); err != nil {
+		return err
+	} else if ok {
+		return ErrProtected
+	}
+	if _, ok, err := walk(string(filepath.Separator), dir, func(info os.FileInfo) bool {
+		return isStore(stores, info)
+	}); err != nil {
 		return err
 	} else if ok {
 		return ErrProtected

@@ -1180,6 +1180,39 @@ func TestCanAdd(t *testing.T) {
 	require.ErrorIs(t, ws.CanAdd(filepath.Join(other, "link")), ErrProtected)
 }
 
+func TestAddRefusesTraversalThroughProtectedStore(t *testing.T) {
+	home, kopiHome := syntheticHome(t)
+	outside := realPath(t, t.TempDir())
+	writeFile(t, filepath.Join(outside, "file"), "outside")
+	require.NoError(t, os.Symlink(outside, filepath.Join(kopiHome, "outward")))
+	require.NoError(t, os.Symlink(kopiHome, filepath.Join(home, "home-alias")))
+	require.NoError(t, os.Symlink(filepath.Join(kopiHome, "outward"), filepath.Join(home, "indirect")))
+	ws := newWorkspace(t, t.TempDir(), []string{kopiHome})
+
+	for _, given := range []string{
+		filepath.Join(kopiHome, "outward"),
+		filepath.Join(home, "home-alias", "outward"),
+		filepath.Join(home, "indirect"),
+		filepath.Join(kopiHome, "outward") + "/..",
+	} {
+		t.Run(given, func(t *testing.T) {
+			real := realPath(t, given)
+			require.ErrorIs(t, ws.CanAdd(given), ErrProtected)
+			require.ErrorIs(t, ws.Add(Dir{Given: given, Real: real}), ErrProtected)
+			assert.Empty(t, ws.more.dirs)
+			path := given + "/file"
+			_, err := ws.in(path).Open(path)
+			assert.ErrorIs(t, err, ErrOutsideWorkspace)
+		})
+	}
+
+	alias := filepath.Join(home, "ordinary-alias")
+	require.NoError(t, os.Symlink(outside, alias))
+	require.NoError(t, ws.CanAdd(alias))
+	require.NoError(t, ws.Add(Dir{Given: alias, Real: outside}))
+	assert.Equal(t, "outside", readAll(t, ws.in(alias+"/file"), alias+"/file"))
+}
+
 func TestCanAddRefusesAnAddedDirectoryInAnotherCase(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("only darwin respells names as on disk")
