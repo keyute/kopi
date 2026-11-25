@@ -141,13 +141,16 @@ func (m *trustModel) View() tea.View {
 	return v
 }
 
+// untrustedLines is text from an untrusted file on one logical line, wrapped
+// after prefix.
+func untrustedLines(prefix, text string, st lipgloss.Style, width int) []string {
+	return hang(prefix, st, oneLine(text), st, width)
+}
+
 func (m *trustModel) rows() []string {
 	if m.body == nil || m.bodyWidth != m.width || m.bodyTheme != m.th {
 		text, width := fg(m.th.text), m.width-2
-		lines := func(prefix, text string, st lipgloss.Style) []string {
-			return hang(prefix, st, oneLine(text), st, width)
-		}
-		m.body = lines("", m.req.Folder, text.Bold(true))
+		m.body = untrustedLines("", m.req.Folder, text.Bold(true), width)
 		list := func(head string, entries []string) {
 			if len(entries) == 0 {
 				return
@@ -155,7 +158,7 @@ func (m *trustModel) rows() []string {
 			m.body = append(m.body, "")
 			m.body = append(m.body, hang("", text, head, text, width)...)
 			for _, e := range entries {
-				m.body = append(m.body, lines("  ", e, fg(m.th.muted))...)
+				m.body = append(m.body, untrustedLines("  ", e, fg(m.th.muted), width)...)
 			}
 		}
 		list("Its .mcp.json declares MCP servers that Kopi would start. They run with your permissions.", m.req.Servers)

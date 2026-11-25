@@ -45,6 +45,7 @@ func NewWrite(ws *Workspace) Tool {
 			if err := ctx.Err(); err != nil {
 				return Result{}, err
 			}
+			ws := ws.in(args.FilePath)
 			dest, err := ws.prepare(args.FilePath)
 			if err != nil {
 				return Result{}, err

@@ -88,6 +88,7 @@ func NewRead(ws *Workspace) Tool {
 			if err := ctx.Err(); err != nil {
 				return Result{}, err
 			}
+			ws := ws.in(args.FilePath)
 			dest, err := ws.prepare(args.FilePath)
 			if err != nil {
 				return Result{}, err
@@ -219,7 +220,7 @@ func pathTarget(ws *Workspace) func(json.RawMessage) (policy.Target, error) {
 		if args.FilePath == "" {
 			return policy.Target{}, fmt.Errorf("%w: file_path is required", ErrInvalidArgs)
 		}
-		return ws.Target(args.FilePath)
+		return ws.in(args.FilePath).Target(args.FilePath)
 	}
 }
 

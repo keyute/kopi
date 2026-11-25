@@ -21,6 +21,7 @@ git diff | kopi -p "review this"
 - Resuming (`-c`, `-r` or `/resume`) redraws the earlier conversation in the fullscreen interface, with its tool activity folded. With `-c` and `-r` the session is open at once, while the [MCP servers](mcp.md#startup) connect.
 - A session resumed with `-c` or `-r` runs on that run's [session model](configuration.md#model), not the one it last ran on.
 - On exit from a session with messages, the fullscreen interface prints the command to resume it.
+- `--add-dir <path>` adds a directory to the [workspace](tools.md#file-tools) as [`/add-dir`](#commands) does. It is repeatable, and a path that cannot be added stops the start. In print mode a folder no [trust](trust.md#added-directories) decision covers is added with file access only, and nothing is saved.
 - `--mode` and `--allowed-tools` are described in [tools](tools.md#modes) and [permissions](permissions.md#rules). `kopi mcp list` is in [MCP](mcp.md#kopi-mcp-list).
 
 ## Commands
@@ -36,6 +37,7 @@ Commands in the fullscreen interface:
 | `/new` | Start a new session |
 | `/resume <id>` | Resume a session |
 | `/model <provider/id>` | Switch the model until Kopi exits; `config.json` is untouched and `/new` and `/resume` keep the choice, and running subagents keep their model. A running workflow's later `agent()` calls, and the `WebFetch`, `WebSearch` and classifier calls of running agents, use the new model when no key pins one. The effort set with `/effort` carries over, clamped to the new model's levels, `medium` when none was set; `WebSearch` is offered or withdrawn with the new model's hosted search when `smallModel` is unset. Refused while a turn runs; it returns at once, and a provider without a credential or an unknown model is reported as an error, with a pointer to `/login` for the former, while no turn starts until the change ends |
+| `/add-dir <path>` | Add a directory to the [workspace](tools.md#file-tools) until Kopi exits; see [what it refuses](tools.md#file-tools) and [trust](trust.md#added-directories) for what it asks. Allowed while a turn runs |
 | `/login <provider>` | Log in to a provider |
 | `/logout <provider>` | Remove a provider's stored credential |
 | `/tasks` | List background tasks, [subagents](subagents.md) and [workflows](workflows.md), show one's output, open a subagent's view or a workflow's [progress dialog](workflows.md#progress-dialog) and stop them |
@@ -232,6 +234,14 @@ The bullet is green for a call that succeeded, yellow for one you or a rule refu
 
 - `/` at the start of the input lists commands and skills; a skill is filled in rather than run.
 - A space after a command lists its arguments: `/plan` lists `open`; `/effort`, `/model`, `/login` and `/logout` list their values.
+- `/add-dir` lists directories only, one level at a time, each ending in `/`:
+  - Nothing typed, or text with no `/` in it other than `~`, completes among the start directory's sibling folders: `pi` lists `../pig/`. Text with a `/`, and `~` alone, completes inside the folder typed so far.
+  - A name matches on its start, in any letter case.
+  - Hidden folders are listed once a `.` is typed.
+  - A folder typed with its `/` is listed first, then the folders in it.
+  - Accepting a folder from the menu fills it in and lists what is in it; it does not add it.
+  - Enter on a folder typed in full, with or without its `/`, adds it. Tab on one typed without its `/` lights its row, and a second Tab fills the `/` in and lists what is in it.
+  - A folder that cannot be added is not listed. At most 50 are listed.
 - Picking `/resume` from the menu lists this directory's sessions, which you filter by date or first message.
 - `@` at the start of the input or after a space lists files and directories under the start directory, leaving out:
   - `.git`
@@ -330,3 +340,8 @@ Limits:
 - `!` in print mode: `kopi -p` sends it as text.
 - Aliases and functions from your shell's startup files: your commands do not read them.
 - Release packaging and self-update.
+- Restoring added directories after Kopi restarts: pass `--add-dir` again when resuming. The resumed conversation still mentions the directory.
+- A list of the added directories, and removing one short of quitting.
+- Loading skills and `.mcp.json` from an added directory.
+- `@` completion in an added directory: it completes only the start directory.
+- The status line's branch, changes and directory segments for an added directory: they stay the start directory's.

@@ -30,6 +30,9 @@ type agentSpec struct {
 	effort pigruntime.Effort
 	tools  []tool.Tool
 	prompt []pigruntime.PromptPart
+	// noFiles is set when the definition takes no instruction files, so the
+	// added directories reach it as paths only.
+	noFiles bool
 }
 
 // buildAgents computes the tools and prompt of each definition, in order, as
@@ -69,6 +72,7 @@ func (c *Controller) buildSpecs(base, serverTools []tool.Tool, servers []mcpServ
 		}
 		if !def.Instructions {
 			groups = nil
+			spec.noFiles = true
 		}
 	}
 	tools := slices.DeleteFunc(slices.Clone(base), func(t tool.Tool) bool { return !named(t) })
@@ -291,7 +295,7 @@ func (c *Controller) launch(ctx context.Context, agent, description, prompt stri
 	if model == "" {
 		model = c.Model()
 	}
-	r := &runner{c: c, name: spec.def.Name, d: newDisplay(spec.tools), model: model}
+	r := &runner{c: c, name: spec.def.Name, d: newDisplay(spec.tools), model: model, noFiles: spec.noFiles}
 	role := &subagentRole{r: r, parent: parent}
 	r.role = role
 	if err := c.openChild(ctx, spec, spec.tools, parent, r); err != nil {

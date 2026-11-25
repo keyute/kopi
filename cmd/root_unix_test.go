@@ -797,6 +797,106 @@ func TestRootFullscreenTrustPromptStartsTheProjectServers(t *testing.T) {
 	}
 }
 
+func TestRootFullscreenAddDirAsksAboutAnUndecidedDirectoryAtLaunch(t *testing.T) {
+	e := newTestEnv(t)
+	t.Setenv("TERM", "xterm-256color")
+	logger := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(logger) })
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"terminal":{"title":false}}`)
+	other := filepath.Join(e.root, "other")
+	require.NoError(t, os.Mkdir(other, 0o755))
+	master, slave := openTestTerminal(t)
+	asked, added := make(chan struct{}), make(chan struct{})
+	drained := make(chan struct{})
+	var result terminalDrainResult
+	go func() {
+		var output strings.Builder
+		buf := make([]byte, 4096)
+		var sawAsk, sawAdded bool
+		askedAt := 0
+		for {
+			n, err := master.Read(buf)
+			output.Write(buf[:n])
+			plain := ansi.Strip(output.String())
+			if !sawAsk {
+				if i := strings.Index(plain, "Add this folder to the workspace?"); i >= 0 {
+					sawAsk, askedAt = true, i
+					close(asked)
+				}
+			}
+			if sawAsk && !sawAdded && strings.Contains(plain[askedAt:], "to the workspace.") {
+				sawAdded = true
+				close(added)
+			}
+			if err != nil {
+				result = terminalDrainResult{text: output.String(), err: err}
+				close(drained)
+				return
+			}
+		}
+	}()
+	root := newRoot()
+	root.SetIn(slave)
+	root.SetOut(slave)
+	var stderr bytes.Buffer
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"--model", mockModel, "--add-dir", other})
+	done := make(chan error, 1)
+	stopped := make(chan struct{})
+	go func() {
+		done <- root.ExecuteContext(ctx)
+		close(stopped)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-stopped:
+		case <-time.After(waitLimit):
+			t.Error("timed out cleaning up fullscreen command")
+			return
+		}
+		// Close the last slave first: closing a master with a blocked read can hang on Darwin.
+		_ = slave.Close()
+		select {
+		case <-drained:
+		case <-time.After(waitLimit):
+			t.Error("timed out cleaning up fullscreen terminal drain")
+			return
+		}
+		_ = master.Close()
+	})
+	waitFor := func(name string, ch <-chan struct{}) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-drained:
+			t.Fatalf("terminal drain ended before %s: %v; output: %q", name, result.err, result.text)
+		case err := <-done:
+			t.Fatalf("fullscreen exited before %s: %v; stderr: %s", name, err, stderr.String())
+		case <-time.After(waitLimit):
+			t.Fatalf("timed out waiting for %s", name)
+		}
+	}
+	waitFor("the add-directory dialog", asked)
+	_, err := io.WriteString(master, "1") // Yes, and trust this folder
+	require.NoError(t, err)
+	waitFor("the notice that the directory was added", added)
+	assert.Equal(t, map[string]string{canonical(t, other): "trusted"}, trustFolders(t, filepath.Join(e.kopiHome, "trust.json")))
+
+	_, err = master.Write([]byte{4}) // ctrl-d quits with an empty composer.
+	require.NoError(t, err)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(waitLimit):
+		t.Fatal("timed out waiting for fullscreen exit")
+	}
+}
+
 func TestRootFullscreenTitleRequest(t *testing.T) {
 	for _, tc := range []struct {
 		name, config string

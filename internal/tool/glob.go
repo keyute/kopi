@@ -61,6 +61,7 @@ func NewGlob(ws *Workspace, hidden Hidden) Tool {
 			if err := ctx.Err(); err != nil {
 				return Result{}, err
 			}
+			ws := ws.in(args.Path)
 			root, rel, info, err := ws.searchRoot(args.Path)
 			if err != nil {
 				return Result{}, err
@@ -82,7 +83,7 @@ func NewGlob(ws *Workspace, hidden Hidden) Tool {
 					return true
 				}
 				total++
-				kept = keepNewest(kept, found{path: p, modTime: info.ModTime()}, maxGlobResults)
+				kept = keepNewest(kept, found{path: ws.named(p), modTime: info.ModTime()}, maxGlobResults)
 				return true
 			})
 			if err != nil {

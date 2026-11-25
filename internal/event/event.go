@@ -183,6 +183,26 @@ type LoginOption struct{ ID, Label, Description string }
 // cancelled.
 type LoginEnded struct{ Token uint64 }
 
+// DirRequested asks the human whether to add Dir, a folder no trust decision
+// covers; answer with Controller.AnswerDir. There may be no session yet.
+type DirRequested struct {
+	// Token identifies this request for the controller's lifetime.
+	Token uint64
+	// Dir is the canonical path.
+	Dir string
+	// Instructions are the instruction files trusting Dir would send to the
+	// model; Servers and Skills are what a saved trust answer would also cover
+	// when Kopi starts there.
+	Instructions, Servers, Skills []string
+	// Saved is false for the user's home and a filesystem root: the answer holds
+	// for this run only.
+	Saved bool
+}
+
+// DirEnded follows every DirRequested: answered or, when the controller closes,
+// cancelled.
+type DirEnded struct{ Token uint64 }
+
 // Notice reports retry and compaction progress, the MCP server tools the
 // first session skipped, and a login's progress and result.
 type Notice struct{ Text string }
@@ -292,6 +312,8 @@ func (PlanRequested) isEvent()       {}
 func (PlanEnded) isEvent()           {}
 func (LoginRequested) isEvent()      {}
 func (LoginEnded) isEvent()          {}
+func (DirRequested) isEvent()        {}
+func (DirEnded) isEvent()            {}
 func (Notice) isEvent()              {}
 func (Activity) isEvent()            {}
 func (TurnEnd) isEvent()             {}

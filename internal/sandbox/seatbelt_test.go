@@ -57,7 +57,7 @@ func fullPolicy(t *testing.T) Policy {
 }
 
 func TestSeatbeltSectionOrder(t *testing.T) {
-	profile, _ := profileOf(t, seatbeltPrefix(fullPolicy(t)))
+	profile, _ := profileOf(t, freshPrefix(fullPolicy(t)))
 	markers := []string{
 		"\n(allow file-read*)\n",
 		"(deny file-read*\n",
@@ -85,27 +85,27 @@ func TestSeatbeltSectionOrder(t *testing.T) {
 }
 
 func TestSeatbeltOmitsRulesWithoutFilters(t *testing.T) {
-	empty, defs := profileOf(t, seatbeltPrefix(Policy{}))
+	empty, defs := profileOf(t, freshPrefix(Policy{}))
 	assert.Empty(t, defs)
 	for _, head := range []string{"(allow file-write*", "(deny file-read*", "(deny file-write*", "(deny file-write-unlink"} {
 		assert.NotContains(t, empty, head)
 	}
 
-	full, _ := profileOf(t, seatbeltPrefix(fullPolicy(t)))
+	full, _ := profileOf(t, freshPrefix(fullPolicy(t)))
 	for _, profile := range []string{empty, full} {
 		for _, bare := range []string{"(allow file-write*)", "(deny file-read*)", "(deny file-write*)", "(deny file-write-unlink)", "(deny file-write-unlink file-write-create)"} {
 			assert.NotContains(t, profile, bare)
 		}
 	}
 
-	onlyDenyWrite, _ := profileOf(t, seatbeltPrefix(Policy{DenyWrite: []string{t.TempDir()}}))
+	onlyDenyWrite, _ := profileOf(t, freshPrefix(Policy{DenyWrite: []string{t.TempDir()}}))
 	assert.NotContains(t, onlyDenyWrite, "(allow file-write*")
 	assert.NotContains(t, onlyDenyWrite, "(deny file-read*")
 }
 
 func TestSeatbeltPreferences(t *testing.T) {
-	restricted, _ := profileOf(t, seatbeltPrefix(fullPolicy(t)))
-	unrestricted, _ := profileOf(t, seatbeltPrefix(Policy{}))
+	restricted, _ := profileOf(t, freshPrefix(fullPolicy(t)))
+	unrestricted, _ := profileOf(t, freshPrefix(Policy{}))
 	for _, rule := range []string{
 		`(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))`,
 		`(global-name "com.apple.cfprefsd.daemon")`,
@@ -121,8 +121,8 @@ func TestSeatbeltPreferences(t *testing.T) {
 }
 
 func TestSeatbeltNetwork(t *testing.T) {
-	off, _ := profileOf(t, seatbeltPrefix(Policy{}))
-	on, _ := profileOf(t, seatbeltPrefix(Policy{Network: true}))
+	off, _ := profileOf(t, freshPrefix(Policy{}))
+	on, _ := profileOf(t, freshPrefix(Policy{Network: true}))
 	assert.NotContains(t, off, networkPolicy)
 	assert.NotContains(t, off, "(allow network")
 	assert.Contains(t, on, networkPolicy+openNetwork)
@@ -141,7 +141,7 @@ func TestSeatbeltNetwork(t *testing.T) {
 func TestSeatbeltNetworkFiltered(t *testing.T) {
 	proxy, err := NewProxy([]string{"example.com"}, nil, nil)
 	require.NoError(t, err)
-	filtered, defs := profileOf(t, seatbeltPrefix(Policy{Proxy: proxy}))
+	filtered, defs := profileOf(t, freshPrefix(Policy{Proxy: proxy}))
 
 	assert.Contains(t, filtered, networkPolicy+proxyNetwork)
 	assert.NotContains(t, filtered, openNetwork)
@@ -154,7 +154,7 @@ func TestSeatbeltNetworkFiltered(t *testing.T) {
 
 func TestSeatbeltParamsMatchDefinitions(t *testing.T) {
 	p := fullPolicy(t)
-	profile, defs := profileOf(t, seatbeltPrefix(p))
+	profile, defs := profileOf(t, freshPrefix(p))
 	used := map[string]bool{}
 	for _, m := range regexp.MustCompile(`\(param "([^"]*)"\)`).FindAllStringSubmatch(profile, -1) {
 		used[m[1]] = true
@@ -180,7 +180,7 @@ func TestSeatbeltPathForms(t *testing.T) {
 	resolved, err := filepath.EvalSymlinks(real)
 	require.NoError(t, err)
 
-	_, defs := profileOf(t, seatbeltPrefix(Policy{
+	_, defs := profileOf(t, freshPrefix(Policy{
 		Write:     []string{link + "/"},
 		DenyRead:  []string{filepath.Join(link, "missing")},
 		DenyWrite: []string{filepath.Join(link, "x", "y")},
@@ -193,10 +193,68 @@ func TestSeatbeltPathForms(t *testing.T) {
 	}, values(defs, "DENY_WRITE"))
 }
 
+func TestSeatbeltSetPolicyKeepsResolvedForms(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	old, next := filepath.Join(base, "old"), filepath.Join(base, "next")
+	require.NoError(t, os.Mkdir(old, 0o700))
+	require.NoError(t, os.Mkdir(next, 0o700))
+	write, read, protected := filepath.Join(base, "write"), filepath.Join(base, "read"), filepath.Join(base, "protected")
+	for _, link := range []string{write, read, protected} {
+		require.NoError(t, os.Symlink(old, link))
+	}
+	missing := filepath.Join(base, "missing")
+	p := Policy{Write: []string{write, missing}, DenyRead: []string{read}, DenyWrite: []string{protected}}
+	cache := make(map[string][]string)
+	s := &Sandbox{prefix: seatbeltPrefix(p, cache), forms: cache}
+	for _, link := range []string{write, read, protected} {
+		require.NoError(t, os.Remove(link))
+		require.NoError(t, os.Symlink(next, link))
+	}
+	require.NoError(t, os.Symlink(next, missing))
+	added := filepath.Join(base, "added")
+	require.NoError(t, os.Mkdir(added, 0o700))
+	p.Write = append(p.Write, added)
+	require.NoError(t, s.SetPolicy(p))
+	_, defs := profileOf(t, s.prefix)
+	for _, key := range []string{"WRITE", "DENY_READ", "DENY_WRITE"} {
+		assert.Contains(t, values(defs, key), old)
+		assert.NotContains(t, values(defs, key), next)
+	}
+	assert.Contains(t, values(defs, "WRITE"), missing)
+	assert.Contains(t, values(defs, "WRITE"), added)
+	addedProtected := filepath.Join(added, "protected")
+	require.NoError(t, os.Symlink(old, addedProtected))
+	p.DenyWrite = append(p.DenyWrite, addedProtected)
+	require.NoError(t, s.SetPolicy(p))
+	require.NoError(t, os.Remove(addedProtected))
+	require.NoError(t, os.Symlink(next, addedProtected))
+	p.Write = p.Write[:2]
+	require.NoError(t, s.SetPolicy(p))
+	_, defs = profileOf(t, s.prefix)
+	assert.Contains(t, values(defs, "WRITE"), old)
+	assert.NotContains(t, values(defs, "WRITE"), next)
+}
+
+func TestValidatePolicyDoesNotChangeSandbox(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bubblewrap validation is Linux-specific")
+	}
+	root := t.TempDir()
+	original := Policy{Write: []string{root}}
+	s := &Sandbox{bwrap: &bwrap{policy: original}}
+	candidate := Policy{Write: []string{root, "/"}, DenyWrite: []string{"/proc"}}
+	assert.ErrorContains(t, s.ValidatePolicy(candidate), "overlaps /proc")
+	assert.Equal(t, original, s.bwrap.policy)
+	err := s.SetPolicy(candidate)
+	assert.ErrorContains(t, err, "overlaps /proc")
+	assert.Equal(t, original, s.bwrap.policy)
+}
+
 func TestSeatbeltAncestors(t *testing.T) {
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
-	_, defs := profileOf(t, seatbeltPrefix(Policy{
+	_, defs := profileOf(t, freshPrefix(Policy{
 		DenyRead:  []string{filepath.Join(base, "a", "x")},
 		DenyWrite: []string{filepath.Join(base, "a", "b", "c"), filepath.Join(base, "a", "b", "d")},
 	}))
@@ -211,14 +269,14 @@ func TestSeatbeltAncestors(t *testing.T) {
 func TestSeatbeltDenyReadIsAlsoDenyWrite(t *testing.T) {
 	path, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
-	profile, defs := profileOf(t, seatbeltPrefix(Policy{DenyRead: []string{path}}))
+	profile, defs := profileOf(t, freshPrefix(Policy{DenyRead: []string{path}}))
 	assert.Equal(t, []string{path}, values(defs, "DENY_WRITE"))
 	assert.Contains(t, profile, `(deny file-write*
   (literal (param "DENY_WRITE_0")) (subpath (param "DENY_WRITE_0")))`)
 }
 
 func TestSeatbeltDenyWriteNamesMatchAnyCase(t *testing.T) {
-	profile, defs := profileOf(t, seatbeltPrefix(Policy{DenyWriteNames: []string{".mcp.json"}}))
+	profile, defs := profileOf(t, freshPrefix(Policy{DenyWriteNames: []string{".mcp.json"}}))
 	assert.Equal(t, []string{`/\.(m|M)(c|C)(p|P)\.(j|J)(s|ſ|S)(o|O)(n|N)$`}, values(defs, "DENY_WRITE_NAME"))
 	assert.Contains(t, profile, `(deny file-write*
   (regex (param "DENY_WRITE_NAME_0")))`)
@@ -321,7 +379,7 @@ func TestSeatbeltSymlinkParentForms(t *testing.T) {
 		t.Run(suffix, func(t *testing.T) {
 			path := link + "/../" + suffix
 			resolved := filepath.Join(real, suffix)
-			_, defs := profileOf(t, seatbeltPrefix(Policy{
+			_, defs := profileOf(t, freshPrefix(Policy{
 				Write: []string{path, path}, DenyRead: []string{path}, DenyWrite: []string{path},
 			}))
 			for _, prefix := range []string{"WRITE", "DENY_READ", "DENY_WRITE"} {
@@ -331,4 +389,8 @@ func TestSeatbeltSymlinkParentForms(t *testing.T) {
 			assert.Contains(t, values(defs, "ANCESTOR"), real)
 		})
 	}
+}
+
+func freshPrefix(p Policy) []string {
+	return seatbeltPrefix(p, make(map[string][]string))
 }

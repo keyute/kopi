@@ -744,7 +744,7 @@ func TestSendUndeliversEntriesAfterNoticeFails(t *testing.T) {
 	}
 
 	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
-	_ = err
+	assert.NoError(t, err)
 	assert.Equal(t, []Prompt{{Text: "x"}}, res.Undelivered)
 	assert.Equal(t, []Notice{failing, last}, res.UndeliveredNotices)
 	assert.Empty(t, drain(evs))
@@ -1071,10 +1071,12 @@ func TestSendQueuesModeAfterSkillsBeforeNotices(t *testing.T) {
 	sess := openTestSession(t, r)
 	evs := recordDelivered(t, sess)
 	n := testNotice("t1")
+	reads := 0
 
-	res, err := sess.Send(t.Context(), Prompt{Text: "prompt", Skills: []string{"S"}, Mode: "M"}, []Notice{n}, nil)
+	res, err := sess.Send(t.Context(), Prompt{Text: "prompt", Skills: []string{"S"}, Mode: "M", ModeRead: func() { reads++ }}, []Notice{n}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, event.Completed, res.Outcome.Status)
+	assert.Equal(t, 1, reads)
 	assert.Equal(t, []string{"prompt", "S", "M", n.Text}, userTexts(<-requests))
 	assert.Equal(t, []event.Event{n.Shown}, drain(evs))
 	require.NoError(t, sess.Close(t.Context()))
@@ -1092,13 +1094,67 @@ func TestSendHandsOverModeWithPrompt(t *testing.T) {
 	faux.SetResponses([]ai.FauxResponseStep{callProbe(), captureRequest(requests, "done")})
 	sess := openTestSession(t, r, probeTool(okProbe))
 	evs := recordDelivered(t, sess)
-	more, _ := moreOnce(Prompt{Text: "x", Skills: []string{"S"}, Mode: "M"})
+	reads := 0
+	more, _ := moreOnce(Prompt{Text: "x", Skills: []string{"S"}, Mode: "M", ModeRead: func() { reads++ }})
 
 	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
 	require.NoError(t, err)
 	assert.Equal(t, event.Completed, res.Outcome.Status)
 	assert.Equal(t, []string{"prompt", "x", "S", "M"}, userTexts(<-requests))
 	assert.Equal(t, []event.Event{event.UserMessage{Text: "x"}}, drain(evs))
+	assert.Equal(t, 1, reads)
+}
+
+func TestSendReadsEachModeLineInTheOrderItQueuedThem(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), reply("done")})
+	sess := openTestSession(t, r, probeTool(okProbe))
+	var read []string
+	mark := func(name string) func() { return func() { read = append(read, name) } }
+	more, _ := moreOnce(Prompt{Text: "x", Mode: "M1", ModeRead: mark("handed")}, Prompt{Text: "y", Mode: "M2"})
+
+	_, err := sess.Send(t.Context(), Prompt{Text: "prompt", Mode: "M0", ModeRead: mark("own")}, nil, more)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"own", "handed"}, read, "a prompt with no callback is still counted")
+}
+
+func TestSendDoesNotReadAModeLineThatFailedToQueue(t *testing.T) {
+	sb := newSandbox(t)
+	r, faux := newTestRuntime(t, sb)
+	faux.SetResponses([]ai.FauxResponseStep{callProbe(), callProbe(), reply("done")})
+	sess := openTestSession(t, r, probeTool(okProbe))
+	var read []string
+	calls := 0
+	// Closing the session is the only way a mode line fails to queue, so the
+	// first hand-over is delivered and the second is not.
+	more := func() []Entry {
+		calls++
+		switch calls {
+		case 1:
+			return []Entry{{Prompt: Prompt{Text: "a", Mode: "M1", ModeRead: func() { read = append(read, "M1") }}}}
+		case 2:
+			require.NoError(t, sess.inner.Close())
+			return []Entry{{Prompt: Prompt{Text: "b", Mode: "M2", ModeRead: func() { read = append(read, "M2") }}}}
+		}
+		return nil
+	}
+
+	_, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"M1"}, read)
+}
+
+func TestSendDoesNotReadTheModeLineWhenItFailsToQueue(t *testing.T) {
+	sb := newSandbox(t)
+	r, _ := newTestRuntime(t, sb)
+	sess := openTestSession(t, r)
+	// Closing the session makes queueing the mode line fail after Send has
+	// counted it, so the run never starts.
+	require.NoError(t, sess.inner.Close())
+
+	_, err := sess.Send(t.Context(), Prompt{Text: "prompt", Mode: "M", ModeRead: func() { t.Error("read") }}, nil, nil)
+	require.Error(t, err)
 }
 
 func TestRootAndChildSessionsSendConcurrently(t *testing.T) {
@@ -1653,4 +1709,35 @@ func TestRecallSkipsFailedCompaction(t *testing.T) {
 	assert.Equal(t, compacted[0], evs[0])
 	assert.Contains(t, evs[1].(event.Notice).Text, "Compaction failed")
 	assert.Zero(t, recalls.Load())
+}
+
+func TestRecallBeforeTheSendsOwnPromptDoesNotReadItsModeLine(t *testing.T) {
+	r, faux := newTestRuntime(t, newSandbox(t))
+	faux.SetResponses([]ai.FauxResponseStep{
+		reply("first"),
+		ai.FauxAssistantMessage(ai.FauxContentString("second"), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonAborted)}),
+		reply("the summary"), reply("third"),
+	})
+	sess, err := r.Open(t.Context(), OpenOptions{Model: fauxModel, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority(), Recall: func() string { return "recalled" }})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
+	notices := recordNotices(t, sess)
+	for _, prompt := range []string{oldPrompt, keptPrompt} {
+		_, err = sess.Send(t.Context(), Prompt{Text: prompt}, nil, nil)
+		require.NoError(t, err)
+	}
+	require.Empty(t, drain(notices), "the aborted turn does not compact")
+
+	var seen []string
+	t.Cleanup(sess.inner.Subscribe(func(ev agent.AgentEvent) {
+		if m, ok := ev.(agent.MessageStartEvent); ok {
+			if t, _ := m.Message.Custom["customType"].(string); t != "" {
+				seen = append(seen, t)
+			}
+		}
+	}))
+	_, err = sess.Send(t.Context(), Prompt{Text: "next", Mode: "M", ModeRead: func() { seen = append(seen, "read") }}, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, compacted, drain(notices), "the compaction ran before the prompt")
+	assert.Equal(t, []string{recallType, modeType, "read"}, seen)
 }

@@ -46,8 +46,25 @@ type Config struct {
 	// Mode is the controller's initial mode, which the first session starts
 	// in, and the mode every later session starts in.
 	Mode policy.Mode
-	// Files lists the entries that @ references complete to; nil offers none.
+	// Files lists the entries that @ references complete to, and is the workspace
+	// /add-dir adds to and completes in, so /add-dir needs it.
 	Files *tool.Workspace
+	// SandboxDirs sets the directories added to the workspace as the sandbox's
+	// write roots; nil when there is no sandbox.
+	SandboxDirs func(dirs []string) error
+	// ValidateSandboxDirs checks prospective roots without changing the sandbox.
+	ValidateSandboxDirs func(dirs []string) error
+	// TrustFile is the trust store /add-dir reads and saves decisions in.
+	TrustFile string
+	// Home is the user's home: /add-dir expands ~ with its Given name and never
+	// saves a decision for its Real one.
+	Home tool.Dir
+	// InstructionFallbacks are the file names read where AGENTS.md is missing,
+	// in an added directory too.
+	InstructionFallbacks []string
+	// Covers lists what a trust answer saved for dir would cover when Kopi starts
+	// there, as shown: the MCP servers and the skill folders; nil lists nothing.
+	Covers func(dir string) (servers, skills []string)
 	// Instructions are added to the system prompt in order: the global
 	// file's group first, then each root's.
 	Instructions []instruction.Group
@@ -218,6 +235,9 @@ type Controller struct {
 	// model is the session model: Config.Model, or the runtime's default once resolved.
 	model  string
 	sessID string
+	// dirsToldBy is how many added directories each session of this run has
+	// read, so a session resumed later is not told them again; queue guards it.
+	dirsToldBy map[string]int
 	// titled is set once the current main session's title has been decided on,
 	// whether or not it was asked for.
 	titled bool
@@ -259,6 +279,18 @@ type Controller struct {
 	// deferred is the first open that Start put off for a login; cleared once
 	// any session opens.
 	deferred *OpenRequest
+	// dirs are the directories added to the workspace, in order, and dirRequests
+	// the adds waiting for AnswerDir by token; mu guards both. Neither is tied
+	// to a session, so a switch keeps them.
+	dirs        []addedDir
+	dirRequests map[uint64]*pendingDir
+	// reports are the events of adds waiting to be shown, in order; mu guards it.
+	reports []event.Event
+	// dirsMu serialises applying an add and takes mu inside.
+	dirsMu sync.Mutex
+	// dirEventsMu orders a request's DirRequested before its DirEnded; it takes
+	// mu inside.
+	dirEventsMu sync.Mutex
 }
 
 // sessionSwitch retains work even after it deregisters while start waits for life.
@@ -399,6 +431,23 @@ func (c *Controller) connectingNow() []string {
 	return c.connecting
 }
 
+// emitOrQueue emits evs when a session is open and no switch is pending, and
+// otherwise queues them for the next open that succeeds, since a pending
+// switch's SessionChanged wipes what is emitted now. It must be called with life
+// held.
+func (c *Controller) emitOrQueue(evs []event.Event) {
+	c.mu.Lock()
+	open := c.main.sess != nil && c.switching == nil
+	c.mu.Unlock()
+	if !open {
+		c.startup = append(c.startup, evs...)
+		return
+	}
+	for _, ev := range evs {
+		c.relay.emit(ev)
+	}
+}
+
 // serverSettled gives the tools of st's server to the sessions opened from now
 // on and to the open main session at once, and the servers part to the open
 // main session once the last server has settled. A subagent or workflow agent
@@ -409,7 +458,6 @@ func (c *Controller) serverSettled(st pigruntime.ServerStatus) {
 	closed := c.isClosed()
 	c.mu.Lock()
 	sess := c.main.sess
-	switching := c.switching != nil
 	c.mu.Unlock()
 	// The session has the tools before ToolSearch can find them.
 	if !closed && sess != nil && st.Err == nil {
@@ -442,15 +490,7 @@ func (c *Controller) serverSettled(st pigruntime.ServerStatus) {
 		}
 		sess.SetPromptPart(part)
 	}
-	if sess == nil || switching {
-		// A pending switch's SessionChanged wipes what is emitted now; the
-		// next open that succeeds reports it.
-		c.startup = append(c.startup, events...)
-	} else {
-		for _, ev := range events {
-			c.relay.emit(ev)
-		}
-	}
+	c.emitOrQueue(events)
 	if last {
 		c.showActivity()
 	}
@@ -1099,6 +1139,7 @@ func (c *Controller) Close(ctx context.Context) error {
 	stopCommand := c.main.clearQueueLocked()
 	c.queue.Unlock()
 	stopCommand()
+	c.endDirRequests()
 	ctx, cancel := context.WithTimeout(ctx, c.cfg.JoinTimeout)
 	defer cancel()
 	// closed is set, so no login starts now. The login needs neither life nor
@@ -1360,7 +1401,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		stopCommand = c.main.clearQueueLocked()
 	}
 	c.main.sess, c.sessID, c.main.emit, c.main.bound, c.main.unsubscribe = sess, id, emit, bound, unsubscribe
-	c.main.told = ""
+	c.main.told, c.main.dirsTold = "", c.dirsToldBy[id]
 	c.titled = sess.Name() != ""
 	c.spent = pigruntime.Usage{}
 	c.deferred = nil

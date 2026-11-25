@@ -46,13 +46,13 @@ func TestParse(t *testing.T) {
 
 func TestArgumentsListsSessionsForResume(t *testing.T) {
 	h, _ := openHarness(t, Config{})
-	cs, err := h.c.Arguments("resume")
+	cs, err := h.c.Arguments("resume", "")
 	require.NoError(t, err)
 	assert.Empty(t, cs)
 
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("answer")})
 	h.turn(t, "first line\nsecond line")
-	cs, err = h.c.Arguments("resume")
+	cs, err = h.c.Arguments("resume", "")
 	require.NoError(t, err)
 	require.Len(t, cs, 1)
 	assert.Equal(t, h.c.Status().SessionID, cs[0].Value)
@@ -61,7 +61,7 @@ func TestArgumentsListsSessionsForResume(t *testing.T) {
 	assert.NotContains(t, cs[0].Description, "second line")
 
 	for _, name := range []string{"execute", "nope"} {
-		cs, err := h.c.Arguments(name)
+		cs, err := h.c.Arguments(name, "")
 		require.NoError(t, err)
 		assert.Nil(t, cs, name)
 	}
@@ -69,7 +69,7 @@ func TestArgumentsListsSessionsForResume(t *testing.T) {
 
 func TestPlanOffersOpenAsOptionalArgument(t *testing.T) {
 	h, _ := openHarness(t, Config{})
-	cs, err := h.c.Arguments("plan")
+	cs, err := h.c.Arguments("plan", "")
 	require.NoError(t, err)
 	assert.Equal(t, []Candidate{{Value: "open", Description: "edit the plan file"}}, cs)
 
@@ -77,6 +77,45 @@ func TestPlanOffersOpenAsOptionalArgument(t *testing.T) {
 	require.GreaterOrEqual(t, i, 0)
 	assert.True(t, h.c.Commands()[i].Argument)
 	assert.True(t, h.c.Commands()[i].Optional)
+}
+
+func TestCommandsReportWhetherTheirArgumentsAreTyped(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	byName := map[string]Command{}
+	for _, cm := range d.c.Commands() {
+		byName[cm.Name] = cm
+	}
+
+	assert.True(t, byName["add-dir"].Argument)
+	assert.True(t, byName["add-dir"].Typed)
+	assert.False(t, byName["add-dir"].Optional)
+	for _, name := range []string{"plan", "effort", "model", "resume", "login", "logout"} {
+		assert.True(t, byName[name].Argument, name)
+		assert.False(t, byName[name].Typed, name)
+	}
+	for _, name := range []string{"execute", "new", "tasks", "usage", "quit"} {
+		assert.False(t, byName[name].Argument, name)
+		assert.False(t, byName[name].Typed, name)
+	}
+}
+
+func TestArgumentsPassesTheTypedTextToATypedSourceOnly(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	other := filepath.Join(filepath.Dir(d.sb.Workspace), "alpha")
+	require.NoError(t, os.Mkdir(other, 0o700))
+
+	all, err := d.c.Arguments("add-dir", "")
+	require.NoError(t, err)
+	some, err := d.c.Arguments("add-dir", "../al")
+	require.NoError(t, err)
+	assert.NotEqual(t, all, some)
+	assert.Equal(t, []Candidate{{Value: "../alpha/"}}, some)
+
+	for _, typed := range []string{"", "open", "anything"} {
+		cs, err := d.c.Arguments("plan", typed)
+		require.NoError(t, err)
+		assert.Equal(t, []Candidate{{Value: "open", Description: "edit the plan file"}}, cs, "a list is not filtered by the controller")
+	}
 }
 
 func TestTasksCommandShowsTasksIdleAndMidTurn(t *testing.T) {
@@ -156,7 +195,7 @@ func TestEffortCommandSetsTheLevelForAReasoningModel(t *testing.T) {
 	assert.Equal(t, "low", h.c.Agents()[0].Effort)
 	receiveEvent(t, changed)
 	assert.Equal(t, event.Notice{Text: "Effort set to low for this session."}, receiveEvent(t, notices))
-	cs, err := h.c.Arguments("effort")
+	cs, err := h.c.Arguments("effort", "")
 	require.NoError(t, err)
 	var current []string
 	for _, cand := range cs {
@@ -194,7 +233,7 @@ func TestEffortCommandRefusesAModelThatDoesNotReason(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, event.Notice{Text: "This model does not reason."}, receiveEvent(t, notices))
 	assert.Empty(t, h.c.Agents()[0].Effort)
-	cs, err := h.c.Arguments("effort")
+	cs, err := h.c.Arguments("effort", "")
 	require.NoError(t, err)
 	assert.Empty(t, cs)
 }
@@ -556,7 +595,7 @@ func TestArgumentsListsAvailableModelsForModel(t *testing.T) {
 	h, _ := openHarness(t, Config{})
 	_, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
 
-	cs, err := h.c.Arguments("model")
+	cs, err := h.c.Arguments("model", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, []Candidate{

@@ -113,6 +113,7 @@ func edit(ctx context.Context, ws *Workspace, args editArgs, admit func(policy.T
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
+	ws = ws.in(args.FilePath)
 	dest, err := ws.prepare(args.FilePath)
 	if err != nil {
 		return Result{}, err

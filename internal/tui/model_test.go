@@ -52,6 +52,8 @@ type fakeController struct {
 	answers    []answer
 	// loginAnswers logs AnswerLogin.
 	loginAnswers []loginAnswer
+	// dirAnswers logs AnswerDir.
+	dirAnswers []dirAnswer
 	// questionAnswers logs AnswerQuestion.
 	questionAnswers []questionAnswer
 	// planAnswers logs AnswerPlan, refreshes RefreshPlan; planFile is PlanFile.
@@ -60,8 +62,14 @@ type fakeController struct {
 	planFile    string
 	commands    []app.Command
 	// skills is what Spans highlights as skill commands; nil means none.
-	skills   *skill.Set
-	args     map[string][]app.Candidate
+	skills *skill.Set
+	args   map[string][]app.Candidate
+	// typedArgs is the candidates of a Typed command by the text typed; asks
+	// logs every Arguments call as "<name> <typed>".
+	typedArgs map[string]func(typed string) []app.Candidate
+	asks      []string
+	// typedErr is what a Typed command's Arguments fails with.
+	typedErr error
 	files    []app.Candidate
 	filesErr error
 	// foreground is what Background returns; backgrounds counts the calls.
@@ -114,6 +122,16 @@ func (f *fakeController) Answer(token uint64, d policy.Decision) bool {
 
 func (f *fakeController) AnswerLogin(token uint64, answer string) bool {
 	f.loginAnswers = append(f.loginAnswers, loginAnswer{token, answer})
+	return true
+}
+
+type dirAnswer struct {
+	token        uint64
+	add, trusted bool
+}
+
+func (f *fakeController) AnswerDir(token uint64, add, trusted bool) bool {
+	f.dirAnswers = append(f.dirAnswers, dirAnswer{token, add, trusted})
 	return true
 }
 
@@ -201,7 +219,13 @@ func (f *fakeController) Spans(session, text string) []app.Span {
 	return app.Spans(text, f.skills, session == app.Main, false)
 }
 
-func (f *fakeController) Arguments(name string) ([]app.Candidate, error) { return f.args[name], nil }
+func (f *fakeController) Arguments(name, typed string) ([]app.Candidate, error) {
+	f.asks = append(f.asks, name+" "+typed)
+	if g := f.typedArgs[name]; g != nil {
+		return g(typed), f.typedErr
+	}
+	return f.args[name], nil
+}
 
 func (f *fakeController) Files() ([]app.Candidate, error) { return f.files, f.filesErr }
 

@@ -437,3 +437,26 @@ func TestReadDisplayOutcome(t *testing.T) {
 
 	assert.Equal(t, "a.go", d.Subject(json.RawMessage(`{"file_path":"a.go","offset":40,"limit":50}`), ""), "whatever range was read")
 }
+
+func TestReadReachesAnAddedDirectory(t *testing.T) {
+	tool, dir := newReadTool(t)
+	other := t.TempDir()
+	writeFile(t, filepath.Join(other, "a.txt"), "hello\n")
+	args := fmt.Sprintf(`{"file_path":%q}`, filepath.Join(other, "a.txt"))
+
+	_, err := runRead(t, tool, args)
+	require.ErrorIs(t, err, ErrOutsideWorkspace)
+	ws := newWorkspace(t, dir, nil)
+	require.NoError(t, ws.Add(Dir{Given: other, Real: realPath(t, other)}))
+	tool = NewRead(ws)
+
+	out, err := runRead(t, tool, args)
+	require.NoError(t, err)
+	assert.Equal(t, "     1\thello\n", out)
+	got, err := tool.Target(json.RawMessage(args))
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(other, "a.txt"), got.Path)
+	assert.Equal(t, filepath.Join(realPath(t, other), "a.txt"), got.Real)
+	_, err = runRead(t, tool, `{"file_path":"a.txt"}`)
+	require.ErrorIs(t, err, fs.ErrNotExist)
+}

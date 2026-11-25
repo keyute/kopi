@@ -24,6 +24,9 @@ type runner struct {
 	d     *display
 	rec   *classifier.Record
 	model string
+	// noFiles is set when the agent is told of an added directory's paths but
+	// not its instruction files.
+	noFiles bool
 
 	// The fields below are guarded by Controller.mu. The main session's are
 	// replaced at each switch.
@@ -68,10 +71,11 @@ type runner struct {
 	// pending. A read of an earlier run's notice, still queued when the subagent
 	// ran again, does not clear it.
 	unread event.TaskEnded
-	// told is the last mode line delivered to the model in the current session;
-	// "" when none was, or when one was not delivered. Only the main session's
-	// is used.
+	// told is the last mode line the session's model has read; "" when none has.
+	// Only the main session's is used.
 	told string
+	// dirsTold is how many of the added directories the session's model has read.
+	dirsTold int
 }
 
 // entry is one item of runner.queued: a prompt, or a command when cmd is set.
@@ -534,21 +538,18 @@ func (r *runner) unhand(es []*entry) {
 
 // reclaim settles what the send that has just ended was handed and never read.
 // Commands go back to their place in the queue. Prompts do too when the Work
-// continues, so the next send is planned from the queue in typing order, and the
-// mode line they carried is told again; when it does not, they are what the
-// send's Undelivered says, handed back through the turn's end. It must be called
-// with queue held.
-func (r *runner) reclaim(emit func(event.Event), cont bool, undelivered []pigruntime.Prompt) {
+// continues, so the next send is planned from the queue in typing order; when it
+// does not, they are what the send's Undelivered says, handed back through the
+// turn's end. It must be called with queue held.
+func (r *runner) reclaim(emit func(event.Event), cont bool) {
 	for _, e := range r.queued {
 		if e.cmd != nil || cont {
 			e.handed = false
 		}
 	}
-	if cont {
-		r.untell(undelivered)
-		return
+	if !cont {
+		r.dropHanded(emit)
 	}
-	r.dropHanded(emit)
 }
 
 func (r *runner) anyHanded() bool {
@@ -604,9 +605,6 @@ func (r *runner) runTurn(ctx context.Context, sess *pigruntime.Session, emit fun
 				return command
 			}))
 		}
-		if res.ModeUndelivered {
-			r.told = ""
-		}
 		// A turn that went on may be continued; one that failed or stopped hands
 		// back every prompt still waiting.
 		cont := !w.stopped && (cancelled || res.Outcome.Status == event.Completed && res.Sent)
@@ -614,9 +612,8 @@ func (r *runner) runTurn(ctx context.Context, sess *pigruntime.Session, emit fun
 		if cont {
 			undelivered = nil
 		}
-		r.reclaim(emit, cont, res.Undelivered)
+		r.reclaim(emit, cont)
 		next, unsent := settle(w.stopped, cancelled, res.Outcome, res.Sent, parts, undelivered, w.handBack, prompts(r.lead()))
-		r.untell(next, unsent)
 		if !w.stopped {
 			lead := r.lead()
 			r.remove(lead)
@@ -917,6 +914,7 @@ func joined(ps []pigruntime.Prompt) pigruntime.Prompt {
 	var images []pigruntime.Image
 	var skills, tools []string
 	var mode string
+	var modeRead func()
 	var effort pigruntime.Effort
 	for _, p := range ps {
 		texts = append(texts, p.Text)
@@ -924,7 +922,7 @@ func joined(ps []pigruntime.Prompt) pigruntime.Prompt {
 			effort = p.Effort
 		}
 		if p.Mode != "" {
-			mode = p.Mode
+			mode, modeRead = p.Mode, p.ModeRead
 		}
 		images = append(images, p.Images...)
 		for _, sk := range p.Skills {
@@ -938,7 +936,7 @@ func joined(ps []pigruntime.Prompt) pigruntime.Prompt {
 			}
 		}
 	}
-	return pigruntime.Prompt{Text: strings.Join(texts, "\n\n"), Images: images, Skills: skills, Tools: tools, Mode: mode, Effort: effort}
+	return pigruntime.Prompt{Text: strings.Join(texts, "\n\n"), Images: images, Skills: skills, Tools: tools, Mode: mode, ModeRead: modeRead, Effort: effort}
 }
 
 // inputs is what prompts are handed back to the human as. Text that opens with

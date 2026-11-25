@@ -299,7 +299,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case pasteFailedMsg:
 		return m.flash("paste failed")
 	case candidatesMsg:
-		m.loaded(msg)
+		return m.loaded(msg)
 	}
 	return nil
 }
@@ -364,7 +364,8 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	if m.shown == app.Main && key.Matches(msg, km.background) && m.c.Background() {
 		return nil
 	}
-	if m.menuHeight() > 0 && !m.holding() {
+	pendingNav := m.menu.open && m.menu.pending && m.navKey(msg)
+	if (m.menuHeight() > 0 || pendingNav) && !m.holding() {
 		if cmd, ok := m.menuKey(msg); ok {
 			return cmd
 		}
@@ -654,7 +655,10 @@ func (m *model) apply(ev event.Event) *view {
 	case event.LoginRequested:
 		m.open(promptLogin, newLoginDialog(ev, &m.keys, m.th))
 		return nil
-	case event.QuestionEnded, event.PlanEnded, event.LoginEnded, event.ApprovalEnded:
+	case event.DirRequested:
+		m.open(promptDir, newDirDialog(ev, &m.keys))
+		return nil
+	case event.QuestionEnded, event.PlanEnded, event.LoginEnded, event.DirEnded, event.ApprovalEnded:
 		return nil
 	}
 	v := m.viewOf(id)

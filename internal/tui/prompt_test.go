@@ -38,6 +38,10 @@ var (
 		kind: promptPlan, open: planRequest(3, "# Heading"), end: event.PlanEnded{Token: 3},
 		title: planPath, answers: func(c *fakeController) int { return len(c.planAnswers) },
 	}
+	dirCase = promptCase{
+		kind: promptDir, open: event.DirRequested{Token: 5, Dir: "/w/other"}, end: event.DirEnded{Token: 5},
+		title: "Add this folder to the workspace?", answers: func(c *fakeController) int { return len(c.dirAnswers) },
+	}
 	loginCase = promptCase{
 		kind: promptLogin, open: event.LoginRequested{Token: 4, Message: "Login code"}, end: event.LoginEnded{Token: 4},
 		title: "Login code", answers: func(c *fakeController) int { return len(c.loginAnswers) },
@@ -59,6 +63,7 @@ func approvalOf(m *model) *approvalDialog { return promptOf[*approvalDialog](m) 
 func questionOf(m *model) *questionDialog { return promptOf[*questionDialog](m) }
 func planOf(m *model) *planDialog         { return promptOf[*planDialog](m) }
 func loginOf(m *model) *loginDialog       { return promptOf[*loginDialog](m) }
+func dirOf(m *model) *dirDialog           { return promptOf[*dirDialog](m) }
 func tasksOf(m *model) *taskDialog        { return promptOf[*taskDialog](m) }
 func usageOf(m *model) *usageDialog       { return promptOf[*usageDialog](m) }
 
@@ -86,7 +91,7 @@ func TestFrontIsTheOpenPromptOfTheHighestKind(t *testing.T) {
 	assert.Nil(t, m.front())
 	assert.Nil(t, m.frontDialog())
 
-	for _, pc := range []promptCase{approvalCase, questionCase, planCase, loginCase} {
+	for _, pc := range []promptCase{approvalCase, questionCase, planCase, loginCase, dirCase} {
 		m, _ := newTestModel(t, 70, 30)
 		send(m, pc.open)
 		assert.Equal(t, pc.kind, frontKind(m))
@@ -113,6 +118,7 @@ func TestOpenOrdersByKindThenArrival(t *testing.T) {
 		event.PlanRequested{Token: 3},
 		event.ApprovalRequested{Token: 4, Title: "Edit b.go"},
 		event.ApprovalRequested{Token: 5, Title: "Edit c.go"},
+		event.DirRequested{Token: 7, Dir: "/w/other"},
 	)
 	m.open(promptTasks, &taskDialog{d: &dialog{}, km: &m.keys})
 	m.open(promptQuestion, newQuestionDialog(event.QuestionRequested{Token: 6, Questions: []tool.Question{choice("one", false, "A")}}, &m.keys, m.th))
@@ -121,7 +127,7 @@ func TestOpenOrdersByKindThenArrival(t *testing.T) {
 	for _, h := range m.prompts {
 		kinds = append(kinds, h.kind)
 	}
-	assert.Equal(t, []promptKind{promptApproval, promptApproval, promptApproval, promptQuestion, promptPlan, promptLogin, promptTasks}, kinds)
+	assert.Equal(t, []promptKind{promptApproval, promptApproval, promptApproval, promptQuestion, promptPlan, promptLogin, promptDir, promptTasks}, kinds)
 	var tokens []uint64
 	for _, h := range m.prompts {
 		if a, ok := h.prompt.(*approvalDialog); ok {
@@ -150,6 +156,9 @@ func TestTheHigherPromptIsInFrontWhateverTheArrivalOrder(t *testing.T) {
 		{questionCase, planCase},
 		{questionCase, loginCase},
 		{planCase, loginCase},
+		{approvalCase, dirCase},
+		{planCase, dirCase},
+		{loginCase, dirCase},
 	} {
 		for _, highFirst := range []bool{true, false} {
 			m, c := newTestModel(t, 70, 30)
@@ -424,7 +433,7 @@ func TestCancelCancelsALoginAndLeavesTheTasksList(t *testing.T) {
 }
 
 func TestClipboardTextIsDroppedWhileAPromptIsInFront(t *testing.T) {
-	for _, pc := range []promptCase{approvalCase, questionCase, planCase, loginCase} {
+	for _, pc := range []promptCase{approvalCase, questionCase, planCase, loginCase, dirCase} {
 		m, _ := newTestModel(t, 70, 30)
 		send(m, pc.open)
 
@@ -445,7 +454,7 @@ func TestClipboardTextIsDroppedWhileAPromptIsInFront(t *testing.T) {
 }
 
 func TestPastedImageGoesToTheDraftWhileAPromptIsInFront(t *testing.T) {
-	for _, pc := range []promptCase{approvalCase, questionCase, planCase, loginCase} {
+	for _, pc := range []promptCase{approvalCase, questionCase, planCase, loginCase, dirCase} {
 		m, _ := newTestModel(t, 70, 30)
 		send(m, pc.open)
 
@@ -490,7 +499,7 @@ func TestPageKeysScrollTheTranscriptFromAQuestionWhoseSelectedOptionHasNoPreview
 }
 
 func TestAPromptStaysThroughTurnEndAndSessionChangeUntilItsEnd(t *testing.T) {
-	for _, pc := range []promptCase{approvalCase, questionCase, planCase, loginCase} {
+	for _, pc := range []promptCase{approvalCase, questionCase, planCase, loginCase, dirCase} {
 		m, _ := newTestModel(t, 70, 30)
 		send(m, pc.open)
 

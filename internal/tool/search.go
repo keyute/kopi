@@ -30,7 +30,7 @@ func searchTarget(ws *Workspace) func(json.RawMessage) (policy.Target, error) {
 		if args.Path == "" {
 			args.Path = "."
 		}
-		return ws.Target(args.Path)
+		return ws.in(args.Path).Target(args.Path)
 	}
 }
 

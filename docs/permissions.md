@@ -18,7 +18,7 @@ Permission rules in `config.json` allow, ask about or deny calls:
 - The name is a tool name (`Read`, `Glob`, `Grep`, `LS`, `Write`, `Edit`, `Bash`, `Agent`, `SendMessage`, `Workflow`, `StructuredOutput`, `TaskStop`, `ToolSearch`, `Skill`, `WebFetch`, `WebSearch`, `AskUserQuestion`, `ExitPlanMode`), an [MCP tool name](mcp.md#plan-mode-and-rules) or `*` for every tool.
 - An unknown name or a malformed rule is rejected at start.
 - Paths:
-  - `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory.
+  - `/abs` is absolute, `~/x` is under the home directory, and anything else is relative to the start directory, and applies in each directory added with [`/add-dir`](usage.md#commands) too: `Edit(docs/**)` allows in an added directory's `docs/` as well. A rule reaches an added directory through the path it was added by and through its real path, so for a directory added through a symlink it applies whichever of the two the call names the file by. A relative rule with a `..` in its path applies only from the start directory.
   - `*` and `**` glob.
   - A name with no slash (`.env`) matches at any depth, and a directory covers everything in it.
   - Paths match case-insensitively on macOS and Windows.
@@ -38,7 +38,7 @@ Permission rules in `config.json` allow, ask about or deny calls:
 - With no rule matching:
   - `Read`, `Glob`, `Grep`, `LS`, `Skill`, `ToolSearch`, `Agent`, `SendMessage`, `Workflow`, `StructuredOutput`, `TaskStop`, `AskUserQuestion`, `ExitPlanMode` and sandboxed `Bash` without `unsandboxed` are allowed.
   - Any other call asks, including every `WebFetch` and `WebSearch` call and every `Bash` command without the sandbox and every `Bash` call that sets [`unsandboxed`](sandbox.md#outside-the-sandbox) where it is offered.
-- Built in: `Edit` and `Write` under any `.git` directory, and of any file named `.mcp.json` or the file the start directory's `.mcp.json` resolves to when it is a symlink, always ask unless a deny rule refuses them.
+- Built in: `Edit` and `Write` under any `.git` directory, and of any file named `.mcp.json` or the file the `.mcp.json` of the start directory or of an added directory resolves to when it is a symlink, always ask unless a deny rule refuses them.
 
 ### Rules per tool
 
@@ -140,7 +140,8 @@ Behaviour with `classifier.enabled`:
 - Permission rules are not an OS boundary: they match the path a call names. Only `Bash` runs under the OS [sandbox](sandbox.md).
 - A command you type with `!` is your action, not the agent's: no rule or approval applies to it, and plan mode does not restrict it. See [your own commands](usage.md#your-own-commands).
 - Kopi refuses no credential locations outside its home; deny them with rules, such as `*(~/.ssh)`, and to `Bash` with `sandbox.denyRead`.
-- Symlinks in rule paths, the start directory and the home directory are resolved once, at start; in sandbox paths too on macOS, and before each command on Linux.
+- Symlinks in rule paths, the start directory and the home directory are resolved once, at start, and those in an added directory's rule paths when it is added; in sandbox paths too on macOS, and before each command on Linux.
+- A call already waiting for your answer when a directory is added is judged by the rules as they stood, so a rule the directory brings into reach does not apply to it.
 - A preview needs 3 or more rows to scroll; on a screen too short for that, the part that does not fit is not reachable.
 - With `classifier.enabled`, the session's prompts, recent tool-call arguments and the call under review go to `classifier.model`'s provider. The classifier can be wrong in both directions, and a review can hold the turn for up to a minute.
 

@@ -271,7 +271,7 @@ func (c *Controller) openDeferred(ctx context.Context, req OpenRequest, op *sess
 // chooseProvider asks which provider to log in to, among those that offer a
 // login.
 func (c *Controller) chooseProvider(ctx context.Context) (string, error) {
-	candidates, err := c.loginCandidates()
+	candidates, err := c.loginCandidates("")
 	if err != nil {
 		return "", err
 	}
@@ -348,7 +348,7 @@ func LoginMethods(p pigruntime.Provider) []string {
 	return methods
 }
 
-func (c *Controller) loginCandidates() ([]Candidate, error) {
+func (c *Controller) loginCandidates(_ string) ([]Candidate, error) {
 	providers, err := c.rt.Providers(context.Background())
 	if err != nil {
 		return nil, err
@@ -368,7 +368,7 @@ func (c *Controller) loginCandidates() ([]Candidate, error) {
 	return out, nil
 }
 
-func (c *Controller) logoutCandidates() ([]Candidate, error) {
+func (c *Controller) logoutCandidates(_ string) ([]Candidate, error) {
 	providers, err := c.rt.Providers(context.Background())
 	if err != nil {
 		return nil, err

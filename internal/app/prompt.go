@@ -73,7 +73,7 @@ func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group
 	for _, g := range groups {
 		texts := make([]string, 0, len(g.Files))
 		for _, f := range g.Files {
-			texts = append(texts, "Instructions from "+f.Path+":\n"+f.Text)
+			texts = append(texts, instructionText(f))
 		}
 		scope := "project"
 		if g.Global {
@@ -95,6 +95,11 @@ func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group
 		parts = append(parts, pigruntime.PromptPart{Name: serversPart, Text: strings.Join(serverLines, "\n")})
 	}
 	return parts
+}
+
+// instructionText is how the model reads an instruction file.
+func instructionText(f instruction.File) string {
+	return "Instructions from " + f.Path + ":\n" + f.Text
 }
 
 // contextOf sorts the estimated sizes of a session's prompt parts, named as
