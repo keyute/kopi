@@ -793,7 +793,7 @@ func TestQuestionWaitsForAChildApprovalAlreadyShown(t *testing.T) {
 	sent(t, c, qs)
 }
 
-func TestQuestionResizeKeepsTheBottomRuleAboveTheFooter(t *testing.T) {
+func TestQuestionResizeKeepsTheBottomRuleLast(t *testing.T) {
 	m, _ := openQuestion(t, choice("one", false, "A", "B", "C", "D"), choice("two", false, "C", "D"))
 	press(m, digit('5'))
 	typeKeys(m, "x")
@@ -801,7 +801,7 @@ func TestQuestionResizeKeepsTheBottomRuleAboveTheFooter(t *testing.T) {
 		m.Update(tea.WindowSizeMsg{Width: 40, Height: height})
 		rows := screen(m)
 		require.Len(t, rows, height)
-		assert.Equal(t, strings.Repeat("─", 40), rows[height-2])
+		assert.Equal(t, strings.Repeat("─", 40), rows[height-1])
 		if height >= 8 {
 			assert.Contains(t, strings.Join(rows, "\n"), "5. x")
 		}

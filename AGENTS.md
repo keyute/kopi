@@ -87,7 +87,7 @@
 
 ## TUI
 
-- Every screen ends with a footer: in a session, the status line with the agent and workflow rows under it while any show; key hints on a screen of its own. A dialog sits directly above the status line (or the key hints) and always draws both rules; do not add a dialog variant for what surrounds it.
+- A session screen ends with a footer: the status line, with the agent and workflow rows under it while any show. A dialog takes the footer's place along with the input's, so its bottom rule is the last row of whatever screen it is on, a session's or one of its own. A dialog always draws both rules; do not add a dialog variant for what surrounds it. A notice shown while a dialog is open joins its hints.
 - Which prompt is in front is decided only by `front()` in `internal/tui/prompt.go`: the open prompt of the earliest kind, the first to arrive among them. A covered prompt stays open. No other code tests a prompt's kind to decide what shows or takes input.
 - A prompt kind is one type implementing `prompt`, a `promptKind` and one `open` call. It fills a `dialog`'s slots and never cuts, windows or offsets rows: only `dialog.rows` decides height, scrolling and field areas.
 - A prompt keeps what it renders for a width and theme (a body, a preview); `dialog.rows` only slices it, so a frame's cost does not grow with the content.

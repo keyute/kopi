@@ -24,7 +24,8 @@ import (
 
 const (
 	// chromeRows is the rows below the transcript besides the input: the
-	// blank row, the composer's two shaded rows and the status line.
+	// blank row, the composer's two shaded rows and the status line, which
+	// a prompt takes back.
 	chromeRows = 4
 	// busyRows is what the working row adds: the row and the blank row
 	// below it.
@@ -151,7 +152,7 @@ type model struct {
 	// pending is the shown view's queued rows.
 	pending      []string
 	pendingCache pendingCache
-	// flashText is the status line's notice until flashMsg{flashSeq}.
+	// flashText is the notice until flashMsg{flashSeq}.
 	flashText string
 	flashSeq  int
 	// exitArmed is set by a cancel at idle with an empty draft; the next
@@ -441,7 +442,8 @@ func (m *model) beat() tea.Cmd {
 	return tea.Tick(barEvery, func(time.Time) tea.Msg { return barMsg{} })
 }
 
-// flash shows text on the status line for flashFor.
+// flash shows text as the notice for flashFor: on the status line, or with the
+// key hints of the prompt in front.
 func (m *model) flash(text string) tea.Cmd {
 	m.flashSeq++
 	m.flashText = text
@@ -797,7 +799,9 @@ func (m *model) place() {
 	input := m.composer.height()
 	var d *dialog
 	if front := m.front(); front != nil {
+		free++
 		d = front.dialog(m.width, m.th)
+		d.notice = m.flashText
 		m.prompt = d.rows(m.width, free+2, max(2, m.height/3), m.th)
 		// The prompt takes the composer's frame rows too.
 		input = len(m.prompt) - 2
@@ -812,9 +816,12 @@ func (m *model) place() {
 	m.pending = m.pendingCache.rows(m.view().queued, m.shown, func(t string) []app.Span { return m.c.PromptSpans(m.shown, t) }, &m.keys, m.width, max(2, m.height/3), free, m.th)
 	m.geo.transcript = max(0, free-len(m.pending))
 	// The rows take only what is left of the transcript.
-	agentRows := m.agentRows(m.geo.transcript)
-	m.geo.agents = len(agentRows)
-	m.geo.transcript -= m.geo.agents
+	var agentRows []string
+	if d == nil {
+		agentRows = m.agentRows(m.geo.transcript)
+		m.geo.agents = len(agentRows)
+		m.geo.transcript -= m.geo.agents
+	}
 
 	rows := append([]string{""}, m.pending...)
 	if shown {
@@ -838,8 +845,10 @@ func (m *model) place() {
 		rows = append(rows, m.menuRows()...)
 		m.geo.fields = []fieldArea{{c: &m.composer, y: m.geo.composerTop, h: m.composer.height()}}
 	}
-	rows = append(rows, statusLine(m.statusInput(), m.layout, m.width, m.th))
-	rows = append(rows, agentRows...)
+	if d == nil {
+		rows = append(rows, statusLine(m.statusInput(), m.layout, m.width, m.th))
+		rows = append(rows, agentRows...)
+	}
 	m.below = make([]line, len(rows))
 	for i, r := range rows {
 		m.below[i] = line{text: r}

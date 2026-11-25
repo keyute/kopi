@@ -41,8 +41,8 @@ type option struct {
 }
 
 // dialog is a choice drawn in the composer's slot. It is drawn between two
-// rules directly above the screen's last row: the status line in the main UI,
-// key hints on a screen of its own.
+// rules; its bottom rule is the last row of its screen, so a session's status
+// line is hidden while it is open.
 type dialog struct {
 	// head is rows under the top rule that outlast the title: the question tabs.
 	head  []string
@@ -61,6 +61,8 @@ type dialog struct {
 	pane *pane
 	// foot is the key hints above the bottom rule.
 	foot string
+	// notice joins the foot, else the keys, as a hint that is always shown.
+	notice string
 	// warn is drawn in place of foot; the next key clears it.
 	warn string
 	// areas is where the last rows call drew each field, y counting from its
@@ -117,6 +119,13 @@ func (d *dialog) rows(width, maxRows, limit int, th theme) []string {
 	}
 	s.opts = d.blocks(s.col, th)
 	scroll, keys, foot := d.scroll, d.keys, d.foot
+	if d.notice != "" {
+		if foot != "" {
+			foot = strings.Join([]string{d.notice, foot}, " · ")
+		} else {
+			keys = strings.Join(slices.DeleteFunc([]string{keys, d.notice}, isEmpty), " · ")
+		}
+	}
 	rows, cut := d.fit(s, keys, foot, maxRows, limit, th)
 	if !cut || d.hint == "" {
 		return rows

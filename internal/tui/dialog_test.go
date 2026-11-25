@@ -84,6 +84,19 @@ func TestHintRowsDrawTheKeysMuted(t *testing.T) {
 	assert.Equal(t, "  "+muted.Render("esc")+dim.Render(" to close"), rows[len(rows)-2])
 }
 
+func TestDialogRowsJoinTheNoticeToTheHints(t *testing.T) {
+	th := mocha()
+	dim, muted := fg(th.dim), fg(th.muted)
+
+	d := dialog{title: "Pick", note: "why", keys: "ctrl+g to edit", foot: "esc to close", notice: "Copied", options: []option{{label: "Yes"}}}
+	rows := d.rows(40, 100, 1, th)
+	assert.Equal(t, "  "+dim.Render("Copied")+dim.Render(" · ")+muted.Render("esc")+dim.Render(" to close"), rows[len(rows)-2], "before the foot")
+	assert.Equal(t, "  "+dim.Render("why")+dim.Render(" · ")+muted.Render("ctrl+g")+dim.Render(" to edit"), rows[2], "the keys stay as they are while there is a foot")
+
+	d = dialog{title: "Pick", keys: "ctrl+g to edit", notice: "Copied", options: []option{{label: "Yes"}}}
+	assert.Equal(t, "  "+muted.Render("ctrl+g")+dim.Render(" to edit")+dim.Render(" · ")+dim.Render("Copied"), d.rows(40, 100, 1, th)[2], "after the keys when there is no foot")
+}
+
 func TestDialogKey(t *testing.T) {
 	km := newKeyMap(config.DefaultKeys())
 	for _, tt := range []struct {

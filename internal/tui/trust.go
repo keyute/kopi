@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -134,26 +135,11 @@ func (m *trustModel) View() tea.View {
 	if m.width == 0 || m.height == 0 {
 		return v
 	}
-	rows := append(m.rows(), m.hint())
+	rows := m.rows()
 	// Short of the height, blank rows above put the dialog at the bottom, where
 	// approvals are drawn.
 	v.SetContent(strings.Join(append(make([]string, m.height-len(rows)), rows...), "\n"))
 	return v
-}
-
-// hint is the footer row naming the bound keys.
-func (m *trustModel) hint() string {
-	var parts []string
-	if ks := m.keys.submit.Keys(); len(ks) > 0 {
-		parts = append(parts, ks[0]+" to choose")
-	}
-	if ks := m.keys.interrupt.Keys(); len(ks) > 0 {
-		parts = append(parts, ks[0]+" to decide later")
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return hintRows("", cut(strings.Join(parts, " · "), m.width-2), m.width, m.th)[0]
 }
 
 func (m *trustModel) rows() []string {
@@ -179,6 +165,6 @@ func (m *trustModel) rows() []string {
 		m.bodyWidth, m.bodyTheme = m.width, m.th
 	}
 	m.dialog.body, m.dialog.hint = m.body, scrollHint(&m.keys)
-	// The footer row is the one below the dialog.
-	return m.dialog.rows(m.width, m.height-1, m.height, m.th)
+	m.dialog.foot = strings.Join(slices.DeleteFunc([]string{binding(m.keys.submit, "choose"), binding(m.keys.interrupt, "decide later")}, isEmpty), " · ")
+	return m.dialog.rows(m.width, m.height, m.height, m.th)
 }

@@ -48,9 +48,9 @@ func TestPlanDialogShowsTitleRowsAndHints(t *testing.T) {
 		"  " + planPath + " · ctrl+g to edit · pgup/pgdown to scroll · esc to dismiss",
 		"",
 		"❭ 1. Yes",
-		"  2. No (esc)  What should change?",
+		"  2. No  What should change?",
 		rule,
-	}, rows[len(rows)-8:len(rows)-1], "directly above the footer")
+	}, rows[len(rows)-7:], "the last rows of the screen")
 	assert.Contains(t, strings.Join(rows, "\n"), "Heading", "the plan is under the row")
 }
 
@@ -70,7 +70,7 @@ func TestPlanDialogKeepsRulesAndSelectionOnAShortTerminal(t *testing.T) {
 			assert.Equal(t, rule, prompt[0])
 			assert.Equal(t, rule, prompt[len(prompt)-1])
 			assert.Contains(t, strings.Join(prompt, "\n"), fmt.Sprintf("❭ %d. ", sel+1))
-			assert.Equal(t, rule, rows[len(rows)-2], "directly above the footer")
+			assert.Equal(t, rule, rows[len(rows)-1], "the last row of the screen")
 		})
 	}
 }
@@ -110,7 +110,7 @@ func TestPlanRowsKeepRulesSelectionAndFieldAreasWithinBudget(t *testing.T) {
 					}
 					if sel == 1 && feedback == "" {
 						require.Len(t, d.areas, 1)
-						assert.Equal(t, fieldArea{c: f, x: 15, y: len(rows) - 2, h: 1}, d.areas[0])
+						assert.Equal(t, fieldArea{c: f, x: 9, y: len(rows) - 2, h: 1}, d.areas[0])
 						assert.Contains(t, rows[d.areas[0].y], "What should change?")
 					}
 					if sel == 1 && feedback != "" && budget == 3 {

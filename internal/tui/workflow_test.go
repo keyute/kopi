@@ -255,7 +255,7 @@ func TestWorkflowDialogEnterWatchesARunningAgent(t *testing.T) {
 		assert.True(t, w.watching)
 		assert.Equal(t, "s2", m.shown)
 		assert.Contains(t, body(m), "❯ review users.ts")
-		assert.Contains(t, statusText(m), "rev-1", "the status line is the agent's")
+		assert.Contains(t, statusLine(m.statusInput(), m.layout, m.width, m.th), "rev-1", "the status line is the agent's")
 		assert.Equal(t, []string{"  watching reviewer › users.ts · esc to go back", ""}, workflowBoxFoot(t, m))
 	})
 }
@@ -297,10 +297,10 @@ func TestWorkflowDialogEnterOnAnAgentWithoutASessionFlashesWhy(t *testing.T) {
 		press(m, down)
 
 		press(m, enter)
-		assert.Contains(t, statusText(m), "not started yet")
+		assert.Contains(t, strings.Join(workflowBox(t, m), "\n"), "not started yet")
 		press(m, down)
 		press(m, enter)
-		assert.Contains(t, statusText(m), "no slot")
+		assert.Contains(t, strings.Join(workflowBox(t, m), "\n"), "no slot")
 		assert.False(t, w.watching)
 		assert.Equal(t, app.Main, m.shown)
 	})
@@ -319,7 +319,7 @@ func TestWorkflowDialogEnterOnACallStoppedWhileQueuedSaysSo(t *testing.T) {
 
 		press(m, enter)
 
-		assert.Contains(t, statusText(m), "stopped before it started")
+		assert.Contains(t, strings.Join(workflowBox(t, m), "\n"), "stopped before it started")
 	})
 }
 
@@ -594,20 +594,22 @@ func TestWorkflowDialogStatusFollowsTheWatchedAgentWhileAnotherPromptCoversIt(t 
 func TestWorkflowDialogStatusFollowsTheWatchedAgent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, c := workflowModel(t, 60)
+		// The dialog hides the status line, so it is drawn directly.
+		status := func() string { return statusLine(m.statusInput(), m.layout, m.width, m.th) }
 		send(m, sub("s2", event.TurnStart{Prompt: "review"}))
 		openFromRow(t, m)
-		require.Contains(t, statusText(m), "model-1")
+		require.Contains(t, status(), "model-1")
 		press(m, down)
 		press(m, enter)
-		assert.Contains(t, statusText(m), "rev-1")
-		assert.Contains(t, statusText(m), "18.2%")
+		assert.Contains(t, status(), "rev-1")
+		assert.Contains(t, status(), "18.2%")
 
 		setRun(m, c, func(r *fakeRun) { r.agents[1].Model = "mock/rev-2" })
 		m.arrange()
 
-		assert.Contains(t, statusText(m), "rev-2")
+		assert.Contains(t, status(), "rev-2")
 		press(m, escape)
-		assert.Contains(t, statusText(m), "model-1")
+		assert.Contains(t, status(), "model-1")
 	})
 }
 

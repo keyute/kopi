@@ -186,7 +186,7 @@ func TestLoginResizeKeepsRulesAboveFooterAndFieldGeometry(t *testing.T) {
 				m.Update(tea.WindowSizeMsg{Width: 40, Height: height})
 				rows := screen(m)
 				require.Len(t, rows, height)
-				assert.Equal(t, rule40, rows[height-2], "bottom rule immediately above footer")
+				assert.Equal(t, rule40, rows[height-1], "bottom rule is the last row")
 				assert.Equal(t, rule40, plainRows(m.prompt)[0])
 				assert.Contains(t, strings.Join(rows, "\n"), "❭ ", "field row visible")
 				if secret {
@@ -198,7 +198,7 @@ func TestLoginResizeKeepsRulesAboveFooterAndFieldGeometry(t *testing.T) {
 					fa := m.geo.fields[0]
 					assert.Equal(t, 2, fa.x)
 					assert.Greater(t, fa.h, 0)
-					assert.LessOrEqual(t, fa.y+fa.h, height-2)
+					assert.LessOrEqual(t, fa.y+fa.h, height-1)
 					assert.Contains(t, []string{"❭ private", "❭ answer", "  answer"}, rows[fa.y])
 				}
 			}
