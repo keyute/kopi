@@ -249,6 +249,19 @@ func TestGlobSearchesAnAddedDirectoryWithAbsoluteResults(t *testing.T) {
 	assert.Equal(t, "Found 1 file\nstart.go", out)
 }
 
+func TestGlobOmitsHiddenInAnAddedDirectory(t *testing.T) {
+	ws := newWorkspace(t, t.TempDir(), nil)
+	other := t.TempDir()
+	writeFile(t, filepath.Join(other, "a.go"), "")
+	writeFile(t, filepath.Join(other, "secret.go"), "")
+	require.NoError(t, ws.Add(other, realPath(t, other)))
+	hidden, _ := recordHidden(func(t policy.Target) bool { return filepath.Base(t.Real) == "secret.go" })
+
+	out, err := runGlob(t, NewGlob(ws, hidden), fmt.Sprintf(`{"pattern":"*.go","path":%q}`, other))
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 file\n"+filepath.Join(realPath(t, other), "a.go"), out)
+}
+
 func TestGlobLeavesKopiHomeOutOfAnAddedDirectory(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
 	writeFile(t, filepath.Join(home, "a.json"), "")

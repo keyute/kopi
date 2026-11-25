@@ -235,8 +235,9 @@ func (r *Rules) eachRule(f func(*rule)) {
 
 // SetDirs makes relative and bare-name rule paths apply in each of dirs as in
 // the workspace, and guards what each one's .mcp.json resolves to. It replaces
-// what an earlier call set; nil removes it. dirs are absolute, resolved and
-// exist.
+// what an earlier call set; nil removes it. dirs are absolute, as the human
+// spelled them (a path through a symlink keeps both its lexical and resolved
+// forms, as the workspace does), and exist.
 func (r *Rules) SetDirs(dirs []string) {
 	if r == nil {
 		return

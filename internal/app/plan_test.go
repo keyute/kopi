@@ -522,3 +522,35 @@ func TestCompactionDoesNotRecallADirectoryAddedDuringTheTurn(t *testing.T) {
 	assert.Contains(t, raw, "the summary")
 	assert.Equal(t, 1, strings.Count(raw, text), "told with the next prompt, not also recalled")
 }
+
+func TestOnlyTheDirectoriesOfAnEarlierPromptNotDeliveredAreToldAgain(t *testing.T) {
+	c := &Controller{authority: policy.NewAuthority()}
+	c.cfg.Workspace = "/ws"
+	c.main = &runner{c: c}
+	c.dirs = []addedDir{{path: "/one"}}
+	first := c.main.tell([]pigruntime.Prompt{{Text: "a"}})
+	require.Equal(t, modeLine(policy.Plan, "", false)+"\n"+c.dirsText(0, 1, true), first[0].Mode)
+	c.dirs = append(c.dirs, addedDir{path: "/two"})
+	second := c.main.tell([]pigruntime.Prompt{{Text: "b"}})
+	require.Equal(t, c.dirsText(1, 2, true), second[0].Mode, "the mode line is not repeated")
+
+	c.main.untell(first)
+	c.main.untell(first)
+
+	assert.Equal(t, modeLine(policy.Plan, "", false)+"\n"+c.dirsText(0, 1, true), c.main.tell([]pigruntime.Prompt{{Text: "c"}})[0].Mode)
+	assert.Empty(t, c.main.tell([]pigruntime.Prompt{{Text: "d"}})[0].Mode)
+}
+
+func TestTheModeLineIsNotToldAgainWhenOnlyDirectoriesWereNotDelivered(t *testing.T) {
+	c := &Controller{authority: policy.NewAuthority()}
+	c.cfg.Workspace = "/ws"
+	c.main = &runner{c: c}
+	c.main.tell([]pigruntime.Prompt{{Text: "a"}})
+	c.dirs = []addedDir{{path: "/one"}}
+	dirsOnly := c.main.tell([]pigruntime.Prompt{{Text: "b"}})
+	require.Equal(t, c.dirsText(0, 1, true), dirsOnly[0].Mode)
+
+	c.main.untell(dirsOnly)
+
+	assert.Equal(t, c.dirsText(0, 1, true), c.main.tell([]pigruntime.Prompt{{Text: "c"}})[0].Mode)
+}

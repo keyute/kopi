@@ -203,6 +203,7 @@ func TestReclaimedQueuePlansInTypingOrder(t *testing.T) {
 		p := prompt("P1")
 		p.handed = true
 		r, emit := newRunner(p)
+		r.told, r.toldBy = "line", map[string]delivery{"line": {line: true}}
 		r.reclaim(emit, true, []pigruntime.Prompt{{Text: "P1", Mode: "line"}})
 		assert.Empty(t, r.told)
 		assert.False(t, p.handed)

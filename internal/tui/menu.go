@@ -139,7 +139,8 @@ func (m *model) loaded(msg candidatesMsg) {
 		return
 	}
 	if m.menu.typed {
-		m.menu.pending, m.menu.sel, m.menu.picked = false, 0, false
+		// Up, Down and Tab pressed while the reply was pending stay in force.
+		m.menu.pending = false
 	}
 	if msg.err != nil {
 		slog.Warn("failed to load completions", "err", msg.err)

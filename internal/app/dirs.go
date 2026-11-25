@@ -18,11 +18,12 @@ import (
 // maxDirCandidates bounds the directories /add-dir offers.
 const maxDirCandidates = 50
 
-// addedDir is a directory added to the workspace: its canonical path and the
+// addedDir is a directory added to the workspace: its canonical path, the
+// absolute spelling the human typed, which the rules match too, and the
 // instruction files the model is sent with it.
 type addedDir struct {
-	path  string
-	files []instruction.File
+	path, typed string
+	files       []instruction.File
 }
 
 // pendingDir is an add waiting for the human's answer. arg is the argument as
@@ -104,11 +105,7 @@ func (c *Controller) prepareDir(arg string) (p *pendingDir, decision trust.Decis
 	if err != nil {
 		return nil, 0, false, err
 	}
-	home, err := trust.Canonical(c.cfg.UserHome)
-	if err != nil {
-		return nil, 0, false, err
-	}
-	p = &pendingDir{arg: arg, typed: typed, dir: dir, files: c.newInstructionFiles(dir), saved: !trust.Broad(dir, home)}
+	p = &pendingDir{arg: arg, typed: typed, dir: dir, files: c.newInstructionFiles(dir), saved: !trust.Broad(dir, c.cfg.UserHome)}
 	return p, decision, decided, nil
 }
 
@@ -170,20 +167,36 @@ func (c *Controller) endDirRequests() {
 	}
 }
 
-// applyDir makes p's directory reachable and reports it. The rules take it
-// first, so no deny or ask rule lags behind the reach; a failure puts the
-// previous directories back.
+// applyDir makes p's directory reachable and reports it.
 func (c *Controller) applyDir(p *pendingDir, trusted bool) error {
 	var files []instruction.File
 	if trusted {
 		files = p.files
 	}
 	c.dirsMu.Lock()
-	err := c.reach(p, files)
-	c.dirsMu.Unlock()
+	defer c.dirsMu.Unlock()
+	c.mu.Lock()
+	prev := slices.Clone(c.dirs)
+	c.mu.Unlock()
+	next := append(slices.Clone(prev), addedDir{path: p.dir, typed: p.typed})
+	// A failure puts the previous directories back.
+	err := c.setReach(next)
+	if err == nil {
+		err = c.cfg.Files.Add(p.typed, p.dir)
+	}
 	if err != nil {
+		if restoreErr := c.setReach(prev); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("failed to restore the sandbox directories: %w", restoreErr))
+		}
 		return fmt.Errorf("failed to add %s: %w", p.arg, err)
 	}
+	c.mu.Lock()
+	// Another pending add under the same git root may have been applied since
+	// files were listed.
+	sent := c.sentFilesLocked()
+	next[len(next)-1].files = slices.DeleteFunc(slices.Clone(files), func(f instruction.File) bool { return sent[f.Path] })
+	c.dirs = next
+	c.mu.Unlock()
 	text := fmt.Sprintf("Added %s to the workspace.", p.dir)
 	switch {
 	case len(p.files) == 0:
@@ -196,40 +209,20 @@ func (c *Controller) applyDir(p *pendingDir, trusted bool) error {
 	return nil
 }
 
-// reach is applyDir's work under dirsMu; files are the instruction files the
-// model is sent.
-func (c *Controller) reach(p *pendingDir, files []instruction.File) error {
-	c.mu.Lock()
-	prev := make([]string, len(c.dirs))
-	for i, d := range c.dirs {
-		prev[i] = d.path
+// setReach makes dirs the added directories of the rules, which match the
+// spelling typed, and of the sandbox, which takes the canonical paths. The rules
+// go first, so no deny or ask rule lags behind the reach.
+func (c *Controller) setReach(dirs []addedDir) error {
+	typed := make([]string, len(dirs))
+	canonical := make([]string, len(dirs))
+	for i, d := range dirs {
+		typed[i], canonical[i] = d.typed, d.path
 	}
-	c.mu.Unlock()
-	next := append(slices.Clone(prev), p.dir)
-	setSandbox := c.cfg.SandboxDirs
-	if setSandbox == nil {
-		setSandbox = func([]string) error { return nil }
+	c.cfg.Rules.SetDirs(typed)
+	if c.cfg.SandboxDirs == nil {
+		return nil
 	}
-	c.cfg.Rules.SetDirs(next)
-	err := setSandbox(next)
-	if err == nil {
-		err = c.cfg.Files.Add(p.typed, p.dir)
-	}
-	if err != nil {
-		c.cfg.Rules.SetDirs(prev)
-		if restoreErr := setSandbox(prev); restoreErr != nil {
-			err = errors.Join(err, fmt.Errorf("failed to restore the sandbox directories: %w", restoreErr))
-		}
-		return err
-	}
-	c.mu.Lock()
-	// Another pending add under the same git root may have been applied since
-	// files were listed.
-	sent := c.sentFilesLocked()
-	files = slices.DeleteFunc(slices.Clone(files), func(f instruction.File) bool { return sent[f.Path] })
-	c.dirs = append(c.dirs, addedDir{path: p.dir, files: files})
-	c.mu.Unlock()
-	return nil
+	return c.cfg.SandboxDirs(canonical)
 }
 
 // typedDir is arg as the absolute path the human spelled: ~ is the user's home,
@@ -316,17 +309,11 @@ func (c *Controller) report(evs ...event.Event) {
 // and it flushes startup after its own.
 func (c *Controller) flushReports() {
 	c.mu.Lock()
-	evs, open, closed := c.reports, c.main.sess != nil && c.switching == nil, c.closed
+	evs, closed := c.reports, c.closed
 	c.reports = nil
 	c.mu.Unlock()
-	switch {
-	case closed:
-	case open:
-		for _, ev := range evs {
-			c.relay.emit(ev)
-		}
-	default:
-		c.startup = append(c.startup, evs...)
+	if !closed {
+		c.emitOrQueue(evs)
 	}
 }
 
@@ -385,6 +372,16 @@ func (c *Controller) dirCandidates(typed string) ([]Candidate, error) {
 		// The human is still typing a path that may not exist yet.
 		return out, nil
 	}
+	// The exact name comes first, since the match ignores case.
+	slices.SortStableFunc(entries, func(a, b os.DirEntry) int {
+		switch {
+		case a.Name() == last:
+			return -1
+		case b.Name() == last:
+			return 1
+		}
+		return 0
+	})
 	for _, e := range entries {
 		name := e.Name()
 		if len(out) == maxDirCandidates {

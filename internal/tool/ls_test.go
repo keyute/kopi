@@ -219,6 +219,19 @@ func TestLSListsAnAddedDirectory(t *testing.T) {
 	assert.Equal(t, "start.txt", out)
 }
 
+func TestLSOmitsHiddenInAnAddedDirectory(t *testing.T) {
+	ws := newWorkspace(t, t.TempDir(), nil)
+	other := t.TempDir()
+	writeFile(t, filepath.Join(other, "b.txt"), "")
+	writeFile(t, filepath.Join(other, "secret.txt"), "")
+	require.NoError(t, ws.Add(other, realPath(t, other)))
+	hidden, _ := recordHidden(func(t policy.Target) bool { return filepath.Base(t.Real) == "secret.txt" })
+
+	out, err := runLS(t, NewLS(ws, hidden), fmt.Sprintf(`{"path":%q}`, other))
+	require.NoError(t, err)
+	assert.Equal(t, "b.txt", out)
+}
+
 func TestLSLeavesKopiHomeOutOfAnAddedDirectory(t *testing.T) {
 	home, kopiHome := syntheticHome(t)
 	writeFile(t, filepath.Join(home, "a.txt"), "")

@@ -179,6 +179,17 @@ func (w *Workspace) Add(given, real string) error {
 	if err != nil {
 		return err
 	}
+	// real may have been replaced by a symlink since the caller resolved it, and
+	// NewWorkspace follows symlinks, so the opened root must still be b.
+	info, err := d.root.Stat(".")
+	if err != nil {
+		d.root.Close()
+		return fmt.Errorf("failed to stat %s: %w", real, err)
+	}
+	if d.realDir != real || !os.SameFile(info, b) {
+		d.root.Close()
+		return fmt.Errorf("%s is not the directory %s", real, given)
+	}
 	d.given = filepath.Clean(given)
 	w.more.dirs = append(w.more.dirs, d)
 	return nil
@@ -201,12 +212,7 @@ func (w *Workspace) canAdd(dir string) error {
 		return fmt.Errorf("failed to resolve %s: %w", dir, err)
 	}
 	for _, root := range append([]*Workspace{w}, w.more.dirs...) {
-		// APFS is case-insensitive, so darwin compares case-folded.
-		base, target := root.realDir, resolved
-		if runtime.GOOS == "darwin" {
-			base, target = strings.ToLower(base), strings.ToLower(target)
-		}
-		if rel, err := filepath.Rel(base, target); err == nil && filepath.IsLocal(rel) {
+		if within(root.realDir, resolved) {
 			return ErrInWorkspace
 		}
 	}
@@ -567,9 +573,18 @@ func fillTemp(f *os.File, path string, data []byte, mode *fs.FileMode) error {
 	return err
 }
 
+// within reports whether target is base or lies lexically in it. APFS is
+// case-insensitive, so darwin compares case-folded.
+func within(base, target string) bool {
+	if runtime.GOOS == "darwin" {
+		base, target = strings.ToLower(base), strings.ToLower(target)
+	}
+	rel, err := filepath.Rel(base, target)
+	return err == nil && filepath.IsLocal(rel)
+}
+
 // inProtectedPath reports whether target lies lexically in a protected path,
-// itself walked to its real path. APFS is case-insensitive, so darwin compares
-// case-folded.
+// itself walked to its real path.
 func (w *Workspace) inProtectedPath(target string) (bool, error) {
 	for _, p := range w.protected {
 		store, _, err := walk(string(filepath.Separator), p, nil)
@@ -579,10 +594,7 @@ func (w *Workspace) inProtectedPath(target string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if runtime.GOOS == "darwin" {
-			store, target = strings.ToLower(store), strings.ToLower(target)
-		}
-		if rel, err := filepath.Rel(store, target); err == nil && filepath.IsLocal(rel) {
+		if within(store, target) {
 			return true, nil
 		}
 	}

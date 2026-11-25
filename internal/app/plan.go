@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/keyute/kopi/internal/event"
@@ -135,42 +136,57 @@ func (r *runner) tell(ps []pigruntime.Prompt) []pigruntime.Prompt {
 	for i := range ps {
 		ps[i].Mode = ""
 	}
+	var carried delivery
 	var lines []string
 	if main {
 		if line := modeLine(r.c.mode(), r.c.cfg.Plans.Path(), r.c.planApproval()); line != r.told {
 			lines = append(lines, line)
-			r.told = line
+			r.told, carried.line = line, true
 		}
 	}
-	from := -1
+	spans := r.dirsLeft
+	r.dirsLeft = nil
 	if n := r.c.dirCount(); n > r.dirsTold {
-		lines = append(lines, r.c.dirsText(r.dirsTold, n, !r.noFiles))
-		from, r.dirsTold = r.dirsTold, n
+		spans = append(spans, span{r.dirsTold, n})
+		r.dirsTold = n
+	}
+	slices.SortFunc(spans, func(a, b span) int { return a.from - b.from })
+	for _, s := range spans {
+		// Spans of prompts that were not delivered may touch or repeat.
+		if last := len(carried.dirs) - 1; last >= 0 && s.from <= carried.dirs[last].to {
+			carried.dirs[last].to = max(carried.dirs[last].to, s.to)
+		} else {
+			carried.dirs = append(carried.dirs, s)
+		}
+	}
+	for _, s := range carried.dirs {
+		lines = append(lines, r.c.dirsText(s.from, s.to, !r.noFiles))
 	}
 	mode := strings.Join(lines, "\n")
 	ps[len(ps)-1].Mode = mode
-	if from >= 0 {
-		if r.dirsFrom == nil {
-			r.dirsFrom = map[string]int{}
+	if carried.line || len(carried.dirs) > 0 {
+		if r.toldBy == nil {
+			r.toldBy = map[string]delivery{}
 		}
-		r.dirsFrom[mode] = from
+		r.toldBy[mode] = carried
 	}
 	return ps
 }
 
 // untell forgets what was told when a prompt that carried it was not
-// delivered: the mode line, and the directories back to where the earliest such
-// prompt that carried any began. It must be called with queue held.
+// delivered: the mode line if it carried it, and the directories it carried. It
+// must be called with queue held.
 func (r *runner) untell(ps ...[]pigruntime.Prompt) {
 	for _, group := range ps {
 		for _, p := range group {
-			if p.Mode == "" {
+			t, ok := r.toldBy[p.Mode]
+			if !ok {
 				continue
 			}
-			r.told = ""
-			if from, ok := r.dirsFrom[p.Mode]; ok {
-				r.dirsTold = min(r.dirsTold, from)
+			if t.line {
+				r.told = ""
 			}
+			r.dirsLeft = append(r.dirsLeft, t.dirs...)
 		}
 	}
 }

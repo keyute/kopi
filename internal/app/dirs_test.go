@@ -55,7 +55,9 @@ func dirConfig(t *testing.T, sb pigruntimetest.Sandbox, cfg Config) (Config, *to
 	rules, err := policy.NewRules(sb.Workspace, sb.Home, specs, policy.Source{Name: "test", Deny: []string{"Read(.env)"}})
 	require.NoError(t, err)
 	cfg.Files, cfg.Rules, cfg.Tools = ws, rules, append(cfg.Tools, read)
-	cfg.TrustFile, cfg.UserHome = filepath.Join(sb.KopiHome, "trust.json"), sb.Home
+	home, err := trust.Canonical(sb.Home)
+	require.NoError(t, err)
+	cfg.TrustFile, cfg.UserHome = filepath.Join(sb.KopiHome, "trust.json"), home
 	cfg.Plans = tool.NewPlans(filepath.Join(sb.Home, "plans"))
 	gate := policy.NewGate(policy.NewAuthority(), specs, rules, answer(policy.Allow, ""), nil)
 	return cfg, ws, gate
@@ -648,4 +650,18 @@ func TestDirCandidates(t *testing.T) {
 	require.Len(t, many, maxDirCandidates)
 	assert.Equal(t, "../many/", many[0])
 	assert.Equal(t, "../many/d48/", many[maxDirCandidates-1])
+}
+
+func TestDirCandidatesPutTheExactNameFirst(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	root := filepath.Dir(d.sb.Workspace)
+	for _, name := range []string{"PIGGY", "pig"} {
+		require.NoError(t, os.Mkdir(filepath.Join(root, name), 0o700))
+	}
+
+	cs, err := d.c.Arguments("add-dir", "../pig")
+
+	require.NoError(t, err)
+	require.Len(t, cs, 2)
+	assert.Equal(t, "../pig/", cs[0].Value)
 }

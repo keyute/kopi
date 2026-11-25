@@ -99,7 +99,7 @@ On macOS and Linux, `Bash` runs inside an OS sandbox when it is available (unles
 - Only the `.mcp.json` of the start directory and of added directories is protected by name: a command can create or change a `.mcp.json` in any other directory.
 - A denied directory reads as empty in the sandbox, and opening a denied file fails with "Permission denied".
 - Sandboxed commands refuse policies whose deny-write self-bind would overlap `/proc` or `/dev`, including an ancestor or descendant, to preserve the private process and device mounts.
-  - This includes plan mode when the start directory is `/`, and adding `/` with `/add-dir`.
+  - This includes plan mode when the start directory is `/`; `/add-dir /` fails with `failed to add /`, because the policy is applied as the directory is added, and the directory is not added.
   - Read-deny masks over those mounts remain supported.
   - A refused command does not run unsandboxed.
 - While sandboxed commands run, a program outside the sandbox that removes a protected path or replaces it by renaming over it, such as an editor's save, lifts the protection on that path for those commands.

@@ -703,6 +703,19 @@ func TestGrepSearchesAnAddedDirectoryWithAbsoluteResults(t *testing.T) {
 	assert.Equal(t, "Found 1 match in 1 file\nstart.txt:1\n", out)
 }
 
+func TestGrepOmitsHiddenInAnAddedDirectory(t *testing.T) {
+	ws := newWorkspace(t, t.TempDir(), nil)
+	other := t.TempDir()
+	writeFile(t, filepath.Join(other, "a.txt"), "needle\n")
+	writeFile(t, filepath.Join(other, "secret.txt"), "needle\n")
+	require.NoError(t, ws.Add(other, realPath(t, other)))
+	hidden, _ := recordHidden(func(t policy.Target) bool { return filepath.Base(t.Real) == "secret.txt" })
+
+	out, err := runGrep(t, NewGrep(ws, hidden), fmt.Sprintf(`{"pattern":"needle","path":%q}`, other))
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 file\n"+filepath.Join(realPath(t, other), "a.txt")+"\n", out)
+}
+
 func TestGrepNamesASavedOutputFileAsGivenInAnAddedDirectory(t *testing.T) {
 	saved, outputs := newSavedOutputs(t)
 	writeFile(t, filepath.Join(outputs, "o.txt"), "needle\n")

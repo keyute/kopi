@@ -46,8 +46,8 @@ type Config struct {
 	// Mode is the controller's initial mode, which the first session starts
 	// in, and the mode every later session starts in.
 	Mode policy.Mode
-	// Files lists the entries that @ references complete to; nil offers none. It
-	// is also the workspace /add-dir adds to.
+	// Files lists the entries that @ references complete to, and is the workspace
+	// /add-dir adds to and completes in, so /add-dir needs it.
 	Files *tool.Workspace
 	// SandboxDirs sets the directories added to the workspace as the sandbox's
 	// write roots; nil when there is no sandbox.
@@ -424,6 +424,23 @@ func (c *Controller) connectingNow() []string {
 	return c.connecting
 }
 
+// emitOrQueue emits evs when a session is open and no switch is pending, and
+// otherwise queues them for the next open that succeeds, since a pending
+// switch's SessionChanged wipes what is emitted now. It must be called with life
+// held.
+func (c *Controller) emitOrQueue(evs []event.Event) {
+	c.mu.Lock()
+	open := c.main.sess != nil && c.switching == nil
+	c.mu.Unlock()
+	if !open {
+		c.startup = append(c.startup, evs...)
+		return
+	}
+	for _, ev := range evs {
+		c.relay.emit(ev)
+	}
+}
+
 // serverSettled gives the tools of st's server to the sessions opened from now
 // on and to the open main session at once, and the servers part to the open
 // main session once the last server has settled. A subagent or workflow agent
@@ -434,7 +451,6 @@ func (c *Controller) serverSettled(st pigruntime.ServerStatus) {
 	closed := c.isClosed()
 	c.mu.Lock()
 	sess := c.main.sess
-	switching := c.switching != nil
 	c.mu.Unlock()
 	// The session has the tools before ToolSearch can find them.
 	if !closed && sess != nil && st.Err == nil {
@@ -467,15 +483,7 @@ func (c *Controller) serverSettled(st pigruntime.ServerStatus) {
 		}
 		sess.SetPromptPart(part)
 	}
-	if sess == nil || switching {
-		// A pending switch's SessionChanged wipes what is emitted now; the
-		// next open that succeeds reports it.
-		c.startup = append(c.startup, events...)
-	} else {
-		for _, ev := range events {
-			c.relay.emit(ev)
-		}
-	}
+	c.emitOrQueue(events)
 	if last {
 		c.showActivity()
 	}
@@ -876,8 +884,7 @@ func (c *Controller) Commands() []Command {
 	out := make([]Command, 0, len(cmds))
 	for _, cmd := range cmds {
 		cm := cmd.Command
-		cm.Argument = cmd.args != nil || cmd.complete != nil
-		cm.Typed = cmd.complete != nil
+		cm.Argument = cmd.args != nil
 		out = append(out, cm)
 	}
 	for _, sk := range c.skills.Skills() {
@@ -1387,7 +1394,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		stopCommand = c.main.clearQueueLocked()
 	}
 	c.main.sess, c.sessID, c.main.emit, c.main.bound, c.main.unsubscribe = sess, id, emit, bound, unsubscribe
-	c.main.told, c.main.dirsTold = "", 0
+	c.main.told, c.main.dirsTold, c.main.dirsLeft = "", 0, nil
 	c.titled = sess.Name() != ""
 	c.spent = pigruntime.Usage{}
 	c.deferred = nil

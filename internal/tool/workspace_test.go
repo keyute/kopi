@@ -1232,6 +1232,23 @@ func TestAddRefusesARealPathOfAnotherDirectory(t *testing.T) {
 	assert.Empty(t, ws.more.dirs)
 }
 
+func TestAddRefusesARealPathReplacedBySymlink(t *testing.T) {
+	parent := t.TempDir()
+	a, b := filepath.Join(parent, "a"), filepath.Join(parent, "b")
+	require.NoError(t, os.Mkdir(a, 0o755))
+	writeFile(t, filepath.Join(b, "secret.txt"), "secret")
+	canonical := realPath(t, a)
+	require.NoError(t, os.Remove(a))
+	require.NoError(t, os.Symlink(b, a))
+	ws := newWorkspace(t, t.TempDir(), nil)
+
+	require.Error(t, ws.Add(a, canonical))
+	assert.Empty(t, ws.more.dirs)
+	path := filepath.Join(canonical, "secret.txt")
+	_, err := ws.Open(path)
+	assert.ErrorIs(t, err, ErrOutsideWorkspace)
+}
+
 func TestAddedDirectoryIsReachedThroughBothCaseSpellings(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("only darwin respells names as on disk")

@@ -75,11 +75,22 @@ type runner struct {
 	// "" when none was, or when one was not delivered. Only the main session's
 	// is used.
 	told string
-	// dirsTold is how many of the added directories the session has been told.
-	// dirsFrom maps the Mode of each prompt that told any to what dirsTold was
-	// before it, which a prompt that was not delivered puts back.
+	// dirsTold is how many of the added directories the session has been told,
+	// except dirsLeft, the ranges of them that a prompt carried and was not
+	// delivered. toldBy maps the Mode of each prompt that told anything to what it
+	// told, which untell takes back.
 	dirsTold int
-	dirsFrom map[string]int
+	dirsLeft []span
+	toldBy   map[string]delivery
+}
+
+// span is the added directories from..to.
+type span struct{ from, to int }
+
+// delivery is what one prompt's Mode carried.
+type delivery struct {
+	line bool
+	dirs []span
 }
 
 // entry is one item of runner.queued: a prompt, or a command when cmd is set.

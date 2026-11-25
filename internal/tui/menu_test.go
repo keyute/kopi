@@ -383,16 +383,30 @@ func TestTypedArgumentMenu(t *testing.T) {
 
 		settle(m, cmd)
 		assert.Equal(t, "add-dir ../pig/", c.asks[len(c.asks)-1])
-		assert.Equal(t, []string{"  ../pig/", "  ../pig/docs/", "  ../pig/internal/"}, menuText(m), "the typed directory is first and runs as typed")
+		assert.Equal(t, []string{"❭ ../pig/", "  ../pig/docs/", "  ../pig/internal/"}, menuText(m), "the Tab pressed while pending lights the typed directory")
 		assert.Zero(t, m.menu.sel)
-		assert.False(t, m.menu.picked)
+		assert.True(t, m.menu.picked, "the Tab pressed while pending is kept")
 
-		press(m, down)
 		press(m, down)
 		settle(m, press(m, enter))
 		assert.Equal(t, "/add-dir ../pig/docs/", m.composer.value(), "enter on a step fills it in")
 		assert.Empty(t, c.submitted)
 		assert.Equal(t, "add-dir ../pig/docs/", c.asks[len(c.asks)-1])
+	})
+}
+
+func TestTypedArgumentMenuKeepsKeysPressedWhilePending(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTypedMenuModel(t)
+		settle(m, keys(m, "/add-dir ../pig/"))
+		press(m, backspace)
+		cmd := keys(m, "/")
+		press(m, up)
+		press(m, tab)
+		settle(m, cmd)
+
+		assert.True(t, m.menu.picked)
+		assert.Equal(t, 2, m.menu.sel)
 	})
 }
 

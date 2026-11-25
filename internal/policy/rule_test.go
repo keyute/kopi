@@ -890,6 +890,26 @@ func TestSetDirsExtendsRelativeAndBareRulesOnly(t *testing.T) {
 	assert.Equal(t, effectDeny, eff)
 }
 
+func TestSetDirsAppliesRulesThroughASymlinkedSpelling(t *testing.T) {
+	d := newDirs(t)
+	real := filepath.Join(addedDir(t), "proj")
+	require.NoError(t, os.Mkdir(real, 0o755))
+	link := filepath.Join(addedDir(t), "link")
+	require.NoError(t, os.Symlink(real, link))
+	r := d.rules(t, Source{Name: "config", Allow: []string{"Edit(src/**)"}})
+
+	viaLink := &Target{Path: filepath.Join(link, "src/a.go"), Real: filepath.Join(real, "src/a.go")}
+	viaReal := at(filepath.Join(real, "src/a.go"))
+	r.SetDirs([]string{link})
+	for _, tg := range []*Target{viaLink, viaReal} {
+		eff, _, _ := r.decide("Edit", tg)
+		assert.Equal(t, effectAllow, eff, tg.Path)
+	}
+	r.SetDirs([]string{real})
+	eff, _, _ := r.decide("Edit", viaReal)
+	assert.Equal(t, effectAllow, eff)
+}
+
 func TestSetDirsKeepsExceptionsInAddedDirectory(t *testing.T) {
 	d := newDirs(t)
 	extra := addedDir(t)
@@ -938,17 +958,21 @@ func TestSetDirsGuardsAddedDirectoryMCPFile(t *testing.T) {
 	extra := addedDir(t)
 	require.NoError(t, os.WriteFile(filepath.Join(extra, "servers.json"), []byte("{}"), 0o600))
 	require.NoError(t, os.Symlink("servers.json", filepath.Join(extra, ".mcp.json")))
+	require.NoError(t, os.WriteFile(filepath.Join(d.ws, "ws.json"), []byte("{}"), 0o600))
+	require.NoError(t, os.Symlink("ws.json", filepath.Join(d.ws, ".mcp.json")))
 	r := d.rules(t, Source{Name: "config", Allow: []string{"*"}})
 	r.SetDirs([]string{extra})
 
 	for _, tool := range []string{"Edit", "Write"} {
+		eff, _, _ := r.decide(tool, at(Resolve(filepath.Join(d.ws, "ws.json"))))
+		assert.Equal(t, effectAsk, eff, tool+" workspace target")
 		for _, name := range []string{".mcp.json", "servers.json"} {
 			eff, text, src := r.decide(tool, at(filepath.Join(extra, name)))
 			assert.Equal(t, effectAsk, eff, tool+" "+name)
 			assert.Equal(t, tool+"("+ProjectMCPFile+")", text)
 			assert.Equal(t, "built-in", src)
 		}
-		eff, _, _ := r.decide(tool, at(filepath.Join(extra, "other.json")))
+		eff, _, _ = r.decide(tool, at(filepath.Join(extra, "other.json")))
 		assert.Equal(t, effectAllow, eff)
 	}
 

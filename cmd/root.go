@@ -481,7 +481,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// Only the fullscreen interface has a human to answer approvals.
 	cfg := app.Config{
 		Model: resolved.Config.Model, SmallModel: resolved.Config.SmallModel, ConfigFile: paths.ConfigFile, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
-		SandboxDirs: setDirs, TrustFile: paths.TrustFile, UserHome: userHome, InstructionFallbacks: resolved.Config.InstructionFallbacks,
+		SandboxDirs: setDirs, TrustFile: paths.TrustFile, UserHome: canonicalHome, InstructionFallbacks: resolved.Config.InstructionFallbacks,
 		Covers: func(dir string) ([]string, []string) { return covers(dir, canonicalHome) },
 		Errors: slices.Concat(set.errs, instructionErrs, skillErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review, Outputs: outputs,
 		Skills: skills, SkillPrefix: resolved.Config.Skills.Prefix,
@@ -528,7 +528,15 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	}
 	// After the frontend subscribes, so a trust question reaches it, and before
 	// the first session opens, so its first prompt carries the directories.
+	added := map[string]bool{}
 	for _, dir := range addDirs {
+		// A folder named twice, or through a symlink, joins once, and asks once.
+		if canonical, err := trust.Canonical(dir); err == nil {
+			if added[canonical] {
+				continue
+			}
+			added[canonical] = true
+		}
 		if err := c.AddDir(dir); err != nil {
 			return fmt.Errorf("failed to use --add-dir: %w", err)
 		}

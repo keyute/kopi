@@ -2898,6 +2898,23 @@ func TestRootPrintAddDirInstructionFilesFollowTheTrustDecision(t *testing.T) {
 	}
 }
 
+func TestRootAddDirAddsEachFolderOnce(t *testing.T) {
+	e := newTestEnv(t)
+	one, two := filepath.Join(e.root, "one"), filepath.Join(e.root, "two")
+	require.NoError(t, os.MkdirAll(one, 0o755))
+	require.NoError(t, os.MkdirAll(two, 0o755))
+	alias := filepath.Join(e.root, "alias")
+	require.NoError(t, os.Symlink(one, alias))
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeMockModels(t, server.URL)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi", "--add-dir", one, "--add-dir", two, "--add-dir", alias, "--add-dir", one)
+
+	require.NoError(t, err)
+	messages := fmt.Sprint(server.next(t).body["messages"])
+	assert.Contains(t, messages, "The workspace also includes "+canonical(t, one)+", "+canonical(t, two)+".")
+}
+
 func TestRootAddDirFailsTheStartBeforeAnySessionOpens(t *testing.T) {
 	e := newTestEnv(t)
 	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
