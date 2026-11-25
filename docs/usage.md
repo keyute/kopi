@@ -146,7 +146,7 @@ Each tool call is a row. It names the call by the tool while it runs, while it w
   ↳ 50 lines
 ```
 
-- A row's bullet is at the left edge and its title two columns in. The `↳` line starts two columns in, with its text four in, and an opened body is six columns in. A call in a group is a `↳` line two columns in, and its opened body is eight columns in. Wrapped lines hang under their text.
+- A row's bullet is at the left edge and its title two columns in. The `↳` line starts two columns in, with its text four in. An opened body is two columns past the text of the line above it: six in under a `↳` line, four in under a title alone. A call in a group is a `↳` line, and its opened body is six in. Wrapped lines hang under their text.
 
 ```text
 • Ran ls
@@ -155,13 +155,13 @@ Each tool call is a row. It names the call by the tool while it runs, while it w
       b.go
 ▾ Read 1 file, ran 1 command
   ↳ Read a.go:98-101 · 4 lines
-         98  func a() {
-         99      b()
-        100  }
-        101
+       98  func a() {
+       99      b()
+      100  }
+      101
   ↳ Ran ls · 2 lines
-        a.go
-        b.go
+      a.go
+      b.go
 • Edited a.go
   ↳ +1 -1
       - old line

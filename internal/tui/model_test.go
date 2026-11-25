@@ -411,14 +411,25 @@ func TestFailedTurnShowsItsReason(t *testing.T) {
 		ev   event.TurnEnd
 		want []string
 	}{
-		{"live", event.TurnEnd{Outcome: failed("401: token expired\nlog in again"), Elapsed: 2 * time.Second}, []string{"", "κ Failed after 2s", "  401: token expired", "  log in again"}},
-		{"restored", event.TurnEnd{Outcome: failed("rate limited")}, []string{"", "κ Failed", "  rate limited"}},
+		{"live", event.TurnEnd{Outcome: failed("401: token expired\nlog in again"), Elapsed: 2 * time.Second}, []string{"", "κ Failed after 2s", "    401: token expired", "    log in again"}},
+		{"restored", event.TurnEnd{Outcome: failed("rate limited")}, []string{"", "κ Failed", "    rate limited"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _ := newTestModel(t, 40, 30)
 			send(m, tc.ev)
 			assert.Equal(t, tc.want, body(m))
 		})
+	}
+}
+
+func TestFailedTurnWrapsItsReasonFourIn(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	send(m, event.TurnEnd{Outcome: event.Outcome{Status: event.Failed, Message: strings.Repeat("rate limited ", 6)}})
+	rows := body(m)
+	require.Greater(t, len(rows), 3)
+	for _, l := range rows[2:] {
+		assert.True(t, strings.HasPrefix(l, "    ") && !strings.HasPrefix(l, "     "), "%q is four in", l)
+		assert.LessOrEqual(t, ansi.StringWidth(l), 40, "%q fits the width", l)
 	}
 }
 
@@ -624,7 +635,7 @@ func TestSessionChangedRestoresHistory(t *testing.T) {
 		"", "", "❯ earlier", "",
 		"", "▸ Read 2 files",
 		"", "reply",
-		"", "• c.go", "      nope",
+		"", "• c.go", "    nope",
 		"", "κ Worked for 5s",
 		"", "• Read 2 files", "  ↳ d.go · 2 lines", "  ↳ e.go · 4 lines",
 	}, body(m))
