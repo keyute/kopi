@@ -733,10 +733,7 @@ func decideTrust(store *trust.Store, cwd, userHome string, project map[string]co
 	if err != nil {
 		return 0, err
 	}
-	broad, err := trust.Broad(cwd, userHome)
-	if err != nil {
-		return 0, err
-	}
+	broad := trust.Broad(cwd, userHome)
 	req := tui.TrustRequest{Folder: cwd, Instructions: instructions, Skills: skills}
 	if parent := filepath.Dir(cwd); !broad && parent != filepath.Dir(parent) && parent != userHome {
 		req.Parent = parent
@@ -768,10 +765,18 @@ func decideTrust(store *trust.Store, cwd, userHome string, project map[string]co
 	return d, nil
 }
 
-// serverLines lists project's servers by name as the trust question shows them.
+// serverLines lists project's servers and the invalid ones by name as the trust
+// question shows them.
 func serverLines(project map[string]config.MCPServer, invalid map[string]error) []string {
+	names := map[string]bool{}
+	for name := range project {
+		names[name] = true
+	}
+	for name := range invalid {
+		names[name] = true
+	}
 	var lines []string
-	for _, name := range slices.Sorted(maps.Keys(project)) {
+	for _, name := range slices.Sorted(maps.Keys(names)) {
 		target := serverTarget(project[name])
 		if invalid[name] != nil {
 			target = "invalid, will not start"
@@ -787,9 +792,6 @@ func serverLines(project map[string]config.MCPServer, invalid map[string]error) 
 func covers(dir, canonicalHome string) (servers, skills []string) {
 	project, invalid, err := config.ProjectServers(filepath.Join(dir, policy.ProjectMCPFile))
 	if err == nil {
-		for name := range invalid {
-			project[name] = config.MCPServer{}
-		}
 		servers = serverLines(project, invalid)
 	}
 	return servers, skill.Find(dir, filepath.Join(canonicalHome, ".agents", "skills"))

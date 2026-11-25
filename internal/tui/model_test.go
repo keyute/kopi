@@ -68,8 +68,10 @@ type fakeController struct {
 	// logs every Arguments call as "<name> <typed>".
 	typedArgs map[string]func(typed string) []app.Candidate
 	asks      []string
-	files     []app.Candidate
-	filesErr  error
+	// typedErr is what a Typed command's Arguments fails with.
+	typedErr error
+	files    []app.Candidate
+	filesErr error
 	// foreground is what Background returns; backgrounds counts the calls.
 	foreground  bool
 	backgrounds int
@@ -220,7 +222,7 @@ func (f *fakeController) Spans(session, text string) []app.Span {
 func (f *fakeController) Arguments(name, typed string) ([]app.Candidate, error) {
 	f.asks = append(f.asks, name+" "+typed)
 	if g := f.typedArgs[name]; g != nil {
-		return g(typed), nil
+		return g(typed), f.typedErr
 	}
 	return f.args[name], nil
 }

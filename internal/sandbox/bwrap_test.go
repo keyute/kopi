@@ -1158,18 +1158,16 @@ func TestSetPolicyBwrapPlanProfile(t *testing.T) {
 	assert.Empty(t, made)
 }
 
-func TestSetPolicyBwrapCheckHelper(t *testing.T) {
+func TestSetPolicyBwrapPlanProfileRefusesRootAsAWriteRoot(t *testing.T) {
 	base := resolvedTemp(t)
-	secret := filepath.Join(base, "secret")
-	mkdirs(t, secret)
-	proxy, err := NewProxy([]string{"example.com"}, nil, []string{filepath.Join(secret, "kopi")})
-	require.NoError(t, err)
-	old := &bwrap{policy: Policy{Proxy: proxy}}
-	s := &Sandbox{bwrap: old, proxy: proxy}
+	root := filepath.Join(base, "root")
+	mkdirs(t, root)
+	old := &bwrap{policy: Policy{Write: []string{root}, DenyWrite: []string{root}}}
+	s := &Sandbox{bwrap: old}
 
-	err = s.SetPolicy(Policy{DenyRead: []string{secret}})
+	err := s.SetPolicy(Policy{Write: []string{root, "/"}, DenyWrite: []string{root, "/"}})
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), secret)
+	assert.Contains(t, err.Error(), "overlaps /proc")
 	assert.Same(t, old, s.bwrap)
 }

@@ -1284,3 +1284,24 @@ func TestWorkflowAgentIsToldAllTheAddedDirectoriesWithItsPrompt(t *testing.T) {
 
 	assert.Contains(t, req.raw, inJSON(t, told(sb.Workspace, first, second)))
 }
+
+func TestWorkflowAgentWithoutInstructionsIsToldTheAddedDirectoryButNotItsFiles(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	cfg, _, _ := dirConfig(t, sb, Config{})
+	def := agentDef("explorer")
+	def.Instructions = false
+	a := newWorkflowHarness(t, sb, cfg, def)
+	dir := otherDir(t)
+	decide(t, a.c, dir, trust.Trusted)
+	require.NoError(t, a.c.AddDir(dir))
+	requests := make(chan childRequest, 1)
+	a.child.SetResponses([]ai.FauxResponseStep{captureChild(requests, nil, "done")})
+	a.rootAcks(1)
+
+	id := a.startWorkflow(t, "audit", `return await agent("look around", {agentType: "explorer"})`)
+	req := receiveChild(t, requests)
+	a.untilStatus(t, id, tool.TaskCompleted)
+
+	assert.Contains(t, req.raw, inJSON(t, "The workspace also includes "+dir+"."))
+	assert.NotContains(t, req.raw, "use tabs")
+}

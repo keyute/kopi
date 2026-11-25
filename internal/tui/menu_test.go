@@ -445,6 +445,19 @@ func TestTypedArgumentMenuEnterRunsADirectoryTypedWithoutItsSlash(t *testing.T) 
 	})
 }
 
+func TestTypedArgumentMenuShowsNothingWhenTheLoadFails(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTypedMenuModel(t)
+		c.typedErr = errors.New("boom")
+		settle(m, keys(m, "/add-dir ../pig"))
+		assert.Zero(t, m.menuHeight())
+		assert.False(t, m.menu.pending)
+
+		press(m, enter)
+		assert.Equal(t, []string{"/add-dir ../pig"}, c.submitted)
+	})
+}
+
 func TestListArgumentIsLoadedOnce(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, c := newTypedMenuModel(t)

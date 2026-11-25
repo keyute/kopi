@@ -104,7 +104,7 @@ func (c *Controller) recall() string {
 	c.queue.Lock()
 	told := c.main.dirsTold
 	c.queue.Unlock()
-	if text := c.dirsText(0, told); text != "" {
+	if text := c.dirsText(0, told, true); text != "" {
 		line += "\n" + text
 	}
 	return line
@@ -144,7 +144,7 @@ func (r *runner) tell(ps []pigruntime.Prompt) []pigruntime.Prompt {
 	}
 	from := -1
 	if n := r.c.dirCount(); n > r.dirsTold {
-		lines = append(lines, r.c.dirsText(r.dirsTold, n))
+		lines = append(lines, r.c.dirsText(r.dirsTold, n, !r.noFiles))
 		from, r.dirsTold = r.dirsTold, n
 	}
 	mode := strings.Join(lines, "\n")

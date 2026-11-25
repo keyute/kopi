@@ -51,38 +51,24 @@ func (c *Controller) AddDir(arg string) error {
 	if closed {
 		return ErrNoSession
 	}
-	typed := c.typedDir(arg)
-	if err := c.cfg.Files.CanAdd(typed); err != nil {
-		return fmt.Errorf("failed to add %s: %w", arg, err)
-	}
-	dir, err := trust.Canonical(typed)
+	p, decision, decided, err := c.prepareDir(arg)
 	if err != nil {
 		return fmt.Errorf("failed to add %s: %w", arg, err)
 	}
-	store, err := trust.Open(c.cfg.TrustFile)
-	if err != nil {
-		return fmt.Errorf("failed to add %s: %w", arg, err)
-	}
-	decision, decided, err := store.Lookup(dir)
-	if err != nil {
-		return fmt.Errorf("failed to add %s: %w", arg, err)
-	}
-	p := &pendingDir{arg: arg, typed: typed, dir: dir, files: c.newInstructionFiles(dir)}
 	if decided || c.cfg.Unattended {
 		return c.applyDir(p, decided && decision == trust.Trusted)
 	}
-	broad, err := trust.Broad(dir, c.cfg.UserHome)
-	if err != nil {
-		return fmt.Errorf("failed to add %s: %w", arg, err)
-	}
-	p.saved = !broad
-	req := event.DirRequested{Dir: dir, Saved: p.saved}
+	req := event.DirRequested{Dir: p.dir, Saved: p.saved}
 	for _, f := range p.files {
 		req.Instructions = append(req.Instructions, f.Path)
 	}
 	if c.cfg.Covers != nil {
-		req.Servers, req.Skills = c.cfg.Covers(dir)
+		req.Servers, req.Skills = c.cfg.Covers(p.dir)
 	}
+	// The registration and its event stay ordered against the end of the
+	// request, or a dialog could open after its DirEnded.
+	c.dirEventsMu.Lock()
+	defer c.dirEventsMu.Unlock()
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -99,20 +85,56 @@ func (c *Controller) AddDir(arg string) error {
 	return nil
 }
 
+// prepareDir checks that arg can join the workspace and looks up the trust
+// decision for it.
+func (c *Controller) prepareDir(arg string) (p *pendingDir, decision trust.Decision, decided bool, err error) {
+	typed := c.typedDir(arg)
+	if err := c.cfg.Files.CanAdd(typed); err != nil {
+		return nil, 0, false, err
+	}
+	dir, err := trust.Canonical(typed)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	store, err := trust.Open(c.cfg.TrustFile)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	decision, decided, err = store.Lookup(dir)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	home, err := trust.Canonical(c.cfg.UserHome)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	p = &pendingDir{arg: arg, typed: typed, dir: dir, files: c.newInstructionFiles(dir), saved: !trust.Broad(dir, home)}
+	return p, decision, decided, nil
+}
+
 // AnswerDir resolves the add pending for token and reports whether one was
 // pending. With add set it adds the directory, with its instruction files when
 // trusted; the decision is saved first, except for a directory whose answer
 // holds for this run only.
 func (c *Controller) AnswerDir(token uint64, add, trusted bool) bool {
+	c.dirEventsMu.Lock()
 	c.mu.Lock()
 	p := c.dirRequests[token]
 	delete(c.dirRequests, token)
 	c.mu.Unlock()
+	if p != nil {
+		c.relay.emit(event.DirEnded{Token: token})
+	}
+	c.dirEventsMu.Unlock()
 	if p == nil {
 		return false
 	}
-	c.relay.emit(event.DirEnded{Token: token})
 	if !add {
+		return true
+	}
+	// Another pending add of the folder may have been answered first.
+	if err := c.cfg.Files.CanAdd(p.typed); err != nil {
+		c.report(event.Error{Err: fmt.Errorf("failed to add %s: %w", p.arg, err)})
 		return true
 	}
 	if p.saved {
@@ -137,6 +159,8 @@ func (c *Controller) AnswerDir(token uint64, add, trusted bool) bool {
 
 // endDirRequests ends every add still waiting, as the Controller closes.
 func (c *Controller) endDirRequests() {
+	c.dirEventsMu.Lock()
+	defer c.dirEventsMu.Unlock()
 	c.mu.Lock()
 	tokens := slices.Sorted(maps.Keys(c.dirRequests))
 	c.dirRequests = nil
@@ -182,20 +206,19 @@ func (c *Controller) reach(p *pendingDir, files []instruction.File) error {
 	}
 	c.mu.Unlock()
 	next := append(slices.Clone(prev), p.dir)
-	c.cfg.Rules.SetDirs(next)
-	var err error
-	if c.cfg.SandboxDirs != nil {
-		err = c.cfg.SandboxDirs(next)
+	setSandbox := c.cfg.SandboxDirs
+	if setSandbox == nil {
+		setSandbox = func([]string) error { return nil }
 	}
+	c.cfg.Rules.SetDirs(next)
+	err := setSandbox(next)
 	if err == nil {
 		err = c.cfg.Files.Add(p.typed, p.dir)
 	}
 	if err != nil {
 		c.cfg.Rules.SetDirs(prev)
-		if c.cfg.SandboxDirs != nil {
-			if restoreErr := c.cfg.SandboxDirs(prev); restoreErr != nil {
-				err = errors.Join(err, fmt.Errorf("failed to restore the sandbox directories: %w", restoreErr))
-			}
+		if restoreErr := setSandbox(prev); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("failed to restore the sandbox directories: %w", restoreErr))
 		}
 		return err
 	}
@@ -316,8 +339,8 @@ func (c *Controller) dirCount() int {
 
 // dirsText is what the model is told of the added directories from..to, "" for
 // none: the directories and, for those added with their instruction files, the
-// files.
-func (c *Controller) dirsText(from, to int) string {
+// files, unless files is false.
+func (c *Controller) dirsText(from, to int, files bool) string {
 	c.mu.Lock()
 	dirs := c.dirs
 	c.mu.Unlock()
@@ -327,8 +350,10 @@ func (c *Controller) dirsText(from, to int) string {
 	var paths, blocks []string
 	for _, d := range dirs[from:to] {
 		paths = append(paths, d.path)
-		for _, f := range d.files {
-			blocks = append(blocks, instructionText(f))
+		if files {
+			for _, f := range d.files {
+				blocks = append(blocks, instructionText(f))
+			}
 		}
 	}
 	text := "The workspace also includes " + strings.Join(paths, ", ") + ". Give a path there as an absolute path; relative paths and Bash still start from " + c.cfg.Workspace + "."
@@ -351,10 +376,10 @@ func (c *Controller) dirCandidates(typed string) ([]Candidate, error) {
 		head, last = typed[:i+1], typed[i+1:]
 	}
 	var out []Candidate
-	if last == "" && strings.HasSuffix(typed, "/") && c.cfg.Files.CanAdd(c.typedDir(head)) == nil {
+	dir := c.typedDir(head)
+	if last == "" && strings.HasSuffix(typed, "/") && c.cfg.Files.CanAdd(dir) == nil {
 		out = append(out, Candidate{Value: typed})
 	}
-	dir := c.typedDir(head)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		// The human is still typing a path that may not exist yet.

@@ -1229,7 +1229,6 @@ func TestAddRefusesARealPathOfAnotherDirectory(t *testing.T) {
 	given, other := t.TempDir(), t.TempDir()
 
 	require.Error(t, ws.Add(given, realPath(t, other)))
-	require.Error(t, ws.Add(given, "relative"))
 	assert.Empty(t, ws.more.dirs)
 }
 
@@ -1307,4 +1306,19 @@ func TestAddedDirectoryViewKeepsPlanAndOutputFiles(t *testing.T) {
 	assert.Same(t, view.outputs, ws.outputs)
 	assert.True(t, view.isPlan(plan))
 	assert.True(t, view.isOutput(filepath.Join(outputs, "o.txt")))
+}
+
+func TestInSkipsAViewWhoseMatchClimbsOut(t *testing.T) {
+	parent := realPath(t, t.TempDir())
+	start := filepath.Join(parent, "s")
+	require.NoError(t, os.Mkdir(start, 0o755))
+	writeFile(t, filepath.Join(parent, "other", "f"), "hello")
+	ws := newWorkspace(t, start, nil)
+	require.NoError(t, ws.Add(parent, parent))
+	path := filepath.Join(start, "..", "other", "f")
+
+	view := ws.in(path)
+
+	assert.True(t, view.extra)
+	assert.Equal(t, "hello", readAll(t, view, path))
 }

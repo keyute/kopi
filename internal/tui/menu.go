@@ -88,8 +88,10 @@ func (m *model) followMenu() tea.Cmd {
 				mn.items = append(mn.items, app.Candidate{Value: cm.Name, Description: cm.Summary})
 			}
 		case app.KindArgument:
-			mn.optional = slices.ContainsFunc(c.Commands(), func(cm app.Command) bool { return cm.Name == q.Command && cm.Optional })
-			mn.typed = slices.ContainsFunc(c.Commands(), func(cm app.Command) bool { return cm.Name == q.Command && cm.Typed })
+			cms := c.Commands()
+			if i := slices.IndexFunc(cms, func(cm app.Command) bool { return cm.Name == q.Command }); i >= 0 {
+				mn.optional, mn.typed = cms[i].Optional, cms[i].Typed
+			}
 			cmd = m.ask()
 		case app.KindReference:
 			cmd = func() tea.Msg {

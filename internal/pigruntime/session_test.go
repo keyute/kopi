@@ -744,7 +744,7 @@ func TestSendUndeliversEntriesAfterNoticeFails(t *testing.T) {
 	}
 
 	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
-	_ = err
+	assert.NoError(t, err)
 	assert.Equal(t, []Prompt{{Text: "x"}}, res.Undelivered)
 	assert.Equal(t, []Notice{failing, last}, res.UndeliveredNotices)
 	assert.Empty(t, drain(evs))
@@ -1123,7 +1123,7 @@ func TestSendNamesTheHandedOverPromptsWhoseModeLineFailed(t *testing.T) {
 	}
 
 	res, err := sess.Send(t.Context(), Prompt{Text: "prompt"}, nil, more)
-	_ = err
+	assert.NoError(t, err)
 	assert.Equal(t, []Prompt{{Text: "b", Mode: "M2"}}, res.ModeUndelivered)
 }
 

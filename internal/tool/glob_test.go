@@ -248,3 +248,15 @@ func TestGlobSearchesAnAddedDirectoryWithAbsoluteResults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Found 1 file\nstart.go", out)
 }
+
+func TestGlobLeavesKopiHomeOutOfAnAddedDirectory(t *testing.T) {
+	home, kopiHome := syntheticHome(t)
+	writeFile(t, filepath.Join(home, "a.json"), "")
+	ws := newWorkspace(t, t.TempDir(), protectedStores(home, kopiHome))
+	require.NoError(t, ws.Add(home, realPath(t, home)))
+
+	out, err := runGlob(t, NewGlob(ws, nil), fmt.Sprintf(`{"pattern":"**/*.json","path":%q}`, home))
+
+	require.NoError(t, err)
+	assert.Equal(t, "Found 1 file\n"+filepath.Join(realPath(t, home), "a.json"), out)
+}

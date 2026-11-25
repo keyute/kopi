@@ -273,7 +273,7 @@ func (r *workflowRun) call(ctx context.Context, raw json.RawMessage) (result jso
 		head += " › " + label
 		name += " " + label
 	}
-	agent := &runner{c: c, name: name, id: r.task.ID(), d: newDisplay(tools), model: c.workflowModel(spec), bound: r.bound, emit: r.bound}
+	agent := &runner{c: c, name: name, id: r.task.ID(), d: newDisplay(tools), model: c.workflowModel(spec), noFiles: spec.noFiles, bound: r.bound, emit: r.bound}
 	if err := c.openChild(callCtx, spec, tools, r.parent, agent); err != nil {
 		return nil, fmt.Errorf("failed to start agent: %w", err)
 	}
@@ -329,7 +329,7 @@ func (r *workflowRun) send(ctx context.Context, run *runner, emit func(event.Eve
 	c.mu.Unlock()
 	emit(event.TurnStart{Prompt: prompt})
 	start := time.Now()
-	dirs := c.dirsText(0, c.dirCount())
+	dirs := c.dirsText(0, c.dirCount(), !run.noFiles)
 	res, err := run.sess.Send(sendCtx, pigruntime.Prompt{Text: prompt, FromAgent: true, Mode: dirs}, nil, nil)
 	if err != nil {
 		res.Outcome = event.Outcome{Status: event.Failed, Message: err.Error()}

@@ -159,9 +159,6 @@ func (w *Workspace) CanAdd(dir string) error {
 // canonical path (symlinks resolved, names as on disk), which is what results
 // name; either spelling reaches the directory.
 func (w *Workspace) Add(given, real string) error {
-	if !filepath.IsAbs(real) {
-		return fmt.Errorf("directory %q is not absolute", real)
-	}
 	w.more.mu.Lock()
 	defer w.more.mu.Unlock()
 	if err := w.canAdd(given); err != nil {
@@ -227,17 +224,19 @@ func (w *Workspace) canAdd(dir string) error {
 
 // in returns the view whose directory holds path: w for a relative path or one
 // in the start directory, else a copy of the first added directory that holds
-// it, else w, which refuses the path as outside the workspace. A view keeps the
-// plan and output files reachable.
+// it, else w, which refuses the path as outside the workspace. A path that
+// matches a directory's prefix but climbs out with ".." is not held by it, as
+// when a parent of the start directory is added. A view keeps the plan and
+// output files reachable.
 func (w *Workspace) in(path string) *Workspace {
-	if _, err := w.relative(path); err == nil {
+	if !filepath.IsAbs(path) || w.holds(path) {
 		return w
 	}
 	w.more.mu.Lock()
 	dirs := slices.Clone(w.more.dirs)
 	w.more.mu.Unlock()
 	for _, d := range dirs {
-		if _, err := d.relative(path); err == nil {
+		if d.holds(path) {
 			v := *d
 			v.plans, v.outputs, v.more, v.extra = w.plans, w.outputs, w.more, true
 			return &v
@@ -246,10 +245,18 @@ func (w *Workspace) in(path string) *Workspace {
 	return w
 }
 
+// holds reports whether the absolute path lies in w's directory without
+// leaving it by "..".
+func (w *Workspace) holds(path string) bool {
+	rel, err := w.relative(path)
+	return err == nil && filepath.IsLocal(rel)
+}
+
 // named is p, a slash-separated path below the workspace directory, as a result
-// names it: absolute in a view of an added directory.
+// names it: absolute in a view of an added directory. An absolute p, a saved
+// output file, is already so.
 func (w *Workspace) named(p string) string {
-	if !w.extra {
+	if !w.extra || filepath.IsAbs(p) {
 		return p
 	}
 	return filepath.Join(w.realDir, filepath.FromSlash(p))

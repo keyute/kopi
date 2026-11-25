@@ -223,7 +223,29 @@ func TestAddDirSendsAnInstructionFileSharedByTwoPendingAddsOnce(t *testing.T) {
 	assert.True(t, d.c.AnswerDir(first.Token, true, true))
 	assert.True(t, d.c.AnswerDir(second.Token, true, true))
 
-	assert.Equal(t, 1, strings.Count(d.c.dirsText(0, d.c.dirCount()), "SHARED_RULE"))
+	assert.Equal(t, 1, strings.Count(d.c.dirsText(0, d.c.dirCount(), true), "SHARED_RULE"))
+}
+
+func TestAnswerDirSavesNothingForAFolderAnotherAnswerAlreadyAdded(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	dir := otherDir(t)
+	requests, errs := subscribeTo[event.DirRequested](d.c), subscribeTo[event.Error](d.c)
+	require.NoError(t, d.c.AddDir(dir))
+	require.NoError(t, d.c.AddDir(dir))
+	first, second := receiveEvent(t, requests), receiveEvent(t, requests)
+	assert.True(t, d.c.AnswerDir(first.Token, true, true))
+	sandboxed := slices.Clone(d.sandboxed)
+
+	assert.True(t, d.c.AnswerDir(second.Token, true, false))
+
+	err := receiveEvent(t, errs).Err
+	assert.EqualError(t, err, "failed to add "+dir+": directory is already in the workspace")
+	assert.ErrorIs(t, err, tool.ErrInWorkspace)
+	got, ok := saved(t, d.c, dir)
+	assert.True(t, ok)
+	assert.Equal(t, trust.Trusted, got)
+	assert.Equal(t, sandboxed, d.sandboxed)
+	assert.Equal(t, 1, d.c.dirCount())
 }
 
 func TestAddDirAddsAtOnceWhenADecisionCoversIt(t *testing.T) {
@@ -282,7 +304,7 @@ func TestAddDirUnattendedAddsWithoutTrustAndSavesNothing(t *testing.T) {
 	assert.Empty(t, requests)
 	assert.Equal(t, event.Notice{Text: "Added " + dir + " to the workspace. Its instruction files were not loaded: the folder is not trusted."}, receiveEvent(t, notices))
 	assert.NoFileExists(t, d.c.cfg.TrustFile)
-	text := d.c.dirsText(0, d.c.dirCount())
+	text := d.c.dirsText(0, d.c.dirCount(), true)
 	assert.Equal(t, "The workspace also includes "+dir+". Give a path there as an absolute path; relative paths and Bash still start from "+d.sb.Workspace+".", text)
 }
 
@@ -326,7 +348,7 @@ func TestAddDirRollsBackWhenTheSandboxRefuses(t *testing.T) {
 	assert.Equal(t, [][]string{{dir}, {}}, d.sandboxed, "the previous list is put back")
 	assert.False(t, d.denied(t, filepath.Join(dir, ".env")), "the rules no longer reach it")
 	assert.NoError(t, d.ws.CanAdd(dir), "the directory is not in the workspace")
-	text := d.c.dirsText(0, d.c.dirCount())
+	text := d.c.dirsText(0, d.c.dirCount(), true)
 	assert.Empty(t, text)
 
 	require.NoError(t, d.c.AddDir(dir))
@@ -559,7 +581,7 @@ func TestAddDirNamesTheOnDiskSpelling(t *testing.T) {
 	require.NoError(t, d.c.AddDir(typed))
 
 	assert.Equal(t, event.Notice{Text: "Added " + dir + " to the workspace."}, receiveEvent(t, notices))
-	assert.Contains(t, d.c.dirsText(0, d.c.dirCount()), "includes "+dir+".")
+	assert.Contains(t, d.c.dirsText(0, d.c.dirCount(), true), "includes "+dir+".")
 	args, err := json.Marshal(map[string]string{"file_path": filepath.Join(dir, "f.txt")})
 	require.NoError(t, err)
 	require.NoError(t, d.gate.Before(t.Context(), "c1", "Read", args))

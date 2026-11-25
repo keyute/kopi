@@ -24,6 +24,9 @@ type runner struct {
 	d     *display
 	rec   *classifier.Record
 	model string
+	// noFiles is set when the agent is told of an added directory's paths but
+	// not its instruction files.
+	noFiles bool
 
 	// The fields below are guarded by Controller.mu. The main session's are
 	// replaced at each switch.

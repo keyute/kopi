@@ -218,3 +218,15 @@ func TestLSListsAnAddedDirectory(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "start.txt", out)
 }
+
+func TestLSLeavesKopiHomeOutOfAnAddedDirectory(t *testing.T) {
+	home, kopiHome := syntheticHome(t)
+	writeFile(t, filepath.Join(home, "a.txt"), "")
+	ws := newWorkspace(t, t.TempDir(), protectedStores(home, kopiHome))
+	require.NoError(t, ws.Add(home, realPath(t, home)))
+
+	out, err := runLS(t, NewLS(ws, nil), fmt.Sprintf(`{"path":%q}`, home))
+
+	require.NoError(t, err)
+	assert.Equal(t, ".env\na.txt", out)
+}

@@ -88,8 +88,8 @@ func NewRead(ws *Workspace) Tool {
 			if err := ctx.Err(); err != nil {
 				return Result{}, err
 			}
-			v := ws.in(args.FilePath)
-			dest, err := v.prepare(args.FilePath)
+			ws := ws.in(args.FilePath)
+			dest, err := ws.prepare(args.FilePath)
 			if err != nil {
 				return Result{}, err
 			}
@@ -99,7 +99,7 @@ func NewRead(ws *Workspace) Tool {
 				return Result{}, err
 			}
 			defer f.Close()
-			if err := v.checkRead(dest, f, args.FilePath); err != nil {
+			if err := ws.checkRead(dest, f, args.FilePath); err != nil {
 				return Result{}, err
 			}
 			if _, err := admit(dest.target); err != nil {

@@ -150,10 +150,7 @@ func untrustedLines(prefix, text string, st lipgloss.Style, width int) []string 
 func (m *trustModel) rows() []string {
 	if m.body == nil || m.bodyWidth != m.width || m.bodyTheme != m.th {
 		text, width := fg(m.th.text), m.width-2
-		lines := func(prefix, text string, st lipgloss.Style) []string {
-			return hang(prefix, st, oneLine(text), st, width)
-		}
-		m.body = lines("", m.req.Folder, text.Bold(true))
+		m.body = untrustedLines("", m.req.Folder, text.Bold(true), width)
 		list := func(head string, entries []string) {
 			if len(entries) == 0 {
 				return

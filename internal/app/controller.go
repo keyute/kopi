@@ -281,6 +281,9 @@ type Controller struct {
 	reports []event.Event
 	// dirsMu serialises applying an add and takes mu inside.
 	dirsMu sync.Mutex
+	// dirEventsMu orders a request's DirRequested before its DirEnded; it takes
+	// mu inside.
+	dirEventsMu sync.Mutex
 }
 
 // sessionSwitch retains work even after it deregisters while start waits for life.

@@ -165,7 +165,8 @@ func (s *Sandbox) Command(argv []string) (cmd *exec.Cmd, done func() []string, e
 }
 
 // SetPolicy makes p the policy of commands started from now on; a running one
-// keeps its own. The proxy stays the one the sandbox was made with. On an
+// keeps its own. The proxy stays the one the sandbox was made with, and p's
+// DenyRead must not hide its helper, as New checked for the first policy. On an
 // error the sandbox keeps its policy.
 func (s *Sandbox) SetPolicy(p Policy) error {
 	if err := checkAbsolute([]Policy{p}); err != nil {
@@ -177,9 +178,6 @@ func (s *Sandbox) SetPolicy(p Policy) error {
 	if s.bwrap == nil {
 		s.prefix = seatbeltPrefix(p)
 		return nil
-	}
-	if err := checkHelper([]Policy{p}); err != nil {
-		return err
 	}
 	// Only the argument building: placeholders are made by a command's start.
 	if _, _, err := bwrapArgs(p); err != nil {

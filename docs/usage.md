@@ -240,7 +240,7 @@ The bullet is green for a call that succeeded, yellow for one you or a rule refu
   - Hidden folders are listed once a `.` is typed.
   - A folder typed with its `/` is listed first, then the folders in it.
   - Accepting a folder from the menu fills it in and lists what is in it; it does not add it.
-  - Enter on a folder typed in full, with its `/`, adds it. Without the `/`, one Enter completes it and a second adds it.
+  - Enter on a folder typed in full, with or without its `/`, adds it. Tab on one typed without its `/` lights its row, and a second Tab fills the `/` in and lists what is in it.
   - A folder that cannot be added is not listed. At most 50 are listed.
 - Picking `/resume` from the menu lists this directory's sessions, which you filter by date or first message.
 - `@` at the start of the input or after a space lists files and directories under the start directory, leaving out:

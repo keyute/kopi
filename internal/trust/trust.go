@@ -147,18 +147,10 @@ func Canonical(dir string) (string, error) {
 
 // Broad reports whether dir is the user's home or a filesystem root: an answer
 // saved for it would cover almost every folder below, so it holds for this run
-// only. Both are put through Canonical first, so the home is recognised through
-// a symlink or in another case, and either must exist.
-func Broad(dir, userHome string) (bool, error) {
-	dir, err := Canonical(dir)
-	if err != nil {
-		return false, err
-	}
-	userHome, err = Canonical(userHome)
-	if err != nil {
-		return false, err
-	}
-	return dir == userHome || filepath.Dir(dir) == dir, nil
+// only. Both must already be Canonical, so the home is recognised through a
+// symlink or in another case.
+func Broad(dir, userHome string) bool {
+	return dir == userHome || filepath.Dir(dir) == dir
 }
 
 // onDiskNames rebuilds path, which has no symlinks, from the names its
