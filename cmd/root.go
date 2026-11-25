@@ -337,7 +337,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// and a call they are serving can fail as the process exits anyway.
 	defer servers.Close()
 
-	sb, planSB, setDirs, unavailable, err := openSandbox(cmd.Context(), resolved.Config.Sandbox, cwd, userHome, paths.Home)
+	sb, planSB, setDirs, validateSandboxDirs, unavailable, err := openSandbox(cmd.Context(), resolved.Config.Sandbox, cwd, userHome, paths.Home)
 	if err != nil {
 		return err
 	}
@@ -481,7 +481,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	// Only the fullscreen interface has a human to answer approvals.
 	cfg := app.Config{
 		Model: resolved.Config.Model, SmallModel: resolved.Config.SmallModel, ConfigFile: paths.ConfigFile, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
-		SandboxDirs: setDirs, TrustFile: paths.TrustFile, Home: tool.Dir{Given: userHome, Real: canonicalHome}, InstructionFallbacks: resolved.Config.InstructionFallbacks,
+		SandboxDirs: setDirs, ValidateSandboxDirs: validateSandboxDirs, TrustFile: paths.TrustFile, Home: tool.Dir{Given: userHome, Real: canonicalHome}, InstructionFallbacks: resolved.Config.InstructionFallbacks,
 		Covers: func(dir string) ([]string, []string) { return covers(dir, canonicalHome) },
 		Errors: slices.Concat(set.errs, instructionErrs, skillErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review, Outputs: outputs,
 		Skills: skills, SkillPrefix: resolved.Config.Skills.Prefix,
@@ -537,7 +537,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		case dir == "~":
 			spelled = userHome
 		case strings.HasPrefix(dir, "~/"):
-			spelled = filepath.Join(userHome, dir[2:])
+			spelled = userHome + string(filepath.Separator) + dir[2:]
 		}
 		if canonical, err := trust.Canonical(spelled); err == nil {
 			if added[canonical] {
@@ -834,38 +834,65 @@ func serverTarget(s config.MCPServer) string {
 // mode, both or neither; neither when sandbox.enabled is false. With enabled
 // unset, a machine without a usable sandbox is not an error: the sandboxes
 // are nil and unavailable says why. setDirs makes the added directories the
-// workspace's other roots in both; it is nil without the sandboxes.
-func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHome string) (sb, plan *sandbox.Sandbox, setDirs func(dirs []string) error, unavailable, err error) {
+// workspace's other roots in both; validateDirs checks them without applying
+// them. Both callbacks are nil without the sandboxes.
+func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHome string) (sb, plan *sandbox.Sandbox, setDirs, validateDirs func(dirs []string) error, unavailable, err error) {
 	if cfg.Enabled != nil && !*cfg.Enabled {
-		return nil, nil, nil, nil, nil
+		return nil, nil, nil, nil, nil, nil
 	}
 	p := sandboxPolicy(cfg, cwd, nil, userHome, kopiHome)
 	if len(cfg.AllowDomains) > 0 {
 		exe, err := os.Executable()
 		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("failed to start the sandbox: failed to find the kopi binary: %w", err)
+			return nil, nil, nil, nil, nil, fmt.Errorf("failed to start the sandbox: failed to find the kopi binary: %w", err)
 		}
 		if p.Proxy, err = sandbox.NewProxy(cfg.AllowDomains, cfg.DenyDomains, []string{exe, "sandbox-listen", "--"}); err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("failed to start the sandbox: %w", err)
+			return nil, nil, nil, nil, nil, fmt.Errorf("failed to start the sandbox: %w", err)
 		}
 	}
 	sandboxes, err := sandbox.New(ctx, filepath.Join(kopiHome, "sandbox"), p, planPolicy(p, cwd, nil))
 	switch {
 	case cfg.Enabled == nil && errors.Is(err, sandbox.ErrUnavailable):
-		return nil, nil, nil, err, nil
+		return nil, nil, nil, nil, err, nil
 	case err != nil:
-		return nil, nil, nil, nil, fmt.Errorf("failed to start the sandbox: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("failed to start the sandbox: %w", err)
+	}
+	// Keep each root's original protection list even if its git metadata changes.
+	protected := map[string][]string{cwd: slices.Clone(p.DenyWrite)}
+	build := func(dirs []string, remember bool) sandbox.Policy {
+		next := p
+		next.Write = slices.Clone(p.Write)
+		next.DenyWrite = slices.Clone(p.DenyWrite)
+		for _, dir := range dirs {
+			paths, ok := protected[dir]
+			if !ok {
+				paths = protectedWrites(dir)
+				if remember {
+					protected[dir] = paths
+				}
+			}
+			next.Write = append(next.Write, dir)
+			next.DenyWrite = append(next.DenyWrite, paths...)
+		}
+		return next
+	}
+	validateDirs = func(dirs []string) error {
+		next := build(dirs, false)
+		if err := sandboxes[1].ValidatePolicy(planPolicy(next, cwd, dirs)); err != nil {
+			return err
+		}
+		return sandboxes[0].ValidatePolicy(next)
 	}
 	// The plan sandbox first: a failure between the two leaves the directory
 	// read-only rather than writable.
 	setDirs = func(dirs []string) error {
-		p := sandboxPolicy(cfg, cwd, dirs, userHome, kopiHome)
-		if err := sandboxes[1].SetPolicy(planPolicy(p, cwd, dirs)); err != nil {
+		next := build(dirs, true)
+		if err := sandboxes[1].SetPolicy(planPolicy(next, cwd, dirs)); err != nil {
 			return err
 		}
-		return sandboxes[0].SetPolicy(p)
+		return sandboxes[0].SetPolicy(next)
 	}
-	return sandboxes[0], sandboxes[1], setDirs, nil, nil
+	return sandboxes[0], sandboxes[1], setDirs, validateDirs, nil, nil
 }
 
 // sandboxPolicy lets commands write only the workspace (the start directory

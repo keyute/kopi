@@ -135,6 +135,39 @@ func (d *dirHarness) denied(t *testing.T, path string) bool {
 	return errors.Is(err, policy.ErrDenied)
 }
 
+func TestAddDirValidatesSandboxBeforeTrust(t *testing.T) {
+	refused := errors.New("sandbox refused")
+	var calls [][]string
+	d := newDirHarness(t, Config{ValidateSandboxDirs: func(dirs []string) error {
+		calls = append(calls, slices.Clone(dirs))
+		return refused
+	}}, false)
+	dir := canonicalTemp(t)
+	requests := subscribeTo[event.DirRequested](d.c)
+	mode, generation := d.c.authority.Snapshot()
+
+	err := d.c.AddDir(dir)
+
+	assert.ErrorIs(t, err, refused)
+	assert.Equal(t, [][]string{{dir}}, calls)
+	assert.Empty(t, requests)
+	assert.Empty(t, d.sandboxed)
+	assert.NoError(t, d.ws.CanAdd(dir))
+	assert.Nil(t, d.c.main.sess)
+	gotMode, gotGeneration := d.c.authority.Snapshot()
+	assert.Equal(t, mode, gotMode)
+	assert.Equal(t, generation, gotGeneration)
+	assert.NoFileExists(t, d.c.cfg.TrustFile)
+
+	d.c.cfg.ValidateSandboxDirs = func(dirs []string) error {
+		calls = append(calls, slices.Clone(dirs))
+		return nil
+	}
+	require.NoError(t, d.c.AddDir(dir))
+	assert.Equal(t, dir, receiveEvent(t, requests).Dir)
+	assert.Empty(t, d.sandboxed)
+}
+
 func TestAddDirRefusals(t *testing.T) {
 	d := newDirHarness(t, Config{}, true)
 	require.NoError(t, os.WriteFile(filepath.Join(d.sb.Workspace, "a.txt"), nil, 0o600))

@@ -37,10 +37,11 @@ type Policy struct {
 
 // Sandbox runs commands under one Policy.
 type Sandbox struct {
-	mu     sync.Mutex // guards prefix and bwrap, which SetPolicy replaces
-	prefix []string   // macOS: the sandbox-exec argv
-	bwrap  *bwrap     // Linux
-	proxy  *Proxy     // the policy's Proxy
+	mu     sync.Mutex          // guards prefix and bwrap, which SetPolicy replaces
+	prefix []string            // macOS: the sandbox-exec argv
+	bwrap  *bwrap              // Linux
+	proxy  *Proxy              // the policy's Proxy
+	forms  map[string][]string // macOS: frozen forms of paths seen in a policy
 }
 
 // New checks once that the platform sandbox works and builds one Sandbox per
@@ -61,7 +62,8 @@ func New(ctx context.Context, dir string, policies ...Policy) ([]*Sandbox, error
 		}
 		sandboxes := make([]*Sandbox, len(policies))
 		for i, p := range policies {
-			sandboxes[i] = &Sandbox{prefix: seatbeltPrefix(p), proxy: p.Proxy}
+			cache := make(map[string][]string)
+			sandboxes[i] = &Sandbox{prefix: seatbeltPrefixCached(p, cache), proxy: p.Proxy, forms: cache}
 		}
 		return sandboxes, nil
 	case "linux":
@@ -164,6 +166,25 @@ func (s *Sandbox) Command(argv []string) (cmd *exec.Cmd, done func() []string, e
 	return cmd, session.close, nil
 }
 
+// ValidatePolicy checks whether p can be applied without changing the sandbox.
+func (s *Sandbox) ValidatePolicy(p Policy) error {
+	if err := checkAbsolute([]Policy{p}); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.validatePolicyLocked(p)
+}
+
+func (s *Sandbox) validatePolicyLocked(p Policy) error {
+	if s.bwrap != nil {
+		p.Proxy = s.proxy
+		_, _, err := bwrapArgs(p)
+		return err
+	}
+	return nil
+}
+
 // SetPolicy makes p the policy of commands started from now on; a running one
 // keeps its own. The proxy stays the one the sandbox was made with, and p's
 // DenyRead must not hide its helper, as New checked for the first policy. On an
@@ -176,11 +197,14 @@ func (s *Sandbox) SetPolicy(p Policy) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.bwrap == nil {
-		s.prefix = seatbeltPrefix(p)
+		if s.forms == nil {
+			s.forms = make(map[string][]string)
+		}
+		s.prefix = seatbeltPrefixCached(p, s.forms)
 		return nil
 	}
 	// Only the argument building: placeholders are made by a command's start.
-	if _, _, err := bwrapArgs(p); err != nil {
+	if err := s.validatePolicyLocked(p); err != nil {
 		return err
 	}
 	next := *s.bwrap

@@ -67,6 +67,23 @@ func probe(ctx context.Context) error {
 // Seatbelt applies the last matching rule: each section may only narrow the
 // ones before it, and the rename protection stays last.
 func seatbeltPrefix(p Policy) []string {
+	return seatbeltPrefixCached(p, make(map[string][]string))
+}
+
+func seatbeltPrefixCached(p Policy, cache map[string][]string) []string {
+	resolve := func(kind string, paths []string) []string {
+		var out []string
+		for _, path := range paths {
+			key := kind + "\x00" + path
+			f, ok := cache[key]
+			if !ok {
+				f = forms([]string{path})
+				cache[key] = f
+			}
+			out = appendNew(out, f...)
+		}
+		return out
+	}
 	var defs []string
 	define := func(prefix string, paths []string) []string {
 		keys := make([]string, len(paths))
@@ -76,9 +93,10 @@ func seatbeltPrefix(p Policy) []string {
 		}
 		return keys
 	}
-	protected := forms(p.DenyRead, p.DenyWrite)
-	write := define("WRITE", forms(p.Write))
-	denyRead := define("DENY_READ", forms(p.DenyRead))
+	read := resolve("read", p.DenyRead)
+	protected := appendNew(slices.Clone(read), resolve("deny-write", p.DenyWrite)...)
+	write := define("WRITE", resolve("write", p.Write))
+	denyRead := define("DENY_READ", read)
 	denyWrite := define("DENY_WRITE", protected)
 	ancestors := define("ANCESTOR", ancestors(protected))
 	names := define("DENY_WRITE_NAME", nameRegexes(p.DenyWriteNames))

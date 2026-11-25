@@ -52,6 +52,8 @@ type Config struct {
 	// SandboxDirs sets the directories added to the workspace as the sandbox's
 	// write roots; nil when there is no sandbox.
 	SandboxDirs func(dirs []string) error
+	// ValidateSandboxDirs checks prospective roots without changing the sandbox.
+	ValidateSandboxDirs func(dirs []string) error
 	// TrustFile is the trust store /add-dir reads and saves decisions in.
 	TrustFile string
 	// Home is the user's home: /add-dir expands ~ with its Given name and never

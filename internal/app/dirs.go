@@ -99,6 +99,21 @@ func (c *Controller) prepareDir(arg string) (p *pendingDir, decision trust.Decis
 		return nil, 0, false, err
 	}
 	dir := tool.Dir{Given: given, Real: real}
+	if c.cfg.ValidateSandboxDirs != nil {
+		c.dirsMu.Lock()
+		c.mu.Lock()
+		roots := make([]string, 0, len(c.dirs)+1)
+		for _, d := range c.dirs {
+			roots = append(roots, d.dir.Real)
+		}
+		c.mu.Unlock()
+		roots = append(roots, real)
+		err := c.cfg.ValidateSandboxDirs(roots)
+		c.dirsMu.Unlock()
+		if err != nil {
+			return nil, 0, false, err
+		}
+	}
 	info, err := os.Stat(real)
 	if err != nil {
 		return nil, 0, false, err

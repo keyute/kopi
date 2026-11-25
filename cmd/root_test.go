@@ -1860,7 +1860,7 @@ func TestSandboxPolicyProtectsHEADWithConcurrentLinuxPlaceholder(t *testing.T) {
 			if exists {
 				e.writeFile(t, head, original)
 			}
-			first, _, _, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
+			first, _, _, _, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
 			require.NoError(t, err)
 			require.NotNil(t, first)
 			cmd, done, err := first.Command([]string{"/bin/bash", "-c", `echo ready; read -r _ || true`})
@@ -1885,7 +1885,7 @@ func TestSandboxPolicyProtectsHEADWithConcurrentLinuxPlaceholder(t *testing.T) {
 
 			p := sandboxPolicy(config.Sandbox{}, e.workspace, nil, e.home, e.kopiHome)
 			assert.Contains(t, p.DenyWrite, head)
-			second, _, _, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
+			second, _, _, _, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
 			require.NoError(t, err)
 			require.NotNil(t, second)
 			attempt, cleanup, err := second.Command([]string{"/bin/bash", "-c", `/bin/mkdir -p objects refs && printf '[core]\n' > config && printf changed > HEAD`})
@@ -1921,7 +1921,7 @@ func TestOpenSandboxFiltersNetworkOnlyWithAllowDomains(t *testing.T) {
 		{"no lists", config.Sandbox{}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			execute, plan, _, _, err := openSandbox(t.Context(), tc.cfg, e.workspace, e.home, e.kopiHome)
+			execute, plan, _, _, _, err := openSandbox(t.Context(), tc.cfg, e.workspace, e.home, e.kopiHome)
 			require.NoError(t, err)
 			require.NotNil(t, execute)
 			require.NotNil(t, plan)
@@ -2204,12 +2204,13 @@ func TestOpenSandboxSetDirsIsNilWithoutTheSandbox(t *testing.T) {
 	e := newTestEnv(t)
 	off := false
 
-	sb, plan, setDirs, unavailable, err := openSandbox(t.Context(), config.Sandbox{Enabled: &off}, e.workspace, e.home, e.kopiHome)
+	sb, plan, setDirs, validateDirs, unavailable, err := openSandbox(t.Context(), config.Sandbox{Enabled: &off}, e.workspace, e.home, e.kopiHome)
 
 	require.NoError(t, err)
 	assert.Nil(t, sb)
 	assert.Nil(t, plan)
 	assert.Nil(t, setDirs)
+	assert.Nil(t, validateDirs)
 	assert.NoError(t, unavailable)
 }
 
@@ -2229,7 +2230,7 @@ func TestOpenSandboxSetDirsMakesTheDirectoryWritableOnlyInExecuteMode(t *testing
 	added := filepath.Join(e.root, "added")
 	require.NoError(t, os.Mkdir(added, 0o700))
 	added = canonical(t, added)
-	execute, plan, setDirs, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
+	execute, plan, setDirs, _, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
 	require.NoError(t, err)
 	require.NotNil(t, setDirs)
 	attempt := func(sb *sandbox.Sandbox) (string, error) {
@@ -2265,12 +2266,47 @@ func TestOpenSandboxSetDirsMakesTheDirectoryWritableOnlyInExecuteMode(t *testing
 	}
 }
 
+func TestOpenSandboxSetDirsKeepsStartupProtections(t *testing.T) {
+	if runtime.GOOS != "darwin" || !sandboxAvailable(t) {
+		t.Skip("requires Seatbelt")
+	}
+	e := newSandboxedEnv(t)
+	old, next := filepath.Join(e.root, "old"), filepath.Join(e.root, "next")
+	require.NoError(t, os.Mkdir(old, 0o700))
+	require.NoError(t, os.Mkdir(next, 0o700))
+	read, write := filepath.Join(e.root, "read"), filepath.Join(e.root, "write")
+	mcp := filepath.Join(e.workspace, ".mcp.json")
+	for _, link := range []string{read, write, mcp} {
+		require.NoError(t, os.Symlink(old, link))
+	}
+	cfg := config.Sandbox{DenyRead: []string{read}, AllowWrite: []string{write}}
+	execute, plan, setDirs, _, _, err := openSandbox(t.Context(), cfg, e.workspace, e.home, e.kopiHome)
+	require.NoError(t, err)
+	for _, link := range []string{read, write, mcp} {
+		require.NoError(t, os.Remove(link))
+		require.NoError(t, os.Symlink(next, link))
+	}
+	added := filepath.Join(e.root, "added")
+	require.NoError(t, os.Mkdir(added, 0o700))
+	for _, dirs := range [][]string{{added}, nil} {
+		require.NoError(t, setDirs(dirs))
+		for _, sb := range []*sandbox.Sandbox{execute, plan} {
+			cmd, done, err := sb.Command([]string{"/bin/true"})
+			require.NoError(t, err)
+			done()
+			args := strings.Join(cmd.Args, "\n")
+			assert.Contains(t, args, "="+canonical(t, old))
+			assert.NotContains(t, args, "="+canonical(t, next))
+		}
+	}
+}
+
 func TestOpenSandboxSetDirsKeepsBothPoliciesOnAnError(t *testing.T) {
 	if !sandboxAvailable(t) {
 		t.Skip("the sandbox is unavailable here")
 	}
 	e := newSandboxedEnv(t)
-	execute, plan, setDirs, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
+	execute, plan, setDirs, _, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
 	require.NoError(t, err)
 	require.NotNil(t, setDirs)
 	argv := func(sb *sandbox.Sandbox) []string {
@@ -2963,6 +2999,32 @@ func TestRootAddDirExpandsTheHomeBeforeDeduplicating(t *testing.T) {
 	require.NoError(t, err)
 	messages := fmt.Sprint(server.next(t).body["messages"])
 	assert.Contains(t, messages, "The workspace also includes "+canonical(t, one)+".")
+}
+
+func TestRootAddDirDeduplicatesAfterResolvingSymlinkParent(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		t.Run(fmt.Sprint(reverse), func(t *testing.T) {
+			e := newTestEnv(t)
+			first := filepath.Join(e.home, "sibling")
+			second := filepath.Join(e.root, "other", "sibling")
+			nested := filepath.Join(e.root, "other", "nested")
+			for _, dir := range []string{first, second, nested} {
+				require.NoError(t, os.MkdirAll(dir, 0o755))
+			}
+			require.NoError(t, os.Symlink(nested, filepath.Join(e.home, "link")))
+			server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+			e.writeMockModels(t, server.URL)
+			args := []string{"~/sibling", "~/link/../sibling"}
+			want := []string{canonical(t, first), canonical(t, second)}
+			if reverse {
+				slices.Reverse(args)
+				slices.Reverse(want)
+			}
+			_, _, err := execute(t, "", "--model", mockModel, "-p", "hi", "--add-dir", args[0], "--add-dir", args[1], "--add-dir", second)
+			require.NoError(t, err)
+			assert.Contains(t, fmt.Sprint(server.next(t).body["messages"]), "The workspace also includes "+strings.Join(want, ", ")+".")
+		})
+	}
 }
 
 func TestRootAddDirFailsTheStartBeforeAnySessionOpens(t *testing.T) {

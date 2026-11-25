@@ -193,6 +193,64 @@ func TestSeatbeltPathForms(t *testing.T) {
 	}, values(defs, "DENY_WRITE"))
 }
 
+func TestSeatbeltSetPolicyKeepsResolvedForms(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	old, next := filepath.Join(base, "old"), filepath.Join(base, "next")
+	require.NoError(t, os.Mkdir(old, 0o700))
+	require.NoError(t, os.Mkdir(next, 0o700))
+	write, read, protected := filepath.Join(base, "write"), filepath.Join(base, "read"), filepath.Join(base, "protected")
+	for _, link := range []string{write, read, protected} {
+		require.NoError(t, os.Symlink(old, link))
+	}
+	missing := filepath.Join(base, "missing")
+	p := Policy{Write: []string{write, missing}, DenyRead: []string{read}, DenyWrite: []string{protected}}
+	cache := make(map[string][]string)
+	s := &Sandbox{prefix: seatbeltPrefixCached(p, cache), forms: cache}
+	for _, link := range []string{write, read, protected} {
+		require.NoError(t, os.Remove(link))
+		require.NoError(t, os.Symlink(next, link))
+	}
+	require.NoError(t, os.Symlink(next, missing))
+	added := filepath.Join(base, "added")
+	require.NoError(t, os.Mkdir(added, 0o700))
+	p.Write = append(p.Write, added)
+	require.NoError(t, s.SetPolicy(p))
+	_, defs := profileOf(t, s.prefix)
+	for _, key := range []string{"WRITE", "DENY_READ", "DENY_WRITE"} {
+		assert.Contains(t, values(defs, key), old)
+		assert.NotContains(t, values(defs, key), next)
+	}
+	assert.Contains(t, values(defs, "WRITE"), missing)
+	assert.Contains(t, values(defs, "WRITE"), added)
+	addedProtected := filepath.Join(added, "protected")
+	require.NoError(t, os.Symlink(old, addedProtected))
+	p.DenyWrite = append(p.DenyWrite, addedProtected)
+	require.NoError(t, s.SetPolicy(p))
+	require.NoError(t, os.Remove(addedProtected))
+	require.NoError(t, os.Symlink(next, addedProtected))
+	p.Write = p.Write[:2]
+	require.NoError(t, s.SetPolicy(p))
+	_, defs = profileOf(t, s.prefix)
+	assert.Contains(t, values(defs, "WRITE"), old)
+	assert.NotContains(t, values(defs, "WRITE"), next)
+}
+
+func TestValidatePolicyDoesNotChangeSandbox(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bubblewrap validation is Linux-specific")
+	}
+	root := t.TempDir()
+	original := Policy{Write: []string{root}}
+	s := &Sandbox{bwrap: &bwrap{policy: original}}
+	candidate := Policy{Write: []string{root, "/"}, DenyWrite: []string{"/proc"}}
+	assert.ErrorContains(t, s.ValidatePolicy(candidate), "overlaps /proc")
+	assert.Equal(t, original, s.bwrap.policy)
+	err := s.SetPolicy(candidate)
+	assert.ErrorContains(t, err, "overlaps /proc")
+	assert.Equal(t, original, s.bwrap.policy)
+}
+
 func TestSeatbeltAncestors(t *testing.T) {
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
