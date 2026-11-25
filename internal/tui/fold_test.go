@@ -71,7 +71,7 @@ func TestClickOnMemberTogglesItsOutputOnly(t *testing.T) {
 		open := []string{"", "▾ Read 2 files", "  ↳ a.go · 3 lines", "  ↳ b.go · 1 line", "", "Done."}
 
 		clickText(t, m, "  ↳ a.go · 3 lines")
-		assert.Equal(t, []string{"", "▾ Read 2 files", "  ↳ a.go · 3 lines", "        a1", "        a2", "  ↳ b.go · 1 line", "", "Done."}, body(m))
+		assert.Equal(t, []string{"", "▾ Read 2 files", "  ↳ a.go · 3 lines", "      a1", "      a2", "  ↳ b.go · 1 line", "", "Done."}, body(m))
 
 		clickText(t, m, "  ↳ a.go · 3 lines")
 		assert.Equal(t, open, body(m))
@@ -100,7 +100,7 @@ func TestLiveGroupThatSealsForgetsExpansion(t *testing.T) {
 		m, _ := newTestModel(t, 40, 30)
 		send(m, start("a"), okOut("a", "3 lines", "a1"), start("b"), ok("b", "1 line"))
 		clickText(t, m, "  ↳ a.go · 3 lines")
-		require.Equal(t, []string{"", "• Read 2 files", "  ↳ a.go · 3 lines", "        a1", "  ↳ b.go · 1 line"}, body(m))
+		require.Equal(t, []string{"", "• Read 2 files", "  ↳ a.go · 3 lines", "      a1", "  ↳ b.go · 1 line"}, body(m))
 
 		send(m, event.TextDelta{Text: "Done."})
 		assert.Equal(t, []string{"", "▸ Read 2 files", "", "Done."}, body(m))
@@ -191,7 +191,7 @@ func TestCtrlOShowsEverythingAndMakesClicksInert(t *testing.T) {
 
 		press(m, ctrlO)
 		all := []string{
-			"", "▾ Read 2 files", "  ↳ a.go · 3 lines", "        a1", "        a2", "  ↳ b.go · 1 line",
+			"", "▾ Read 2 files", "  ↳ a.go · 3 lines", "      a1", "      a2", "  ↳ b.go · 1 line",
 			"", "Done.",
 			"", "• c.go", "  ↳ 1 line", "      c1",
 		}

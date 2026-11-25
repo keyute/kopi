@@ -46,7 +46,7 @@ type renderCache struct {
 	th      theme
 	entries map[string]cached
 	md      *markdown
-	// planMD draws a plan bodyIndent columns in; created on first use.
+	// planMD draws a plan at its row's body width; created on first use.
 	planMD *markdown
 }
 
@@ -77,16 +77,14 @@ func (c *renderCache) render(b transcript.Block, f blockFolds, spans func(string
 	case transcript.Assistant:
 		return plain(c.md.lines(b.Key(), b.Text))
 	case transcript.Row:
-		out := renderRow(b.Call, f, width, th)
+		o := renderRow(b.Call, f, width, th)
 		if b.Call.Plan != "" && (b.Call.State == transcript.Running || f.expanded[0]) {
-			if c.planMD == nil {
-				c.planMD = newMarkdown(max(1, width-bodyIndent), th)
+			if w := max(1, o.bodyWidth()); c.planMD == nil || c.planMD.width != w {
+				c.planMD = newMarkdown(w, th)
 			}
-			for _, s := range c.planMD.lines(b.Key(), b.Call.Plan) {
-				out = append(out, line{text: bodyPad(0) + s})
-			}
+			o.body(plain(c.planMD.lines(b.Key(), b.Call.Plan)))
 		}
-		return out
+		return o.rows
 	case transcript.Group:
 		return renderGroup(b, f, width, th)
 	case transcript.Notice:
@@ -94,7 +92,7 @@ func (c *renderCache) render(b transcript.Block, f blockFolds, spans func(string
 	case transcript.Error:
 		return plain(hang("κ ", fg(th.error), b.Text, fg(th.error), width))
 	case transcript.Turn:
-		return plain(renderTurn(b, f.verb, width, th))
+		return renderTurn(b, f.verb, width, th)
 	case transcript.Task:
 		return renderTask(b, len(f.expanded) > 0 && f.expanded[0], width, th)
 	case transcript.Command:
@@ -107,13 +105,37 @@ func (c *renderCache) render(b transcript.Block, f blockFolds, spans func(string
 	return nil
 }
 
-// memberIndent is how far a member's ↳ sits in from the start of the group's
-// row, where its sentence text starts too, and bodyIndent how far an opened body
-// sits in from the start of its own row; a member's body is at their sum.
-const (
-	memberIndent = 2
-	bodyIndent   = 6
-)
+// step is how far a line's text starts past the text of the line it is under;
+// only outline places a line.
+const step = 2
+
+// outline draws a row top down. col is the column where the text of its last
+// title or ↳ line starts, which is what a body under it is placed by.
+type outline struct {
+	width, col int
+	rows       []line
+}
+
+func (o *outline) title(glyph string, gs lipgloss.Style, text string, ts lipgloss.Style, h hit) {
+	o.rows = append(o.rows, withHit(h, hang(glyph, gs, text, ts, o.width))...)
+	o.col = lipgloss.Width(glyph)
+}
+
+func (o *outline) under(text string, style lipgloss.Style, h hit) {
+	o.rows = append(o.rows, withHit(h, under(text, style, o.width))...)
+	o.col = 2 * step
+}
+
+// bodyWidth is the width for drawing rows that body places.
+func (o *outline) bodyWidth() int { return o.width - o.col - step }
+
+// body appends rows drawn flush left, step past the text above.
+func (o *outline) body(rows []line) {
+	pad := strings.Repeat(" ", o.col+step)
+	for _, r := range rows {
+		o.rows = append(o.rows, line{text: pad + r.text, hit: r.hit})
+	}
+}
 
 // tone is how a row's outcome reads in colour: a neutral, or a signal.
 type tone int
@@ -163,81 +185,91 @@ func taskTone(s tool.TaskStatus) tone {
 	return toneFailed
 }
 
-func renderRow(c transcript.Call, f blockFolds, width int, th theme) []line {
+func renderRow(c transcript.Call, f blockFolds, width int, th theme) *outline {
 	bullet, lineStyle := callTone(c.State).styles(th)
 	title := fg(th.text)
+	o := &outline{width: width}
 	if c.State == transcript.Running {
-		return plain(hang("• ", bullet, c.Title, title, width))
+		o.title("• ", bullet, c.Title, title, hit{})
+		return o
 	}
 	h := commandHit(c)
-	var rest []line
+	var text string
+	var head, tail []string
+	var omitted int
 	switch c.State {
 	case transcript.OK:
 		h = openHit(c)
-		if f.expanded[0] {
-			rest = opened(c, 0, width, th)
-		}
 	case transcript.Failed:
-		text := bodyText(c.Body)
-		head, tail, omitted := capBody(text)
+		text = bodyText(c.Body)
+		head, tail, omitted = capBody(text)
 		if omitted > 0 {
 			h = hit{kind: hitOutput, id: c.ID}
 		}
-		if f.expanded[0] {
-			rest = commandLines(c, 0, width, th)
-		}
-		switch {
-		case text == "":
-		case omitted == 0 || f.expanded[0]:
-			rest = append(rest, bodyLines(text, 0, width, th)...)
-		default:
-			rest = append(rest, bodyLines(strings.Join(head, "\n"), 0, width, th)...)
-			rest = append(rest, plain(hang(bodyPad(0), fg(th.dim), fmt.Sprintf("… %d more lines", omitted), fg(th.dim), width))...)
-			rest = append(rest, bodyLines(strings.Join(tail, "\n"), 0, width, th)...)
-		}
-	default:
-		if f.expanded[0] {
-			rest = commandLines(c, 0, width, th)
-		}
-		if c.State == transcript.Rejected {
-			rest = append(rest, bodyLines(bodyText(c.Body), 0, width, th)...)
-		}
 	}
-	out := withHit(h, hang("• ", bullet, c.Title, title, width))
+	o.title("• ", bullet, c.Title, title, h)
 	summary := c.Summary
 	if c.State == transcript.Unfinished {
 		summary = "interrupted"
 	}
 	if summary != "" {
-		out = append(out, plain(under(summary, lineStyle, width))...)
+		o.under(summary, lineStyle, hit{})
 	}
-	return append(out, rest...)
+	w := o.bodyWidth()
+	switch c.State {
+	case transcript.OK:
+		if f.expanded[0] {
+			o.body(opened(c, w, th))
+		}
+	case transcript.Failed:
+		if f.expanded[0] {
+			o.body(commandLines(c, w, th))
+		}
+		switch {
+		case text == "":
+		case omitted == 0 || f.expanded[0]:
+			o.body(bodyLines(text, w, th))
+		default:
+			o.body(bodyLines(strings.Join(head, "\n"), w, th))
+			o.body(moreRow(fmt.Sprintf("… %d more lines", omitted), w, th))
+			o.body(bodyLines(strings.Join(tail, "\n"), w, th))
+		}
+	default:
+		if f.expanded[0] {
+			o.body(commandLines(c, w, th))
+		}
+		if c.State == transcript.Rejected {
+			o.body(bodyLines(bodyText(c.Body), w, th))
+		}
+	}
+	return o
 }
 
 // renderGroup draws a live group, or a sealed one closed behind ▸ or open
 // behind ▾; live and open groups list their members.
 func renderGroup(g transcript.Group, f blockFolds, width int, th theme) []line {
-	var out []line
+	o := &outline{width: width}
 	text := fg(th.text)
 	switch {
 	case !g.Sealed:
-		out = plain(hang("• ", fg(th.success), g.Sentence(), text, width))
+		o.title("• ", fg(th.success), g.Sentence(), text, hit{})
 	case f.open:
-		out = withHit(hit{kind: hitHandle, id: g.Key()}, hang("▾ ", text, g.Sentence(), text, width))
+		o.title("▾ ", text, g.Sentence(), text, hit{kind: hitHandle, id: g.Key()})
 	default:
-		return withHit(hit{kind: hitHandle, id: g.Key()}, hang("▸ ", fg(th.dim), g.Sentence(), fg(th.dim), width))
+		o.title("▸ ", fg(th.dim), g.Sentence(), fg(th.dim), hit{kind: hitHandle, id: g.Key()})
+		return o.rows
 	}
 	for i, c := range g.Calls {
 		label := c.Title
 		if c.Summary != "" {
 			label += " · " + c.Summary
 		}
-		out = append(out, withHit(openHit(c), under(label, fg(th.dim), width))...)
+		o.under(label, fg(th.dim), openHit(c))
 		if f.expanded[i] {
-			out = append(out, opened(c, memberIndent, width, th)...)
+			o.body(opened(c, o.bodyWidth(), th))
 		}
 	}
-	return out
+	return o.rows
 }
 
 // openHit makes a successful call's line toggle what it opens to; a call that
@@ -258,45 +290,43 @@ func commandHit(c transcript.Call) hit {
 	return hit{kind: hitOutput, id: c.ID}
 }
 
-// bodyPad is the columns before an opened body of a row that starts in columns in.
-func bodyPad(in int) string { return strings.Repeat(" ", in+bodyIndent) }
-
-// under is the line below a row: its arrow sits memberIndent in, and wrapped
-// text hangs under the text.
+// under is the line below a row: its arrow sits step in, and wrapped text
+// hangs under the text.
 func under(text string, style lipgloss.Style, width int) []string {
-	return hang(strings.Repeat(" ", memberIndent)+"↳ ", style, text, style, width)
+	return hang(strings.Repeat(" ", step)+"↳ ", style, text, style, width)
 }
 
-// opened is what a successful call opens to: its command when the title cut
-// it, then a file change's lines, else its body in full.
-func opened(c transcript.Call, in, width int, th theme) []line {
-	out := commandLines(c, in, width, th)
+// opened is what a successful call opens to, drawn flush left: its command when
+// the title cut it, then a file change's lines, else its body in full.
+func opened(c transcript.Call, width int, th theme) []line {
+	out := commandLines(c, width, th)
 	if len(c.Preview) == 0 {
-		return append(out, bodyLines(bodyText(c.Body), in, width, th)...)
+		return append(out, bodyLines(bodyText(c.Body), width, th)...)
 	}
-	pad := bodyPad(in)
-	for _, s := range previewRows(c.Preview, width-in-bodyIndent, th) {
-		out = append(out, line{text: pad + s})
-	}
-	return out
+	return append(out, plain(previewRows(c.Preview, width, th))...)
 }
 
 // commandLines is the whole command after a "$", nil when the title shows it
 // all. It is not passed through bodyText, which would drop what the command
 // itself holds.
-func commandLines(c transcript.Call, in, width int, th theme) []line {
+func commandLines(c transcript.Call, width int, th theme) []line {
 	if c.Command == "" {
 		return nil
 	}
-	return plain(hang(bodyPad(in)+"$ ", fg(th.dim), c.Command, fg(th.text), width))
+	return plain(hang("$ ", fg(th.dim), c.Command, fg(th.text), width))
 }
 
-// bodyLines draws text as the body of a row that starts in columns in.
-func bodyLines(text string, in, width int, th theme) []line {
+// bodyLines draws text flush left.
+func bodyLines(text string, width int, th theme) []line {
 	if text == "" {
 		return nil
 	}
-	return plain(hang(bodyPad(in), fg(th.muted), text, fg(th.muted), width))
+	return plain(hang("", fg(th.muted), text, fg(th.muted), width))
+}
+
+// moreRow is the row that says how many lines of a body are not drawn.
+func moreRow(text string, width int, th theme) []line {
+	return plain(hang("", fg(th.dim), text, fg(th.dim), width))
 }
 
 // bodyText prepares a command's output for drawing: a carriage return redraws
@@ -330,7 +360,7 @@ func capBody(text string) (head, tail []string, omitted int) {
 	return ne[:2], ne[len(ne)-2:], len(ne) - 4
 }
 
-func renderTurn(t transcript.Turn, v verb, width int, th theme) []string {
+func renderTurn(t transcript.Turn, v verb, width int, th theme) []line {
 	var text string
 	var c lipgloss.Style
 	switch t.Outcome.Status {
@@ -347,11 +377,12 @@ func renderTurn(t transcript.Turn, v verb, width int, th theme) []string {
 	if t.Outcome.Status != event.Completed && t.Elapsed > 0 {
 		text += " after " + formatDuration(t.Elapsed)
 	}
-	out := hang("κ ", c, text, c, width)
+	o := &outline{width: width}
+	o.title("κ ", c, text, c, hit{})
 	if t.Outcome.Message != "" {
-		out = append(out, hang("  ", fg(th.error), t.Outcome.Message, fg(th.error), width)...)
+		o.body(plain(hang("", fg(th.error), t.Outcome.Message, fg(th.error), o.bodyWidth())))
 	}
-	return out
+	return o.rows
 }
 
 // renderTask is one row naming a background task's end, its command's (an
@@ -375,7 +406,8 @@ func renderTask(t transcript.Task, expanded bool, width int, th theme) []line {
 	if result != "" {
 		h = hit{kind: hitOutput, id: t.Key()}
 	}
-	out := withHit(h, hang("• ", bullet, head+command+tail, fg(th.text), width))
+	o := &outline{width: width}
+	o.title("• ", bullet, head+command+tail, fg(th.text), h)
 	var parts []string
 	if t.Agents > 0 {
 		parts = append(parts, countText(t.Agents, "agent")+failedSuffix(t.Failed))
@@ -384,12 +416,12 @@ func renderTask(t transcript.Task, expanded bool, width int, th theme) []line {
 		parts = append(parts, t.Reason)
 	}
 	if len(parts) > 0 {
-		out = append(out, plain(under(strings.Join(parts, " · "), lineStyle, width))...)
+		o.under(strings.Join(parts, " · "), lineStyle, hit{})
 	}
 	if expanded {
-		out = append(out, bodyLines(result, 0, width, th)...)
+		o.body(bodyLines(result, o.bodyWidth(), th))
 	}
-	return out
+	return o.rows
 }
 
 // transcriptCommandLines is how many output lines a command in the transcript
@@ -415,29 +447,30 @@ type commandOptions struct {
 // for its state and its output rows.
 func commandRows(c event.UserCommand, o commandOptions, width int, th theme) []line {
 	ps := commandShade(th).Foreground(th.error)
-	out := plain(shadedBox("! ", ps, c.Command, nil, width, th))
-	out = append(out, line{})
+	out := &outline{width: width}
+	out.rows = append(plain(shadedBox("! ", ps, c.Command, nil, width, th)), line{})
 
 	output := bodyText(c.Output)
 	h := hit{}
 	if output != "" {
 		h = o.Hit
 	}
-	out = append(out, withHit(h, commandHint(c, o, width, th))...)
+	commandHint(out, h, c, o, th)
 
 	if output == "" {
-		return out
+		return out.rows
 	}
 	ls := strings.Split(output, "\n")
 	if !o.Expanded && len(ls) > o.Lines {
 		omitted := len(ls) - o.Lines
-		out = append(out, plain(hang(bodyPad(0), fg(th.dim), fmt.Sprintf("… %d earlier lines", omitted), fg(th.dim), width))...)
+		out.body(moreRow(fmt.Sprintf("… %d earlier lines", omitted), out.bodyWidth(), th))
 		ls = ls[omitted:]
 	}
-	return append(out, bodyLines(strings.Join(ls, "\n"), 0, width, th)...)
+	out.body(bodyLines(strings.Join(ls, "\n"), out.bodyWidth(), th))
+	return out.rows
 }
 
-func commandHint(c event.UserCommand, o commandOptions, width int, th theme) []string {
+func commandHint(out *outline, h hit, c event.UserCommand, o commandOptions, th theme) {
 	// since is " · 12s" or "" under a second.
 	since := func(sep string, d time.Duration) string {
 		if d < time.Second {
@@ -452,7 +485,7 @@ func commandHint(c event.UserCommand, o commandOptions, width int, th theme) []s
 	_, running := toneRunning.styles(th)
 	switch c.State {
 	case event.CommandQueued:
-		return under("queued", running, width)
+		out.under("queued", running, h)
 	case event.CommandRunning:
 		text := "running" + since(" ", o.Elapsed)
 		if o.BackgroundKey != "" {
@@ -461,25 +494,27 @@ func commandHint(c event.UserCommand, o commandOptions, width int, th theme) []s
 		if o.StopKey != "" {
 			text += " · " + o.StopKey + " to stop"
 		}
-		return under(text, running, width)
+		out.under(text, running, h)
 	case event.CommandExited:
 		text := c.Exit + since(" · ", c.Elapsed) + unread
 		if c.Failed {
 			_, failed := toneFailed.styles(th)
-			return under(text, failed, width)
+			out.under(text, failed, h)
+			return
 		}
 		word, okLine := toneOK.styles(th)
-		out := under(text, okLine, width)
+		first := len(out.rows)
+		out.under(text, okLine, h)
 		// The exit text leads the hint, so it sits on the first row unless the width cuts it.
-		start := memberIndent + lipgloss.Width("↳ ")
-		out[0] = lipgloss.StyleRanges(out[0], lipgloss.NewRange(start, start+lipgloss.Width(c.Exit), word))
-		return out
+		start := 2 * step
+		out.rows[first].text = lipgloss.StyleRanges(out.rows[first].text, lipgloss.NewRange(start, start+lipgloss.Width(c.Exit), word))
 	case event.CommandStopped:
 		text := "stopped" + since(" after ", c.Elapsed) + unread
 		_, stopped := toneRefused.styles(th)
-		return under(text, stopped, width)
+		out.under(text, stopped, h)
+	default:
+		out.under("moved to background"+since(" after ", c.Elapsed), running, h)
 	}
-	return under("moved to background"+since(" after ", c.Elapsed), running, width)
 }
 
 // formatDuration renders d as "41s", "1m 12s" or "1h 2m".

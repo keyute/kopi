@@ -411,8 +411,8 @@ func TestFailedTurnShowsItsReason(t *testing.T) {
 		ev   event.TurnEnd
 		want []string
 	}{
-		{"live", event.TurnEnd{Outcome: failed("401: token expired\nlog in again"), Elapsed: 2 * time.Second}, []string{"", "κ Failed after 2s", "  401: token expired", "  log in again"}},
-		{"restored", event.TurnEnd{Outcome: failed("rate limited")}, []string{"", "κ Failed", "  rate limited"}},
+		{"live", event.TurnEnd{Outcome: failed("401: token expired\nlog in again"), Elapsed: 2 * time.Second}, []string{"", "κ Failed after 2s", "    401: token expired", "    log in again"}},
+		{"restored", event.TurnEnd{Outcome: failed("rate limited")}, []string{"", "κ Failed", "    rate limited"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _ := newTestModel(t, 40, 30)
@@ -624,7 +624,7 @@ func TestSessionChangedRestoresHistory(t *testing.T) {
 		"", "", "❯ earlier", "",
 		"", "▸ Read 2 files",
 		"", "reply",
-		"", "• c.go", "      nope",
+		"", "• c.go", "    nope",
 		"", "κ Worked for 5s",
 		"", "• Read 2 files", "  ↳ d.go · 2 lines", "  ↳ e.go · 4 lines",
 	}, body(m))

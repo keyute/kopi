@@ -226,7 +226,7 @@ func TestPlanEndedForAnotherTokenKeepsTheDialog(t *testing.T) {
 func TestPlanRowClosesToItsDecisionAndAClickOpensThePlanAgain(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, _ := openPlan(t)
-		assert.Equal(t, []string{"", "• Plan approval", "      Heading", "", "      step one"}, body(m)[:5])
+		assert.Equal(t, []string{"", "• Plan approval", "    Heading", "", "    step one"}, body(m)[:5])
 
 		send(m, event.PlanEnded{Token: 7}, event.ToolEnd{CallID: "p", Name: "ExitPlanMode", Summary: "approved"})
 		assert.Equal(t, []string{"", "• Plan approval", "  ↳ approved"}, body(m))
