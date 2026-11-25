@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/event"
 )
@@ -38,10 +39,10 @@ func (m *model) openEditor(path string) tea.Cmd {
 		return nil
 	}
 	m.editing.Store(true)
-	return m.execProcess(cmd, func(err error) tea.Msg {
+	return tea.Sequence(m.raw(ansi.ResetModeLightDark), m.execProcess(cmd, func(err error) tea.Msg {
 		m.editing.Store(false)
 		return editorDoneMsg{err}
-	})
+	}))
 }
 
 // editorDone shows a failed run, then tells the prompts, whichever editor run

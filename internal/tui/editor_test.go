@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -95,4 +97,23 @@ func TestOpenEditorMarksEditingUntilTheEditorExits(t *testing.T) {
 
 	m.Update((*calls)[0].done(nil))
 	assert.False(t, m.editing.Load())
+}
+
+func TestEditorResetsTheColorSchemeModeWhileItRunsAndSetsItAfter(t *testing.T) {
+	m, c := newTestModel(t, 70, 30)
+	c.planFile = planPath
+	c.submitErr = app.ErrOpenPlan
+	m.getenv = env(map[string]string{"EDITOR": "vi"})
+	raw := recordRaw(m)
+	calls := recordExec(m)
+
+	submitText(m, "/plan open")
+	require.Len(t, *calls, 1)
+	assert.Equal(t, []any{ansi.ResetModeLightDark}, *raw)
+
+	*raw = nil
+	_, cmd := m.Update((*calls)[0].done(nil))
+	require.NotNil(t, cmd)
+	assert.Equal(t, []any{ansi.SetModeLightDark}, *raw)
+	assert.Contains(t, messagesOf(cmd), tea.RequestBackgroundColor())
 }

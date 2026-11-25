@@ -15,6 +15,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/app"
@@ -203,7 +204,7 @@ func newModel(ctx context.Context, c Controller, b *bridge, opts Options) *model
 }
 
 func (m *model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.bridge.wait(), tea.RequestBackgroundColor}
+	cmds := []tea.Cmd{m.bridge.wait(), tea.RequestBackgroundColor, m.raw(ansi.SetModeLightDark)}
 	if m.terminal.Title {
 		cmds = append(cmds, tea.RequestProgramStatusSupport)
 	}
@@ -243,9 +244,21 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case recordsWrittenMsg:
 		m.records = msg
 		m.recordsWriting = false
+	case uv.DarkColorSchemeEvent, uv.LightColorSchemeEvent:
+		// The report's value is not used: terminals disagree on what it means
+		// (Ghostty with a single theme always reports light), so the background decides.
+		return tea.RequestBackgroundColor
 	case tea.BackgroundColorMsg:
-		if !msg.IsDark() {
-			m.th = m.themes.light
+		// A malformed reply parses to a nil colour, which IsDark reports as dark.
+		if msg.Color == nil {
+			return nil
+		}
+		th := m.themes.light
+		if msg.IsDark() {
+			th = m.themes.dark
+		}
+		if th != m.th {
+			m.th = th
 			m.clearSelection()
 			m.composer.style(m.th)
 			m.spinner.Style = fg(m.th.accent)
@@ -268,6 +281,9 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return m.cancel()
 	case editorDoneMsg:
 		m.editorDone(msg)
+		// An editor such as Neovim turns the mode off when it exits, and a change
+		// during the edit was not seen.
+		return tea.Batch(m.raw(ansi.SetModeLightDark), tea.RequestBackgroundColor)
 	case barMsg:
 		m.barBeating = false
 		m.barBeat = 1 - m.barBeat
