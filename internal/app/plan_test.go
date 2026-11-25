@@ -399,6 +399,37 @@ func TestDirectoriesAreToldAgainWhenTheirPromptWasNotDelivered(t *testing.T) {
 	assert.Equal(t, "The workspace also includes /another. Give a path there as an absolute path; relative paths and Bash still start from /ws.", c.main.tell([]pigruntime.Prompt{{Text: "d"}})[0].Mode, "only what is new")
 }
 
+func TestDirectoriesAreNotToldAgainWhenOnlyAModeLineWasNotDelivered(t *testing.T) {
+	c := &Controller{authority: policy.NewAuthority()}
+	c.cfg.Workspace = "/ws"
+	c.main = &runner{c: c}
+	c.dirs = []addedDir{{path: "/other"}}
+	c.main.tell([]pigruntime.Prompt{{Text: "a"}})
+
+	c.authority.EnterExecute()
+	modeOnly := c.main.tell([]pigruntime.Prompt{{Text: "b"}})
+	require.Equal(t, modeLine(policy.Execute, "", false), modeOnly[0].Mode)
+	c.main.untell(modeOnly)
+
+	assert.Equal(t, modeLine(policy.Execute, "", false), c.main.tell([]pigruntime.Prompt{{Text: "c"}})[0].Mode)
+}
+
+func TestDirectoriesOfEveryPromptNotDeliveredAreToldAgain(t *testing.T) {
+	c := &Controller{authority: policy.NewAuthority()}
+	c.cfg.Workspace = "/ws"
+	c.main = &runner{c: c}
+	c.dirs = []addedDir{{path: "/one"}}
+	first := c.main.tell([]pigruntime.Prompt{{Text: "a"}})
+	c.dirs = append(c.dirs, addedDir{path: "/two"})
+	second := c.main.tell([]pigruntime.Prompt{{Text: "b"}})
+
+	c.main.untell(first, second)
+
+	got := c.main.tell([]pigruntime.Prompt{{Text: "c"}})[0].Mode
+	assert.Contains(t, got, "/one")
+	assert.Contains(t, got, "/two")
+}
+
 func TestSubagentRunnerIsToldTheDirectoriesButNotTheMode(t *testing.T) {
 	c := &Controller{authority: policy.NewAuthority()}
 	c.cfg.Workspace = "/ws"

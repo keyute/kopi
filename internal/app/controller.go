@@ -1384,7 +1384,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 		stopCommand = c.main.clearQueueLocked()
 	}
 	c.main.sess, c.sessID, c.main.emit, c.main.bound, c.main.unsubscribe = sess, id, emit, bound, unsubscribe
-	c.main.told, c.main.dirsTold, c.main.dirsBefore = "", 0, 0
+	c.main.told, c.main.dirsTold = "", 0
 	c.titled = sess.Name() != ""
 	c.spent = pigruntime.Usage{}
 	c.deferred = nil

@@ -428,6 +428,23 @@ func TestTypedArgumentMenuEnterSendsTheDraftWhilePendingAndWhenTypedInFull(t *te
 	})
 }
 
+func TestTypedArgumentMenuEnterRunsADirectoryTypedWithoutItsSlash(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newTypedMenuModel(t)
+		settle(m, keys(m, "/add-dir ../pig"))
+		press(m, enter)
+		assert.Equal(t, []string{"/add-dir ../pig"}, c.submitted)
+
+		m, c = newTypedMenuModel(t)
+		settle(m, keys(m, "/add-dir ../pig"))
+		press(m, tab)
+		assert.Equal(t, "/add-dir ../pig", m.composer.value(), "the first Tab lights the row")
+		press(m, tab)
+		assert.Equal(t, "/add-dir ../pig/", m.composer.value())
+		assert.Empty(t, c.submitted)
+	})
+}
+
 func TestListArgumentIsLoadedOnce(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, c := newTypedMenuModel(t)

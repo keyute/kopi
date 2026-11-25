@@ -142,21 +142,34 @@ func (r *runner) tell(ps []pigruntime.Prompt) []pigruntime.Prompt {
 			r.told = line
 		}
 	}
+	from := -1
 	if n := r.c.dirCount(); n > r.dirsTold {
 		lines = append(lines, r.c.dirsText(r.dirsTold, n))
-		r.dirsBefore, r.dirsTold = r.dirsTold, n
+		from, r.dirsTold = r.dirsTold, n
 	}
-	ps[len(ps)-1].Mode = strings.Join(lines, "\n")
+	mode := strings.Join(lines, "\n")
+	ps[len(ps)-1].Mode = mode
+	if from >= 0 {
+		if r.dirsFrom == nil {
+			r.dirsFrom = map[string]int{}
+		}
+		r.dirsFrom[mode] = from
+	}
 	return ps
 }
 
 // untell forgets what was told when a prompt that carried it was not
-// delivered. It must be called with queue held.
+// delivered: the mode line, and the directories back to where the earliest such
+// prompt that carried any began. It must be called with queue held.
 func (r *runner) untell(ps ...[]pigruntime.Prompt) {
 	for _, group := range ps {
 		for _, p := range group {
-			if p.Mode != "" {
-				r.told, r.dirsTold = "", r.dirsBefore
+			if p.Mode == "" {
+				continue
+			}
+			r.told = ""
+			if from, ok := r.dirsFrom[p.Mode]; ok {
+				r.dirsTold = min(r.dirsTold, from)
 			}
 		}
 	}

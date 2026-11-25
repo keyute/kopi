@@ -200,6 +200,10 @@ func (c *Controller) reach(p *pendingDir, files []instruction.File) error {
 		return err
 	}
 	c.mu.Lock()
+	// Another pending add under the same git root may have been applied since
+	// files were listed.
+	sent := c.sentFilesLocked()
+	files = slices.DeleteFunc(slices.Clone(files), func(f instruction.File) bool { return sent[f.Path] })
 	c.dirs = append(c.dirs, addedDir{path: p.dir, files: files})
 	c.mu.Unlock()
 	return nil
@@ -219,22 +223,29 @@ func (c *Controller) typedDir(arg string) string {
 	return filepath.Clean(arg)
 }
 
-// newInstructionFiles reads the instruction files of dir, from the git root
-// down, that the model has not been sent yet. They are held in memory until the
-// human trusts dir.
-func (c *Controller) newInstructionFiles(dir string) []instruction.File {
+// sentFilesLocked is the paths of the instruction files the model has been or
+// will be sent. It must be called with mu held.
+func (c *Controller) sentFilesLocked() map[string]bool {
 	sent := map[string]bool{}
 	for _, g := range c.cfg.Instructions {
 		for _, f := range g.Files {
 			sent[f.Path] = true
 		}
 	}
-	c.mu.Lock()
 	for _, d := range c.dirs {
 		for _, f := range d.files {
 			sent[f.Path] = true
 		}
 	}
+	return sent
+}
+
+// newInstructionFiles reads the instruction files of dir, from the git root
+// down, that the model has not been sent yet. They are held in memory until the
+// human trusts dir.
+func (c *Controller) newInstructionFiles(dir string) []instruction.File {
+	c.mu.Lock()
+	sent := c.sentFilesLocked()
 	c.mu.Unlock()
 	groups, errs := instruction.Load("", []instruction.Root{{Dir: dir, Trusted: true}}, c.cfg.InstructionFallbacks)
 	for _, err := range errs {

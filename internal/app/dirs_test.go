@@ -205,6 +205,27 @@ func TestAddDirAsksWhenNoDecisionCoversTheDirectory(t *testing.T) {
 	}
 }
 
+func TestAddDirSendsAnInstructionFileSharedByTwoPendingAddsOnce(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	root := canonicalTemp(t)
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("SHARED_RULE\n"), 0o600))
+	a, b := filepath.Join(root, "a"), filepath.Join(root, "b")
+	require.NoError(t, os.Mkdir(a, 0o700))
+	require.NoError(t, os.Mkdir(b, 0o700))
+	requests := subscribeTo[event.DirRequested](d.c)
+
+	require.NoError(t, d.c.AddDir(a))
+	require.NoError(t, d.c.AddDir(b))
+	first, second := receiveEvent(t, requests), receiveEvent(t, requests)
+	assert.Equal(t, []string{filepath.Join(root, "AGENTS.md")}, first.Instructions)
+	assert.Equal(t, first.Instructions, second.Instructions)
+	assert.True(t, d.c.AnswerDir(first.Token, true, true))
+	assert.True(t, d.c.AnswerDir(second.Token, true, true))
+
+	assert.Equal(t, 1, strings.Count(d.c.dirsText(0, d.c.dirCount()), "SHARED_RULE"))
+}
+
 func TestAddDirAddsAtOnceWhenADecisionCoversIt(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

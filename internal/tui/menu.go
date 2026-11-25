@@ -180,7 +180,7 @@ func (mn *menu) lit() bool {
 	if mn.arg == "" {
 		return !mn.optional
 	}
-	return !slices.ContainsFunc(mn.items, func(cd app.Candidate) bool { return cd.Value == mn.arg })
+	return !slices.ContainsFunc(mn.items, func(cd app.Candidate) bool { return cd.Value == mn.arg || cd.Value == mn.arg+"/" })
 }
 
 func (m *model) menuHeight() int { return m.geo.menu }
