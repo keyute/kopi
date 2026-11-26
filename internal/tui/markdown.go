@@ -81,7 +81,14 @@ func (md *markdown) lines(key, text string) []string {
 			c.lines = prev[i].lines
 		} else {
 			md.renders++
-			c.lines = md.block(n, src, md.width, fg(md.th.text))
+			// Nothing is wider than the width, however deep a block nests.
+			for _, l := range md.block(n, src, md.width, fg(md.th.text)) {
+				if lipgloss.Width(l) > md.width {
+					c.lines = append(c.lines, cutRow(l, max(1, md.width))...)
+					continue
+				}
+				c.lines = append(c.lines, l)
+			}
 		}
 		chunks = append(chunks, c)
 		if len(out) > 0 && len(c.lines) > 0 && gap(n) {
@@ -147,7 +154,7 @@ func (md *markdown) block(n ast.Node, src []byte, width int, st lipgloss.Style) 
 // gap reports whether a blank row goes above block n: always, except under a
 // heading the source puts text right under.
 func gap(n ast.Node) bool {
-	if prev := n.PreviousSibling(); prev == nil || prev.Kind() != ast.KindHeading {
+	if prev := n.PreviousSibling(); prev == nil || prev.Kind() != ast.KindHeading || prev.FirstChild() == nil {
 		return true
 	}
 	b, ok := n.(interface{ HasBlankPreviousLines() bool })
@@ -183,8 +190,26 @@ func prefixed(st lipgloss.Style, first, rest string, rows []string) []string {
 	return out
 }
 
+// wrapRows wraps s at width. x/ansi's wrap lets a hyphen after a space hang
+// past the width (charmbracelet/x#785): such a row is wrapped again that much
+// narrower, and cut if it still hangs.
 func wrapRows(s string, width int) []string {
-	return strings.Split(lipgloss.Wrap(s, width, ""), "\n")
+	var out []string
+	for _, r := range strings.Split(lipgloss.Wrap(s, width, ""), "\n") {
+		over := lipgloss.Width(r) - width
+		if over <= 0 {
+			out = append(out, r)
+			continue
+		}
+		for _, p := range strings.Split(lipgloss.Wrap(r, max(1, width-over), ""), "\n") {
+			if lipgloss.Width(p) > width {
+				out = append(out, cutRow(p, width)...)
+				continue
+			}
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func rawText(n ast.Node, src []byte) string {
@@ -322,9 +347,21 @@ func plainText(text []byte) []byte {
 }
 
 func (md *markdown) table(n *east.Table, src []byte, width int, st lipgloss.Style) []string {
+	cols := len(n.Alignments)
+	var cells [][]string
+	widths := make([]int, cols)
+	for row := n.FirstChild(); row != nil; row = row.NextSibling() {
+		var cs []string
+		for cell := row.FirstChild(); cell != nil; cell = cell.NextSibling() {
+			c := md.inline(cell, src, st)
+			widths[len(cs)] = max(widths[len(cs)], lipgloss.Width(c))
+			cs = append(cs, c)
+		}
+		cells = append(cells, cs)
+	}
 	t := table.New().
-		Border(lipgloss.NormalBorder()).BorderTop(false).BorderBottom(false).BorderLeft(false).BorderRight(false).
-		BorderStyle(st).
+		Border(lipgloss.NormalBorder()).
+		BorderStyle(fg(md.th.dim)).
 		StyleFunc(func(_, col int) lipgloss.Style {
 			cell := lipgloss.NewStyle().Padding(0, 1)
 			switch n.Alignments[col] {
@@ -335,35 +372,39 @@ func (md *markdown) table(n *east.Table, src []byte, width int, st lipgloss.Styl
 			}
 			return cell
 		})
-	for row := n.FirstChild(); row != nil; row = row.NextSibling() {
-		var cells []string
-		for cell := row.FirstChild(); cell != nil; cell = cell.NextSibling() {
-			cells = append(cells, md.inline(cell, src, st))
-		}
-		if row.Kind() == east.KindTableHeader {
-			t.Headers(cells...)
-		} else {
-			t.Row(cells...)
-		}
+	// lipgloss shortens a header and can drop the end of a cell when it
+	// narrows a table, so a table wider than width is narrowed here: its
+	// widest column gives way a cell at a time and the cells wrap. Each column
+	// has two cells of padding and a rule before it, and one rule ends the row.
+	over := 3*cols + 1 - width
+	for _, w := range widths {
+		over += w
 	}
-	// A table that fits spans the width. For a wider one a width would make
-	// lipgloss ellipsize headers and split words, losing text, so it keeps its
-	// natural width and a row wider than width is cut.
-	s := t.String()
-	if lipgloss.Width(s) <= width {
-		s = t.Width(width).String()
-	}
-	var rows []string
-	for _, r := range strings.Split(s, "\n") {
-		r = strings.TrimRight(r, " ")
-		if sep := xansi.Strip(r); sep != "" && strings.Trim(sep, "─┼") == "" {
-			// The separator row has no words to keep.
-			rows = append(rows, xansi.Truncate(r, width, ""))
-			continue
+	if over <= 0 {
+		t.Headers(cells[0]...).Rows(cells[1:]...)
+	} else {
+		for ; over > 0; over-- {
+			widest := 0
+			for j, w := range widths {
+				if w > widths[widest] {
+					widest = j
+				}
+			}
+			if widths[widest] == 1 {
+				break
+			}
+			widths[widest]--
 		}
-		rows = append(rows, cutRow(r, width)...)
+		for _, cs := range cells {
+			for j, c := range cs {
+				cs[j] = strings.Join(wrapRows(c, widths[j]), "\n")
+			}
+		}
+		// lipgloss keeps one line of a header, so a wrapped header is a row
+		// like the others, with a rule between rows.
+		t.BorderRow(true).Rows(cells...)
 	}
-	return rows
+	return strings.Split(t.String(), "\n")
 }
 
 var (

@@ -1,10 +1,14 @@
 package tui
 
 import (
+	"bytes"
 	"fmt"
+	"html"
 	"image/color"
+	"regexp"
 	"strings"
 	"testing"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -158,9 +162,7 @@ func TestMarkdownReplacedTextIsDrawnAfresh(t *testing.T) {
 func TestMarkdownTableDirectlyAfterParagraphDraws(t *testing.T) {
 	got := renderMarkdown(" Results:\n| a | b |\n|---|---|\n| 1 | 2 |", 20)
 
-	require.Len(t, got, 5)
-	assert.Equal(t, "Results:", got[0])
-	assert.Contains(t, got[3], "─")
+	assert.Equal(t, []string{"Results:", "", "┌───┬───┐", "│ a │ b │", "├───┼───┤", "│ 1 │ 2 │", "└───┴───┘"}, got)
 }
 
 func TestMarkdownDrawsNoControlBytesFromReferences(t *testing.T) {
@@ -171,24 +173,27 @@ func TestMarkdownDrawsNoControlBytesFromReferences(t *testing.T) {
 	assert.Contains(t, got, "2J")
 }
 
-func TestMarkdownSmallTableSpansTheWidth(t *testing.T) {
+func TestMarkdownSmallTableIsDrawnAtItsContentWidth(t *testing.T) {
 	got := renderMarkdown("| a | b |\n|---|---|\n| 1 | 2 |", 60)
 
-	assert.Equal(t, " a                            │ b", got[0])
+	assert.Equal(t, []string{"┌───┬───┐", "│ a │ b │", "├───┼───┤", "│ 1 │ 2 │", "└───┴───┘"}, got)
 }
 
-func TestMarkdownWiderTableLosesNoText(t *testing.T) {
-	const src = "| Name | Description | Default | Type | Notes |\n|---|---|---|---|---|\n| timeout | How long to wait before giving up | 30s | duration | applies per call |"
-	got := renderMarkdown(src, 50)
-	for _, l := range got {
-		assert.LessOrEqual(t, ansi.StringWidth(l), 50)
-	}
-	// A cut splits a word over two rows; no text is dropped.
-	joined := strings.Join(got, "")
-	for _, word := range []string{"Default", "How long to wait before giving up", "applies per call"} {
-		assert.Contains(t, joined, word)
-	}
-	assert.NotContains(t, joined, "…")
+func TestMarkdownTableWiderThanTheWidthWrapsItsCells(t *testing.T) {
+	const src = "| Name | Description | Default | Type | Notes |\n|---|---|---|---|---|\n| timeout | How long to wait before giving up | 30s | duration | applies per call |\n| retries | How many times | 3 | int | |"
+	got := renderMarkdown(src, 82)
+
+	assert.Equal(t, []string{
+		"┌─────────┬─────────────────────────┬─────────┬──────────┬──────────────────┐",
+		"│ Name    │ Description             │ Default │ Type     │ Notes            │",
+		"├─────────┼─────────────────────────┼─────────┼──────────┼──────────────────┤",
+		"│ timeout │ How long to wait before │ 30s     │ duration │ applies per call │",
+		"│         │ giving up               │         │          │                  │",
+		"├─────────┼─────────────────────────┼─────────┼──────────┼──────────────────┤",
+		"│ retries │ How many times          │ 3       │ int      │                  │",
+		"└─────────┴─────────────────────────┴─────────┴──────────┴──────────────────┘",
+	}, got)
+	assert.NotContains(t, strings.Join(got, ""), "…")
 }
 
 func TestMarkdownHTMLBlockKeepsItsClosingLine(t *testing.T) {
@@ -289,19 +294,21 @@ func TestMarkdownHardBreakStartsANewRow(t *testing.T) {
 }
 
 func TestMarkdownTableAlignsColumnsPerSource(t *testing.T) {
-	got := renderMarkdown("| a | b |\n|---|--:|\n| x | 1 |\n| y | 22 |", 40)
-	require.Len(t, got, 4)
-	assert.Equal(t, " x                  │                 1", got[2])
-	assert.Equal(t, " y                  │                22", got[3])
+	got := renderMarkdown("| name | n |\n|:--|--:|\n| x | 1 |\n| y | 22 |", 40)
+	assert.Equal(t, []string{"┌──────┬────┐", "│ name │  n │", "├──────┼────┤", "│ x    │  1 │", "│ y    │ 22 │", "└──────┴────┘"}, got)
 }
 
 func TestMarkdownTableCentresColumnsPerSource(t *testing.T) {
-	assert.Equal(t, []string{"    a     │       b", "──────────┼─────────", "    x     │       1"}, renderMarkdown("| a | b |\n|:-:|--:|\n| x | 1 |", 20))
+	got := renderMarkdown("| name | n |\n|:-:|:-:|\n| x | 1 |", 40)
+	assert.Equal(t, []string{"┌──────┬───┐", "│ name │ n │", "├──────┼───┤", "│  x   │ 1 │", "└──────┴───┘"}, got)
 }
 
-func TestMarkdownWiderTableCutsItsSeparatorRow(t *testing.T) {
-	got := renderMarkdown("| aaaaaaaaaaaa | bbbbbbbbbbbbbb |\n|---|---|\n| x | y |", 10)
-	assert.Equal(t, []string{" aaaaaaaaa", "aaa │ bbbb", "bbbbbbbbbb", "──────────", " x        ", "    │ y"}, got)
+func TestMarkdownEmptyHeadingIsNotTheHeadingABlockSitsUnder(t *testing.T) {
+	assert.Equal(t, []string{"before", "", "after"}, renderMarkdown("before\n\n#\nafter", 30))
+}
+
+func TestMarkdownRowWithAHangingDashStaysInsideTheWidth(t *testing.T) {
+	assert.Equal(t, []string{"the gate", "returns -", "keeps a long row"}, renderMarkdown("the gate returns - keeps a long row", 16))
 }
 
 func TestMarkdownMultiLineCommentKeepsItsColourOnEachRow(t *testing.T) {
@@ -375,5 +382,78 @@ func TestMarkdownWideTableFitsTheWidthInsideAList(t *testing.T) {
 	const src = "- | a | b |\n  |---|---|\n  | " + "xxxxxxxxxxxxxxxxxxxx | yyyyyyyyyyyyyyyyyyyy |"
 	for _, l := range renderMarkdown(src, 20) {
 		assert.LessOrEqual(t, ansi.StringWidth(l), 20)
+	}
+}
+
+var markdownTags = regexp.MustCompile(`(?s)<[^>]*>`)
+
+func squashSpace(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+func runeCounts(s string) map[rune]int {
+	m := map[rune]int{}
+	for _, r := range s {
+		m[r]++
+	}
+	return m
+}
+
+func TestMarkdownProperties(t *testing.T) {
+	const hyphens = "The well-known read-only plan-mode profile - which is chosen from the mode the gate returns - keeps a long-running renderer from being re-drawn on every key-press - end"
+	const wide3 = "| File | Change | Why |\n|---|---|---|\n| `tui/markdown.go` | rewritten over goldmark | glamour had no hook |"
+	const wide5 = "| Name | Description | Default | Type | Notes |\n|---|---|---|---|---|\n| timeout | How long to wait | 30s | duration | per call |"
+	const cjk = "| 名前 | 説明 |\n|---|---|\n| タイムアウト | 待機する **bold** [l](https://x.io) |"
+	corpus := []string{
+		"# Title\n\nSome text.", "a paragraph\nover two lines",
+		"> quoted text\n> over two lines", "- one\n- two\n  - nested",
+		"- [ ] todo\n- [x] done", "```go\nfunc main() {}\n```", "```\nplain fence long line\n```",
+		"    indented", "above\n\n---\n\nbelow", "| a | b |\n|---|---|\n| 1 | 2 |", "<div>\nhtml block\n</div>",
+		"`code`, *em*, **strong**, ~~strike~~, [link](https://x.io/a-b), ![alt](a.png), <https://x.io> <b>raw</b>",
+		"hard\\\nbreak and a \\* escape &amp; &lt;entity&gt;",
+		"- `c` **s** [l](https://x.io)\n- > quoted\n- ```\n  fenced\n  ```",
+		"> - ~~struck~~ ![i](a.png)\n>\n> ```\n> fenced\n> ```",
+		hyphens, "- " + hyphens, "> " + hyphens,
+		"| a | b |\n|:-:|--:|\n| x | 1 |", wide3, wide5, cjk,
+		"- item\n\n  | a | b |\n  |---|---|\n  | one two three | four five six |", "> | k | v |\n> |---|---|\n> | key | a value long enough to wrap |",
+		"one paragraph\n\n#\n\nanother paragraph",
+		"1. **First**\n\n   Explained here.\n\n   ```sh\n   ! kopi login --flag=value\n   ```\n\n2. **Second**\n   - nested bullet\n     > and a quote",
+	}
+	th := mocha()
+	for _, src := range corpus {
+		var buf bytes.Buffer
+		require.NoError(t, markdownEngine.Convert([]byte(clean(src)), &buf))
+		want := runeCounts(squashSpace(html.UnescapeString(markdownTags.ReplaceAllString(buf.String(), ""))))
+
+		for width := 1; width <= 120; width++ {
+			rows := newMarkdown(width, th).lines("k", src)
+			for _, r := range rows {
+				if ansi.StringWidth(r) > max(2, width) {
+					require.FailNowf(t, "row too wide", "width %d for %q: %q", width, src, ansi.Strip(r))
+				}
+			}
+
+			got := runeCounts(squashSpace(ansi.Strip(strings.Join(rows, "\n"))))
+			for r, n := range want {
+				if got[r] < n {
+					require.FailNowf(t, "text dropped", "rune %q at width %d for %q", r, width, src)
+				}
+			}
+
+			if width != 80 && width != 24 {
+				continue
+			}
+			md := newMarkdown(width, th)
+			var streamed []string
+			for i := range len(src) + 1 {
+				streamed = md.lines("k", src[:i])
+			}
+			require.Equal(t, rows, streamed, "streamed reply differs at width %d for %q", width, src)
+		}
 	}
 }
