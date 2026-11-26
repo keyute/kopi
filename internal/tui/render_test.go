@@ -616,7 +616,7 @@ func TestFailedRowDrawsErrorSummaryAndCapsItsBody(t *testing.T) {
 	six := transcript.Call{ID: "a", State: transcript.Failed, Title: "t", Summary: "failed", Body: five + "6\n"}
 	got = renderRow(six, blockFolds{expanded: []bool{false}}, 40, th).rows
 	assert.Equal(t, hit{kind: hitOutput, id: "a"}, got[0].hit)
-	assert.Equal(t, hit{}, got[1].hit)
+	assert.Equal(t, hit{kind: hitOutput, id: "a"}, got[1].hit)
 	var text []string
 	for _, l := range got {
 		text = append(text, ansi.Strip(l.text))

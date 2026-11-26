@@ -229,7 +229,7 @@ The bullet is green for a call that succeeded, yellow for one you or a rule refu
 - An opened result is the model's text, so it includes notices written to the model, such as `use offset=2001 to continue`. A `Read` row shows its line numbers right-aligned to the widest, without the padding the model receives.
 - An edit's lines show without surrounding context or line numbers.
 - Colour in command output is not kept.
-- Only the row's title line opens and closes it; scroll up to close a long body.
+- Only the row's title line and its `↳` line open and close it; scroll up to close a long body.
 
 In a reply, HTML is shown as written, a line break inside a paragraph is kept, a link is shown as its text with the URL in parentheses and an image as its text and URL, without a title, and footnotes are not supported: a `[^1]` reads as a link reference. A table is boxed and as wide as its content; one wider than the terminal wraps its cells, with a rule between rows. A table too narrow for one cell per column is shown as pipe text.
 
@@ -287,7 +287,7 @@ A command is a shaded block: `!` and the command, a status line under it, then t
 
 ## Mouse
 
-- Click a folded group to open it, and a row that [opens](#transcript) to open or close it. Only the row's title line takes the click.
+- Click a folded group to open it, and a row that [opens](#transcript) to open or close it. The row's title line and the `↳` line under it take the click; the output it opens to does not.
 - Drag in the transcript to select text; it is copied on release. Double-click selects a word, triple-click a line.
 - Drag in the input to select text; it is copied on release. A click places the cursor. Double-click selects a word, triple-click the whole line across wraps.
 - Dragging after a double- or triple-click extends the selection by words or lines.
