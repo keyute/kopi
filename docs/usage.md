@@ -231,7 +231,7 @@ The bullet is green for a call that succeeded, yellow for one you or a rule refu
 - Colour in command output is not kept.
 - Only the row's title line opens and closes it; scroll up to close a long body.
 
-In a reply, HTML is shown as written, a line break inside a paragraph is kept, a link is shown as its text with the URL in parentheses, an image is shown as its text and URL, and footnotes are not supported: a `[^1]` reads as a link reference. A table is boxed and as wide as its content; one wider than the terminal wraps its cells, with a rule between rows. A table too narrow for one cell per column is shown as pipe text.
+In a reply, HTML is shown as written, a line break inside a paragraph is kept, a link is shown as its text with the URL in parentheses and an image as its text and URL, without a title, and footnotes are not supported: a `[^1]` reads as a link reference. A table is boxed and as wide as its content; one wider than the terminal wraps its cells, with a rule between rows. A table too narrow for one cell per column is shown as pipe text.
 
 ## Menus and highlighting
 

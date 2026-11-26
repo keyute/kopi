@@ -60,13 +60,7 @@ func (c *composer) historyNext() bool {
 	}
 	h.back--
 	if h.back == 0 {
-		trial := c.ta
-		trial.SetValue(h.saved)
-		if trial.Value() != sanitizedText(h.saved) {
-			text, imgs := c.expand(h.saved)
-			trial.SetValue(c.collapse(text, imgs))
-		}
-		c.ta, c.bang = trial, false
+		c.setDraft(h.saved)
 	} else {
 		c.showHistory(h.entries[len(h.entries)-h.back])
 	}

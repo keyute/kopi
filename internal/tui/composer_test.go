@@ -293,6 +293,26 @@ func TestBackspaceAtTheStartOfACommandKeepsTheBangOfTheText(t *testing.T) {
 	assert.Equal(t, " !ls", m.composer.value())
 }
 
+func TestBackspaceAtTheStartOfACommandCollapsesWhatTheLeadingSpaceOverflows(t *testing.T) {
+	m, _ := newTestModel(t, 30, 30)
+	// The text fills both rows, so the leading space overflows them.
+	text := "!" + strings.Repeat("w", 2*m.composer.ta.Width()-1)
+	typeText(m, "!"+text)
+	m.syncInput(false)
+	require.True(t, m.composer.bang)
+	require.Equal(t, text, m.composer.ta.Value())
+	m.composer.ta.MaxContentHeight = 2
+
+	m.composer.ta.MoveToBegin()
+	press(m, backspace)
+	m.syncInput(false)
+
+	assert.False(t, m.composer.bang)
+	assert.True(t, strings.HasPrefix(m.composer.value(), "[paste"))
+	expanded, _ := m.composer.expanded()
+	assert.Equal(t, " "+text, expanded)
+}
+
 func TestTypingABangInFrontOfTextMakesItACommand(t *testing.T) {
 	m, _ := newTestModel(t, 40, 20)
 	typeText(m, "ls")

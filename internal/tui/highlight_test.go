@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"image/color"
 	"strings"
 	"testing"
 
@@ -203,4 +204,19 @@ func TestComposerTurnsRedWhileTheDraftIsAShellCommand(t *testing.T) {
 	m.syncInput(false)
 	assert.Equal(t, blank(shade(m.th)), view()[0])
 	assert.Contains(t, glyph(view()), shade(m.th).Foreground(m.th.accent).Render("❯ "))
+}
+
+func TestComposerKeepsTheRedGlyphAcrossAThemeChange(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	typeText(m, "!ls")
+	m.syncInput(false)
+	before := m.th
+
+	m.Update(tea.BackgroundColorMsg{Color: color.White})
+	if m.th == before {
+		m.Update(tea.BackgroundColorMsg{Color: color.Black})
+	}
+	require.NotEqual(t, before, m.th)
+
+	assert.Contains(t, m.composer.view(m.width, m.th)[1], commandShade(m.th).Foreground(m.th.error).Render("! "))
 }

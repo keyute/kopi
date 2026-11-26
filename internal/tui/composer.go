@@ -218,13 +218,7 @@ func (c *composer) update(msg tea.Msg) tea.Cmd {
 			c.bang = false
 			// The textarea may itself start with "!", which would be swallowed again.
 			if v := app.AsPrompt(c.ta.Value()); v != c.ta.Value() {
-				trial := c.ta
-				trial.SetValue(v)
-				if trial.Value() != sanitizedText(v) {
-					text, imgs := c.expand(v)
-					trial.SetValue(c.collapse(text, imgs))
-				}
-				c.ta = trial
+				c.setDraft(v)
 				c.ta.MoveToBegin()
 			}
 			return nil
@@ -535,6 +529,19 @@ func (c *composer) insertImage(path string) tea.Cmd {
 	return nil
 }
 
+// setDraft replaces the draft with v as a prompt. When the textarea cannot
+// hold v, either by logical lines or soft wraps, the full expanded input and
+// its image references are kept outside it, behind markers.
+func (c *composer) setDraft(v string) {
+	trial := c.ta
+	trial.SetValue(v)
+	if trial.Value() != sanitizedText(v) {
+		text, imgs := c.expand(v)
+		trial.SetValue(c.collapse(text, imgs))
+	}
+	c.ta, c.bang = trial, false
+}
+
 // collapseDraft replaces the draft with one block holding want, the intended
 // text of the textarea; a command's "!" goes into the block, which is never one.
 func (c *composer) collapseDraft(want string) {
@@ -610,15 +617,7 @@ func (c *composer) restore(inputs []event.Input) {
 		parts = append(parts, draft)
 	}
 	joined := strings.Join(parts, "\n\n")
-	trial := c.ta
-	trial.SetValue(joined)
-	if trial.Value() != sanitizedText(joined) {
-		// Keep the full expanded input and its image references outside the
-		// textarea when either logical lines or soft wraps exceed its limits.
-		text, imgs := c.expand(joined)
-		trial.SetValue(c.collapse(text, imgs))
-	}
-	c.ta, c.bang = trial, false
+	c.setDraft(joined)
 	c.lastPaste = ""
 	c.stopBrowsing()
 }

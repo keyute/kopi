@@ -365,6 +365,7 @@ func TestMarkdownTextAndLists(t *testing.T) {
 		{"inline html as written", "a <b>bold</b> c", []string{"a <b>bold</b> c"}},
 		{"image as text and URL", "![alt](https://e.com/i)", []string{"alt", "(https://e.com/i)"}},
 		{"code span across a line", "a `b\nc` d", []string{"a b c d"}},
+		{"footnote read as a link reference", "a[^1]\n\n[^1]: note", []string{"a^1 (note)"}},
 		{"escaped entity", `\&amp; &amp;`, []string{"&amp; &"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -587,7 +588,7 @@ func TestMarkdownProperties(t *testing.T) {
 		for width := 1; width <= 120; width++ {
 			rows := newMarkdown(width, th).lines("k", src)
 			for _, r := range rows {
-				if ansi.StringWidth(r) > max(2, width) {
+				if ansi.StringWidth(r) > rowLimit(width, r) {
 					require.FailNowf(t, "row too wide", "width %d for %q: %q", width, src, ansi.Strip(r))
 				}
 			}
@@ -616,6 +617,14 @@ func TestMarkdownProperties(t *testing.T) {
 	}
 }
 
+// rowLimit is width, except that at width 1 a rune of two columns cannot be split.
+func rowLimit(width int, row string) int {
+	if width == 1 && strings.ContainsFunc(ansi.Strip(row), func(r rune) bool { return ansi.StringWidth(string(r)) > 1 }) {
+		return 2
+	}
+	return width
+}
+
 func FuzzMarkdown(f *testing.F) {
 	for _, s := range []string{
 		"| a |\n|---|\n| 1 | 2 | 3 |", "| a | b |\n|---|---|\n| 1 |", "- a\n  - b\n\n    c\n> q\n```go\nx\n", "1. a\n\n   | x | y |\n   |:-:|--:|\n   | 日本 | `c` |",
@@ -631,7 +640,7 @@ func FuzzMarkdown(f *testing.F) {
 		width := int(w%100) + 1
 		rows := newMarkdown(width, mocha()).lines("k", src)
 		for _, r := range rows {
-			require.LessOrEqual(t, ansi.StringWidth(r), max(2, width), "row %q", ansi.Strip(r))
+			require.LessOrEqual(t, ansi.StringWidth(r), rowLimit(width, r), "row %q", ansi.Strip(r))
 		}
 
 		var buf bytes.Buffer
