@@ -56,6 +56,7 @@ func (t *Transcript) Apply(ev event.Event) {
 			t.items = append(t.items, item{kind: userItem, text: ev.Prompt})
 		}
 	case event.UserMessage:
+		t.finishReply()
 		// History restores a steered message as a TurnStart; both draw the
 		// same block.
 		t.items = append(t.items, item{kind: userItem, text: ev.Text})
@@ -122,8 +123,10 @@ func (t *Transcript) Apply(ev event.Event) {
 		t.settleUnfinished()
 		t.items = append(t.items, item{kind: turnItem, outcome: ev.Outcome, elapsed: ev.Elapsed})
 	case event.TaskEnded:
+		t.finishReply()
 		t.items = append(t.items, item{kind: taskItem, task: ev})
 	case event.UserCommand:
+		t.finishReply()
 		t.items = append(t.items, item{kind: commandItem, command: ev})
 	case event.PlanRequested:
 		// The plan's tool is exclusive, so its call is the one solo call running.

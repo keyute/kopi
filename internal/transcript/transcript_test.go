@@ -392,6 +392,32 @@ func TestWorkflowTaskEndedCarriesItsOutcome(t *testing.T) {
 	assert.Equal(t, want, restored.Blocks())
 }
 
+func TestLastReplyFollowUp(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input event.Event
+	}{
+		{"user", event.UserMessage{Text: "b"}},
+		{"task", event.TaskEnded{ID: "t1"}},
+		{"command", event.UserCommand{Command: "make"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var tr Transcript
+			tr.Apply(event.TurnStart{Prompt: "old"})
+			tr.Apply(event.TextDelta{Text: "older"})
+			tr.Apply(event.TurnEnd{})
+			tr.Apply(event.TurnStart{Prompt: "a"})
+			tr.Apply(event.TextDelta{Text: "first"})
+			tr.Apply(tc.input)
+			tr.Apply(event.TextDelta{Text: "partial"})
+			assert.Equal(t, "first", tr.LastReply())
+			tr.Apply(event.TextDelta{Text: " done"})
+			tr.Apply(event.TurnEnd{})
+			assert.Equal(t, "partial done", tr.LastReply())
+		})
+	}
+}
+
 func TestLastReply(t *testing.T) {
 	apply := func(evs ...event.Event) *Transcript {
 		var tr Transcript
