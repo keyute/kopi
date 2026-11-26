@@ -116,7 +116,10 @@ func TestClickOnSingleOkRowTogglesOutput(t *testing.T) {
 		send(m, start("a"), okOut("a", "3 lines", "a1\na2"))
 
 		clickText(t, m, "  ↳ 3 lines")
-		assert.Equal(t, []string{"", "• a.go", "  ↳ 3 lines"}, body(m), "only the title line toggles")
+		assert.Equal(t, []string{"", "• a.go", "  ↳ 3 lines", "      a1", "      a2"}, body(m))
+
+		clickText(t, m, "  ↳ 3 lines")
+		assert.Equal(t, []string{"", "• a.go", "  ↳ 3 lines"}, body(m))
 
 		clickText(t, m, "• a.go")
 		assert.Equal(t, []string{"", "• a.go", "  ↳ 3 lines", "      a1", "      a2"}, body(m))
@@ -165,14 +168,11 @@ func TestLongFailureOpensByClickAndByCtrlO(t *testing.T) {
 		collapsed := []string{"", "• a.go", "  ↳ exit code 1 · 12 lines", "      l1", "      l2", "      … 8 more lines", "      l11", "      l12"}
 		require.Equal(t, collapsed, body(m))
 
-		clickText(t, m, "  ↳ exit code 1 · 12 lines")
-		assert.Equal(t, collapsed, body(m), "only the title line toggles")
-
-		clickText(t, m, "• a.go")
 		open := []string{"", "• a.go", "  ↳ exit code 1 · 12 lines"}
 		for _, l := range lines {
 			open = append(open, "      "+l)
 		}
+		clickText(t, m, "  ↳ exit code 1 · 12 lines")
 		assert.Equal(t, open, body(m))
 
 		clickText(t, m, "• a.go")
@@ -306,6 +306,9 @@ func TestTaskResultFoldTogglesByClickAndCtrlO(t *testing.T) {
 
 		clickText(t, m, "• workflow finished · audit route handlers · 6m 3s")
 		assert.Equal(t, append(closed, "      result"), body(m))
+
+		clickText(t, m, "  ↳ 1 agent")
+		assert.Equal(t, closed, body(m))
 	})
 }
 
