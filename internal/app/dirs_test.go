@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/event"
+	"github.com/keyute/kopi/internal/instruction"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
@@ -524,6 +525,198 @@ func TestAddDirIsAllowedWhileATurnRuns(t *testing.T) {
 	assert.Equal(t, event.Notice{Text: "Added " + dir + " to the workspace."}, receiveEvent(t, notices))
 	close(release)
 	wait(t, w.Done())
+}
+
+// addTrusted adds dir, whose trust decision is saved, and waits for the add to land.
+func (d *dirHarness) addTrusted(t *testing.T, dir string) {
+	t.Helper()
+	decide(t, d.c, dir, trust.Trusted)
+	require.NoError(t, d.c.AddDir(dir))
+}
+
+func TestRemoveDirMatchesTheGivenSpellingTheRealPathAndAResolvedPath(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	dir := canonicalTemp(t)
+	alias := filepath.Join(canonicalTemp(t), "alias")
+	require.NoError(t, os.Symlink(dir, alias))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), nil, 0o600))
+	decide(t, d.c, dir, trust.Untrusted)
+	notices := subscribeTo[event.Notice](d.c)
+
+	start, err := trust.Canonical(d.sb.Workspace)
+	require.NoError(t, err)
+	relative, err := filepath.Rel(start, dir)
+	require.NoError(t, err)
+	for _, tc := range []struct{ add, remove string }{
+		{alias, alias},
+		{alias, dir},
+		{dir, relative},
+		{dir, alias},
+	} {
+		arg := tc.remove
+		require.NoError(t, d.c.AddDir(tc.add))
+		require.True(t, d.denied(t, filepath.Join(dir, ".env")))
+		receiveEvent(t, notices)
+
+		require.NoError(t, d.c.RemoveDir(arg), arg)
+
+		assert.Equal(t, event.Notice{Text: "Removed " + dir + " from the workspace."}, receiveEvent(t, notices), arg)
+		assert.NoError(t, d.ws.CanAdd(dir), arg)
+		assert.False(t, d.denied(t, filepath.Join(dir, ".env")), arg)
+		assert.Empty(t, liveDirs(d.c.dirs), arg)
+	}
+	assert.Equal(t, []string{dir}, d.sandboxed[len(d.sandboxed)-2], "the sandbox is given the real path")
+	assert.Equal(t, []string{}, d.sandboxed[len(d.sandboxed)-1])
+}
+
+func TestRemoveDirRefusals(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	dir := canonicalTemp(t)
+	d.addTrusted(t, dir)
+
+	assert.ErrorIs(t, d.c.RemoveDir(""), ErrMissingArgument)
+	assert.EqualError(t, d.c.RemoveDir(""), "missing argument: /remove-dir needs a directory")
+	assert.EqualError(t, d.c.RemoveDir(d.sb.Workspace), "failed to remove "+d.sb.Workspace+": directory was not added to the workspace")
+	assert.ErrorIs(t, d.c.RemoveDir(canonicalTemp(t)), ErrNotAdded)
+	assert.Len(t, liveDirs(d.c.dirs), 1)
+	require.NoError(t, d.c.Close(t.Context()))
+	assert.ErrorIs(t, d.c.RemoveDir(dir), ErrNoSession)
+}
+
+func TestRemoveDirKeepsTheDirectoryWhenTheSandboxRefuses(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	dir := canonicalTemp(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), nil, 0o600))
+	d.addTrusted(t, dir)
+	d.sandboxed = nil
+	d.sandboxErr = errors.New("boom")
+
+	err := d.c.RemoveDir(dir)
+
+	assert.EqualError(t, err, "failed to remove "+dir+": boom")
+	assert.Equal(t, [][]string{{}, {dir}}, d.sandboxed, "the previous list is put back")
+	assert.True(t, d.denied(t, filepath.Join(dir, ".env")), "the rules still reach it")
+	assert.ErrorIs(t, d.ws.CanAdd(dir), tool.ErrInWorkspace, "the directory is still in the workspace")
+	assert.Len(t, liveDirs(d.c.dirs), 1)
+	assert.Equal(t, 1, d.c.dirCount())
+}
+
+func TestRemoveDirDropsReachBeforeTheRules(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	dir := canonicalTemp(t)
+	d.addTrusted(t, dir)
+	var deniedAtSandbox bool
+	var addable error
+	inner := d.c.cfg.SandboxDirs
+	d.c.cfg.SandboxDirs = func(dirs []string) error {
+		deniedAtSandbox = d.denied(t, filepath.Join(dir, ".env"))
+		addable = d.ws.CanAdd(dir)
+		return inner(dirs)
+	}
+
+	require.NoError(t, d.c.RemoveDir(dir))
+
+	assert.True(t, deniedAtSandbox, "no deny rule is dropped while the directory can be reached")
+	assert.ErrorIs(t, addable, tool.ErrInWorkspace, "the workspace goes after the sandbox")
+	assert.NoError(t, d.ws.CanAdd(dir))
+	assert.False(t, d.denied(t, filepath.Join(dir, ".env")))
+}
+
+func TestRemoveDirKeepsAnInstructionFileTheFirstOfTwoDirectoriesHeld(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	root := canonicalTemp(t)
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("SHARED_RULE\n"), 0o600))
+	a, b := filepath.Join(root, "a"), filepath.Join(root, "b")
+	require.NoError(t, os.Mkdir(a, 0o700))
+	require.NoError(t, os.Mkdir(b, 0o700))
+	d.addTrusted(t, a)
+	d.addTrusted(t, b)
+	assert.Equal(t, 1, strings.Count(d.c.dirsText(0, 2, true), "SHARED_RULE"), "sent once for both")
+
+	require.NoError(t, d.c.RemoveDir(a))
+
+	text := d.c.dirsText(0, d.c.dirCount(), true)
+	assert.Equal(t, 1, strings.Count(text, "SHARED_RULE"), "a session that starts now still gets it")
+	assert.Contains(t, text, "The workspace also includes "+b+".")
+	assert.NotContains(t, text, a)
+}
+
+func TestRemoveDirNamesTheDirectoryItIsStillReachableInside(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	parent := canonicalTemp(t)
+	child := filepath.Join(parent, "child")
+	require.NoError(t, os.Mkdir(child, 0o700))
+	d.addTrusted(t, child)
+	d.addTrusted(t, parent)
+	notices := subscribeTo[event.Notice](d.c)
+
+	require.NoError(t, d.c.RemoveDir(child))
+
+	assert.Equal(t, event.Notice{Text: "Removed " + child + " from the workspace. It is still reachable inside " + parent + "."}, receiveEvent(t, notices))
+}
+
+func TestRemoveDirCandidatesListTheAddedDirectoriesInOrder(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	first, second := canonicalTemp(t), canonicalTemp(t)
+	cs, err := d.c.Arguments("remove-dir", "")
+	require.NoError(t, err)
+	assert.Empty(t, cs)
+	d.addTrusted(t, second)
+	d.addTrusted(t, first)
+
+	cs, err = d.c.Arguments("remove-dir", "")
+
+	require.NoError(t, err)
+	assert.Equal(t, []Candidate{{Value: second}, {Value: first}}, cs)
+}
+
+func TestRemoveDirIsAllowedWhileATurnRuns(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	d := newDirHarness(t, Config{Tools: []tool.Tool{releaseTool(started, release)}}, true)
+	dir := canonicalTemp(t)
+	d.addTrusted(t, dir)
+	d.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.ToolCalls(call("Hold", "call-1")), pigruntimetest.Text("done")})
+	notices := subscribeTo[event.Notice](d.c)
+
+	w, err := d.c.Submit(t.Context(), Main, "hold")
+	require.NoError(t, err)
+	wait(t, started)
+	_, err = d.c.Submit(t.Context(), Main, "/remove-dir "+dir)
+
+	require.NoError(t, err)
+	assert.Equal(t, event.Notice{Text: "Removed " + dir + " from the workspace."}, receiveEvent(t, notices))
+	close(release)
+	wait(t, w.Done())
+}
+
+func TestDirsTextFoldsTheLog(t *testing.T) {
+	c := &Controller{}
+	c.cfg.Workspace = "/ws"
+	file := func(p string) []instruction.File { return []instruction.File{{Path: p, Text: "x"}} }
+	a, b, child := tool.Dir{Real: "/a"}, tool.Dir{Real: "/b"}, tool.Dir{Real: "/a/child"}
+	c.dirs = []addedDir{
+		{dir: a, files: file("/a/AGENTS.md")},
+		{dir: child},
+		{dir: a, removed: true},
+		{dir: a, files: file("/a/AGENTS.md")},
+		{dir: b},
+		{dir: b, removed: true},
+		{dir: child, removed: true},
+	}
+	also := func(dirs string) string {
+		return "The workspace also includes " + dirs + ". Give a path there as an absolute path; relative paths and Bash still start from /ws."
+	}
+
+	assert.Equal(t, also("/a")+"\nInstructions from /a/AGENTS.md:\nx", c.dirsText(0, 1, true))
+	assert.Equal(t, also("/a, /a/child")+"\nInstructions from /a/AGENTS.md:\nx", c.dirsText(0, 2, true))
+	assert.Equal(t, also("/a, /a/child"), c.dirsText(0, 2, false))
+	assert.Equal(t, "The workspace no longer includes /a.", c.dirsText(2, 3, true))
+	assert.Equal(t, also("/a/child, /a"), c.dirsText(1, 4, true), "removed and added again is named again, not called gone, and its file is not resent")
+	assert.Equal(t, also("/a")+"\nInstructions from /a/AGENTS.md:\nx", c.dirsText(0, 7, true), "only what is live is told")
+	assert.Empty(t, c.dirsText(4, 7, true), "a directory inside another added one is not gone")
+	assert.Empty(t, c.dirsText(4, 6, true), "an add undone inside the window says nothing")
+	assert.Equal(t, "The workspace no longer includes /b.", c.dirsText(5, 7, true))
 }
 
 func TestAddDirCommandNeedsAnArgument(t *testing.T) {

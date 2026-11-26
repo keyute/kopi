@@ -223,6 +223,20 @@ func (w *Workspace) Add(d Dir) (err error) {
 	return nil
 }
 
+// Remove drops the added directory whose real path is d.Real and reports
+// whether there was one. Its root is not closed: a running call holds a copy of
+// the view (in), and os.Root closes itself once nothing references it.
+func (w *Workspace) Remove(d Dir) bool {
+	w.more.mu.Lock()
+	defer w.more.mu.Unlock()
+	i := slices.IndexFunc(w.more.dirs, func(x *Workspace) bool { return x.realDir == d.Real })
+	if i < 0 {
+		return false
+	}
+	w.more.dirs = slices.Delete(w.more.dirs, i, i+1)
+	return true
+}
+
 func (w *Workspace) canAdd(dir string) error {
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err == nil {

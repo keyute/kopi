@@ -100,7 +100,7 @@ func (c *Controller) recall() string {
 		}
 	}
 	// The runtime calls recall during a compaction, with queue free; the
-	// directories not yet read arrive with the next prompt.
+	// directory changes not yet read arrive with the next prompt.
 	c.queue.Lock()
 	told := c.main.dirsTold
 	c.queue.Unlock()
@@ -117,10 +117,10 @@ func (c *Controller) planApproval() bool {
 
 // tell attaches to the last of ps what the model has not read yet: the current
 // mode line, for the main session only, and the directories added to the
-// workspace since the model last read any. ps carry no line of their own. It
-// records nothing as told: the prompt's ModeRead does once the model reads the
-// line, so text that was not read is offered again by the next tell. It must be
-// called with queue held.
+// workspace or removed from it since the model last read any. ps carry no line
+// of their own. It records nothing as told: the prompt's ModeRead does once the
+// model reads the line, so text that was not read is offered again by the next
+// tell. It must be called with queue held.
 //
 // Every prompt about to be sent to the main session's model passes through tell,
 // so it is also where the session's first human prompt is noticed for its title.
@@ -147,7 +147,9 @@ func (r *runner) tell(ps []pigruntime.Prompt) []pigruntime.Prompt {
 	}
 	n := c.dirCount()
 	if n > r.dirsTold {
-		lines = append(lines, c.dirsText(r.dirsTold, n, !r.noFiles))
+		if text := c.dirsText(r.dirsTold, n, !r.noFiles); text != "" {
+			lines = append(lines, text)
+		}
 	}
 	if len(lines) == 0 {
 		return ps

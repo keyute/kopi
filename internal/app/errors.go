@@ -21,6 +21,7 @@ var (
 	ErrMissingArgument    = errors.New("missing argument")
 	ErrStartupInterrupted = errors.New("failed to start MCP servers: startup was interrupted")
 	ErrLoggingIn          = errors.New("a login is under way")
+	ErrNotAdded           = errors.New("directory was not added to the workspace")
 	ErrTooManyAgents      = fmt.Errorf("%d subagents are already running", maxAgents)
 
 	// ErrTooManyWorkflows is wrapped with the configured limit as "%d workflows are already running".

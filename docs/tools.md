@@ -21,8 +21,9 @@
 
 ## File tools
 
-- The workspace is the start directory and the directories added with [`/add-dir`](usage.md#commands) or `--add-dir`, until Kopi exits. A relative path, and the default `path` of `Glob`, `Grep` and `LS`, mean the start directory. A file in an added directory is named by its absolute path, and results there are absolute paths.
+- The workspace is the start directory and the directories added with [`/add-dir`](usage.md#commands) or `--add-dir`, until `/remove-dir` removes one or Kopi exits. A relative path, and the default `path` of `Glob`, `Grep` and `LS`, mean the start directory. A file in an added directory is named by its absolute path, and results there are absolute paths.
 - `/add-dir` and `--add-dir` refuse, with `failed to add <path>: ` and the reason, a path that does not exist (`file does not exist`), one that is not a directory (`path is not a directory`), one already in the workspace, the start directory, an added one or anything inside either (`directory is already in the workspace`), and Kopi's home or anything in it (`path is protected`). On Linux with the sandbox on, `/` is also refused, because its sandbox policy would overlap `/proc`. A parent of the start directory or of an added directory can be added.
+- `/remove-dir` refuses, with `failed to remove <path>: directory was not added to the workspace`, a path that is not an added directory, the start directory included. The model is told in the hidden message sent with the next prompt, `The workspace no longer includes <path>.`, unless the directory was added and removed again since the model last read, or still lies inside another added directory. A call already running in the directory finishes; one waiting for approval is refused when it runs, with `path is outside the workspace`.
 - `Read` reads text files inside the workspace: up to 2000 lines, 2000 characters per line and 100 KiB per call.
   - It returns PNG, JPEG, GIF and WebP images whole, up to 20 MiB; one that cannot be processed is left out with a note. `offset` and `limit` do not apply to them.
   - Other binary files and directories are refused.
