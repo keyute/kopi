@@ -263,7 +263,7 @@ func TestSeamOpenStreamsFauxTurnWithZeroAmbient(t *testing.T) {
 	assert.Equal(t, []string{"Probe"}, sess.inner.ActiveToolNames())
 	assert.Equal(t, 4, sess.MessageCount())
 
-	// PiG v0.7.0 carries the system prompt and tool set as system messages in
+	// PiG v0.8.0 carries the system prompt and tool set as system messages in
 	// the transcript, not in ai.Context.SystemPrompt/Tools.
 	req := <-requests
 	assert.Equal(t, []string{"Probe"}, toolSchemaNames(ai.GetCurrentTools(req)))
@@ -288,6 +288,7 @@ func writeAgentFile(t *testing.T, sb sandbox, name, content string) {
 
 func TestRuntimeOmitsPiGAttribution(t *testing.T) {
 	sb := newSandbox(t)
+	t.Setenv("PIG_TELEMETRY", "1")
 	t.Setenv("PI_TELEMETRY", "1")
 	requests := make(chan http.Header, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -330,9 +331,9 @@ func sessionFiles(t *testing.T, root string) []string {
 	return jsonl
 }
 
-// PiG v0.7.0 behaviour: an abort during a running tool cancels the tool's
+// PiG v0.8.0 behaviour: an abort during a running tool cancels the tool's
 // ctx, and PiG's Send returns a nil error whose last assistant message has
-// StopReason "error" (not "aborted") with ErrorMessage "context canceled".
+// StopReason "aborted" with ErrorMessage "context canceled".
 // Kopi reports Interrupted because it requested the abort.
 func TestSeamCancelDuringToolReportsInterrupted(t *testing.T) {
 	sb := newSandbox(t)
@@ -372,9 +373,9 @@ func TestSeamCancelDuringToolReportsInterrupted(t *testing.T) {
 	msgs := sess.inner.Messages()
 	last := msgs[len(msgs)-1]
 	require.NotNil(t, last.Assistant)
-	assert.Equal(t, ai.StopReasonError, last.Assistant.StopReason)
+	assert.Equal(t, ai.StopReasonAborted, last.Assistant.StopReason)
 	assert.Equal(t, context.Canceled.Error(), last.Assistant.ErrorMessage)
-	// user, tool call, tool result and PiG's synthesized error message
+	// user, tool call, tool result and PiG's synthesized aborted message
 	assert.Equal(t, 4, sess.MessageCount())
 
 	closeCtx, closeCancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -566,7 +567,7 @@ func TestAbortOnEvent(t *testing.T) {
 	}
 }
 
-// PiG v0.7.0 behaviour, recorded for the login/diagnostic step: a native
+// PiG v0.8.0 behaviour, recorded for the login/diagnostic step: a native
 // provider with API-key auth reports a check with an empty Source, and a
 // built-in OAuth provider without a credential reports (nil, nil).
 func TestSeamCheckAuthOnFauxProvider(t *testing.T) {

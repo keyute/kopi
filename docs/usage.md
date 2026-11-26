@@ -212,7 +212,7 @@ A call that did not succeed is one of:
 | --- | --- | --- |
 | Rejected | `↳ rejected` | You answered `No` in the [approval dialog](permissions.md#approval-dialog); your reason shows under it |
 | Denied | `↳ denied · plan mode` | A rule, the mode, the classifier or a run that cannot ask refused it |
-| Interrupted | `↳ interrupted` | The turn was interrupted while it ran |
+| Interrupted | `↳ interrupted` | The turn was interrupted while it ran, or before it started |
 | Failed | `↳ exit code 1 · 84 lines` | It ran and returned an error; a one-line error shows itself, any other shows `failed` |
 
 The bullet is green for a call that succeeded, yellow for one you or a rule refused, interrupted or stopped, and red for one that failed. A row that did not succeed colours its `↳` line like its bullet; a successful row's `↳` line is dim.

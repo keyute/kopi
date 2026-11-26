@@ -2,13 +2,13 @@ package pigruntime
 
 import "strings"
 
-// pigTexts rewrites the PiG v0.7.0 messages that tell the user to run another
+// pigTexts rewrites the PiG v0.8.0 messages that tell the user to run another
 // tool's command. Recheck them on a PiG bump: a reworded upstream message
 // shows through unchanged.
 var pigTexts = strings.NewReplacer(
 	"run `pig login github-copilot`", "run `kopi login github-copilot`",
 	"Run `/login meta`", "Run `kopi login meta`",
-	"another pi session", "another Kopi session",
+	"another pig session", "another Kopi session",
 	"Run '/login ", "Run 'kopi login ",
 	"Use /login to log into a provider", "Use `kopi login <provider>` to log into a provider",
 )

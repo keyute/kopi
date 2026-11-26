@@ -403,9 +403,8 @@ func (s *server) tools(listed []mcp.Tool) ([]tool.Tool, []string) {
 
 func parameters(schema json.RawMessage) map[string]any {
 	var p map[string]any
-	if json.Unmarshal(schema, &p) != nil || p == nil {
-		return map[string]any{"type": "object", "properties": map[string]any{}}
-	}
+	// The normalised schema is always a JSON object.
+	_ = json.Unmarshal(mcp.NormalizeMcpInputSchema(schema), &p)
 	return p
 }
 

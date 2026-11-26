@@ -29,11 +29,11 @@ import (
 // telemetry off is what stops PiG attributing requests to itself. The default
 // thinking level is PiG's own at open; set, it is also what PiG's
 // thinkingLevelForModelSwitch picks, which otherwise carries over the level
-// the old model clamped (PiG v0.7.0; recheck on a bump). Session.setModel
+// the old model clamped (PiG v0.8.0; recheck on a bump). Session.setModel
 // applies the same default when PiG returned before setting a level.
 // "steeringMode":"all" is what Session.Send's mode-line bookkeeping rests on:
 // everything handed over at a turn boundary is in the session before the next
-// boundary (PiG v0.7.0; recheck on a bump).
+// boundary (PiG v0.8.0; recheck on a bump).
 const pigSettings = `{"retry":{"enabled":true},"compaction":{"enabled":true},"cacheWarming":"off","defaultThinkingLevel":"medium","steeringMode":"all","enableInstallTelemetry":false}`
 
 type Options struct {
@@ -49,8 +49,9 @@ type Runtime struct {
 	rt   *coding.Runtime
 	// joining holds the tools of root sessions that are not always callable or
 	// that join after an open. PiG fixes the tools a session is created with;
-	// the only ones a session reads again are an extension's registrations
-	// (PiG v0.7.0 coding/session_tool_registry.go refresh; recheck on a bump).
+	// a refresh re-admits those and reads an extension's registrations again,
+	// so the registrations are the only tools that can change
+	// (PiG v0.8.0 coding/session_tool_registry.go refresh; recheck on a bump).
 	// It holds tool registrations only: no handlers, commands or flags.
 	joining          extension.Extension
 	installationFile string
@@ -577,8 +578,10 @@ func (r *Runtime) hasCredential(ctx context.Context, provider string) (bool, err
 
 // Close must follow Close of every Session opened on r.
 func (r *Runtime) Close() {
-	// The refresh must have returned before the runtime it calls is closed; PiG's
-	// close then joins any store write it left (PiG v0.7.0; recheck on a bump).
+	// The refresh must have returned before the runtime it calls is closed.
+	// Closing the model runtime then joins a refresh's store and credential
+	// writes, but not a login or a request's own credential callbacks
+	// (PiG v0.8.0 ai Models.Drain; recheck on a bump).
 	r.refreshMu.Lock()
 	if r.stopRefresh != nil {
 		// Under refreshMu, so refreshLateLocked starts nothing after it.
