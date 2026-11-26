@@ -62,7 +62,7 @@ func newMarkdown(width int, th theme) *markdown {
 }
 
 // lines draws the text of the assistant block keyed key; top-level blocks
-// are joined by one blank line.
+// are joined by a blank line where gap puts one.
 func (md *markdown) lines(key, text string) []string {
 	src := []byte(clean(text))
 	doc := markdownEngine.Parser().Parse(gmtext.NewReader(src))
@@ -98,6 +98,9 @@ func (md *markdown) block(n ast.Node, src []byte, width int, st lipgloss.Style) 
 	width = max(1, width)
 	switch n := n.(type) {
 	case *ast.Heading:
+		if n.FirstChild() == nil {
+			return nil
+		}
 		return wrapRows(md.inline(n, src, fg(md.th.heading).Bold(true)), width)
 	case *ast.Blockquote:
 		return prefixed(st, "│ ", "│ ", md.children(n, src, width-2, fg(md.th.muted), true))
@@ -250,7 +253,12 @@ func (md *markdown) inline(n ast.Node, src []byte, st lipgloss.Style) string {
 		case *ast.RawHTML:
 			for i := range c.Segments.Len() {
 				seg := c.Segments.At(i)
-				b.WriteString(st.Render(string(seg.Value(src))))
+				v := string(seg.Value(src))
+				t := strings.TrimSuffix(v, "\n")
+				b.WriteString(st.Render(t))
+				if t != v {
+					b.WriteString(st.Render(" "))
+				}
 			}
 		case *east.TaskCheckBox:
 			if c.IsChecked {
@@ -347,7 +355,13 @@ func (md *markdown) table(n *east.Table, src []byte, width int, st lipgloss.Styl
 	}
 	var rows []string
 	for _, r := range strings.Split(s, "\n") {
-		rows = append(rows, cutRow(strings.TrimRight(r, " "), width)...)
+		r = strings.TrimRight(r, " ")
+		if sep := xansi.Strip(r); sep != "" && strings.Trim(sep, "─┼") == "" {
+			// The separator row has no words to keep.
+			rows = append(rows, xansi.Truncate(r, width, ""))
+			continue
+		}
+		rows = append(rows, cutRow(r, width)...)
 	}
 	return rows
 }

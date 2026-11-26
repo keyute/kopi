@@ -307,6 +307,44 @@ func TestTypingABangInFrontOfTextMakesItACommand(t *testing.T) {
 	assert.Equal(t, "xls", m.composer.ta.Value())
 }
 
+func TestBackspaceInsideACommandDraftKeepsItACommand(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	pasteText(m, "!ls\necho hi")
+	m.syncInput(false)
+	require.True(t, m.composer.bang)
+
+	press(m, tea.KeyPressMsg{Code: tea.KeyDown})
+	press(m, home)
+	press(m, backspace)
+	m.syncInput(false)
+
+	assert.True(t, m.composer.bang)
+	assert.Equal(t, "!lsecho hi", m.composer.value())
+
+	press(m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	press(m, backspace)
+	m.syncInput(false)
+
+	assert.True(t, m.composer.bang)
+	assert.Len(t, m.composer.value(), len("!lsecho hi")-1)
+}
+
+func TestSpacesAfterATypedBangAreSwallowedAtTheCursor(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	typeText(m, "ls")
+	press(m, home)
+	typeText(m, "!  ")
+	m.syncInput(false)
+
+	assert.Equal(t, "ls", m.composer.ta.Value())
+	assert.Equal(t, 0, m.composer.ta.Column())
+
+	typeText(m, "x")
+	m.syncInput(false)
+
+	assert.Equal(t, "!xls", m.composer.value())
+}
+
 func TestCollapsingACommandDraftMakesItAPrompt(t *testing.T) {
 	m, _ := newTestModel(t, 30, 30)
 	typeText(m, "!"+strings.Repeat("w", 40))

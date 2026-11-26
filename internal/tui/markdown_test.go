@@ -215,6 +215,13 @@ func TestMarkdownReusesListsAndOpenFences(t *testing.T) {
 
 	assert.Equal(t, 1, md.renders-before)
 	assert.Equal(t, []string{"code", "", "more"}, renderMarkdown("```\ncode\n\nmore", 40))
+
+	md.lines("k", "- a\n\n```\ncode")
+	before = md.renders
+
+	md.lines("k", "- a\n\n```\ncode\nmo")
+
+	assert.Equal(t, 1, md.renders-before)
 }
 
 func TestMarkdownInlineStylesEmitTheirSGRCode(t *testing.T) {
@@ -288,6 +295,15 @@ func TestMarkdownTableAlignsColumnsPerSource(t *testing.T) {
 	assert.Equal(t, " y                  │                22", got[3])
 }
 
+func TestMarkdownTableCentresColumnsPerSource(t *testing.T) {
+	assert.Equal(t, []string{"    a     │       b", "──────────┼─────────", "    x     │       1"}, renderMarkdown("| a | b |\n|:-:|--:|\n| x | 1 |", 20))
+}
+
+func TestMarkdownWiderTableCutsItsSeparatorRow(t *testing.T) {
+	got := renderMarkdown("| aaaaaaaaaaaa | bbbbbbbbbbbbbb |\n|---|---|\n| x | y |", 10)
+	assert.Equal(t, []string{" aaaaaaaaa", "aaa │ bbbb", "bbbbbbbbbb", "──────────", " x        ", "    │ y"}, got)
+}
+
 func TestMarkdownMultiLineCommentKeepsItsColourOnEachRow(t *testing.T) {
 	got := newMarkdown(40, mocha()).lines("k", "```go\n/* one\ntwo */\n```")
 	require.Len(t, got, 2)
@@ -312,6 +328,11 @@ func TestMarkdownTextAndLists(t *testing.T) {
 	}{
 		{"text under a heading", "## H\ntext", []string{"H", "text"}},
 		{"ordered list from 3", "3. a\n4. b", []string{"3. a", "4. b"}},
+		{"list item that wraps", "- one two three four five six seven\n- b", []string{"- one two three four", "  five six seven", "- b"}},
+		{"ordered list from 9 to 10", "9. a b c d e f g h\n1. i j k l m n o p q r", []string{"9. a b c d e f g h", "10. i j k l m n o p", "    q r"}},
+		{"quote that wraps with an empty line", "> " + strings.Repeat("word ", 8) + "\n>\n> tail", []string{"│ word word word", "│ word word word", "│ word word", "│", "│ tail"}},
+		{"inline html across a line", "x <span\nclass=\"y\">z</span> w", []string{"x <span", "class=\"y\">z</span> w"}},
+		{"empty heading", "#\n\nb", []string{"b"}},
 		{"nested list", "- a\n  - b\n- c", []string{"- a", "  - b", "- c"}},
 		{"empty items keep their marker", "1.\n2. two", []string{"1.", "2. two"}},
 		{"empty bullet", "-\n- b", []string{"-", "- b"}},

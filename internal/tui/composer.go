@@ -134,9 +134,11 @@ func (c *composer) stale() bool { return c.bang != c.looksShell }
 
 // setSpans takes the draft's spans. A draft the spans say is a shell command
 // loses its "!" and the spaces after it to the prompt, the cursor staying on
-// the same rune.
+// the same rune. A swallowed command draws no spans.
 func (c *composer) setSpans(spans []app.Span, th theme) {
-	if !c.bang && len(spans) > 0 && spans[0].Kind == app.KindShell {
+	if c.bang {
+		spans = nil
+	} else if len(spans) > 0 && spans[0].Kind == app.KindShell {
 		c.swallow()
 		spans = nil
 	}
