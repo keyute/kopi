@@ -38,6 +38,23 @@ func deliveredRecordRaw(m *model) *[]any {
 	return &got
 }
 
+// messagesOf runs cmd and returns what it yields, flattening a batch.
+func messagesOf(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		return []tea.Msg{msg}
+	}
+	var msgs []tea.Msg
+	for _, c := range batch {
+		msgs = append(msgs, messagesOf(c)...)
+	}
+	return msgs
+}
+
 // recordSequence exposes Bubble Tea's unexported sequenceMsg for delivery in order.
 func recordSequence(t *testing.T, cmd tea.Cmd) []tea.Cmd {
 	t.Helper()

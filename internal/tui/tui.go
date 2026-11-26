@@ -148,8 +148,9 @@ func (f *Frontend) Run(ctx context.Context, interrupts <-chan os.Signal) error {
 		}
 	}()
 	_, err := p.Run()
-	// Bubble Tea leaves the last status record, which a shell would not clear.
-	_, _ = fmt.Fprint(f.out, ansi.ClearProgramStatus)
+	// Bubble Tea leaves the last status record, which a shell would not clear,
+	// and the light/dark mode, which would print a report at the prompt on every switch.
+	_, _ = fmt.Fprint(f.out, ansi.ClearProgramStatus+ansi.ResetModeLightDark)
 	if err != nil {
 		return fmt.Errorf("failed to run the terminal UI: %w", err)
 	}

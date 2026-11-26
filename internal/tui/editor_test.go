@@ -2,9 +2,13 @@ package tui
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -95,4 +99,33 @@ func TestOpenEditorMarksEditingUntilTheEditorExits(t *testing.T) {
 
 	m.Update((*calls)[0].done(nil))
 	assert.False(t, m.editing.Load())
+}
+
+type execMarker struct{}
+
+func TestEditorResetsTheColorSchemeModeWhileItRunsAndSetsItAfter(t *testing.T) {
+	m, _ := newTestModel(t, 70, 30)
+	m.getenv = env(map[string]string{"EDITOR": "vi"})
+	raw := deliveredRecordRaw(m)
+	var calls []*exec.Cmd
+	m.execProcess = func(cmd *exec.Cmd, _ tea.ExecCallback) tea.Cmd {
+		calls = append(calls, cmd)
+		return func() tea.Msg { return execMarker{} }
+	}
+
+	launch := m.openEditor(planPath)
+	require.NotNil(t, launch)
+	assert.Equal(t, "sequenceMsg", reflect.TypeOf(launch()).Name(), "ordered, not a batch")
+	seq := recordSequence(t, launch)
+	require.Len(t, seq, 2)
+	seq[0]()
+	assert.Equal(t, []any{ansi.ResetModeLightDark}, *raw)
+	assert.Equal(t, execMarker{}, seq[1]())
+	require.Len(t, calls, 1)
+
+	*raw = nil
+	_, cmd := m.Update(editorDoneMsg{})
+	require.NotNil(t, cmd)
+	assert.Contains(t, messagesOf(cmd), tea.RequestBackgroundColor())
+	assert.Equal(t, []any{ansi.SetModeLightDark}, *raw)
 }

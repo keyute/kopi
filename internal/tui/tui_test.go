@@ -163,5 +163,5 @@ func TestRunReportsTheProgramStatusAndClearsItOnExit(t *testing.T) {
 	case <-time.After(waitLimit):
 		t.Fatal("Run did not return")
 	}
-	assert.True(t, strings.HasSuffix(out.String(), ansi.ClearProgramStatus), "output ends %q", out.String()[max(0, len(out.String())-60):])
+	assert.True(t, strings.HasSuffix(out.String(), ansi.ClearProgramStatus+ansi.ResetModeLightDark), "output ends %q", out.String()[max(0, len(out.String())-60):])
 }

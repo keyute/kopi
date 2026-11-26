@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyute/kopi/internal/event"
 )
@@ -38,18 +39,21 @@ func (m *model) openEditor(path string) tea.Cmd {
 		return nil
 	}
 	m.editing.Store(true)
-	return m.execProcess(cmd, func(err error) tea.Msg {
+	return tea.Sequence(m.raw(ansi.ResetModeLightDark), m.execProcess(cmd, func(err error) tea.Msg {
 		m.editing.Store(false)
 		return editorDoneMsg{err}
-	})
+	}))
 }
 
 // editorDone shows a failed run, then tells the prompts, whichever editor run
 // it was.
-func (m *model) editorDone(msg editorDoneMsg) {
+func (m *model) editorDone(msg editorDoneMsg) tea.Cmd {
 	if msg.err != nil {
 		m.view().tr.Apply(event.Error{Err: fmt.Errorf("failed to run the editor: %w", msg.err)})
 		m.relayout()
 	}
 	m.sweep(msg)
+	// An editor such as Neovim turns the mode off when it exits, and a change
+	// during the edit was not seen.
+	return tea.Batch(m.raw(ansi.SetModeLightDark), tea.RequestBackgroundColor)
 }

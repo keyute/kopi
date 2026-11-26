@@ -259,6 +259,7 @@ Segments:
   - `colors`: optional overrides by role: `accent`, `success`, `error`, `warning`, `muted`, `dim`, `text`, `userMessageBg`, `userCommandBg`, `heading`, `link`, `code`, `frame`. `userMessageBg` shades your messages; `userCommandBg` shades a command you run with `!` and the input while you type one.
   - `codeTheme`: optional Chroma style for code blocks.
 - A colour is `#rgb`, `#rrggbb` or a number from 0 to 255.
+- Kopi follows a change of the terminal between dark and light while it runs where the terminal reports it (DEC mode 2031); elsewhere the theme is the one chosen at start.
 - An unknown theme, role, colour or style fails at start.
 
 ```json
