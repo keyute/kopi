@@ -391,3 +391,33 @@ func TestWorkflowTaskEndedCarriesItsOutcome(t *testing.T) {
 	assert.Equal(t, want, live.Blocks())
 	assert.Equal(t, want, restored.Blocks())
 }
+
+func TestLastReply(t *testing.T) {
+	apply := func(evs ...event.Event) *Transcript {
+		var tr Transcript
+		for _, ev := range evs {
+			tr.Apply(ev)
+		}
+		return &tr
+	}
+	assert.Empty(t, apply().LastReply())
+	assert.Empty(t, apply(event.TurnStart{Prompt: "go"}).LastReply())
+
+	assert.Equal(t, "second", apply(
+		event.TurnStart{Prompt: "a"}, event.TextDelta{Text: "first"}, event.TurnEnd{},
+		event.TurnStart{Prompt: "b"}, event.TextDelta{Text: "\n second\n"}, event.TurnEnd{},
+	).LastReply())
+
+	assert.Equal(t, "before", apply(
+		event.TurnStart{Prompt: "a"}, event.TextDelta{Text: "before"}, start("a"),
+	).LastReply(), "text ended by a call is a reply")
+
+	assert.Equal(t, "first", apply(
+		event.TurnStart{Prompt: "a"}, event.TextDelta{Text: "first"}, event.TurnEnd{},
+		event.TurnStart{Prompt: "b"}, event.TextDelta{Text: "sec"},
+	).LastReply(), "a reply still being written is skipped")
+
+	var restored Transcript
+	restored.Restore([]event.Event{event.TurnStart{Prompt: "a"}, event.TextDelta{Text: " done "}})
+	assert.Equal(t, "done", restored.LastReply())
+}

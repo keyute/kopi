@@ -1891,6 +1891,11 @@ func TestPromptHidesTheFooterAndTheDialogEndsTheScreen(t *testing.T) {
 			c.submitErr = app.ErrShowTasks
 			submitText(m, "/tasks")
 		}},
+		{"copy", func(m *model, c *fakeController) {
+			send(m, event.TurnStart{Prompt: "go"}, event.TextDelta{Text: "```sh\ntask test\n```"}, event.TurnEnd{})
+			c.submitErr = app.ErrCopy
+			submitText(m, "/copy")
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, c := subagentLineModel(t, 60, config.DefaultSubagentLine(), explorer("t1"))

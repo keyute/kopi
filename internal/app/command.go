@@ -67,6 +67,9 @@ func commandTable() []command {
 		{Command: Command{Name: "usage", Summary: "show context, plan limits and cost"}, run: func(*Controller, context.Context, string) error {
 			return ErrShowUsage
 		}},
+		{Command: Command{Name: "copy", Summary: "copy the last reply or one of its code blocks"}, run: func(*Controller, context.Context, string) error {
+			return ErrCopy
+		}},
 		{Command: Command{Name: "quit", Summary: "exit kopi"}, run: func(*Controller, context.Context, string) error {
 			return ErrQuit
 		}},

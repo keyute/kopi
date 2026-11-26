@@ -525,3 +525,34 @@ func knownLexer(lang string) chroma.Lexer {
 	}
 	return l
 }
+
+// codeBlock is a fenced or indented code block of a reply; text has no fence
+// and no last line break.
+type codeBlock struct{ lang, text string }
+
+// codeBlocks lists the code blocks of text, nested ones too, in order, skipping
+// empty ones. text is parsed as written, since clean turns tabs into spaces.
+func codeBlocks(text string) []codeBlock {
+	src := []byte(text)
+	doc := markdownEngine.Parser().Parse(gmtext.NewReader(src))
+	var out []codeBlock
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		var b codeBlock
+		switch n := n.(type) {
+		case *ast.FencedCodeBlock:
+			b.lang = string(n.Language(src))
+		case *ast.CodeBlock:
+		default:
+			return ast.WalkContinue, nil
+		}
+		b.text = strings.TrimSuffix(rawText(n, src), "\n")
+		if b.text != "" {
+			out = append(out, b)
+		}
+		return ast.WalkSkipChildren, nil
+	})
+	return out
+}

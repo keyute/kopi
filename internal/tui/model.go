@@ -500,6 +500,9 @@ func (m *model) submitted(err error) tea.Cmd {
 	case errors.Is(err, app.ErrShowUsage):
 		m.composer.reset()
 		return m.showUsage()
+	case errors.Is(err, app.ErrCopy):
+		m.composer.reset()
+		return m.showCopy()
 	case errors.Is(err, app.ErrOpenPlan):
 		m.composer.reset()
 		return m.openEditor(m.c.PlanFile())

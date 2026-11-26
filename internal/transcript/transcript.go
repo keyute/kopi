@@ -133,6 +133,20 @@ func (t *Transcript) Apply(ev event.Event) {
 	}
 }
 
+// LastReply is the text of the last finished assistant reply, trimmed, "" when
+// there is none. Live text still being written is not finished: it is the last
+// item, since a turn ends with an item after it; restored text has ended.
+func (t *Transcript) LastReply() string {
+	for i := len(t.items) - 1; i >= 0; i-- {
+		it := t.items[i]
+		if it.kind != assistantItem || !it.visible() || i == len(t.items)-1 && i >= t.boundary {
+			continue
+		}
+		return strings.TrimSpace(it.text)
+	}
+	return ""
+}
+
 // Restore must be called on an empty Transcript.
 func (t *Transcript) Restore(history []event.Event) {
 	for _, ev := range history {

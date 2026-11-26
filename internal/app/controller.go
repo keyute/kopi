@@ -711,7 +711,7 @@ func (c *Controller) Sessions() ([]pigruntime.SessionInfo, error) {
 // session, Main or a subagent's task id; an unknown one fails with an error
 // wrapping tool.ErrUnknownTask. A control command always runs on the main
 // session, whatever session is, and is executed and returns (nil, nil), ErrQuit for /quit,
-// ErrShowTasks for /tasks, ErrShowUsage for /usage, ErrMissingArgument for /resume, /model, /login or /logout
+// ErrShowTasks for /tasks, ErrShowUsage for /usage, ErrCopy for /copy, ErrMissingArgument for /resume, /model, /login or /logout
 // without an argument, or ErrUnknownCommand. /new, /resume with an id, /model and
 // /login with a provider return at once and report their result through
 // events; while a login runs, /new and /resume return ErrLoggingIn.

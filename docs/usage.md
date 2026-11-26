@@ -43,6 +43,7 @@ Commands in the fullscreen interface:
 | `/logout <provider>` | Remove a provider's stored credential |
 | `/tasks` | List background tasks, [subagents](subagents.md) and [workflows](workflows.md), show one's output, open a subagent's view or a workflow's [progress dialog](workflows.md#progress-dialog) and stop them |
 | `/usage` | Show the context and what holds it, the [plan limits](providers.md#plan-limits), the tokens and estimated cost by model, the prompt cache, compaction and time, [as a dialog](#usage-1) |
+| `/copy` | Copy the last finished reply as the agent wrote it (markdown), or, when it has code blocks, pick the whole reply or one block in a dialog (a block is copied without its fence). A reply still being written is skipped for the one before it. Earlier replies, quotes and writing to a file are not offered. Where copies go: see [Mouse](#mouse) |
 | `/skill:<name>` | Load a skill with the prompt ([skills](skills.md)) |
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
