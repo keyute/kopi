@@ -38,6 +38,10 @@ func translate(ev agent.AgentEvent) (event.Event, bool) {
 		case ai.ThinkingDeltaEvent:
 			return event.ThinkingDelta{Text: d.Delta}, true
 		}
+	case agent.MessageEndEvent:
+		if ev.Message.Assistant != nil {
+			return event.ReplyEnd{}, true
+		}
 	case agent.ToolExecutionStartEvent:
 		return event.ToolStart{CallID: ev.ToolCallID, Name: ev.ToolName, Args: compactJSON(ev.Args)}, true
 	case agent.ToolExecutionEndEvent:
@@ -117,7 +121,7 @@ func (j *textJoiner) translate(ev agent.AgentEvent) (event.Event, bool) {
 			e = event.TextDelta{Text: "\n\n" + d.Text}
 		}
 		j.newBlock, j.afterText = false, true
-	case event.ThinkingDelta, nil:
+	case event.ThinkingDelta, event.ReplyEnd, nil:
 	default:
 		j.afterText = false
 	}

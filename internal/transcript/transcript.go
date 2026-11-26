@@ -16,6 +16,9 @@ type Transcript struct {
 	// boundary is the number of items restored from history; stretches never
 	// cross it and groups before it are sealed.
 	boundary int
+	// writing is the assistant text since the last ReplyEnd; reply is the last
+	// ended text that was not blank.
+	writing, reply string
 }
 
 type kind int
@@ -32,14 +35,13 @@ const (
 )
 
 type item struct {
-	kind     kind
-	text     string
-	finished bool
-	call     Call
-	outcome  event.Outcome
-	elapsed  time.Duration
-	task     event.TaskEnded
-	command  event.UserCommand
+	kind    kind
+	text    string
+	call    Call
+	outcome event.Outcome
+	elapsed time.Duration
+	task    event.TaskEnded
+	command event.UserCommand
 }
 
 // visible reports whether the item draws a block; whitespace-only assistant
@@ -53,22 +55,25 @@ func (t *Transcript) Apply(ev event.Event) {
 	case event.TurnStart:
 		// A wake turn, started by a background task's end, has no prompt.
 		if ev.Prompt != "" {
-			t.finishReply()
 			t.items = append(t.items, item{kind: userItem, text: ev.Prompt})
 		}
 	case event.UserMessage:
-		t.finishReply()
 		// History restores a steered message as a TurnStart; both draw the
 		// same block.
 		t.items = append(t.items, item{kind: userItem, text: ev.Text})
 	case event.TextDelta:
+		t.writing += ev.Text
 		if n := len(t.items); n > t.boundary && t.items[n-1].kind == assistantItem {
 			t.items[n-1].text += ev.Text
 			return
 		}
 		t.items = append(t.items, item{kind: assistantItem, text: ev.Text})
+	case event.ReplyEnd:
+		if strings.TrimSpace(t.writing) != "" {
+			t.reply = t.writing
+		}
+		t.writing = ""
 	case event.ToolStart:
-		t.finishReply()
 		t.items = append(t.items, item{kind: callItem, call: Call{
 			ID:          ev.CallID,
 			Title:       ev.Title,
@@ -120,14 +125,11 @@ func (t *Transcript) Apply(ev event.Event) {
 	case event.Error:
 		t.items = append(t.items, item{kind: errorItem, text: ev.Err.Error()})
 	case event.TurnEnd:
-		t.finishReply()
 		t.settleUnfinished()
 		t.items = append(t.items, item{kind: turnItem, outcome: ev.Outcome, elapsed: ev.Elapsed})
 	case event.TaskEnded:
-		t.finishReply()
 		t.items = append(t.items, item{kind: taskItem, task: ev})
 	case event.UserCommand:
-		t.finishReply()
 		t.items = append(t.items, item{kind: commandItem, command: ev})
 	case event.PlanRequested:
 		// The plan's tool is exclusive, so its call is the one solo call running.
@@ -140,41 +142,9 @@ func (t *Transcript) Apply(ev event.Event) {
 	}
 }
 
-// LastReply is the raw text of the last finished assistant reply, or "" when
-// there is none. Restored text is eligible even without a reply-ending event.
-func (t *Transcript) LastReply() string {
-	var parts []string
-	finished := false
-	for i := len(t.items) - 1; i >= -1; i-- {
-		if i == -1 || i == t.boundary-1 || t.items[i].kind == userItem || t.items[i].kind == callItem || t.items[i].kind == turnItem || t.items[i].kind == taskItem || t.items[i].kind == commandItem {
-			if finished {
-				slices.Reverse(parts)
-				if text := strings.Join(parts, ""); strings.TrimSpace(text) != "" {
-					return text
-				}
-			}
-			parts = nil
-			finished = false
-		}
-		if i >= 0 && t.items[i].kind == assistantItem {
-			parts = append(parts, t.items[i].text)
-			finished = t.items[i].finished || i < t.boundary
-		}
-	}
-	return ""
-}
-
-func (t *Transcript) finishReply() {
-	for i := len(t.items) - 1; i >= t.boundary; i-- {
-		it := &t.items[i]
-		if it.kind == callItem || it.kind == turnItem {
-			break
-		}
-		if it.kind == assistantItem {
-			it.finished = true
-		}
-	}
-}
+// LastReply is the raw text of the last assistant message that ended with text
+// other than whitespace, or "" when there is none.
+func (t *Transcript) LastReply() string { return t.reply }
 
 // Restore must be called on an empty Transcript.
 func (t *Transcript) Restore(history []event.Event) {

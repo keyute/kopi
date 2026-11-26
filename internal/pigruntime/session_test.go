@@ -1083,6 +1083,7 @@ func TestSendQueuesModeAfterSkillsBeforeNotices(t *testing.T) {
 		event.TurnStart{Prompt: "prompt"},
 		n.Shown,
 		event.TextDelta{Text: "done"},
+		event.ReplyEnd{},
 	}, resume(t, r, sess.ID()).History())
 }
 

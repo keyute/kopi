@@ -392,84 +392,6 @@ func TestWorkflowTaskEndedCarriesItsOutcome(t *testing.T) {
 	assert.Equal(t, want, restored.Blocks())
 }
 
-func TestLastReplyFollowUp(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		input event.Event
-	}{
-		{"user", event.UserMessage{Text: "b"}},
-		{"task", event.TaskEnded{ID: "t1"}},
-		{"command", event.UserCommand{Command: "make"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var tr Transcript
-			tr.Apply(event.TurnStart{Prompt: "old"})
-			tr.Apply(event.TextDelta{Text: "older"})
-			tr.Apply(event.TurnEnd{})
-			tr.Apply(event.TurnStart{Prompt: "a"})
-			tr.Apply(event.TextDelta{Text: "first"})
-			tr.Apply(tc.input)
-			tr.Apply(event.TextDelta{Text: "partial"})
-			assert.Equal(t, "first", tr.LastReply())
-			tr.Apply(event.TextDelta{Text: " done"})
-			tr.Apply(event.TurnEnd{})
-			assert.Equal(t, "partial done", tr.LastReply())
-		})
-	}
-}
-
-func TestLastReplyInterruptedByNotice(t *testing.T) {
-	events := []event.Event{
-		event.TextDelta{Text: "before\n```go\n"},
-		event.Notice{Text: "notice"},
-		event.TextDelta{Text: "code\n```\nafter"},
-	}
-	var live, restored Transcript
-	for _, ev := range events {
-		live.Apply(ev)
-	}
-	assert.Empty(t, live.LastReply())
-	restored.Restore(events)
-	want := "before\n```go\ncode\n```\nafter"
-	assert.Equal(t, want, restored.LastReply())
-	live.Apply(event.TurnEnd{})
-	assert.Equal(t, want, live.LastReply())
-	assert.Equal(t, []Block{
-		Assistant{key: "item:0", Text: "before\n```go\n"},
-		Notice{key: "item:1", Text: "notice"},
-		Assistant{key: "item:2", Text: "code\n```\nafter"},
-		Turn{key: "item:3"},
-	}, live.Blocks())
-}
-
-func TestLastReplyBoundaries(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		ev   event.Event
-	}{
-		{"tool", start("a")},
-		{"user", event.UserMessage{Text: "next"}},
-		{"turn start", event.TurnStart{Prompt: "next"}},
-		{"turn end", event.TurnEnd{}},
-		{"task", event.TaskEnded{ID: "t"}},
-		{"command", event.UserCommand{Command: "make"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var tr Transcript
-			tr.Apply(event.TextDelta{Text: "first"})
-			tr.Apply(event.Notice{Text: "notice"})
-			tr.Apply(event.TextDelta{Text: " reply"})
-			tr.Apply(tc.ev)
-			tr.Apply(event.TextDelta{Text: "partial"})
-			assert.Equal(t, "first reply", tr.LastReply())
-			tr.Apply(event.Notice{Text: "notice"})
-			tr.Apply(event.TextDelta{Text: " done"})
-			tr.Apply(event.TurnEnd{})
-			assert.Equal(t, "partial done", tr.LastReply())
-		})
-	}
-}
-
 func TestLastReply(t *testing.T) {
 	apply := func(evs ...event.Event) *Transcript {
 		var tr Transcript
@@ -478,29 +400,65 @@ func TestLastReply(t *testing.T) {
 		}
 		return &tr
 	}
+	end := event.ReplyEnd{}
 	assert.Empty(t, apply().LastReply())
 	assert.Empty(t, apply(event.TurnStart{Prompt: "go"}).LastReply())
 
-	assert.Equal(t, "\n second\n", apply(
-		event.TurnStart{Prompt: "a"}, event.TextDelta{Text: "first"}, event.TurnEnd{},
-		event.TurnStart{Prompt: "b"}, event.TextDelta{Text: "\n second\n"}, event.TurnEnd{},
-	).LastReply())
-
-	assert.Equal(t, "before", apply(
-		event.TurnStart{Prompt: "a"}, event.TextDelta{Text: "before"}, start("a"),
-	).LastReply(), "text ended by a call is a reply")
-
 	assert.Equal(t, "first", apply(
-		event.TurnStart{Prompt: "a"}, event.TextDelta{Text: "first"}, event.TurnEnd{},
+		event.TurnStart{Prompt: "a"}, event.TextDelta{Text: "first"}, end, event.TurnEnd{},
 		event.TurnStart{Prompt: "b"}, event.TextDelta{Text: "sec"},
 	).LastReply(), "a reply still being written is skipped")
 
-	assert.Equal(t, "first", apply(
-		event.TurnStart{Prompt: "a"}, event.TextDelta{Text: "first"}, event.TurnEnd{},
-		event.TurnStart{Prompt: "b"}, event.TextDelta{Text: "partial"}, event.Notice{Text: "notice"},
-	).LastReply(), "a notice does not finish a reply")
+	assert.Equal(t, "before", apply(
+		event.TurnStart{Prompt: "a"}, event.TextDelta{Text: "before"}, end, start("a"),
+	).LastReply(), "text ended before a tool call is a reply")
 
+	assert.Equal(t, "first", apply(
+		event.TextDelta{Text: "first"}, end, event.TextDelta{Text: " \n"}, end,
+	).LastReply(), "blank text does not replace the earlier reply")
+
+	assert.Equal(t, "\n second\n", apply(
+		event.TurnStart{Prompt: "a"}, event.TextDelta{Text: "\n second\n"}, end, event.TurnEnd{},
+	).LastReply(), "raw text is not trimmed")
+
+	assert.Equal(t, "Hello world", apply(
+		event.TextDelta{Text: "Hel"}, end, event.Notice{Text: "retrying"}, event.TextDelta{Text: "Hello world"}, end,
+	).LastReply(), "a retried reply replaces the failed one")
+
+	events := []event.Event{
+		event.TurnStart{Prompt: "a"},
+		event.TextDelta{Text: "first"},
+		end, start("a"),
+		event.TextDelta{Text: "last"},
+		end,
+		event.TurnEnd{},
+	}
 	var restored Transcript
-	restored.Restore([]event.Event{event.TurnStart{Prompt: "a"}, event.TextDelta{Text: " done "}})
-	assert.Equal(t, " done ", restored.LastReply())
+	restored.Restore(events)
+	assert.Equal(t, apply(events...).LastReply(), restored.LastReply())
+	assert.Equal(t, "last", restored.LastReply())
+}
+
+func TestLastReplyInterruptedByNotice(t *testing.T) {
+	events := []event.Event{
+		event.TextDelta{Text: "before\n```go\n"},
+		event.Notice{Text: "notice"},
+		event.TextDelta{Text: "code\n```\nafter"},
+		event.ReplyEnd{},
+		event.TurnEnd{},
+	}
+	var live, restored Transcript
+	for _, ev := range events {
+		live.Apply(ev)
+	}
+	restored.Restore(events)
+	want := "before\n```go\ncode\n```\nafter"
+	assert.Equal(t, want, live.LastReply())
+	assert.Equal(t, want, restored.LastReply())
+	assert.Equal(t, []Block{
+		Assistant{key: "item:0", Text: "before\n```go\n"},
+		Notice{key: "item:1", Text: "notice"},
+		Assistant{key: "item:2", Text: "code\n```\nafter"},
+		Turn{key: "item:3"},
+	}, live.Blocks())
 }

@@ -13,7 +13,7 @@ import (
 )
 
 func reply(m *model, text string) {
-	send(m, event.TurnStart{Prompt: "go"}, event.TextDelta{Text: text}, event.TurnEnd{})
+	send(m, event.TurnStart{Prompt: "go"}, event.TextDelta{Text: text}, event.ReplyEnd{}, event.TurnEnd{})
 }
 
 func runCopyCommand(m *model, c *fakeController) tea.Cmd {

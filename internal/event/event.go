@@ -70,6 +70,9 @@ type TextDelta struct{ Text string }
 
 type ThinkingDelta struct{ Text string }
 
+// ReplyEnd follows the text of one assistant message, however the message ended.
+type ReplyEnd struct{}
+
 // ToolStart carries the call's JSON arguments, compacted. Title names the call
 // and Done names it once it succeeded, "" when Title serves. Change is the
 // line a file change shows under the row and Preview its removed and added
@@ -302,6 +305,7 @@ func (UserCommand) isEvent()         {}
 func (Unsent) isEvent()              {}
 func (TextDelta) isEvent()           {}
 func (ThinkingDelta) isEvent()       {}
+func (ReplyEnd) isEvent()            {}
 func (ToolStart) isEvent()           {}
 func (ToolEnd) isEvent()             {}
 func (ApprovalRequested) isEvent()   {}
