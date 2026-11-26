@@ -181,11 +181,13 @@ func (c *pendingCache) options(cmd event.UserCommand, km *keyMap) commandOptions
 		o.Unread = true
 	case event.CommandRunning:
 		o.Elapsed = time.Since(cmd.Started)
-		if ks := km.background.Keys(); len(ks) > 0 && c.backgroundable && o.Elapsed >= hintDelay {
-			o.BackgroundKey = ks[0]
-		}
-		if ks := km.interrupt.Keys(); len(ks) > 0 && c.stoppable && o.Elapsed >= hintDelay {
-			o.StopKey = ks[0]
+		if o.Elapsed >= hintDelay {
+			if ks := km.background.Keys(); len(ks) > 0 && c.backgroundable {
+				o.BackgroundKey = ks[0]
+			}
+			if ks := km.interrupt.Keys(); len(ks) > 0 && c.stoppable {
+				o.StopKey = ks[0]
+			}
 		}
 	}
 	return o

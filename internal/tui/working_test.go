@@ -110,15 +110,22 @@ func TestWorkingRowShowsActivityOnlyAfterTheDelay(t *testing.T) {
 func hintWakes(t *testing.T, m *model, cmd tea.Cmd) []time.Duration {
 	t.Helper()
 	m.bridge.push(event.Notice{Text: "release the bridge wait"})
-	// A lone command comes back unbatched, and is the bridge wait.
-	batch, _ := cmd().(tea.BatchMsg)
+	require.NotNil(t, cmd)
 	var waits []time.Duration
 	start := time.Now()
-	for _, c := range batch {
-		if _, ok := c().(hintMsg); ok {
+	// tea.Batch does not flatten, so batches nest.
+	var walk func(tea.Cmd)
+	walk = func(c tea.Cmd) {
+		switch msg := c().(type) {
+		case tea.BatchMsg:
+			for _, sub := range msg {
+				walk(sub)
+			}
+		case hintMsg:
 			waits = append(waits, time.Since(start))
 		}
 	}
+	walk(cmd)
 	return waits
 }
 

@@ -336,6 +336,7 @@ func TestPendingRunningCommandShowsClockTailAndStopKey(t *testing.T) {
 		time.Sleep(hintDelay - time.Millisecond)
 		m.arrange()
 		assert.NotContains(t, strings.Join(pendingText(m), "\n"), "ctrl+b")
+		assert.NotContains(t, strings.Join(pendingText(m), "\n"), "esc to stop")
 		time.Sleep(time.Millisecond)
 		m.arrange()
 		assert.Contains(t, strings.Join(pendingText(m), "\n"), "↳ running 2s · ctrl+b to background · esc to stop")
@@ -484,6 +485,7 @@ func TestPendingBackgroundKeyYieldsToADialog(t *testing.T) {
 		ask := editApproval()
 		send(m, ask)
 		require.NotNil(t, m.front())
+		require.Contains(t, strings.Join(pendingText(m), "\n"), "↳ running")
 		assert.NotContains(t, strings.Join(pendingText(m), "\n"), "ctrl+b")
 
 		send(m, event.ApprovalEnded{Token: ask.Token})

@@ -837,8 +837,9 @@ func (m *model) place() {
 		m.geo.menu = max(0, min(m.menu.want(), free-input))
 	}
 	free -= input + m.geo.menu
-	m.pendingCache.tail, m.pendingCache.backgroundable = nil, m.front() == nil
-	m.pendingCache.stoppable = m.shown == app.Main && !m.view().busy && m.front() == nil && (m.menuHeight() == 0 || m.holding())
+	m.pendingCache.tail = nil
+	m.pendingCache.backgroundable = m.front() == nil
+	m.pendingCache.stoppable = m.pendingCache.backgroundable && m.shown == app.Main && !m.view().busy && (m.menuHeight() == 0 || m.holding())
 	if m.queuedRunning() {
 		m.pendingCache.tail = m.c.CommandOutput
 	}
