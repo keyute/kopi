@@ -269,6 +269,7 @@ func TestModelCommandSwitchesModelAndKeepsItAcrossNew(t *testing.T) {
 	_, err = h.c.Submit(t.Context(), Main, "/new")
 	require.NoError(t, err)
 	receiveEvent(t, sessions)
+	assertSwitchDone(t, h)
 	requests := make(chan pigruntimetest.Request, 1)
 	other.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "answer")})
 	h.turn(t, "hello")
