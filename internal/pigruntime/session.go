@@ -351,7 +351,7 @@ func (s *Session) SetEffort(e Effort) error {
 // setModel switches the model, then asks again for the level the session was
 // given, which the old model may have clamped; with nothing asked the level is
 // the default PiG applies on a switch. PiG sets the agent's model before it
-// appends the change and then the level to the session file (PiG v0.7.0
+// appends the change and then the level to the session file (PiG v0.8.0
 // coding/session.go beginModelChangeState; recheck on a bump), so a failed
 // append of either leaves the session on model: that error wraps ErrModelNotSaved. A
 // failure that left the model as it was is returned as it is.
@@ -529,8 +529,7 @@ func InterruptTurn(ctx context.Context) bool {
 // Send runs one turn. Cancelling ctx is the abort request for this turn
 // only: a ctx already done returns Interrupted without calling the provider,
 // and a turn Kopi aborted reports Interrupted unless its last assistant message
-// stopped normally (PiG reports an abort during a tool as StopReason "error"
-// with "context canceled"). Model failures are not
+// stopped normally. Model failures are not
 // errors: they surface as a Failed outcome carrying the provider's error text.
 // An overlapping call returns ErrSendInProgress unless ctx is already done.
 //
@@ -802,10 +801,11 @@ func (s *Session) notify(e event.Event) {
 	}
 }
 
-// steerContent does the image work PiG's prompt path does before images enter
-// history and QueueSteer does not: it resizes p's images to the model's limits
-// and, as that path does, omits an image that cannot be processed and notes
-// the omission in the text.
+// steerContent resizes p's images to the model's limits and omits one that
+// cannot be processed, noting the omission in the text. PiG's QueueSteer would
+// do both at delivery, but it also appends a note to the text of every image
+// it resizes; resized here, the text stays as typed (PiG v0.8.0; recheck on a
+// bump).
 func (s *Session) steerContent(p Prompt) (string, []ai.ImageContent) {
 	text := p.Text
 	var images []ai.ImageContent

@@ -200,9 +200,9 @@ func history(msgs []agent.AgentMessage) []event.Event {
 	return out
 }
 
-// storedTurnEnd mirrors Send's outcome for a stored message. PiG stores an
-// abort during a tool as StopReason "error" with "context canceled", which a
-// live turn reports as Interrupted.
+// storedTurnEnd mirrors Send's outcome for a stored message. A transcript
+// written before PiG v0.8.0 holds an abort during a tool as StopReason "error"
+// with "context canceled", not "aborted".
 func storedTurnEnd(m *agent.AssistantMessage) (event.TurnEnd, bool) {
 	switch {
 	case m.StopReason == ai.StopReasonAborted,

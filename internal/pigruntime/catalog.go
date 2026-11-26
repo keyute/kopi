@@ -23,10 +23,13 @@ const (
 // must be known and have a credential. A fetch cut short by its caller's own
 // context is not remembered: a later call, or a waiter, fetches again.
 //
-// It relies on PiG v0.7.0: a provider refresh fetches only with a credential;
-// an unset AllowNetwork leaves PiG's offline gate in force (PI_OFFLINE set at
-// all, else PIG_OFFLINE set to 1, true or yes); and Force skips the four-hour
-// freshness window of the stored list. Recheck on a bump.
+// It relies on PiG v0.8.0: a list request to PiG's catalog host runs only
+// when the provider is configured, carries no credential and renews no
+// sign-in (RefreshModelsAuthConfigured), while openrouter and radius are asked
+// with their own credential; an unset AllowNetwork leaves PiG's offline gate
+// in force (PI_OFFLINE set at all, else PIG_OFFLINE set to 1, true or yes);
+// and Force skips the four-hour freshness window of the stored list. Recheck
+// on a bump.
 func (r *Runtime) refreshModels(ctx context.Context, provider string) error {
 	for {
 		r.refreshMu.Lock()
@@ -83,7 +86,7 @@ func (r *Runtime) fetchModels(ctx context.Context, provider string) error {
 // Close cancels it and waits. A provider first resolved after it has run is
 // refreshed once by refreshLateLocked.
 //
-// It relies on PiG v0.7.0: a nil Providers selects every provider,
+// It relies on PiG v0.8.0: a nil Providers selects every provider,
 // hence the return on no used provider; a later refresh of a provider cancels
 // one in flight and the cancelled one reports no error, so a refresh begun
 // during a forced fetch would make that fetch return no list; an unset Force

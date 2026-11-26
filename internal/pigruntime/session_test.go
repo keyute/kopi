@@ -977,8 +977,7 @@ func TestReply(t *testing.T) {
 }
 
 // PiG answers a call "Operation aborted" when the turn was cancelled while the
-// call's before hook ran. A sequential batch stops at the cancelled call and
-// never reports the ones after it, so the calls here run in parallel.
+// call's before hook ran.
 func TestCancelledTurnMarksAbortedCallInterrupted(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)
