@@ -177,6 +177,20 @@ func TestMarkdownSmallTableSpansTheWidth(t *testing.T) {
 	assert.Equal(t, " a                            │ b", got[0])
 }
 
+func TestMarkdownWiderTableLosesNoText(t *testing.T) {
+	const src = "| Name | Description | Default | Type | Notes |\n|---|---|---|---|---|\n| timeout | How long to wait before giving up | 30s | duration | applies per call |"
+	got := renderMarkdown(src, 50)
+	for _, l := range got {
+		assert.LessOrEqual(t, ansi.StringWidth(l), 50)
+	}
+	// A cut splits a word over two rows; no text is dropped.
+	joined := strings.Join(got, "")
+	for _, word := range []string{"Default", "How long to wait before giving up", "applies per call"} {
+		assert.Contains(t, joined, word)
+	}
+	assert.NotContains(t, joined, "…")
+}
+
 func TestMarkdownHTMLBlockKeepsItsClosingLine(t *testing.T) {
 	assert.Equal(t, []string{"<!--", "note", "-->"}, renderMarkdown("<!--\nnote\n-->", 40))
 	assert.Equal(t, []string{"<pre>", "x", "</pre>"}, renderMarkdown("<pre>\nx\n</pre>", 40))
@@ -251,8 +265,8 @@ func TestMarkdownHardBreakStartsANewRow(t *testing.T) {
 func TestMarkdownTableAlignsColumnsPerSource(t *testing.T) {
 	got := renderMarkdown("| a | b |\n|---|--:|\n| x | 1 |\n| y | 22 |", 40)
 	require.Len(t, got, 4)
-	assert.Equal(t, " 1", got[2][len(got[2])-2:])
-	assert.Equal(t, "22", got[3][len(got[3])-2:])
+	assert.Equal(t, " x                  │                 1", got[2])
+	assert.Equal(t, " y                  │                22", got[3])
 }
 
 func TestMarkdownMultiLineCommentKeepsItsColourOnEachRow(t *testing.T) {
@@ -260,5 +274,62 @@ func TestMarkdownMultiLineCommentKeepsItsColourOnEachRow(t *testing.T) {
 	require.Len(t, got, 2)
 	for _, l := range got {
 		assert.Regexp(t, `^\x1b\[[0-9;]*m`, l)
+	}
+}
+
+func TestMarkdownCutRowsCarryTheirStyle(t *testing.T) {
+	got := newMarkdown(10, mocha()).lines("k", "```go\n// "+strings.Repeat("comment ", 6)+"\n```")
+	require.Greater(t, len(got), 1)
+	for _, l := range got {
+		assert.Regexp(t, `^\x1b\[[0-9;]*m`, l)
+		assert.Regexp(t, `\x1b\[0?m$`, l)
+	}
+}
+
+func TestMarkdownTextAndLists(t *testing.T) {
+	for _, tc := range []struct {
+		name, src string
+		want      []string
+	}{
+		{"text under a heading", "## H\ntext", []string{"H", "text"}},
+		{"ordered list from 3", "3. a\n4. b", []string{"3. a", "4. b"}},
+		{"nested list", "- a\n  - b\n- c", []string{"- a", "  - b", "- c"}},
+		{"empty items keep their marker", "1.\n2. two", []string{"1.", "2. two"}},
+		{"empty bullet", "-\n- b", []string{"-", "- b"}},
+		{"task checkbox", "- [x] done\n- [ ] todo", []string{"- [x] done", "- [ ] todo"}},
+		{"indented code", "    a := 1\n    b := 2", []string{"a := 1", "b := 2"}},
+		{"thematic break", "a\n\n---\n\nb", []string{"a", "", strings.Repeat("─", 20), "", "b"}},
+		{"inline html as written", "a <b>bold</b> c", []string{"a <b>bold</b> c"}},
+		{"image as text and URL", "![alt](https://e.com/i)", []string{"alt https://e.com/i"}},
+		{"code span across a line", "a `b\nc` d", []string{"a b c d"}},
+		{"escaped entity", `\&amp; &amp;`, []string{"&amp; &"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, renderMarkdown(tc.src, 20))
+		})
+	}
+}
+
+func TestMarkdownLinksDrawOnceWithTheirTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name, src, want, target string
+	}{
+		{"autolink", "<https://e.com/a>", "https://e.com/a", "https://e.com/a"},
+		{"link text equal to the URL", "[https://e.com/a](https://e.com/a)", "https://e.com/a", "https://e.com/a"},
+		{"email autolink", "<me@e.com>", "me@e.com", "mailto:me@e.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := newMarkdown(60, mocha()).lines("k", tc.src)
+			require.Len(t, got, 1)
+			assert.Equal(t, tc.want, ansi.Strip(got[0]))
+			assert.Contains(t, got[0], "\x1b]8;;"+tc.target)
+		})
+	}
+}
+
+func TestMarkdownWideTableFitsTheWidthInsideAList(t *testing.T) {
+	const src = "- | a | b |\n  |---|---|\n  | " + "xxxxxxxxxxxxxxxxxxxx | yyyyyyyyyyyyyyyyyyyy |"
+	for _, l := range renderMarkdown(src, 20) {
+		assert.LessOrEqual(t, ansi.StringWidth(l), 20)
 	}
 }

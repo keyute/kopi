@@ -812,7 +812,7 @@ func TestSubmitSendsOnlyAVisibleCommandAsOne(t *testing.T) {
 				typeText(m, tc.text)
 				m.syncInput(false)
 			}
-			require.Equal(t, tc.shell, m.composer.shell())
+			require.Equal(t, tc.shell, m.composer.bang)
 			if tc.shell {
 				assert.Equal(t, tc.box, m.composer.ta.Value())
 			}
@@ -827,7 +827,7 @@ func TestSubmitSendsOnlyAVisibleCommandAsOne(t *testing.T) {
 func TestSendNowSendsACollapsedBangPasteAsAPrompt(t *testing.T) {
 	m, c := newTestModel(t, 40, 20)
 	pasteText(m, "!"+linesOf(11))
-	require.False(t, m.composer.shell())
+	require.False(t, m.composer.bang)
 	assert.True(t, strings.HasPrefix(m.composer.ta.Value(), "[paste"))
 
 	press(m, ctrlEnter)

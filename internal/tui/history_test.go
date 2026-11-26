@@ -127,19 +127,19 @@ func TestRecalledCommandShowsSwallowedAndDownReturnsACommandDraft(t *testing.T) 
 	m := newHistoryModel(t, "!ls")
 	typeText(m, "!pwd")
 	m.syncInput(false)
-	require.True(t, m.composer.shell())
+	require.True(t, m.composer.bang)
 	press(m, home)
 
 	press(m, up)
 
 	assert.Equal(t, "!ls", m.composer.value())
-	assert.True(t, m.composer.shell())
+	assert.True(t, m.composer.bang)
 	assert.Equal(t, "ls", m.composer.ta.Value())
 	assert.True(t, m.composer.browsing(), "the swallow does not stop browsing")
 
 	press(m, down)
 
 	assert.Equal(t, "!pwd", m.composer.value())
-	assert.True(t, m.composer.shell())
+	assert.True(t, m.composer.bang)
 	assert.Equal(t, "pwd", m.composer.ta.Value())
 }

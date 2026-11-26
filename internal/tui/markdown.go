@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"bufio"
 	"bytes"
+	stdhtml "html"
 	"image/color"
+	"io"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,7 +23,6 @@ import (
 	east "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/renderer/html"
 	gmtext "github.com/yuin/goldmark/text"
-	"github.com/yuin/goldmark/util"
 )
 
 var markdownEngine = goldmark.New(
@@ -79,10 +81,7 @@ func (md *markdown) lines(key, text string) []string {
 			c.lines = prev[i].lines
 		} else {
 			md.renders++
-			for _, l := range md.block(n, src, md.width, fg(md.th.text)) {
-				// Nothing is wider than the width, whatever a table needs.
-				c.lines = append(c.lines, strings.Split(xansi.Hardwrap(l, max(1, md.width), true), "\n")...)
-			}
+			c.lines = md.block(n, src, md.width, fg(md.th.text))
 		}
 		chunks = append(chunks, c)
 		if len(out) > 0 && len(c.lines) > 0 && gap(n) {
@@ -117,6 +116,9 @@ func (md *markdown) block(n ast.Node, src []byte, width int, st lipgloss.Style) 
 				num++
 			}
 			rows := md.children(item, src, width-len(marker), st, !n.IsTight)
+			if len(rows) == 0 {
+				rows = []string{""}
+			}
 			out = append(out, prefixed(st, marker, strings.Repeat(" ", len(marker)), rows)...)
 			if !n.IsTight && item.NextSibling() != nil {
 				out = append(out, "")
@@ -215,7 +217,7 @@ func (md *markdown) inline(n ast.Node, src []byte, st lipgloss.Style) string {
 		case *ast.Text:
 			text := c.Value(src)
 			if !c.IsRaw() {
-				text = util.UnescapePunctuations(util.ResolveEntityNames(util.ResolveNumericReferences(text)))
+				text = plainText(text)
 			}
 			b.WriteString(st.Render(clean(string(text))))
 			if c.HardLineBreak() {
@@ -226,7 +228,9 @@ func (md *markdown) inline(n ast.Node, src []byte, st lipgloss.Style) string {
 		case *ast.String:
 			b.WriteString(st.Render(string(c.Value)))
 		case *ast.CodeSpan:
-			b.WriteString(st.Foreground(md.th.code).Render(xansi.Strip(md.inline(c, src, lipgloss.NewStyle()))))
+			// A newline inside a span is a space, as in CommonMark.
+			span := strings.ReplaceAll(xansi.Strip(md.inline(c, src, lipgloss.NewStyle())), "\n", " ")
+			b.WriteString(st.Foreground(md.th.code).Render(span))
 		case *ast.Emphasis:
 			if c.Level == 2 {
 				b.WriteString(md.inline(c, src, st.Bold(true)))
@@ -241,6 +245,9 @@ func (md *markdown) inline(n ast.Node, src []byte, st lipgloss.Style) string {
 			link(c, string(c.Destination))
 		case *ast.AutoLink:
 			url := string(c.URL(src))
+			if c.AutoLinkType == ast.AutoLinkEmail && !strings.HasPrefix(strings.ToLower(url), "mailto:") {
+				url = "mailto:" + url
+			}
 			b.WriteString(st.Foreground(md.th.link).Hyperlink(url).Render(string(c.Label(src))))
 		case *ast.RawHTML:
 			for i := range c.Segments.Len() {
@@ -280,13 +287,33 @@ func (md *markdown) code(lang, body string, width int) []string {
 	}
 	var out []string
 	for _, r := range rows {
-		out = append(out, strings.Split(xansi.Hardwrap(r, width, true), "\n")...)
+		out = append(out, cutRow(r, width)...)
 	}
 	return out
 }
 
+// cutRow cuts a row at width, not at a word. Each cut row closes the styles
+// and link it opened and the next reopens them.
+func cutRow(row string, width int) []string {
+	var b strings.Builder
+	w := lipgloss.NewWrapWriter(&b)
+	_, _ = io.WriteString(w, xansi.Hardwrap(row, width, true))
+	_ = w.Close()
+	return strings.Split(b.String(), "\n")
+}
+
+// plainText resolves backslash escapes and character references in one pass,
+// as goldmark's HTML writer does: it writes HTML, whose escaping is undone.
+func plainText(text []byte) []byte {
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
+	html.DefaultWriter.Write(w, text)
+	_ = w.Flush()
+	return []byte(stdhtml.UnescapeString(buf.String()))
+}
+
 func (md *markdown) table(n *east.Table, src []byte, width int, st lipgloss.Style) []string {
-	t := table.New().Wrap(true).
+	t := table.New().
 		Border(lipgloss.NormalBorder()).BorderTop(false).BorderBottom(false).BorderLeft(false).BorderRight(false).
 		BorderStyle(st).
 		StyleFunc(func(_, col int) lipgloss.Style {
@@ -310,10 +337,15 @@ func (md *markdown) table(n *east.Table, src []byte, width int, st lipgloss.Styl
 			t.Row(cells...)
 		}
 	}
-	t.Width(width)
-	rows := strings.Split(t.String(), "\n")
-	for i, r := range rows {
-		rows[i] = strings.TrimRight(r, " ")
+	// A table that fits spans the width. For a wider one a width would make
+	// lipgloss ellipsize headers and split words, losing text, so it keeps its
+	// natural width and a row wider than width is cut.
+	if lipgloss.Width(t.String()) <= width {
+		t.Width(width)
+	}
+	var rows []string
+	for _, r := range strings.Split(t.String(), "\n") {
+		rows = append(rows, cutRow(strings.TrimRight(r, " "), width)...)
 	}
 	return rows
 }

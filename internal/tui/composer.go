@@ -128,9 +128,6 @@ func (c *composer) fieldStyle(th theme) {
 	c.ta.SetStyles(textarea.Styles{Focused: state, Blurred: state, Cursor: textarea.CursorStyle{Color: th.text}})
 }
 
-// shell reports whether the draft is a shell command.
-func (c *composer) shell() bool { return c.bang }
-
 // stale reports that the draft stopped being, or may now be, a shell command
 // without setSpans running since.
 func (c *composer) stale() bool { return c.bang != c.looksShell }
@@ -142,10 +139,10 @@ func (c *composer) setSpans(spans []app.Span, th theme) {
 	if !c.bang && len(spans) > 0 && spans[0].Kind == app.KindShell {
 		c.swallow()
 	}
-	c.spans = spans
 	if c.bang {
-		c.spans = nil
+		spans = nil
 	}
+	c.spans = spans
 	if c.stale() {
 		c.style(th)
 	}
@@ -219,6 +216,11 @@ func (c *composer) update(msg tea.Msg) tea.Cmd {
 		switch {
 		case key.Matches(k, c.ta.KeyMap.DeleteCharacterBackward) && c.bang && c.ta.Line() == 0 && c.ta.Column() == 0:
 			c.bang = false
+			// The textarea may itself start with "!", which would be swallowed again.
+			if v := app.AsPrompt(c.ta.Value()); v != c.ta.Value() {
+				c.ta.SetValue(v)
+				c.ta.MoveToBegin()
+			}
 			return nil
 		case key.Matches(k, c.ta.KeyMap.DeleteCharacterBackward):
 			if mk := c.markerBefore(); mk != "" {

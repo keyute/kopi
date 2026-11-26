@@ -269,26 +269,70 @@ func TestBackspaceAtTheStartOfACommandTurnsItBackIntoAPrompt(t *testing.T) {
 	m, _ := newTestModel(t, 40, 20)
 	typeText(m, "!ls")
 	m.syncInput(false)
-	require.True(t, m.composer.shell())
+	require.True(t, m.composer.bang)
 
 	press(m, home)
 	press(m, backspace)
 
-	assert.False(t, m.composer.shell())
+	assert.False(t, m.composer.bang)
 	assert.Equal(t, "ls", m.composer.value())
 	assert.Contains(t, m.composer.view(m.width, m.th)[1], shade(m.th).Foreground(m.th.accent).Render("❯ "))
+}
+
+func TestBackspaceAtTheStartOfACommandKeepsTheBangOfTheText(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	typeText(m, "!!ls")
+	m.syncInput(false)
+	require.True(t, m.composer.bang)
+
+	press(m, home)
+	press(m, backspace)
+	m.syncInput(false)
+
+	assert.False(t, m.composer.bang)
+	assert.Equal(t, " !ls", m.composer.value())
+}
+
+func TestTypingABangInFrontOfTextMakesItACommand(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	typeText(m, "ls")
+	press(m, home)
+	typeText(m, "!")
+	m.syncInput(false)
+	typeText(m, "x")
+	m.syncInput(false)
+
+	assert.True(t, m.composer.bang)
+	assert.Equal(t, "!xls", m.composer.value())
+	assert.Equal(t, "xls", m.composer.ta.Value())
+}
+
+func TestCollapsingACommandDraftMakesItAPrompt(t *testing.T) {
+	m, _ := newTestModel(t, 30, 30)
+	typeText(m, "!"+strings.Repeat("w", 40))
+	m.syncInput(false)
+	require.True(t, m.composer.bang)
+	m.composer.ta.MaxContentHeight = 2
+
+	m.composer.insertImage("/synthetic/draft.png")
+	m.syncInput(false)
+
+	assert.False(t, m.composer.bang)
+	assert.True(t, strings.HasPrefix(m.composer.value(), "[paste"))
+	text, _ := m.composer.expanded()
+	assert.True(t, strings.HasPrefix(text, "!www"))
 }
 
 func TestRestoreInFrontOfACommandDraftYieldsAPrompt(t *testing.T) {
 	m, _ := newTestModel(t, 60, 30)
 	typeText(m, "!ls")
 	m.syncInput(false)
-	require.True(t, m.composer.shell())
+	require.True(t, m.composer.bang)
 
 	m.composer.restore([]event.Input{{Text: "queued"}})
 	m.syncInput(false)
 
-	assert.False(t, m.composer.shell())
+	assert.False(t, m.composer.bang)
 	assert.Equal(t, "queued\n\n!ls", m.composer.value())
 }
 

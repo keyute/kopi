@@ -231,7 +231,7 @@ The bullet is green for a call that succeeded, yellow for one you or a rule refu
 - Colour in command output is not kept.
 - Only the row's title line opens and closes it; scroll up to close a long body.
 
-In a reply, HTML is shown as written, an image is shown as its text and URL, and footnotes are not drawn.
+In a reply, HTML is shown as written, an image is shown as its text and URL, and footnotes are not supported: a `[^1]` reads as a link reference.
 
 ## Menus and highlighting
 
