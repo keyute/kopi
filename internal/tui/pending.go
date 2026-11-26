@@ -35,8 +35,9 @@ type pendingCache struct {
 
 	// tail is the running command's output so far; nil keeps what the queue holds.
 	tail func() string
-	// stoppable is whether Esc would stop the running command.
-	stoppable bool
+	// backgroundable and stoppable are whether the background key and Esc would
+	// act on the running command.
+	backgroundable, stoppable bool
 
 	// lines is how many output lines a command shows; total is the rows the
 	// queue was fitted to.
@@ -180,11 +181,13 @@ func (c *pendingCache) options(cmd event.UserCommand, km *keyMap) commandOptions
 		o.Unread = true
 	case event.CommandRunning:
 		o.Elapsed = time.Since(cmd.Started)
-		if ks := km.background.Keys(); len(ks) > 0 {
-			o.BackgroundKey = ks[0]
-		}
-		if ks := km.interrupt.Keys(); len(ks) > 0 && c.stoppable {
-			o.StopKey = ks[0]
+		if o.Elapsed >= hintDelay {
+			if ks := km.background.Keys(); len(ks) > 0 && c.backgroundable {
+				o.BackgroundKey = ks[0]
+			}
+			if ks := km.interrupt.Keys(); len(ks) > 0 && c.stoppable {
+				o.StopKey = ks[0]
+			}
 		}
 	}
 	return o

@@ -130,7 +130,7 @@ func (m *Tasks) OnChange(f func(TaskInfo)) {
 
 // OnForeground registers f, called without the manager's lock when a Run's
 // command becomes live in the foreground and when it leaves the foreground;
-// f must not block and re-reads Foreground.
+// f must not block and re-reads ForegroundSince.
 func (m *Tasks) OnForeground(f func()) {
 	m.mu.Lock()
 	m.onForeground = f
@@ -198,7 +198,7 @@ type Live struct {
 // Begin starts command in the foreground; ctx is checked only before it
 // starts. The caller must Wait on the result or Stop it.
 func (m *Tasks) Begin(ctx context.Context, sh *Shell, command string) (*Live, error) {
-	t := &task{command: command, ready: make(chan struct{}), moved: make(chan struct{})}
+	t := &task{command: command, started: time.Now(), ready: make(chan struct{}), moved: make(chan struct{})}
 	m.mu.Lock()
 	m.fg[t] = struct{}{}
 	m.mu.Unlock()
@@ -210,7 +210,7 @@ func (m *Tasks) Begin(ctx context.Context, sh *Shell, command string) (*Live, er
 		close(t.ready)
 		return nil, err
 	}
-	t.p, t.started = p, time.Now()
+	t.p = p
 	close(t.ready)
 	m.mu.Lock()
 	f := m.onForeground
@@ -337,10 +337,18 @@ func (m *Tasks) Detach() bool {
 	return len(m.fg) > 0
 }
 
-func (m *Tasks) Foreground() bool {
+// ForegroundSince is the earliest start among the foreground commands, zero
+// when there are none.
+func (m *Tasks) ForegroundSince() time.Time {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(m.fg) > 0
+	var since time.Time
+	for t := range m.fg {
+		if since.IsZero() || t.started.Before(since) {
+			since = t.started
+		}
+	}
+	return since
 }
 
 // List returns the background tasks in id order, without their Output.
