@@ -47,10 +47,13 @@ func (m *model) openEditor(path string) tea.Cmd {
 
 // editorDone shows a failed run, then tells the prompts, whichever editor run
 // it was.
-func (m *model) editorDone(msg editorDoneMsg) {
+func (m *model) editorDone(msg editorDoneMsg) tea.Cmd {
 	if msg.err != nil {
 		m.view().tr.Apply(event.Error{Err: fmt.Errorf("failed to run the editor: %w", msg.err)})
 		m.relayout()
 	}
 	m.sweep(msg)
+	// An editor such as Neovim turns the mode off when it exits, and a change
+	// during the edit was not seen.
+	return tea.Batch(m.raw(ansi.SetModeLightDark), tea.RequestBackgroundColor)
 }

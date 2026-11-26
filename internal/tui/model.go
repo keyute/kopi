@@ -280,10 +280,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 	case interruptMsg:
 		return m.cancel()
 	case editorDoneMsg:
-		m.editorDone(msg)
-		// An editor such as Neovim turns the mode off when it exits, and a change
-		// during the edit was not seen.
-		return tea.Batch(m.raw(ansi.SetModeLightDark), tea.RequestBackgroundColor)
+		return m.editorDone(msg)
 	case barMsg:
 		m.barBeating = false
 		m.barBeat = 1 - m.barBeat

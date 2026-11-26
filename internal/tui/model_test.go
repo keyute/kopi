@@ -631,23 +631,6 @@ func TestBackgroundKeyWaitsForAnApproval(t *testing.T) {
 	assert.Empty(t, c.answers)
 }
 
-// messagesOf runs cmd and returns what it yields, flattening a batch.
-func messagesOf(cmd tea.Cmd) []tea.Msg {
-	if cmd == nil {
-		return nil
-	}
-	msg := cmd()
-	batch, ok := msg.(tea.BatchMsg)
-	if !ok {
-		return []tea.Msg{msg}
-	}
-	var msgs []tea.Msg
-	for _, c := range batch {
-		msgs = append(msgs, messagesOf(c)...)
-	}
-	return msgs
-}
-
 func TestBackgroundSwitchesTheme(t *testing.T) {
 	m, _ := newTestModel(t, 30, 20)
 
@@ -676,6 +659,12 @@ func TestThemeSwitchRedrawsTheTranscript(t *testing.T) {
 	after := m.view().lines[len(m.view().lines)-1].text
 	assert.NotEqual(t, before, after)
 	assert.Equal(t, ansi.Strip(before), ansi.Strip(after))
+
+	m.Update(tea.BackgroundColorMsg{Color: color.Black})
+
+	last := m.view().lines[len(m.view().lines)-1].text
+	assert.NotEqual(t, after, last)
+	assert.Equal(t, ansi.Strip(after), ansi.Strip(last))
 }
 
 func TestColorSchemeReportsAskForTheBackground(t *testing.T) {
@@ -1097,10 +1086,7 @@ func TestInitAsksForStatusSupportOnlyWithTheTitle(t *testing.T) {
 		batch, ok := m.Init()().(tea.BatchMsg)
 		require.True(t, ok)
 		assert.Len(t, batch, map[bool]int{true: 4, false: 3}[title], "title %v", title)
-		var msgs []tea.Msg
-		for _, cmd := range batch {
-			msgs = append(msgs, cmd())
-		}
+		msgs := messagesOf(func() tea.Msg { return batch })
 		assert.Equal(t, title, slices.Contains(msgs, tea.RequestProgramStatusSupport()), "title %v", title)
 	}
 }

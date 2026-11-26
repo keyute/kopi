@@ -624,6 +624,20 @@ func TestSelectionClearsOnResizeFoldSessionAndTheme(t *testing.T) {
 	}
 }
 
+func TestSelectionSurvivesABackgroundThatKeepsTheTheme(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	send(m, sealedGroup()...)
+	row := rowOf(t, m, "Done.")
+	pressAt(m, 0, row)
+	moveTo(m, 3, row)
+	releaseAt(m, 3, row)
+	require.NotEmpty(t, reversedRows(m))
+
+	m.Update(tea.BackgroundColorMsg{Color: color.Black})
+
+	assert.NotEmpty(t, reversedRows(m))
+}
+
 func TestActiveTranscriptDragClearsWhenCoordinatesChange(t *testing.T) {
 	for name, invalidate := range map[string]func(*model){
 		"resize":     func(m *model) { m.Update(tea.WindowSizeMsg{Width: 50, Height: 30}) },
