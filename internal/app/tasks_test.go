@@ -71,10 +71,13 @@ func (f *fakeTasks) Detach() bool {
 	return f.fg
 }
 
-func (f *fakeTasks) Foreground() bool {
+func (f *fakeTasks) ForegroundSince() time.Time {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.fg
+	if !f.fg {
+		return time.Time{}
+	}
+	return time.Unix(1000, 0)
 }
 
 func (f *fakeTasks) List() []tool.TaskInfo {
@@ -761,7 +764,7 @@ func TestStatusCountsRunningTasks(t *testing.T) {
 	h, _ := openHarness(t, Config{})
 	assert.Zero(t, h.c.Status().Shells)
 	assert.Zero(t, h.c.Status().Agents)
-	assert.False(t, h.c.Status().Foreground)
+	assert.True(t, h.c.Status().ForegroundSince.IsZero())
 	h.tasks.set(runningTask("t1"))
 	h.tasks.set(endedTask("t2"))
 	h.tasks.set(runningTask("t3"))
@@ -772,7 +775,7 @@ func TestStatusCountsRunningTasks(t *testing.T) {
 	s := h.c.Status()
 	assert.Equal(t, 2, s.Shells)
 	assert.Zero(t, s.Agents)
-	assert.True(t, s.Foreground)
+	assert.False(t, s.ForegroundSince.IsZero())
 	assert.Len(t, h.c.Tasks(), 3)
 	info, err := h.c.TaskOutput("t2")
 	require.NoError(t, err)
@@ -817,10 +820,10 @@ func TestForegroundSignalReportsTasksChanged(t *testing.T) {
 
 	h.tasks.foreground(true)
 	receiveEvent(t, changes)
-	assert.True(t, h.c.Status().Foreground)
+	assert.False(t, h.c.Status().ForegroundSince.IsZero())
 	h.tasks.foreground(false)
 	receiveEvent(t, changes)
-	assert.False(t, h.c.Status().Foreground)
+	assert.True(t, h.c.Status().ForegroundSince.IsZero())
 
 	require.NoError(t, h.c.Close(t.Context()))
 	delivered := len(h.rec.all())

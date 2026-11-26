@@ -119,7 +119,7 @@ Defaults; change them with [`keys`](configuration.md#keys).
 - Up at the top of the input pulls queued prompts back into it for editing (not your commands); with nothing queued it browses input history, and Down goes back.
 - Down from the last line of the input, with no newer history entry, moves into the [agent rows](subagents.md#agent-rows) under the status line: Up and Down move, Enter opens that session's view, `x` stops the selected subagent or workflow (a workflow's row opens its [progress dialog](workflows.md#progress-dialog)), Esc or typing returns to the input.
 - Esc interrupts the running turn of the session whose view is open: the main agent's in the main view, only that subagent's run in a [subagent's view](subagents.md#views). It never acts on another session. It leaves your [commands](#your-own-commands) alone; with no turn running it stops the command that runs.
-- The row above the input, in priority order: `Waiting for you…` while an approval, question or plan dialog is open; `<Verb>… <elapsed>` (`Brewing… 12s`) while the open view's turn runs; in the main view, Kopi's own activity such as `Connecting to MCP servers…` or `Logging in to <provider>…`; `2 agents, 1 workflow, 1 shell still running` in the main view while the main agent is idle and background tasks, subagents or [workflows](workflows.md) run.
+- The row above the input, in priority order: `Waiting for you…` while an approval, question or plan dialog is open; `<Verb>… <elapsed>` (`Brewing… 12s`) while the open view's turn runs; in the main view, Kopi's own activity such as `Connecting to MCP servers…` or `Logging in to <provider>…`, once it has lasted 2 seconds; `2 agents, 1 workflow, 1 shell still running` in the main view while the main agent is idle and background tasks, subagents or [workflows](workflows.md) run.
 - A turn ends with `κ Brewed for 41s`, `κ Interrupted after 12s` or `κ Failed after 12s` followed by the error.
 - Each turn has its own row and time, including a turn started by a task's end. The time is wall time and includes time spent waiting on an approval.
 - After an interrupt, a task's end starts no turn until the next prompt; see [background tasks](tools.md#background-tasks).
@@ -128,7 +128,7 @@ Defaults; change them with [`keys`](configuration.md#keys).
 - Ctrl+D exits when the input is empty.
 - Shift+Tab switches between plan and execute.
 - Ctrl+B moves the running foreground `Bash` command to the background, where it keeps running as a [task](tools.md#background-tasks). It moves your running [command](#your-own-commands) the same way.
-  - While one runs, the working row shows `ctrl+b to background`.
+  - Once one has run 2 seconds, the working row shows `ctrl+b to background`.
   - With none running, Ctrl+B keeps its meaning in the input.
 - Ctrl+G, while an [`ExitPlanMode`](tools.md#exitplanmode) plan is open, opens the plan file in `$VISUAL`, else `$EDITOR`.
 - Ctrl+V pastes text or an image from the clipboard.
@@ -280,7 +280,7 @@ A command is a shaded block: `!` and the command, a status line under it, then t
 | Status line | Meaning |
 | --- | --- |
 | `queued` | Waiting for an earlier command |
-| `running 12s · ctrl+b to background · esc to stop` | Running |
+| `running 12s · ctrl+b to background · esc to stop` | Running; the keys show once it has run 2 seconds |
 | `exit 0 · 12s` | Finished; `· unread` is added while it is above the input |
 | `stopped after 12s` | You stopped it; `· unread` is added while it is above the input |
 | `moved to background after 12s` | You moved it to the background |

@@ -304,7 +304,7 @@ func TestPendingDrawsTheQueueInOrder(t *testing.T) {
 			"  ↳ queued · ctrl+enter to send now · up to edit",
 			"", "",
 			"! sleep 9", "", "",
-			"  ↳ running · ctrl+b to background · esc to stop",
+			"  ↳ running",
 			"      tail",
 			"", "",
 			"! pwd", "", "",
@@ -330,10 +330,17 @@ func TestPendingRunningCommandShowsClockTailAndStopKey(t *testing.T) {
 		running.Command.Started = time.Now()
 		send(m, event.QueueChanged{Pending: []event.Queued{running}})
 		s := strings.Join(pendingText(m), "\n")
-		assert.Contains(t, s, "↳ running · ctrl+b to background · esc to stop")
+		assert.Contains(t, s, "↳ running\n")
 		assert.Contains(t, s, "… 3 earlier lines\n      line 3\n      line 4\n      line 5\n      line 6\n      line 7")
 
-		time.Sleep(12 * time.Second)
+		time.Sleep(hintDelay - time.Millisecond)
+		m.arrange()
+		assert.NotContains(t, strings.Join(pendingText(m), "\n"), "ctrl+b")
+		time.Sleep(time.Millisecond)
+		m.arrange()
+		assert.Contains(t, strings.Join(pendingText(m), "\n"), "↳ running 2s · ctrl+b to background · esc to stop")
+
+		time.Sleep(12*time.Second - hintDelay)
 		m.arrange()
 		assert.Contains(t, strings.Join(pendingText(m), "\n"), "↳ running 12s · ctrl+b to background")
 
@@ -394,7 +401,7 @@ func TestPendingCapShrinksARunningCommandsTailBeforeHidingThePrompt(t *testing.T
 
 		assert.Equal(t, []string{
 			"! make", "", "",
-			"  ↳ running · ctrl+b to background · esc to stop",
+			"  ↳ running",
 			"      … 6 earlier lines",
 			"      line 6", "      line 7",
 			"", "",
@@ -455,7 +462,7 @@ func TestPendingStopHintYieldsToAnOpenMenu(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, _ := newMenuModel(t, 60, 30)
 		running := queuedCommand("make", event.CommandRunning)
-		running.Command.Started = time.Now()
+		running.Command.Started = time.Now().Add(-hintDelay)
 		send(m, event.QueueChanged{Pending: []event.Queued{running}})
 		require.Contains(t, strings.Join(pendingText(m), "\n"), "esc to stop")
 
@@ -463,6 +470,24 @@ func TestPendingStopHintYieldsToAnOpenMenu(t *testing.T) {
 
 		require.Positive(t, m.menuHeight())
 		assert.NotContains(t, strings.Join(pendingText(m), "\n"), "esc to stop")
+	})
+}
+
+func TestPendingBackgroundKeyYieldsToADialog(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, _ := newTestModel(t, 60, 40)
+		running := queuedCommand("make", event.CommandRunning)
+		running.Command.Started = time.Now().Add(-hintDelay)
+		send(m, event.QueueChanged{Pending: []event.Queued{running}})
+		require.Contains(t, strings.Join(pendingText(m), "\n"), "ctrl+b to background")
+
+		ask := editApproval()
+		send(m, ask)
+		require.NotNil(t, m.front())
+		assert.NotContains(t, strings.Join(pendingText(m), "\n"), "ctrl+b")
+
+		send(m, event.ApprovalEnded{Token: ask.Token})
+		assert.Contains(t, strings.Join(pendingText(m), "\n"), "ctrl+b to background")
 	})
 }
 

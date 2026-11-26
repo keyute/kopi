@@ -129,7 +129,7 @@ func TestTasksRunPassesForegroundResult(t *testing.T) {
 
 	assert.Empty(t, events)
 	assert.Empty(t, m.List())
-	assert.False(t, m.Foreground())
+	assert.True(t, m.ForegroundSince().IsZero())
 }
 
 func TestTasksDoNotStartCanceled(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/pigruntime"
@@ -20,7 +21,7 @@ type Tasks interface {
 	OnForeground(f func())
 	Begin(ctx context.Context, sh *tool.Shell, command string) (*tool.Live, error)
 	Detach() bool
-	Foreground() bool
+	ForegroundSince() time.Time
 	List() []tool.TaskInfo
 	Output(id string) (tool.TaskInfo, error)
 	Stop(id string) (info tool.TaskInfo, stopped bool, err error)
