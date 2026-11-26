@@ -11,6 +11,8 @@ import (
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -148,7 +150,7 @@ func TestMarkdownStreamingTableAndDefinitionsEndLikeWholeRender(t *testing.T) {
 	}
 
 	assert.Equal(t, newMarkdown(40, mocha()).lines("k", streamTrickyDoc), got)
-	assert.Contains(t, strings.Join(stripped(got), "\n"), "See docs http://example.com/long/path.")
+	assert.Contains(t, strings.Join(stripped(got), "\n"), "See docs (http://example.com/long/path).")
 }
 
 func TestMarkdownReplacedTextIsDrawnAfresh(t *testing.T) {
@@ -308,7 +310,20 @@ func TestMarkdownEmptyHeadingIsNotTheHeadingABlockSitsUnder(t *testing.T) {
 }
 
 func TestMarkdownRowWithAHangingDashStaysInsideTheWidth(t *testing.T) {
-	assert.Equal(t, []string{"the gate", "returns -", "keeps a long row"}, renderMarkdown("the gate returns - keeps a long row", 16))
+	assert.Equal(t, []string{"the gate returns", "- keeps a long", "row"}, renderMarkdown("the gate returns - keeps a long row", 16))
+}
+
+func TestMarkdownLeadingDashesAreNeverSplit(t *testing.T) {
+	assert.Equal(t, []string{"a --flag", "and", "--mode"}, renderMarkdown("a --flag and --mode", 8))
+	want := []string{"a --flag", "and", "--mode"}
+	assert.Equal(t, want, renderMarkdown("a --flag and **--mode**", 8))
+	assert.Equal(t, want, renderMarkdown("# a --flag and --mode", 8))
+	assert.Equal(t, want, renderMarkdown("a --flag and ~~--mode~~", 8))
+}
+
+func TestMarkdownTextHoldingThePrivateUseRuneIsNotAltered(t *testing.T) {
+	got := renderMarkdown("a \ue000 b - c", 40)
+	assert.Equal(t, []string{"a \ue000 b - c"}, got)
 }
 
 func TestMarkdownMultiLineCommentKeepsItsColourOnEachRow(t *testing.T) {
@@ -338,6 +353,7 @@ func TestMarkdownTextAndLists(t *testing.T) {
 		{"list item that wraps", "- one two three four five six seven\n- b", []string{"- one two three four", "  five six seven", "- b"}},
 		{"ordered list from 9 to 10", "9. a b c d e f g h\n1. i j k l m n o p q r", []string{"9. a b c d e f g h", "10. i j k l m n o p", "    q r"}},
 		{"quote that wraps with an empty line", "> " + strings.Repeat("word ", 8) + "\n>\n> tail", []string{"│ word word word", "│ word word word", "│ word word", "│", "│ tail"}},
+		{"inline html across a line that would fit", "a <span\nid=x> b", []string{"a <span", "id=x> b"}},
 		{"inline html across a line", "x <span\nclass=\"y\">z</span> w", []string{"x <span", "class=\"y\">z</span> w"}},
 		{"empty heading", "#\n\nb", []string{"b"}},
 		{"nested list", "- a\n  - b\n- c", []string{"- a", "  - b", "- c"}},
@@ -347,7 +363,7 @@ func TestMarkdownTextAndLists(t *testing.T) {
 		{"indented code", "    a := 1\n    b := 2", []string{"a := 1", "b := 2"}},
 		{"thematic break", "a\n\n---\n\nb", []string{"a", "", strings.Repeat("─", 20), "", "b"}},
 		{"inline html as written", "a <b>bold</b> c", []string{"a <b>bold</b> c"}},
-		{"image as text and URL", "![alt](https://e.com/i)", []string{"alt https://e.com/i"}},
+		{"image as text and URL", "![alt](https://e.com/i)", []string{"alt", "(https://e.com/i)"}},
 		{"code span across a line", "a `b\nc` d", []string{"a b c d"}},
 		{"escaped entity", `\&amp; &amp;`, []string{"&amp; &"}},
 	} {
@@ -364,7 +380,7 @@ func TestMarkdownLinksDrawOnceWithTheirTarget(t *testing.T) {
 		{"autolink", "<https://e.com/a>", "https://e.com/a", "https://e.com/a"},
 		{"link text equal to the URL", "[https://e.com/a](https://e.com/a)", "https://e.com/a", "https://e.com/a"},
 		{"escaped target", "[https://e.com/a_b](https://e.com/a\\_b)", "https://e.com/a_b", "https://e.com/a_b"},
-		{"reference in target", "[a](https://e.com/?x=1&amp;y=2)", "a https://e.com/?x=1&y=2", "https://e.com/?x=1&y=2"},
+		{"reference in target", "[a](https://e.com/?x=1&amp;y=2)", "a (https://e.com/?x=1&y=2)", "https://e.com/?x=1&y=2"},
 		{"empty text", "[](https://e.com)", "https://e.com", "https://e.com"},
 		{"empty image text", "![](https://e.com/i.png)", "https://e.com/i.png", "https://e.com/i.png"},
 		{"email autolink", "<me@e.com>", "me@e.com", "mailto:me@e.com"},
@@ -385,7 +401,122 @@ func TestMarkdownWideTableFitsTheWidthInsideAList(t *testing.T) {
 	}
 }
 
+func TestMarkdownGruvboxDiffLinesAreNotDrawnInThePageColour(t *testing.T) {
+	got := newMarkdown(40, builtinThemes["gruvbox-dark"]()).lines("k", "```diff\n-old\n+new\n```")
+	require.Len(t, got, 2)
+	assert.Contains(t, got[0], "\x1b[38;2;251;73;52m-old")
+	assert.Contains(t, got[1], "\x1b[38;2;184;187;38m+new")
+
+	got = newMarkdown(40, mocha()).lines("k", "```diff\n-old\n+new\n```")
+	assert.Contains(t, got[0], "\x1b[38;2;243;139;168m-old")
+	assert.Contains(t, got[1], "\x1b[38;2;166;227;161m+new")
+}
+
+func TestMarkdownCodeStylesNeverUseTheirPageColour(t *testing.T) {
+	for name, mk := range builtinThemes {
+		th := mk()
+		page := styles.Get(th.codeTheme).Get(chroma.Background).Background
+		style := codeStyle(th.codeTheme, th.code)
+		for _, tt := range style.Types() {
+			if tt != chroma.Background {
+				assert.NotEqual(t, page, style.Get(tt).Colour, "%s: %v", name, tt)
+			}
+		}
+	}
+}
+
+func TestMarkdownCodeWithoutAKnownLanguageUsesTheCodeColour(t *testing.T) {
+	r, g, b, _ := mocha().code.RGBA()
+	truecolor := fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r>>8, g>>8, b>>8)
+	for _, src := range []string{"```\nx := 1\n```", "```nosuchlanguage\nx := 1\n```"} {
+		for range 2 {
+			got := newMarkdown(40, mocha()).lines("k", src)
+			require.Len(t, got, 1)
+			assert.Contains(t, got[0], truecolor, src)
+		}
+	}
+	lexersMu.Lock()
+	defer lexersMu.Unlock()
+	l, ok := lexerFor["nosuchlanguage"]
+	assert.True(t, ok)
+	assert.Nil(t, l)
+	assert.NotContains(t, lexerFor, "")
+}
+
+func TestMarkdownTableWithoutRoomForACellPerColumnIsPipeText(t *testing.T) {
+	const src = "| a | b | c |\n|---|---|---|\n| 1 | 2 | 3 |"
+	assert.Equal(t, []string{"| a | b | c", "|", "|---|---|---", "|", "| 1 | 2 | 3", "|"}, renderMarkdown(src, 12))
+}
+
+func TestMarkdownParagraphNewlineIsARowBreak(t *testing.T) {
+	assert.Equal(t, []string{"one", "two three"}, renderMarkdown("one\ntwo three", 40))
+}
+
+func TestMarkdownTableHeaderIsBold(t *testing.T) {
+	const src = "| aa bb | x |\n|---|---|\n| cc dd | y |"
+	for _, width := range []int{40, 10} {
+		got := newMarkdown(width, mocha()).lines("k", src)
+		var head, cell string
+		for _, l := range got {
+			if strings.Contains(l, "aa") {
+				head = l
+			}
+			if strings.Contains(l, "cc") {
+				cell = l
+			}
+		}
+		assert.Regexp(t, `\x1b\[1;[0-9;]*maa`, head, width)
+		assert.NotRegexp(t, `\x1b\[1;[0-9;]*mcc`, cell, width)
+	}
+}
+
+func TestMarkdownNarrowingKeepsAColumnsLongestWord(t *testing.T) {
+	const src = "| File | Change | Why |\n|---|---|---|\n| `internal/tui/markdown.go` | rewritten over goldmark with a long text | glamour had no hook for tables at all |"
+	got := renderMarkdown(src, 60)
+	assert.Contains(t, got[3], "│ internal/tui/markdown.go │")
+	assert.Equal(t, "│                          │ over goldmark │ no hook for   │", got[4])
+}
+
+func TestMarkdownLinkIsItsTextAndThenItsURLInDim(t *testing.T) {
+	th := mocha()
+	got := newMarkdown(60, th).lines("k", "[a](https://e.com)")
+	require.Len(t, got, 1)
+	assert.Equal(t, "a (https://e.com)", ansi.Strip(got[0]))
+	r, g, b, _ := th.dim.RGBA()
+	assert.Contains(t, got[0], fmt.Sprintf("\x1b[38;2;%d;%d;%dm (https://e.com)", r>>8, g>>8, b>>8))
+	assert.Equal(t, 1, strings.Count(got[0], "\x1b]8;;https://e.com\a"))
+
+	assert.Equal(t, []string{"a"}, renderMarkdown("[a]()", 60))
+}
+
+func TestMarkdownHeadingLevelsDifferInSGR(t *testing.T) {
+	got := newMarkdown(40, mocha()).lines("k", "# a b\n\n## c d\n\n### e f")
+	require.Len(t, got, 5)
+	h, tx := "38;2;250;179;135", "38;2;205;214;244"
+	assert.Equal(t, "\x1b[1;4;"+h+";4ma\x1b[m\x1b["+h+";4m \x1b[m\x1b[1;4;"+h+";4mb\x1b[m", got[0])
+	assert.Equal(t, "\x1b[1;"+h+"mc\x1b[m\x1b[1;"+h+"m d\x1b[m", got[2])
+	assert.Equal(t, "\x1b[1;"+tx+"me\x1b[m\x1b[1;"+tx+"m f\x1b[m", got[4])
+}
+
 var markdownTags = regexp.MustCompile(`(?s)<[^>]*>`)
+
+var markdownImageAlt = regexp.MustCompile(`<img [^>]*?alt="([^"]*)"[^>]*>`)
+
+// inOrder reports whether want is a subsequence of got.
+func inOrder(want, got string) bool {
+	g := []rune(got)
+	j := 0
+	for _, r := range want {
+		for j < len(g) && g[j] != r {
+			j++
+		}
+		if j == len(g) {
+			return false
+		}
+		j++
+	}
+	return true
+}
 
 func squashSpace(s string) string {
 	return strings.Map(func(r rune) rune {
@@ -421,14 +552,18 @@ func TestMarkdownProperties(t *testing.T) {
 		hyphens, "- " + hyphens, "> " + hyphens,
 		"| a | b |\n|:-:|--:|\n| x | 1 |", wide3, wide5, cjk,
 		"- item\n\n  | a | b |\n  |---|---|\n  | one two three | four five six |", "> | k | v |\n> |---|---|\n> | key | a value long enough to wrap |",
-		"one paragraph\n\n#\n\nanother paragraph",
+		"one paragraph\n\n#\n\nanother paragraph", "first line\nsecond line with a --flag\nthird - line",
+		"| a | b | c | d | e | f | g |\n|---|---|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | five words | 6 | 7 |",
 		"1. **First**\n\n   Explained here.\n\n   ```sh\n   ! kopi login --flag=value\n   ```\n\n2. **Second**\n   - nested bullet\n     > and a quote",
 	}
 	th := mocha()
 	for _, src := range corpus {
 		var buf bytes.Buffer
 		require.NoError(t, markdownEngine.Convert([]byte(clean(src)), &buf))
-		want := runeCounts(squashSpace(html.UnescapeString(markdownTags.ReplaceAllString(buf.String(), ""))))
+		text := squashSpace(html.UnescapeString(markdownTags.ReplaceAllString(markdownImageAlt.ReplaceAllString(buf.String(), "$1"), "")))
+		want := runeCounts(text)
+		// A wrapped table's cells interleave, so a table's runes are only counted.
+		ordered := !strings.Contains(buf.String(), "<table>")
 
 		for width := 1; width <= 120; width++ {
 			rows := newMarkdown(width, th).lines("k", src)
@@ -438,7 +573,11 @@ func TestMarkdownProperties(t *testing.T) {
 				}
 			}
 
-			got := runeCounts(squashSpace(ansi.Strip(strings.Join(rows, "\n"))))
+			drawn := squashSpace(ansi.Strip(strings.Join(rows, "\n")))
+			if ordered && !inOrder(text, drawn) {
+				require.FailNowf(t, "text out of order", "at width %d for %q: %q", width, src, drawn)
+			}
+			got := runeCounts(drawn)
 			for r, n := range want {
 				if got[r] < n {
 					require.FailNowf(t, "text dropped", "rune %q at width %d for %q", r, width, src)
@@ -456,4 +595,39 @@ func TestMarkdownProperties(t *testing.T) {
 			require.Equal(t, rows, streamed, "streamed reply differs at width %d for %q", width, src)
 		}
 	}
+}
+
+func FuzzMarkdown(f *testing.F) {
+	for _, s := range []string{
+		"| a |\n|---|\n| 1 | 2 | 3 |", "| a | b |\n|---|---|\n| 1 |", "- a\n  - b\n\n    c\n> q\n```go\nx\n", "1. a\n\n   | x | y |\n   |:-:|--:|\n   | 日本 | `c` |",
+		"[a][b]\n\n[b]: <u> \"t\"", "a  \nb\\\nc &#10; d", "<div>\n*x*\n</div>\n\n<!-- c", "***a** b* ~~c~~ `d` <https://e.com> ![i](u)", "# h\n===\n---\n- [ ] t\n- [x] u",
+		"> > - 1. ```\n> > - 1. x", "|a|\n|-|\n|\\||", "\t- tab\n\t\tcode", "a\n-", "a \ue000 b - c", "| a | b |\n|---|---|\n| [l](https://e.com/x-y) | **b** - c |",
+	} {
+		f.Add(s, uint8(20))
+	}
+	f.Fuzz(func(t *testing.T, src string, w uint8) {
+		if len(src) > 400 {
+			return
+		}
+		width := int(w%100) + 1
+		rows := newMarkdown(width, mocha()).lines("k", src)
+		for _, r := range rows {
+			require.LessOrEqual(t, ansi.StringWidth(r), max(2, width), "row %q", ansi.Strip(r))
+		}
+
+		var buf bytes.Buffer
+		require.NoError(t, markdownEngine.Convert([]byte(clean(src)), &buf))
+		want := runeCounts(squashSpace(clean(html.UnescapeString(markdownTags.ReplaceAllString(markdownImageAlt.ReplaceAllString(buf.String(), "$1"), "")))))
+		got := runeCounts(squashSpace(ansi.Strip(strings.Join(rows, "\n"))))
+		for r, n := range want {
+			require.GreaterOrEqual(t, got[r], n, "rune %q missing from %q", r, rows)
+		}
+
+		md := newMarkdown(width, mocha())
+		var streamed []string
+		for i := range len(src) + 1 {
+			streamed = md.lines("k", src[:i])
+		}
+		require.Equal(t, rows, streamed, "streamed reply differs")
+	})
 }

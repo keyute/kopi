@@ -6,6 +6,8 @@ import (
 	stdhtml "html"
 	"image/color"
 	"io"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -108,7 +110,14 @@ func (md *markdown) block(n ast.Node, src []byte, width int, st lipgloss.Style) 
 		if n.FirstChild() == nil {
 			return nil
 		}
-		return wrapRows(md.inline(n, src, fg(md.th.heading).Bold(true)), width)
+		hs := fg(md.th.heading).Bold(true)
+		switch {
+		case n.Level == 1:
+			hs = hs.Underline(true).UnderlineSpaces(true)
+		case n.Level >= 3:
+			hs = st.Bold(true)
+		}
+		return wrapRows(md.inline(n, src, hs), width)
 	case *ast.Blockquote:
 		return prefixed(st, "│ ", "│ ", md.children(n, src, width-2, fg(md.th.muted), true))
 	case *ast.List:
@@ -190,24 +199,44 @@ func prefixed(st lipgloss.Style, first, rest string, rows []string) []string {
 	return out
 }
 
+const escapeSequence = `\x1b\[[0-9;:]*m|\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\)`
+
+var (
+	// leadingDashes matches a run of dashes that starts a string or follows a
+	// space or newline, with SGR or OSC 8 sequences before and between them.
+	leadingDashes = regexp.MustCompile(`((?:^|[ \n])(?:` + escapeSequence + `)*)(-(?:(?:` + escapeSequence + `)*-)*)`)
+	dashOrEscape  = regexp.MustCompile(escapeSequence + `|-`)
+)
+
 // wrapRows wraps s at width. x/ansi's wrap lets a hyphen after a space hang
-// past the width (charmbracelet/x#785): such a row is wrapped again that much
-// narrower, and cut if it still hangs.
+// past the width (charmbracelet/x#785), so the dashes of a run that starts a
+// word are swapped for U+E000, which it does not break at, and swapped back
+// after. A string that already holds U+E000 is wrapped without the swap. A
+// row still wider is cut.
 func wrapRows(s string, width int) []string {
+	swap := !strings.Contains(s, "\ue000")
+	if swap {
+		s = leadingDashes.ReplaceAllStringFunc(s, func(m string) string {
+			g := leadingDashes.FindStringSubmatch(m)
+			return g[1] + dashOrEscape.ReplaceAllStringFunc(g[2], func(x string) string {
+				if x == "-" {
+					return "\ue000"
+				}
+				return x
+			})
+		})
+	}
+	wrapped := lipgloss.Wrap(s, width, "")
+	if swap {
+		wrapped = strings.ReplaceAll(wrapped, "\ue000", "-")
+	}
 	var out []string
-	for _, r := range strings.Split(lipgloss.Wrap(s, width, ""), "\n") {
-		over := lipgloss.Width(r) - width
-		if over <= 0 {
-			out = append(out, r)
+	for _, r := range strings.Split(wrapped, "\n") {
+		if lipgloss.Width(r) > width {
+			out = append(out, cutRow(r, width)...)
 			continue
 		}
-		for _, p := range strings.Split(lipgloss.Wrap(r, max(1, width-over), ""), "\n") {
-			if lipgloss.Width(p) > width {
-				out = append(out, cutRow(p, width)...)
-				continue
-			}
-			out = append(out, p)
-		}
+		out = append(out, r)
 	}
 	return out
 }
@@ -232,10 +261,11 @@ func (md *markdown) inline(n ast.Node, src []byte, st lipgloss.Style) string {
 		text := md.inline(c, src, st.Foreground(md.th.link).Hyperlink(url))
 		b.WriteString(text)
 		if xansi.Strip(text) != url {
-			if text != "" {
-				b.WriteString(st.Render(" "))
+			if text == "" {
+				b.WriteString(st.Foreground(md.th.link).Hyperlink(url).Render(url))
+			} else if url != "" {
+				b.WriteString(st.Foreground(md.th.dim).Render(" (" + url + ")"))
 			}
-			b.WriteString(st.Foreground(md.th.link).Hyperlink(url).Render(url))
 		}
 	}
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
@@ -249,7 +279,7 @@ func (md *markdown) inline(n ast.Node, src []byte, st lipgloss.Style) string {
 			if c.HardLineBreak() {
 				b.WriteByte('\n')
 			} else if c.SoftLineBreak() {
-				b.WriteString(st.Render(" "))
+				b.WriteByte('\n')
 			}
 		case *ast.String:
 			b.WriteString(st.Render(string(c.Value)))
@@ -282,7 +312,7 @@ func (md *markdown) inline(n ast.Node, src []byte, st lipgloss.Style) string {
 				t := strings.TrimSuffix(v, "\n")
 				b.WriteString(st.Render(t))
 				if t != v {
-					b.WriteString(st.Render(" "))
+					b.WriteByte('\n')
 				}
 			}
 		case *east.TaskCheckBox:
@@ -304,7 +334,7 @@ func (md *markdown) inline(n ast.Node, src []byte, st lipgloss.Style) string {
 func (md *markdown) code(lang, body string, width int) []string {
 	var rows []string
 	var it chroma.Iterator
-	if lexer := lexers.Get(lang); lexer != nil {
+	if lexer := knownLexer(lang); lexer != nil {
 		it, _ = chroma.Coalesce(lexer).Tokenise(nil, body)
 	}
 	if it != nil {
@@ -349,15 +379,34 @@ func plainText(text []byte) []byte {
 func (md *markdown) table(n *east.Table, src []byte, width int, st lipgloss.Style) []string {
 	cols := len(n.Alignments)
 	var cells [][]string
-	widths := make([]int, cols)
+	// longest is the width of each column's longest word, capped at 30 cells.
+	widths, longest := make([]int, cols), make([]int, cols)
 	for row := n.FirstChild(); row != nil; row = row.NextSibling() {
+		cst := st
+		if row.Kind() == east.KindTableHeader {
+			cst = st.Bold(true)
+		}
 		var cs []string
 		for cell := row.FirstChild(); cell != nil; cell = cell.NextSibling() {
-			c := md.inline(cell, src, st)
+			c := md.inline(cell, src, cst)
 			widths[len(cs)] = max(widths[len(cs)], lipgloss.Width(c))
+			for _, w := range strings.Fields(xansi.Strip(c)) {
+				longest[len(cs)] = max(longest[len(cs)], min(lipgloss.Width(w), 30))
+			}
 			cs = append(cs, c)
 		}
 		cells = append(cells, cs)
+	}
+	// Too narrow for a cell per column: the rows as pipe text.
+	if width < 4*cols+1 {
+		var out []string
+		for i, cs := range cells {
+			out = append(out, wrapRows(st.Render("| ")+strings.Join(cs, st.Render(" | "))+st.Render(" |"), width)...)
+			if i == 0 {
+				out = append(out, wrapRows(st.Render("|"+strings.Repeat("---|", cols)), width)...)
+			}
+		}
+		return out
 	}
 	t := table.New().
 		Border(lipgloss.NormalBorder()).
@@ -374,8 +423,9 @@ func (md *markdown) table(n *east.Table, src []byte, width int, st lipgloss.Styl
 		})
 	// lipgloss shortens a header and can drop the end of a cell when it
 	// narrows a table, so a table wider than width is narrowed here: its
-	// widest column gives way a cell at a time and the cells wrap. Each column
-	// has two cells of padding and a rule before it, and one rule ends the row.
+	// widest column gives way a cell at a time, down to its longest word while
+	// any column is above it, and the cells wrap. Each column has two cells of
+	// padding and a rule before it, and one rule ends the row.
 	over := 3*cols + 1 - width
 	for _, w := range widths {
 		over += w
@@ -383,17 +433,25 @@ func (md *markdown) table(n *east.Table, src []byte, width int, st lipgloss.Styl
 	if over <= 0 {
 		t.Headers(cells[0]...).Rows(cells[1:]...)
 	} else {
-		for ; over > 0; over-- {
-			widest := 0
+		widest := func(floors []int) int {
+			at := -1
 			for j, w := range widths {
-				if w > widths[widest] {
-					widest = j
+				if w > floors[j] && (at < 0 || w > widths[at]) {
+					at = j
 				}
 			}
-			if widths[widest] == 1 {
+			return at
+		}
+		ones := slices.Repeat([]int{1}, cols)
+		for ; over > 0; over-- {
+			at := widest(longest)
+			if at < 0 {
+				at = widest(ones)
+			}
+			if at < 0 {
 				break
 			}
-			widths[widest]--
+			widths[at]--
 		}
 		for _, cs := range cells {
 			for j, c := range cs {
@@ -426,9 +484,14 @@ func codeStyle(base string, code color.Color) *chroma.Style {
 	}
 	src := styles.Get(base)
 	plain := src.Get(chroma.Text).Colour
+	page := src.Get(chroma.Background).Background
 	sb := chroma.NewStyleBuilder(key)
 	for _, tt := range append(src.Types(), chroma.Background) {
 		e := src.Get(tt)
+		// Gruvbox draws a diff's lines in its page colour on a shade of their own.
+		if tt != chroma.Background && e.Colour == page && e.Background != page {
+			e.Colour = e.Background
+		}
 		e.Background = 0
 		if e.Colour == plain || tt == chroma.Background {
 			e.Colour = col
@@ -441,4 +504,26 @@ func codeStyle(base string, code color.Color) *chroma.Style {
 	}
 	codeStyles[key] = s
 	return s
+}
+
+var (
+	lexersMu sync.Mutex
+	lexerFor = map[string]chroma.Lexer{}
+)
+
+// knownLexer is the Chroma lexer for lang, or nil. Chroma matches an unknown or
+// empty name against every lexer's file patterns, which takes milliseconds, so
+// the answer is kept per name.
+func knownLexer(lang string) chroma.Lexer {
+	if lang == "" {
+		return nil
+	}
+	lexersMu.Lock()
+	defer lexersMu.Unlock()
+	l, ok := lexerFor[lang]
+	if !ok {
+		l = lexers.Get(lang)
+		lexerFor[lang] = l
+	}
+	return l
 }
