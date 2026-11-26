@@ -218,7 +218,13 @@ func (c *composer) update(msg tea.Msg) tea.Cmd {
 			c.bang = false
 			// The textarea may itself start with "!", which would be swallowed again.
 			if v := app.AsPrompt(c.ta.Value()); v != c.ta.Value() {
-				c.ta.SetValue(v)
+				trial := c.ta
+				trial.SetValue(v)
+				if trial.Value() != sanitizedText(v) {
+					text, imgs := c.expand(v)
+					trial.SetValue(c.collapse(text, imgs))
+				}
+				c.ta = trial
 				c.ta.MoveToBegin()
 			}
 			return nil

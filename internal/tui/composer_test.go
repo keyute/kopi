@@ -326,7 +326,7 @@ func TestBackspaceInsideACommandDraftKeepsItACommand(t *testing.T) {
 	m.syncInput(false)
 
 	assert.True(t, m.composer.bang)
-	assert.Len(t, m.composer.value(), len("!lsecho hi")-1)
+	assert.Equal(t, "!secho hi", m.composer.value())
 }
 
 func TestSpacesAfterATypedBangAreSwallowedAtTheCursor(t *testing.T) {

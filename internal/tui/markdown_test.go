@@ -489,6 +489,25 @@ func TestMarkdownLinkIsItsTextAndThenItsURLInDim(t *testing.T) {
 	assert.Equal(t, []string{"a"}, renderMarkdown("[a]()", 60))
 }
 
+func TestMarkdownQuoteBreakAndTableBordersHaveTheirColours(t *testing.T) {
+	th := mocha()
+	seq := func(c color.Color) string {
+		r, g, b, _ := c.RGBA()
+		return fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r>>8, g>>8, b>>8)
+	}
+	quote := newMarkdown(40, th).lines("k", "> quoted")
+	require.Len(t, quote, 1)
+	assert.Contains(t, quote[0], seq(th.muted)+"quoted")
+
+	rule := newMarkdown(40, th).lines("k", "---")
+	require.Len(t, rule, 1)
+	assert.Contains(t, rule[0], seq(th.dim)+"─")
+
+	for _, row := range newMarkdown(40, th).lines("k", "| a |\n|---|\n| 1 |") {
+		assert.Contains(t, row, seq(th.dim))
+	}
+}
+
 func TestMarkdownHeadingLevelsDifferInSGR(t *testing.T) {
 	got := newMarkdown(40, mocha()).lines("k", "# a b\n\n## c d\n\n### e f")
 	require.Len(t, got, 5)
@@ -550,7 +569,7 @@ func TestMarkdownProperties(t *testing.T) {
 		"- `c` **s** [l](https://x.io)\n- > quoted\n- ```\n  fenced\n  ```",
 		"> - ~~struck~~ ![i](a.png)\n>\n> ```\n> fenced\n> ```",
 		hyphens, "- " + hyphens, "> " + hyphens,
-		"| a | b |\n|:-:|--:|\n| x | 1 |", wide3, wide5, cjk,
+		"| a | b |\n|:-:|--:|\n| x | 1 |", "| a&#10;bee | c |\n|---|---|\n| 1 | 2 |", wide3, wide5, cjk,
 		"- item\n\n  | a | b |\n  |---|---|\n  | one two three | four five six |", "> | k | v |\n> |---|---|\n> | key | a value long enough to wrap |",
 		"one paragraph\n\n#\n\nanother paragraph", "first line\nsecond line with a --flag\nthird - line",
 		"| a | b | c | d | e | f | g |\n|---|---|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | five words | 6 | 7 |",

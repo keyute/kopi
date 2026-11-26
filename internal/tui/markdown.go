@@ -84,13 +84,7 @@ func (md *markdown) lines(key, text string) []string {
 		} else {
 			md.renders++
 			// Nothing is wider than the width, however deep a block nests.
-			for _, l := range md.block(n, src, md.width, fg(md.th.text)) {
-				if lipgloss.Width(l) > md.width {
-					c.lines = append(c.lines, cutRow(l, max(1, md.width))...)
-					continue
-				}
-				c.lines = append(c.lines, l)
-			}
+			c.lines = cutWider(md.block(n, src, md.width, fg(md.th.text)), md.width)
 		}
 		chunks = append(chunks, c)
 		if len(out) > 0 && len(c.lines) > 0 && gap(n) {
@@ -166,8 +160,7 @@ func gap(n ast.Node) bool {
 	if prev := n.PreviousSibling(); prev == nil || prev.Kind() != ast.KindHeading || prev.FirstChild() == nil {
 		return true
 	}
-	b, ok := n.(interface{ HasBlankPreviousLines() bool })
-	return !ok || b.HasBlankPreviousLines()
+	return n.HasBlankPreviousLines()
 }
 
 // children draws the blocks under n, a blank line between them when loose.
@@ -230,10 +223,15 @@ func wrapRows(s string, width int) []string {
 	if swap {
 		wrapped = strings.ReplaceAll(wrapped, "\ue000", "-")
 	}
+	return cutWider(strings.Split(wrapped, "\n"), width)
+}
+
+// cutWider cuts each row wider than width and keeps the others.
+func cutWider(rows []string, width int) []string {
 	var out []string
-	for _, r := range strings.Split(wrapped, "\n") {
+	for _, r := range rows {
 		if lipgloss.Width(r) > width {
-			out = append(out, cutRow(r, width)...)
+			out = append(out, cutRow(r, max(1, width))...)
 			continue
 		}
 		out = append(out, r)
@@ -258,11 +256,12 @@ func rawText(n ast.Node, src []byte) string {
 func (md *markdown) inline(n ast.Node, src []byte, st lipgloss.Style) string {
 	var b strings.Builder
 	link := func(c ast.Node, url string) {
-		text := md.inline(c, src, st.Foreground(md.th.link).Hyperlink(url))
+		linked := st.Foreground(md.th.link).Hyperlink(url)
+		text := md.inline(c, src, linked)
 		b.WriteString(text)
 		if xansi.Strip(text) != url {
 			if text == "" {
-				b.WriteString(st.Foreground(md.th.link).Hyperlink(url).Render(url))
+				b.WriteString(linked.Render(url))
 			} else if url != "" {
 				b.WriteString(st.Foreground(md.th.dim).Render(" (" + url + ")"))
 			}
@@ -276,9 +275,7 @@ func (md *markdown) inline(n ast.Node, src []byte, st lipgloss.Style) string {
 				text = plainText(text)
 			}
 			b.WriteString(st.Render(clean(string(text))))
-			if c.HardLineBreak() {
-				b.WriteByte('\n')
-			} else if c.SoftLineBreak() {
+			if c.HardLineBreak() || c.SoftLineBreak() {
 				b.WriteByte('\n')
 			}
 		case *ast.String:
@@ -430,7 +427,8 @@ func (md *markdown) table(n *east.Table, src []byte, width int, st lipgloss.Styl
 	for _, w := range widths {
 		over += w
 	}
-	if over <= 0 {
+	// A header cell holding a newline would lose its later lines, so it is a row.
+	if over <= 0 && !slices.ContainsFunc(cells[0], func(c string) bool { return strings.Contains(c, "\n") }) {
 		t.Headers(cells[0]...).Rows(cells[1:]...)
 	} else {
 		widest := func(floors []int) int {

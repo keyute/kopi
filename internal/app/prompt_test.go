@@ -1,6 +1,7 @@
 package app
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -207,8 +208,9 @@ func TestOnlyTheMainSessionWithAUserShellIsToldToHandOverCommands(t *testing.T) 
 	with := newHarness(t, sb, Config{UserShell: tool.NewShell(sb.Workspace, nil), Agents: []subagent.Definition{agentDef("worker")}})
 	require.NoError(t, with.c.Open(t.Context(), OpenRequest{}))
 	assert.True(t, strings.HasSuffix(with.c.prompt[0].Text, "\n"+line))
-	assert.NotContains(t, with.c.agents[0].prompt[0].Text, line)
-	assert.NotContains(t, with.c.workflowSpecs[1].prompt[0].Text, line)
+	for _, spec := range slices.Concat(with.c.agents, with.c.workflowSpecs) {
+		assert.NotContains(t, spec.prompt[0].Text, line)
+	}
 
 	without := newHarness(t, sb, Config{Agents: []subagent.Definition{agentDef("worker")}})
 	require.NoError(t, without.c.Open(t.Context(), OpenRequest{}))
