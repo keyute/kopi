@@ -256,8 +256,8 @@ Segments:
 - Built-in names: `catppuccin-mocha`, `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `gruvbox-dark`, `gruvbox-light`, `tokyonight-night`, `tokyonight-day`, `rose-pine`, `rose-pine-dawn`, `solarized-dark`, `solarized-light`, `dracula`, `ansi-dark` and `ansi-light`; the last two use the terminal's own 16 colours.
 - Any other name reads `themes/<name>.json` in Kopi's home:
   - `base`: required, a built-in theme.
-  - `colors`: optional overrides by role: `accent`, `success`, `error`, `warning`, `muted`, `dim`, `text`, `userMessageBg`, `userCommandBg`, `heading`, `link`, `code`, `frame`. `userMessageBg` shades your messages; `userCommandBg` shades a command you run with `!` and the input while you type one.
-  - `codeTheme`: optional Chroma style for code blocks.
+  - `colors`: optional overrides by role: `accent`, `success`, `error`, `warning`, `muted`, `dim`, `text`, `userMessageBg`, `userCommandBg`, `heading`, `link`, `code`, `frame`. `userMessageBg` shades your messages; `userCommandBg` shades a command you run with `!` and the input while you type one. `code` also colours the plain text of code blocks.
+  - `codeTheme`: optional Chroma style for code blocks; it colours the tokens it knows.
 - A colour is `#rgb`, `#rrggbb` or a number from 0 to 255.
 - Kopi follows a change of the terminal between dark and light while it runs where the terminal reports it (DEC mode 2031); elsewhere the theme is the one chosen at start.
 - An unknown theme, role, colour or style fails at start.

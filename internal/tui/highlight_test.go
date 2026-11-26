@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"image/color"
 	"strings"
 	"testing"
 
@@ -194,13 +195,28 @@ func TestComposerTurnsRedWhileTheDraftIsAShellCommand(t *testing.T) {
 	typeText(m, "!ls")
 	m.syncInput(false)
 	assert.Equal(t, blank(commandShade(m.th)), view()[0])
-	assert.Contains(t, glyph(view()), commandShade(m.th).Foreground(m.th.error).Render("❯ "))
-	assert.Equal(t, []string{"!"}, pieces(m)[:1])
-	assert.Contains(t, glyph(view()), spanStyle(m.th, app.KindShell).Render("!"))
+	assert.Contains(t, glyph(view()), commandShade(m.th).Foreground(m.th.error).Render("! "))
+	assert.Equal(t, "ls", m.composer.ta.Value())
+	assert.Nil(t, pieces(m))
 
 	m.composer.reset()
 	typeText(m, " !ls")
 	m.syncInput(false)
 	assert.Equal(t, blank(shade(m.th)), view()[0])
 	assert.Contains(t, glyph(view()), shade(m.th).Foreground(m.th.accent).Render("❯ "))
+}
+
+func TestComposerKeepsTheRedGlyphAcrossAThemeChange(t *testing.T) {
+	m, _ := newTestModel(t, 40, 30)
+	typeText(m, "!ls")
+	m.syncInput(false)
+	before := m.th
+
+	m.Update(tea.BackgroundColorMsg{Color: color.White})
+	if m.th == before {
+		m.Update(tea.BackgroundColorMsg{Color: color.Black})
+	}
+	require.NotEqual(t, before, m.th)
+
+	assert.Contains(t, m.composer.view(m.width, m.th)[1], commandShade(m.th).Foreground(m.th.error).Render("! "))
 }

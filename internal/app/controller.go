@@ -402,7 +402,7 @@ func (c *Controller) rebuild() {
 		servers = append(servers, server)
 	}
 	tools := slices.Concat(c.builtin, serverTools, c.workflow)
-	prompt := buildPrompt(c.cfg.Workspace, tools, c.cfg.Instructions, servers, nil, false, c.cfg.Servers != nil)
+	prompt := buildPrompt(c.cfg.Workspace, tools, c.cfg.Instructions, servers, nil, false, c.cfg.Servers != nil, c.cfg.UserShell != nil)
 	agents, workflowSpecs := c.buildAgents(c.search, serverTools, servers)
 	c.mu.Lock()
 	defer c.mu.Unlock()

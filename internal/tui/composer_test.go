@@ -265,6 +265,135 @@ func TestRestoreKeepsDraftBlocks(t *testing.T) {
 	assert.Equal(t, []string{"/tmp/a.png"}, imgs)
 }
 
+func TestBackspaceAtTheStartOfACommandTurnsItBackIntoAPrompt(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	typeText(m, "!ls")
+	m.syncInput(false)
+	require.True(t, m.composer.bang)
+
+	press(m, home)
+	press(m, backspace)
+
+	assert.False(t, m.composer.bang)
+	assert.Equal(t, "ls", m.composer.value())
+	assert.Contains(t, m.composer.view(m.width, m.th)[1], shade(m.th).Foreground(m.th.accent).Render("❯ "))
+}
+
+func TestBackspaceAtTheStartOfACommandKeepsTheBangOfTheText(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	typeText(m, "!!ls")
+	m.syncInput(false)
+	require.True(t, m.composer.bang)
+
+	press(m, home)
+	press(m, backspace)
+	m.syncInput(false)
+
+	assert.False(t, m.composer.bang)
+	assert.Equal(t, " !ls", m.composer.value())
+}
+
+func TestBackspaceAtTheStartOfACommandCollapsesWhatTheLeadingSpaceOverflows(t *testing.T) {
+	m, _ := newTestModel(t, 30, 30)
+	// The text fills both rows, so the leading space overflows them.
+	text := "!" + strings.Repeat("w", 2*m.composer.ta.Width()-1)
+	typeText(m, "!"+text)
+	m.syncInput(false)
+	require.True(t, m.composer.bang)
+	require.Equal(t, text, m.composer.ta.Value())
+	m.composer.ta.MaxContentHeight = 2
+
+	m.composer.ta.MoveToBegin()
+	press(m, backspace)
+	m.syncInput(false)
+
+	assert.False(t, m.composer.bang)
+	assert.True(t, strings.HasPrefix(m.composer.value(), "[paste"))
+	expanded, _ := m.composer.expanded()
+	assert.Equal(t, " "+text, expanded)
+}
+
+func TestTypingABangInFrontOfTextMakesItACommand(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	typeText(m, "ls")
+	press(m, home)
+	typeText(m, "!")
+	m.syncInput(false)
+	typeText(m, "x")
+	m.syncInput(false)
+
+	assert.True(t, m.composer.bang)
+	assert.Equal(t, "!xls", m.composer.value())
+	assert.Equal(t, "xls", m.composer.ta.Value())
+}
+
+func TestBackspaceInsideACommandDraftKeepsItACommand(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	pasteText(m, "!ls\necho hi")
+	m.syncInput(false)
+	require.True(t, m.composer.bang)
+
+	press(m, tea.KeyPressMsg{Code: tea.KeyDown})
+	press(m, home)
+	press(m, backspace)
+	m.syncInput(false)
+
+	assert.True(t, m.composer.bang)
+	assert.Equal(t, "!lsecho hi", m.composer.value())
+
+	press(m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	press(m, backspace)
+	m.syncInput(false)
+
+	assert.True(t, m.composer.bang)
+	assert.Equal(t, "!secho hi", m.composer.value())
+}
+
+func TestSpacesAfterATypedBangAreSwallowedAtTheCursor(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	typeText(m, "ls")
+	press(m, home)
+	typeText(m, "!  ")
+	m.syncInput(false)
+
+	assert.Equal(t, "ls", m.composer.ta.Value())
+	assert.Equal(t, 0, m.composer.ta.Column())
+
+	typeText(m, "x")
+	m.syncInput(false)
+
+	assert.Equal(t, "!xls", m.composer.value())
+}
+
+func TestCollapsingACommandDraftMakesItAPrompt(t *testing.T) {
+	m, _ := newTestModel(t, 30, 30)
+	typeText(m, "!"+strings.Repeat("w", 40))
+	m.syncInput(false)
+	require.True(t, m.composer.bang)
+	m.composer.ta.MaxContentHeight = 2
+
+	m.composer.insertImage("/synthetic/draft.png")
+	m.syncInput(false)
+
+	assert.False(t, m.composer.bang)
+	assert.True(t, strings.HasPrefix(m.composer.value(), "[paste"))
+	text, _ := m.composer.expanded()
+	assert.True(t, strings.HasPrefix(text, "!www"))
+}
+
+func TestRestoreInFrontOfACommandDraftYieldsAPrompt(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	typeText(m, "!ls")
+	m.syncInput(false)
+	require.True(t, m.composer.bang)
+
+	m.composer.restore([]event.Input{{Text: "queued"}})
+	m.syncInput(false)
+
+	assert.False(t, m.composer.bang)
+	assert.Equal(t, "queued\n\n!ls", m.composer.value())
+}
+
 func TestComposerDragSelectsAndCopies(t *testing.T) {
 	m, _ := newTestModel(t, 40, 30)
 	typeText(m, "hello world")
@@ -766,4 +895,90 @@ func TestImageAtWrappedCapacityPreservesDraft(t *testing.T) {
 			assert.NotEqual(t, draft, c.value())
 		})
 	}
+}
+
+func TestSwallowingAMultiLineCommandKeepsTheCursor(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	pasteText(m, "!ls\necho hi")
+	m.syncInput(false)
+
+	require.True(t, m.composer.bang)
+	assert.Equal(t, "ls\necho hi", m.composer.ta.Value())
+	assert.Equal(t, 1, m.composer.ta.Line())
+	assert.Equal(t, 7, m.composer.ta.Column())
+
+	typeText(m, "!")
+	m.syncInput(false)
+
+	assert.Equal(t, "!ls\necho hi!", m.composer.value())
+}
+
+func TestPastingIntoACommandDraft(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	typeText(m, "!ls")
+	m.syncInput(false)
+	require.True(t, m.composer.bang)
+
+	pasteText(m, " -la")
+	m.syncInput(false)
+
+	assert.True(t, m.composer.bang)
+	assert.Equal(t, "!ls -la", m.composer.value())
+	assert.Equal(t, "ls -la", m.composer.ta.Value())
+}
+
+func TestPastingABlockIntoACommandDraftKeepsItACommand(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	typeText(m, "!ls")
+	m.syncInput(false)
+	require.True(t, m.composer.bang)
+
+	pasteText(m, linesOf(pasteMaxLines+1))
+	m.syncInput(false)
+	text, _ := m.draft()
+
+	assert.True(t, m.composer.bang)
+	assert.True(t, strings.HasPrefix(m.composer.ta.Value(), "ls[paste"))
+	assert.True(t, strings.HasPrefix(text, "!ls"))
+}
+
+func TestPastingPastTheCapIntoACommandDraftMakesItAPrompt(t *testing.T) {
+	m, _ := newTestModel(t, 30, 30)
+	typeText(m, "!"+strings.Repeat("w", 40))
+	m.syncInput(false)
+	require.True(t, m.composer.bang)
+	m.composer.ta.MaxContentHeight = 2
+
+	pasteText(m, " more")
+	m.syncInput(false)
+	text, _ := m.draft()
+
+	assert.False(t, m.composer.bang)
+	assert.True(t, strings.HasPrefix(m.composer.value(), "[paste"))
+	assert.True(t, strings.HasPrefix(text, " !www"), "a collapsed draft is sent as a prompt")
+}
+
+func TestABareBangDraft(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	typeText(m, "!")
+	m.syncInput(false)
+	require.True(t, m.composer.bang)
+	require.Empty(t, m.composer.ta.Value())
+	assert.Contains(t, strings.Join(m.composer.view(40, m.th), "\n"), "! ")
+
+	assert.False(t, isQuit(press(m, ctrlD)))
+	assert.False(t, m.composer.empty())
+
+	press(m, backspace)
+	m.syncInput(false)
+	assert.False(t, m.composer.bang)
+	assert.True(t, m.composer.empty())
+
+	typeText(m, "!")
+	m.syncInput(false)
+	press(m, ctrlC)
+	m.syncInput(false)
+	assert.False(t, m.composer.bang)
+	assert.True(t, m.composer.empty())
+	assert.Contains(t, strings.Join(m.composer.view(40, m.th), "\n"), "❯ ")
 }

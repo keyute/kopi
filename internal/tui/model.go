@@ -321,11 +321,13 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 // may have changed it. The menu follows once a composer hold ends, as well as
 // on a change, so it never acts on a token from before the hold.
 func (m *model) syncInput(wasHeld bool) tea.Cmd {
-	value, line, col := m.composer.value(), m.composer.ta.Line(), m.composer.ta.Column()
-	changed := value != m.seen.value || line != m.seen.line || col != m.seen.col
-	if value != m.seen.value || m.shown != m.seen.shown {
+	value := m.composer.value()
+	if value != m.seen.value || m.shown != m.seen.shown || m.composer.stale() {
 		m.composer.setSpans(m.c.Spans(m.shown, value), m.th)
 	}
+	value = m.composer.value()
+	line, col := m.composer.ta.Line(), m.composer.ta.Column()
+	changed := value != m.seen.value || line != m.seen.line || col != m.seen.col
 	m.seen.value, m.seen.shown, m.seen.line, m.seen.col = value, m.shown, line, col
 	if m.holding() || (!changed && !wasHeld) {
 		return nil
@@ -463,7 +465,7 @@ func (m *model) flash(text string) tea.Cmd {
 // shell command is sent as one: a "!" that a collapsed paste brings in is not.
 func (m *model) draft() (string, []string) {
 	text, images := m.composer.expanded()
-	if !m.composer.shell() {
+	if !m.composer.bang {
 		text = app.AsPrompt(text)
 	}
 	return text, images

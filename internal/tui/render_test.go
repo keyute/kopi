@@ -70,8 +70,7 @@ func TestRenderStripsUntrustedTerminalControls(t *testing.T) {
 				}
 			}
 			assert.Equal(t, shadedBox("❯ ", shade(mocha()), clean, nil, width, mocha()), shadedBox("❯ ", shade(mocha()), attack+clean, nil, width, mocha()))
-			md := &markdown{width: width}
-			assert.Equal(t, md.render(clean), md.render(attack+clean), "plain markdown fallback")
+			assert.Equal(t, newMarkdown(width, theme{}).lines("", clean), newMarkdown(width, theme{}).lines("", attack+clean), "markdown drops terminal controls")
 		})
 	}
 }

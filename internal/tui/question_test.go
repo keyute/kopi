@@ -172,7 +172,7 @@ func TestQuestionRowsShowThePreviewBesideFromSixtyFourColumns(t *testing.T) {
 	box := cellOf(first, "┌")
 	assert.Equal(t, list+previewGap, box)
 	assert.Equal(t, box+2, cellOf(rows[4], "Heading"))
-	assert.Equal(t, box+2, cellOf(rows[5], "some text"))
+	assert.Equal(t, box+2, cellOf(rows[6], "some text"))
 	assert.Equal(t, "  enter to choose · tab to add a note · esc to dismiss", rows[len(rows)-2], "the hint spans the whole width")
 
 	assert.Contains(t, plainQuestionRows(qs, 0, 64, 6, 100)[3], "┌", "from 64 columns")
@@ -188,6 +188,7 @@ func TestQuestionRowsShowThePreviewBelowUnderSixtyFourColumns(t *testing.T) {
 		"",
 		"  ┌" + box + "┐",
 		"  │ Heading" + strings.Repeat(" ", 59-8) + "│",
+		"  │" + strings.Repeat(" ", 59) + "│",
 		"  │ some text" + strings.Repeat(" ", 59-10) + "│",
 		"  └" + box + "┘",
 		"",

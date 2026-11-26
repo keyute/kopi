@@ -39,7 +39,10 @@ type mcpServer struct {
 //
 // joining reports that MCP servers may give the session tools after it opens,
 // so the preamble speaks of tools that are not read-only whatever tools has.
-func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group, servers []mcpServer, def *subagent.Definition, workflow, joining bool) []pigruntime.PromptPart {
+//
+// userShell reports that the human can run commands with "!": only the main
+// session in the fullscreen interface has it.
+func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group, servers []mcpServer, def *subagent.Definition, workflow, joining, userShell bool) []pigruntime.PromptPart {
 	lines := []string{
 		fmt.Sprintf("You are Kopi, a coding agent working in %s.", workspace),
 	}
@@ -65,6 +68,9 @@ func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group
 			}
 		}
 		lines = append(lines, line)
+	}
+	if userShell {
+		lines = append(lines, "If a command will not work when you run it, give the user `! command` in a code block; its output is sent to you.")
 	}
 	parts := []pigruntime.PromptPart{{Name: "preamble", Text: strings.Join(lines, "\n")}}
 	if def != nil && strings.TrimSpace(def.Prompt) != "" {

@@ -329,7 +329,7 @@ func (q *questionDialog) previewLines(i, width int, th theme) []string {
 	}
 	at := [2]int{q.tab, i}
 	if _, ok := q.previews[at]; !ok {
-		q.previews[at] = newMarkdown(width, th).render(opts[i].Preview)
+		q.previews[at] = newMarkdown(width, th).lines("", opts[i].Preview)
 	}
 	return q.previews[at]
 }

@@ -5,7 +5,6 @@ go 1.27.4
 require (
 	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.1.1
-	charm.land/glamour/v2 v2.0.1
 	charm.land/lipgloss/v2 v2.1.1
 	code.dny.dev/ssrf v0.3.0
 	codeberg.org/readeck/go-readability/v2 v2.1.3
@@ -32,6 +31,7 @@ require (
 	github.com/sahilm/fuzzy v0.1.3
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
+	github.com/yuin/goldmark v1.8.5
 	go.uber.org/goleak v1.3.0
 	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/net v0.62.0
@@ -46,9 +46,7 @@ require (
 	github.com/MichaelKinsy/PiG/extensions/sdk v0.8.0 // indirect
 	github.com/Microsoft/go-winio v0.6.4 // indirect
 	github.com/andybalholm/cascadia v1.3.4 // indirect
-	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
-	github.com/charmbracelet/x/exp/slice v0.0.0-20250327172914-2fdc97757edf // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
@@ -61,7 +59,6 @@ require (
 	github.com/go-git/go-billy/v5 v5.9.2 // indirect
 	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c // indirect
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
-	github.com/gorilla/css v1.0.1 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20240701034025-d67f41855da4 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/itlightning/dateparse v0.2.1 // indirect
@@ -70,15 +67,12 @@ require (
 	github.com/knadh/koanf/maps v0.1.2 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/mattn/go-runewidth v0.0.30 // indirect
-	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/tetratelabs/wazero v1.12.0 // indirect
 	github.com/xo/terminfo v1.0.0 // indirect
-	github.com/yuin/goldmark v1.8.5 // indirect
-	github.com/yuin/goldmark-emoji v1.0.5 // indirect
 	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
