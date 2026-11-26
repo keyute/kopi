@@ -213,7 +213,7 @@ func renderRow(c transcript.Call, f blockFolds, width int, th theme) *outline {
 		summary = "interrupted"
 	}
 	if summary != "" {
-		o.under(summary, lineStyle, hit{})
+		o.under(summary, lineStyle, h)
 	}
 	w := o.bodyWidth()
 	switch c.State {
@@ -411,7 +411,7 @@ func renderTask(t transcript.Task, expanded bool, width int, th theme) []line {
 		parts = append(parts, t.Reason)
 	}
 	if len(parts) > 0 {
-		o.under(strings.Join(parts, " · "), lineStyle, hit{})
+		o.under(strings.Join(parts, " · "), lineStyle, h)
 	}
 	if expanded {
 		o.body(bodyLines(result, fg(th.muted), o.bodyWidth()))
