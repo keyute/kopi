@@ -37,7 +37,8 @@ Commands in the fullscreen interface:
 | `/new` | Start a new session |
 | `/resume <id>` | Resume a session |
 | `/model <provider/id>` | Switch the model until Kopi exits; `config.json` is untouched and `/new` and `/resume` keep the choice, and running subagents keep their model. A running workflow's later `agent()` calls, and the `WebFetch`, `WebSearch` and classifier calls of running agents, use the new model when no key pins one. The effort set with `/effort` carries over, clamped to the new model's levels, `medium` when none was set; `WebSearch` is offered or withdrawn with the new model's hosted search when `smallModel` is unset. Refused while a turn runs; it returns at once, and a provider without a credential or an unknown model is reported as an error, with a pointer to `/login` for the former, while no turn starts until the change ends |
-| `/add-dir <path>` | Add a directory to the [workspace](tools.md#file-tools) until Kopi exits; see [what it refuses](tools.md#file-tools) and [trust](trust.md#added-directories) for what it asks. Allowed while a turn runs |
+| `/add-dir <path>` | Add a directory to the [workspace](tools.md#file-tools) until `/remove-dir` removes it or Kopi exits; see [what it refuses](tools.md#file-tools) and [trust](trust.md#added-directories) for what it asks. Allowed while a turn runs |
+| `/remove-dir <path>` | Remove an added directory from the workspace. `<path>` is the spelling it was added in, its real path, or a path that resolves to it, as `/add-dir` reads one; the start directory cannot be removed. Takes effect at once for the session, its subagents and workflow agents; see [what it refuses](tools.md#file-tools) and [what it does not undo](trust.md#added-directories). Allowed while a turn runs |
 | `/login <provider>` | Log in to a provider |
 | `/logout <provider>` | Remove a provider's stored credential |
 | `/tasks` | List background tasks, [subagents](subagents.md) and [workflows](workflows.md), show one's output, open a subagent's view or a workflow's [progress dialog](workflows.md#progress-dialog) and stop them |
@@ -242,6 +243,7 @@ The bullet is green for a call that succeeded, yellow for one you or a rule refu
   - Accepting a folder from the menu fills it in and lists what is in it; it does not add it.
   - Enter on a folder typed in full, with or without its `/`, adds it. Tab on one typed without its `/` lights its row, and a second Tab fills the `/` in and lists what is in it.
   - A folder that cannot be added is not listed. At most 50 are listed.
+- `/remove-dir` lists the added directories, by real path, in the order they were added.
 - Picking `/resume` from the menu lists this directory's sessions, which you filter by date or first message.
 - `@` at the start of the input or after a space lists files and directories under the start directory, leaving out:
   - `.git`
@@ -341,7 +343,6 @@ Limits:
 - Aliases and functions from your shell's startup files: your commands do not read them.
 - Release packaging and self-update.
 - Restoring added directories after Kopi restarts: pass `--add-dir` again when resuming. The resumed conversation still mentions the directory.
-- A list of the added directories, and removing one short of quitting.
 - Loading skills and `.mcp.json` from an added directory.
 - `@` completion in an added directory: it completes only the start directory.
 - The status line's branch, changes and directory segments for an added directory: they stay the start directory's.

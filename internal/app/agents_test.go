@@ -1994,6 +1994,32 @@ func TestSubagentIsToldTheAddedDirectoriesWithItsFirstPromptAndItsNextMessage(t 
 	a.untilStatus(t, id, tool.TaskCompleted)
 }
 
+func TestSubagentIsToldADirectoryWasRemovedWithItsNextMessage(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	cfg, _, _ := dirConfig(t, sb, Config{})
+	a := newAgentHarness(t, sb, cfg, agentDef("explorer"))
+	first := otherDir(t)
+	decide(t, a.c, first, trust.Untrusted)
+	require.NoError(t, a.c.AddDir(first))
+	removedText := inJSON(t, "The workspace no longer includes "+first+".")
+	one, two, gate := make(chan childRequest, 1), make(chan childRequest, 1), make(chan struct{})
+	a.child.SetResponses([]ai.FauxResponseStep{captureChild(one, gate, "first"), captureChild(two, nil, "second")})
+	a.rootAcks(1)
+
+	id := a.launch(t, "explorer", "look", "go")
+	req := receiveChild(t, one)
+	assert.NotContains(t, req.raw, removedText)
+
+	require.NoError(t, a.c.RemoveDir(first))
+	_, err := a.c.message(t.Context(), id, "more")
+	require.NoError(t, err)
+	close(gate)
+	req = receiveChild(t, two)
+
+	assert.Equal(t, 1, strings.Count(req.raw, removedText), "the next message carries the removal")
+	a.untilStatus(t, id, tool.TaskCompleted)
+}
+
 func TestSubagentWithoutInstructionsIsToldTheAddedDirectoryButNotItsFiles(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	cfg, _, _ := dirConfig(t, sb, Config{})

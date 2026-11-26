@@ -74,7 +74,7 @@ type runner struct {
 	// told is the last mode line the session's model has read; "" when none has.
 	// Only the main session's is used.
 	told string
-	// dirsTold is how many of the added directories the session's model has read.
+	// dirsTold is how many entries of the directory log the session's model has read.
 	dirsTold int
 }
 

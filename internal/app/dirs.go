@@ -20,10 +20,13 @@ import (
 const maxDirCandidates = 50
 
 // addedDir is a directory added to the workspace and the instruction files the
-// model is sent with it.
+// model is sent with it: every one its walk finds that the system prompt does
+// not already carry. removed marks the entry that takes dir out of the
+// workspace again.
 type addedDir struct {
-	dir   tool.Dir
-	files []instruction.File
+	dir     tool.Dir
+	files   []instruction.File
+	removed bool
 }
 
 // pendingDir is an add waiting for the human's answer. arg is the argument as
@@ -37,12 +40,12 @@ type pendingDir struct {
 	saved bool
 }
 
-// AddDir adds the directory arg names to the workspace until Kopi exits: for
-// /add-dir and --add-dir, so it works before a session is open. A directory no
-// trust decision covers is not added until AnswerDir says so, unless the
-// Controller is unattended, which adds it without trust. The error wraps
-// ErrMissingArgument for an empty arg, and otherwise the reason the directory
-// cannot join.
+// AddDir adds the directory arg names to the workspace until RemoveDir removes
+// it or Kopi exits: for /add-dir and --add-dir, so it works before a session is
+// open. A directory no trust decision covers is not added until AnswerDir says
+// so, unless the Controller is unattended, which adds it without trust. The
+// error wraps ErrMissingArgument for an empty arg, and otherwise the reason the
+// directory cannot join.
 func (c *Controller) AddDir(arg string) error {
 	if arg == "" {
 		return fmt.Errorf("%w: /add-dir needs a directory", ErrMissingArgument)
@@ -61,8 +64,13 @@ func (c *Controller) AddDir(arg string) error {
 		return c.applyDir(p, decided && decision == trust.Trusted)
 	}
 	req := event.DirRequested{Dir: p.dir.Real, Saved: p.saved}
+	c.mu.Lock()
+	sent := c.sentFilesLocked()
+	c.mu.Unlock()
 	for _, f := range p.files {
-		req.Instructions = append(req.Instructions, f.Path)
+		if !sent[f.Path] {
+			req.Instructions = append(req.Instructions, f.Path)
+		}
 	}
 	if c.cfg.Covers != nil {
 		req.Servers, req.Skills = c.cfg.Covers(p.dir.Real)
@@ -121,10 +129,7 @@ func (c *Controller) prepareDir(arg string) (p *pendingDir, decision trust.Decis
 	if c.cfg.ValidateSandboxDirs != nil {
 		c.dirsMu.Lock()
 		c.mu.Lock()
-		roots := make([]string, 0, len(c.dirs)+1)
-		for _, d := range c.dirs {
-			roots = append(roots, d.dir.Real)
-		}
+		_, roots := dirNames(liveDirs(c.dirs))
 		c.mu.Unlock()
 		roots = append(roots, real)
 		err := c.cfg.ValidateSandboxDirs(roots)
@@ -226,7 +231,7 @@ func (c *Controller) applyDir(p *pendingDir, trusted bool) error {
 	c.dirsMu.Lock()
 	defer c.dirsMu.Unlock()
 	c.mu.Lock()
-	prev := c.dirs
+	prev := liveDirs(c.dirs)
 	c.mu.Unlock()
 	next := append(slices.Clone(prev), addedDir{dir: p.dir})
 	// A failure puts the previous directories back.
@@ -245,10 +250,11 @@ func (c *Controller) applyDir(p *pendingDir, trusted bool) error {
 	// files were listed.
 	sent := c.sentFilesLocked()
 	fresh := slices.DeleteFunc(slices.Clone(p.files), func(f instruction.File) bool { return sent[f.Path] })
+	entry := addedDir{dir: p.dir}
 	if trusted {
-		next[len(next)-1].files = fresh
+		entry.files = p.files
 	}
-	c.dirs = next
+	c.dirs = append(c.dirs, entry)
 	c.mu.Unlock()
 	text := fmt.Sprintf("Added %s to the workspace.", p.dir.Real)
 	switch {
@@ -262,12 +268,84 @@ func (c *Controller) applyDir(p *pendingDir, trusted bool) error {
 	return nil
 }
 
-// setReach makes dirs the added directories of the rules, which take both names
-// of each, and of the sandbox, which takes the real one. The rules go first, so
-// no deny or ask rule lags behind the reach.
-func (c *Controller) setReach(dirs []addedDir) error {
-	var names []string
-	real := make([]string, len(dirs))
+// RemoveDir removes the added directory arg names from the workspace, for
+// /remove-dir. arg matches the spelling a directory was added in, its real path,
+// or the real path of what arg resolves to. The error wraps ErrMissingArgument
+// for an empty arg, ErrNotAdded when no added directory matches, and otherwise
+// the reason the sandbox refused the change.
+func (c *Controller) RemoveDir(arg string) error {
+	if arg == "" {
+		return fmt.Errorf("%w: /remove-dir needs a directory", ErrMissingArgument)
+	}
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return ErrNoSession
+	}
+	c.dirsMu.Lock()
+	defer c.dirsMu.Unlock()
+	c.mu.Lock()
+	prev := liveDirs(c.dirs)
+	c.mu.Unlock()
+	typed := c.typedDir(arg)
+	i := slices.IndexFunc(prev, func(d addedDir) bool { return typed == d.dir.Given || typed == d.dir.Real })
+	if i < 0 {
+		if real, err := trust.Canonical(typed); err == nil {
+			i = slices.IndexFunc(prev, func(d addedDir) bool { return real == d.dir.Real })
+		}
+	}
+	if i < 0 {
+		return fmt.Errorf("failed to remove %s: %w", arg, ErrNotAdded)
+	}
+	removed := prev[i]
+	next := slices.Delete(slices.Clone(prev), i, i+1)
+	// Reach goes before the rules, so no deny or ask rule is dropped while the
+	// directory can still be reached.
+	if c.cfg.SandboxDirs != nil {
+		_, real := dirNames(next)
+		if err := c.cfg.SandboxDirs(real); err != nil {
+			_, prevReal := dirNames(prev)
+			if restoreErr := c.cfg.SandboxDirs(prevReal); restoreErr != nil {
+				err = errors.Join(err, fmt.Errorf("failed to restore the sandbox directories: %w", restoreErr))
+			}
+			return fmt.Errorf("failed to remove %s: %w", arg, err)
+		}
+	}
+	c.cfg.Files.Remove(removed.dir)
+	names, _ := dirNames(next)
+	c.cfg.Rules.SetDirs(names)
+	c.mu.Lock()
+	c.dirs = append(c.dirs, addedDir{dir: removed.dir, removed: true})
+	c.mu.Unlock()
+	text := fmt.Sprintf("Removed %s from the workspace.", removed.dir.Real)
+	for _, d := range next {
+		if insideDir(removed.dir.Real, d.dir.Real) {
+			text += fmt.Sprintf(" It is still reachable inside %s.", d.dir.Real)
+			break
+		}
+	}
+	c.report(event.Notice{Text: text})
+	return nil
+}
+
+// removeDirCandidates lists the added directories, by real path, in the order
+// they were added.
+func (c *Controller) removeDirCandidates(_ string) ([]Candidate, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	live := liveDirs(c.dirs)
+	out := make([]Candidate, len(live))
+	for i, d := range live {
+		out[i] = Candidate{Value: d.dir.Real}
+	}
+	return out, nil
+}
+
+// dirNames is the names of dirs the rules take, both of each, and the real
+// paths the sandbox takes.
+func dirNames(dirs []addedDir) (names, real []string) {
+	real = make([]string, len(dirs))
 	for i, d := range dirs {
 		names = append(names, d.dir.Given)
 		if d.dir.Real != d.dir.Given {
@@ -275,11 +353,24 @@ func (c *Controller) setReach(dirs []addedDir) error {
 		}
 		real[i] = d.dir.Real
 	}
+	return names, real
+}
+
+// setReach makes dirs the added directories of the rules and of the sandbox. The
+// rules go first, so no deny or ask rule lags behind the reach.
+func (c *Controller) setReach(dirs []addedDir) error {
+	names, real := dirNames(dirs)
 	c.cfg.Rules.SetDirs(names)
 	if c.cfg.SandboxDirs == nil {
 		return nil
 	}
 	return c.cfg.SandboxDirs(real)
+}
+
+// insideDir reports whether path is dir or lies inside it, by name.
+func insideDir(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && filepath.IsLocal(rel)
 }
 
 // typedDir is arg as the absolute path the human spelled: ~ is the user's home as
@@ -296,16 +387,23 @@ func (c *Controller) typedDir(arg string) string {
 	return arg
 }
 
-// sentFilesLocked is the paths of the instruction files the model has been or
-// will be sent. It must be called with mu held.
-func (c *Controller) sentFilesLocked() map[string]bool {
-	sent := map[string]bool{}
+// promptFiles is the paths of the instruction files the system prompt carries.
+func (c *Controller) promptFiles() map[string]bool {
+	files := map[string]bool{}
 	for _, g := range c.cfg.Instructions {
 		for _, f := range g.Files {
-			sent[f.Path] = true
+			files[f.Path] = true
 		}
 	}
-	for _, d := range c.dirs {
+	return files
+}
+
+// sentFilesLocked is the paths of the instruction files the system prompt
+// carries and those of the directories now added. It must be called with mu
+// held.
+func (c *Controller) sentFilesLocked() map[string]bool {
+	sent := c.promptFiles()
+	for _, d := range liveDirs(c.dirs) {
 		for _, f := range d.files {
 			sent[f.Path] = true
 		}
@@ -314,12 +412,10 @@ func (c *Controller) sentFilesLocked() map[string]bool {
 }
 
 // newInstructionFiles reads the instruction files of dir, from the git root
-// down, that the model has not been sent yet. They are held in memory until the
-// human trusts dir.
+// down, that the system prompt does not already carry. They are held in memory
+// until the human trusts dir.
 func (c *Controller) newInstructionFiles(dir string) []instruction.File {
-	c.mu.Lock()
-	sent := c.sentFilesLocked()
-	c.mu.Unlock()
+	held := c.promptFiles()
 	groups, errs := instruction.Load("", []instruction.Root{{Dir: dir, Trusted: true}}, c.cfg.InstructionFallbacks)
 	for _, err := range errs {
 		c.report(event.Error{Err: err})
@@ -327,7 +423,7 @@ func (c *Controller) newInstructionFiles(dir string) []instruction.File {
 	var files []instruction.File
 	for _, g := range groups {
 		for _, f := range g.Files {
-			if !sent[f.Path] {
+			if !held[f.Path] {
 				files = append(files, f)
 			}
 		}
@@ -374,37 +470,93 @@ func (c *Controller) flushReports() {
 	}
 }
 
-// dirCount is how many directories have been added.
+// dirCount is how many adds and removals have been logged.
 func (c *Controller) dirCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.dirs)
 }
 
-// dirsText is what the model is told of the added directories from..to, "" for
-// none: the directories and, for those added with their instruction files, the
-// files, unless files is false.
+// liveAt is the positions in log of the adds still in the workspace after its
+// first n entries: a removal cancels the live entry with the same real path.
+func liveAt(log []addedDir, n int) []int {
+	var live []int
+	for i, d := range log[:n] {
+		if !d.removed {
+			live = append(live, i)
+			continue
+		}
+		live = slices.DeleteFunc(live, func(j int) bool { return log[j].dir.Real == d.dir.Real })
+	}
+	return live
+}
+
+// liveDirs is the directories now added to the workspace, in the order added.
+func liveDirs(log []addedDir) []addedDir {
+	var out []addedDir
+	for _, i := range liveAt(log, len(log)) {
+		out = append(out, log[i])
+	}
+	return out
+}
+
+// dirsText is what the model is told of the changes the log holds from..to, ""
+// for none: the directories that left the workspace, and those added, with
+// their instruction files unless files is false. A directory is told as it
+// stands at to against at from, so an add undone inside the window says nothing,
+// and a directory still inside another added one is not called gone. A file is
+// not sent again while a directory live at from holds it.
 func (c *Controller) dirsText(from, to int, files bool) string {
-	c.mu.Lock()
-	dirs := c.dirs
-	c.mu.Unlock()
 	if from >= to {
 		return ""
 	}
+	c.mu.Lock()
+	log := c.dirs[:to]
+	c.mu.Unlock()
+	before, after := liveAt(log, from), liveAt(log, to)
+	var gone []string
+	for _, b := range before {
+		real := log[b].dir.Real
+		if !slices.ContainsFunc(after, func(a int) bool {
+			return insideDir(real, log[a].dir.Real)
+		}) {
+			gone = append(gone, real)
+		}
+	}
+	var lines []string
+	if len(gone) > 0 {
+		lines = append(lines, "The workspace no longer includes "+strings.Join(gone, ", ")+".")
+	}
+	held := map[string]bool{}
+	for _, b := range before {
+		for _, f := range log[b].files {
+			held[f.Path] = true
+		}
+	}
 	var paths, blocks []string
-	for _, d := range dirs[from:to] {
-		paths = append(paths, d.dir.Real)
-		if files {
-			for _, f := range d.files {
+	for _, a := range after {
+		if slices.Contains(before, a) {
+			continue
+		}
+		paths = append(paths, log[a].dir.Real)
+		if !files {
+			continue
+		}
+		for _, f := range log[a].files {
+			if !held[f.Path] {
+				held[f.Path] = true
 				blocks = append(blocks, instructionText(f))
 			}
 		}
 	}
-	text := "The workspace also includes " + strings.Join(paths, ", ") + ". Give a path there as an absolute path; relative paths and Bash still start from " + c.cfg.Workspace + "."
-	if len(blocks) > 0 {
-		text += "\n" + strings.Join(blocks, "\n\n")
+	if len(paths) > 0 {
+		text := "The workspace also includes " + strings.Join(paths, ", ") + ". Give a path there as an absolute path; relative paths and Bash still start from " + c.cfg.Workspace + "."
+		if len(blocks) > 0 {
+			text += "\n" + strings.Join(blocks, "\n\n")
+		}
+		lines = append(lines, text)
 	}
-	return text
+	return strings.Join(lines, "\n")
 }
 
 // dirCandidates lists the directories typed continues: the entries of its last

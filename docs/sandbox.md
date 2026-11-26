@@ -52,7 +52,7 @@ On macOS and Linux, `Bash` runs inside an OS sandbox when it is available (unles
   - Linux: anything.
 - A command cannot write `HEAD` in the start directory on Linux, or on macOS when it has no `.git`.
 - In plan mode nothing in the start directory is writable, including `sandbox.allowWrite` paths inside it.
-- A directory added with [`/add-dir`](usage.md#commands) is a write root like the start directory, with the same `.git`, `HEAD` and `.mcp.json` protection, and is read-only in plan mode. A command already running keeps the profile it started with.
+- A directory added with [`/add-dir`](usage.md#commands) is a write root like the start directory, with the same `.git`, `HEAD` and `.mcp.json` protection, and is read-only in plan mode. [`/remove-dir`](usage.md#commands) takes it out again for later commands. A command already running keeps the profile it started with, after an add and after a removal.
 - A command cannot create, write, rename or remove the start directory's `.mcp.json`, nor what it resolves to when it is a symlink.
   - On macOS this holds for a file named `.mcp.json` in any letter case and in any directory.
   - Git operations that change a protected `.mcp.json` therefore fail in the sandbox.

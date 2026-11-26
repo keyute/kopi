@@ -52,6 +52,9 @@ func commandTable() []command {
 		{Command: Command{Name: "add-dir", Summary: "add a directory to the workspace until kopi exits", Typed: true}, run: func(c *Controller, _ context.Context, arg string) error {
 			return c.AddDir(arg)
 		}, args: (*Controller).dirCandidates},
+		{Command: Command{Name: "remove-dir", Summary: "remove an added directory from the workspace"}, run: func(c *Controller, _ context.Context, arg string) error {
+			return c.RemoveDir(arg)
+		}, args: (*Controller).removeDirCandidates},
 		{Command: Command{Name: "new", Summary: "start a new session"}, run: func(c *Controller, ctx context.Context, _ string) error {
 			return c.switchTo(ctx, OpenRequest{})
 		}},

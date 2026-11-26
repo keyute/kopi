@@ -1053,6 +1053,30 @@ func TestAddedDirectoryIsReachedThroughItsView(t *testing.T) {
 	assert.False(t, ws.in("a.txt").extra)
 }
 
+func TestRemoveDropsAnAddedDirectorysReach(t *testing.T) {
+	start := t.TempDir()
+	writeFile(t, filepath.Join(start, "s.txt"), "start")
+	ws := newWorkspace(t, start, nil)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "a.txt"), "hello")
+	path := filepath.Join(dir, "a.txt")
+	d := Dir{Given: dir, Real: realPath(t, dir)}
+	require.NoError(t, ws.Add(d))
+	view := ws.in(path)
+
+	assert.False(t, ws.Remove(Dir{Given: start, Real: realPath(t, start)}), "the start directory is not an added one")
+	assert.False(t, ws.Remove(Dir{Given: "/nowhere", Real: "/nowhere"}))
+	assert.True(t, ws.Remove(d))
+
+	_, err := ws.in(path).Open(path)
+	require.ErrorIs(t, err, ErrOutsideWorkspace)
+	assert.Equal(t, "hello", readAll(t, view, path), "a view taken before the removal still reads")
+	assert.Equal(t, "start", readAll(t, ws, filepath.Join(start, "s.txt")))
+	assert.False(t, ws.Remove(d))
+	require.NoError(t, ws.Add(d))
+	assert.Equal(t, "hello", readAll(t, ws.in(path), path))
+}
+
 func realPath(t *testing.T, dir string) string {
 	t.Helper()
 	real, err := filepath.EvalSymlinks(dir)

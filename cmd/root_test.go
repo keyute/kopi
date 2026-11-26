@@ -2387,6 +2387,52 @@ func TestOpenSandboxSetDirsKeepsAnAddedDirectorysProtections(t *testing.T) {
 	}
 }
 
+func TestOpenSandboxSetDirsDropsARemovedDirectoryAsAWriteRoot(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("the sandbox is unavailable here")
+	}
+	if runtime.GOOS == "linux" {
+		// t.TempDir() is under /tmp there, which is always a write root.
+		t.Setenv("TMPDIR", "/var/tmp")
+	}
+	e := newSandboxedEnv(t)
+	// The temporary directory is a write root, so it must not contain either directory.
+	temp := filepath.Join(e.root, "tmp")
+	require.NoError(t, os.Mkdir(temp, 0o700))
+	t.Setenv("TMPDIR", temp)
+	kept, removed := filepath.Join(e.root, "kept"), filepath.Join(e.root, "removed")
+	require.NoError(t, os.Mkdir(kept, 0o700))
+	require.NoError(t, os.Mkdir(removed, 0o700))
+	kept, removed = canonical(t, kept), canonical(t, removed)
+	execute, plan, setDirs, _, _, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
+	require.NoError(t, err)
+	require.NotNil(t, setDirs)
+	attempt := func(sb *sandbox.Sandbox, dir string) (string, error) {
+		cmd, cleanup, err := sb.Command([]string{"/bin/bash", "-c", "printf x > " + filepath.Join(dir, "f")})
+		require.NoError(t, err)
+		defer cleanup()
+		cmd.Dir = e.workspace
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	require.NoError(t, setDirs([]string{kept, removed}))
+	out, err := attempt(execute, removed)
+	require.NoError(t, err, "the directory is a write root while it is added: "+out)
+	require.NoError(t, os.Remove(filepath.Join(removed, "f")))
+
+	require.NoError(t, setDirs([]string{kept}))
+
+	_, err = attempt(execute, removed)
+	assert.Error(t, err, "the removed directory is no longer a write root")
+	_, err = attempt(plan, removed)
+	assert.Error(t, err)
+	out, err = attempt(execute, kept)
+	require.NoError(t, err, out)
+	assert.FileExists(t, filepath.Join(kept, "f"))
+	_, err = attempt(plan, kept)
+	assert.Error(t, err, "the kept directory is read-only in plan mode")
+}
+
 func TestCovers(t *testing.T) {
 	home := t.TempDir()
 	t.Run("servers and skills", func(t *testing.T) {

@@ -235,7 +235,7 @@ type Controller struct {
 	// model is the session model: Config.Model, or the runtime's default once resolved.
 	model  string
 	sessID string
-	// dirsToldBy is how many added directories each session of this run has
+	// dirsToldBy is how many entries of dirs each session of this run has
 	// read, so a session resumed later is not told them again; queue guards it.
 	dirsToldBy map[string]int
 	// titled is set once the current main session's title has been decided on,
@@ -279,14 +279,15 @@ type Controller struct {
 	// deferred is the first open that Start put off for a login; cleared once
 	// any session opens.
 	deferred *OpenRequest
-	// dirs are the directories added to the workspace, in order, and dirRequests
-	// the adds waiting for AnswerDir by token; mu guards both. Neither is tied
-	// to a session, so a switch keeps them.
+	// dirs is the log of adds and removals, in order, and dirRequests the adds
+	// waiting for AnswerDir by token; mu guards both. Entries are only appended:
+	// a removal is an entry of its own, and the directories now added are what
+	// the log folds to. Neither is tied to a session, so a switch keeps them.
 	dirs        []addedDir
 	dirRequests map[uint64]*pendingDir
-	// reports are the events of adds waiting to be shown, in order; mu guards it.
+	// reports are the events of adds and removals waiting to be shown, in order; mu guards it.
 	reports []event.Event
-	// dirsMu serialises applying an add and takes mu inside.
+	// dirsMu serialises applying an add or a removal and takes mu inside.
 	dirsMu sync.Mutex
 	// dirEventsMu orders a request's DirRequested before its DirEnded; it takes
 	// mu inside.

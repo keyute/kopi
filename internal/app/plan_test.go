@@ -382,6 +382,71 @@ func TestAddedDirectoryIsToldOnceAndAgainToANewSessionButNotToAResumedOne(t *tes
 	assert.ErrorIs(t, d.ws.CanAdd(dir), tool.ErrInWorkspace)
 }
 
+func TestRemovedDirectoryIsToldOnce(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	dir := otherDir(t)
+	d.addTrusted(t, dir)
+	assert.Equal(t, [][]string{{"one", told(d.sb.Workspace, dir)}}, d.userTexts(t, "one"))
+	require.NoError(t, d.c.RemoveDir(dir))
+
+	assert.Equal(t, [][]string{{"two", "The workspace no longer includes " + dir + "."}, {"three"}}, d.userTexts(t, "two", "three"))
+}
+
+func TestDirectoryAddedAndRemovedBetweenPromptsIsNotTold(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	dir := otherDir(t)
+	assert.Equal(t, [][]string{{"one"}}, d.userTexts(t, "one"))
+	d.addTrusted(t, dir)
+	require.NoError(t, d.c.RemoveDir(dir))
+
+	assert.Equal(t, [][]string{{"two"}}, d.userTexts(t, "two"))
+}
+
+func TestDirectoryAddedAfterARemovalIsTold(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	first, second := otherDir(t), otherDir(t)
+	d.addTrusted(t, first)
+	assert.Equal(t, [][]string{{"one", told(d.sb.Workspace, first)}}, d.userTexts(t, "one"))
+	require.NoError(t, d.c.RemoveDir(first))
+	d.addTrusted(t, second)
+
+	assert.Equal(t, [][]string{{"two", "The workspace no longer includes " + first + ".\n" + told(d.sb.Workspace, second)}}, d.userTexts(t, "two"))
+}
+
+func TestRecallAfterARemovalNeitherPanicsNorListsTheDirectory(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	dir := otherDir(t)
+	d.addTrusted(t, dir)
+	d.userTexts(t, "one")
+	require.NoError(t, d.c.RemoveDir(dir))
+	assert.Equal(t, d.planLine()+"\n"+told(d.sb.Workspace, dir), d.c.recall(), "the session has not read the removal")
+
+	d.userTexts(t, "two")
+
+	assert.Equal(t, d.planLine(), d.c.recall())
+}
+
+func TestResumedSessionToldBeforeARemovalIsToldOfIt(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	dir := otherDir(t)
+	d.addTrusted(t, dir)
+	d.userTexts(t, "one")
+	savedID := d.c.Status().SessionID
+	require.NoError(t, d.c.NewSession(t.Context()))
+	require.NoError(t, d.c.RemoveDir(dir))
+
+	sessions := subscribeTo[event.SessionChanged](d.c)
+	_, err := d.c.Submit(t.Context(), Main, "/resume "+savedID)
+	require.NoError(t, err)
+	assert.Equal(t, savedID, receiveEvent(t, sessions).SessionID)
+	assertSwitchDone(t, d.harness)
+	d.read = 0
+	got := d.userTexts(t, "two")
+
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0], "The workspace no longer includes "+dir+".")
+}
+
 func TestModeLineAndDirectoriesAreOfferedUntilRead(t *testing.T) {
 	c := &Controller{authority: policy.NewAuthority()}
 	c.cfg.Workspace = "/ws"

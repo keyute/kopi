@@ -141,7 +141,7 @@ Behaviour with `classifier.enabled`:
 - A command you type with `!` is your action, not the agent's: no rule or approval applies to it, and plan mode does not restrict it. See [your own commands](usage.md#your-own-commands).
 - Kopi refuses no credential locations outside its home; deny them with rules, such as `*(~/.ssh)`, and to `Bash` with `sandbox.denyRead`.
 - Symlinks in rule paths, the start directory and the home directory are resolved once, at start, and those in an added directory's rule paths when it is added; in sandbox paths too on macOS, and before each command on Linux.
-- A call already waiting for your answer when a directory is added is judged by the rules as they stood, so a rule the directory brings into reach does not apply to it.
+- A call already waiting for your answer when a directory is added is judged by the rules as they stood, so a rule the directory brings into reach does not apply to it. A file call waiting for your answer when its directory is removed with [`/remove-dir`](usage.md#commands) is refused when it runs, with `path is outside the workspace`, unless the path still lies inside the start directory or another added directory.
 - A preview needs 3 or more rows to scroll; on a screen too short for that, the part that does not fit is not reachable.
 - With `classifier.enabled`, the session's prompts, recent tool-call arguments and the call under review go to `classifier.model`'s provider. The classifier can be wrong in both directions, and a review can hold the turn for up to a minute.
 

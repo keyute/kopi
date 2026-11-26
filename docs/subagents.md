@@ -56,7 +56,7 @@ Report file paths and line numbers.
 
 - Its prompt is Kopi's own text, then the definition's body, then the instruction files (unless `instructions: false`), then what its MCP servers report.
 - Its tools are the session's tools, or the `tools` list, but never `Agent`, `SendMessage`, `Workflow`, `AskUserQuestion`, `ExitPlanMode` or `TaskStop`, and it cannot reach the session's [plan file](tools.md#exitplanmode). Its `Read` and `Grep` do reach the session's [saved output](tools.md#saved-output), the root's and other subagents' alike, as its `Bash` output is saved there too.
-- The directories added with [`/add-dir`](usage.md#commands) or `--add-dir` reach subagents and [workflow](workflows.md) agents, which are told of them with their first prompt.
+- The directories added with [`/add-dir`](usage.md#commands) or `--add-dir` reach subagents and [workflow](workflows.md) agents, which are told of them with their first prompt. After [`/remove-dir`](usage.md#commands) their file tools lose the directory at once; a subagent is told so with its next prompt.
 - Its `Bash` runs in the foreground only, and a command still running at its timeout is stopped.
 
 ## Permissions

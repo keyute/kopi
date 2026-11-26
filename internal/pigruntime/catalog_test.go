@@ -84,13 +84,13 @@ func newCatalogServer(t *testing.T, bundled *ai.Model, status int, ids ...string
 	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/models/providers/"+catalogProvider, r.URL.Path)
 		assert.Empty(t, r.Header.Get("Authorization"))
-		s.requests <- struct{}{}
 		s.mu.Lock()
 		s.validators = append(s.validators, r.Header.Get("If-None-Match"))
 		s.inflight++
 		s.maxInflight = max(s.maxInflight, s.inflight)
 		body, hold, gate := s.body, s.hold, s.gate
 		s.mu.Unlock()
+		s.requests <- struct{}{}
 		defer func() {
 			s.mu.Lock()
 			defer s.mu.Unlock()
@@ -579,13 +579,14 @@ func TestProviderFirstUsedAfterStartIsRefreshed(t *testing.T) {
 }
 
 func TestForcedFetchDuringLateRefreshResolves(t *testing.T) {
-	_, s, r := catalogSetup(t, http.StatusOK, "catalog-new-1")
+	_, s, r := catalogSetup(t, http.StatusOK, "catalog-other-1")
 	r.StartModelListRefresh()
 	r.refreshes.Wait()
 	release := s.gateRequests()
 	defer release()
 	require.NoError(t, r.Check(t.Context(), OpenOptions{Model: catalogProvider + "/" + bundledMistral(t, r).ID}))
 	<-s.requests
+	s.serve(t, "catalog-new-1")
 	r.refreshMu.Lock()
 	assert.Contains(t, r.fetching, catalogProvider)
 	r.refreshMu.Unlock()
