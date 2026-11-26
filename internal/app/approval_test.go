@@ -23,6 +23,7 @@ import (
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
+	"github.com/keyute/kopi/internal/trust"
 )
 
 // editHarness opens an execute-mode session with Edit and Write over the
@@ -77,6 +78,42 @@ func TestApprovalYesRunsEdit(t *testing.T) {
 	assert.Equal(t, event.ApprovalEnded{Token: req.Token}, receiveEvent(t, ended))
 	assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
 	assert.Equal(t, "beta\n", fileText(t, sb, "a.txt"))
+}
+
+func TestApprovalReadRefusesRemovedDirectory(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	cfg, _, _ := dirConfig(t, sb, Config{})
+	rules, err := policy.NewRules(sb.Workspace, sb.Home, tool.Specs(cfg.Tools), policy.Source{Name: "test", Ask: []string{"Read"}})
+	require.NoError(t, err)
+	cfg.Rules = rules
+	h := newHarness(t, sb, cfg)
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	dir := canonicalTemp(t)
+	path := filepath.Join(dir, "file.txt")
+	const contents = "synthetic private contents"
+	require.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
+	decide(t, h.c, dir, trust.Untrusted)
+	require.NoError(t, h.c.AddDir(dir))
+
+	approvals := subscribeTo[event.ApprovalRequested](h.c)
+	requests := make(chan pigruntimetest.Request, 1)
+	h.faux.SetResponses([]ai.FauxResponseStep{
+		pigruntimetest.ToolCalls(pigruntimetest.Call{Name: "Read", ID: "call-1", Args: map[string]any{"file_path": path}}),
+		pigruntimetest.Capture(t, requests, "done"),
+	})
+	w, err := h.c.Submit(t.Context(), Main, "read the file")
+	require.NoError(t, err)
+	req := receiveEvent(t, approvals)
+	assert.Equal(t, "call-1", req.CallID)
+	require.NoError(t, h.c.RemoveDir(dir))
+	require.True(t, h.c.Answer(req.Token, policy.Decision{Answer: policy.Allow}))
+	wait(t, w.Done())
+
+	assert.Equal(t, event.Outcome{Status: event.Completed}, w.Outcome())
+	results := receive(t, requests).ToolResults
+	require.Len(t, results, 1)
+	assert.Contains(t, results[0], tool.ErrOutsideWorkspace.Error())
+	assert.NotContains(t, results[0], contents)
 }
 
 func TestApprovalAllowEditsSkipsLaterPrompts(t *testing.T) {
