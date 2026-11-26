@@ -93,11 +93,6 @@ func (md *markdown) lines(key, text string) []string {
 	return out
 }
 
-// render draws text once, keeping nothing.
-func (md *markdown) render(text string) []string {
-	return newMarkdown(md.width, md.th).lines("", text)
-}
-
 // block draws one block node at width; st is the style of its plain text.
 func (md *markdown) block(n ast.Node, src []byte, width int, st lipgloss.Style) []string {
 	width = max(1, width)
@@ -209,7 +204,10 @@ func (md *markdown) inline(n ast.Node, src []byte, st lipgloss.Style) string {
 		text := md.inline(c, src, st.Foreground(md.th.link).Hyperlink(url))
 		b.WriteString(text)
 		if xansi.Strip(text) != url {
-			b.WriteString(st.Render(" ") + st.Foreground(md.th.link).Hyperlink(url).Render(url))
+			if text != "" {
+				b.WriteString(st.Render(" "))
+			}
+			b.WriteString(st.Foreground(md.th.link).Hyperlink(url).Render(url))
 		}
 	}
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
@@ -240,9 +238,9 @@ func (md *markdown) inline(n ast.Node, src []byte, st lipgloss.Style) string {
 		case *east.Strikethrough:
 			b.WriteString(md.inline(c, src, st.Strikethrough(true)))
 		case *ast.Link:
-			link(c, string(c.Destination))
+			link(c, clean(string(plainText(c.Destination))))
 		case *ast.Image:
-			link(c, string(c.Destination))
+			link(c, clean(string(plainText(c.Destination))))
 		case *ast.AutoLink:
 			url := string(c.URL(src))
 			if c.AutoLinkType == ast.AutoLinkEmail && !strings.HasPrefix(strings.ToLower(url), "mailto:") {
@@ -272,17 +270,20 @@ func (md *markdown) inline(n ast.Node, src []byte, st lipgloss.Style) string {
 // than width is cut, not wrapped at a word.
 func (md *markdown) code(lang, body string, width int) []string {
 	var rows []string
-	lexer := lexers.Get(lang)
-	if lexer == nil {
-		for l := range strings.Lines(body) {
-			rows = append(rows, fg(md.th.code).Render(strings.TrimSuffix(l, "\n")))
-		}
-	} else if it, err := chroma.Coalesce(lexer).Tokenise(nil, body); err == nil {
+	var it chroma.Iterator
+	if lexer := lexers.Get(lang); lexer != nil {
+		it, _ = chroma.Coalesce(lexer).Tokenise(nil, body)
+	}
+	if it != nil {
 		f, style := formatters.Get(md.th.codeFormatter), codeStyle(md.th.codeTheme, md.th.code)
 		for _, tokens := range chroma.SplitTokensIntoLines(it.Tokens()) {
 			var b strings.Builder
 			_ = f.Format(&b, style, chroma.Literator(tokens...))
 			rows = append(rows, strings.ReplaceAll(b.String(), "\n", ""))
+		}
+	} else {
+		for l := range strings.Lines(body) {
+			rows = append(rows, fg(md.th.code).Render(strings.TrimSuffix(l, "\n")))
 		}
 	}
 	var out []string
@@ -340,11 +341,12 @@ func (md *markdown) table(n *east.Table, src []byte, width int, st lipgloss.Styl
 	// A table that fits spans the width. For a wider one a width would make
 	// lipgloss ellipsize headers and split words, losing text, so it keeps its
 	// natural width and a row wider than width is cut.
-	if lipgloss.Width(t.String()) <= width {
-		t.Width(width)
+	s := t.String()
+	if lipgloss.Width(s) <= width {
+		s = t.Width(width).String()
 	}
 	var rows []string
-	for _, r := range strings.Split(t.String(), "\n") {
+	for _, r := range strings.Split(s, "\n") {
 		rows = append(rows, cutRow(strings.TrimRight(r, " "), width)...)
 	}
 	return rows

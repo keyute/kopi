@@ -138,8 +138,6 @@ func (c *composer) stale() bool { return c.bang != c.looksShell }
 func (c *composer) setSpans(spans []app.Span, th theme) {
 	if !c.bang && len(spans) > 0 && spans[0].Kind == app.KindShell {
 		c.swallow()
-	}
-	if c.bang {
 		spans = nil
 	}
 	c.spans = spans

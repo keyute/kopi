@@ -143,3 +143,18 @@ func TestRecalledCommandShowsSwallowedAndDownReturnsACommandDraft(t *testing.T) 
 	assert.True(t, m.composer.bang)
 	assert.Equal(t, "pwd", m.composer.ta.Value())
 }
+
+func TestRecallingAnEntryEqualToACommandDraftSwallowsIt(t *testing.T) {
+	m := newHistoryModel(t, "!ls")
+	typeText(m, "!ls")
+	m.syncInput(false)
+	require.True(t, m.composer.bang)
+	press(m, home)
+
+	press(m, up)
+
+	assert.Equal(t, "!ls", m.composer.value())
+	assert.True(t, m.composer.browsing())
+	assert.True(t, m.composer.bang)
+	assert.Equal(t, "ls", m.composer.ta.Value())
+}

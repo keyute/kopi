@@ -323,7 +323,7 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 func (m *model) syncInput(wasHeld bool) tea.Cmd {
 	value := m.composer.value()
 	if value != m.seen.value || m.shown != m.seen.shown || m.composer.stale() {
-		m.composer.setSpans(m.c.Spans(m.shown, value), m.th)
+		m.composer.setSpans(m.draftSpans(value), m.th)
 	}
 	value = m.composer.value()
 	line, col := m.composer.ta.Line(), m.composer.ta.Column()
@@ -333,6 +333,15 @@ func (m *model) syncInput(wasHeld bool) tea.Cmd {
 		return nil
 	}
 	return m.followMenu()
+}
+
+// draftSpans are the spans of value; a swallowed command draws no spans, so
+// none are computed.
+func (m *model) draftSpans(value string) []app.Span {
+	if m.composer.bang {
+		return nil
+	}
+	return m.c.Spans(m.shown, value)
 }
 
 func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
@@ -559,7 +568,7 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 		m.status, m.agents, m.workflows = m.c.Status(), m.c.Agents(), m.c.Workflows()
 	}
 	if respan {
-		m.composer.setSpans(m.c.Spans(m.shown, m.composer.value()), m.th)
+		m.composer.setSpans(m.draftSpans(m.composer.value()), m.th)
 	}
 	if redraw && !pureThinking {
 		m.relayout()

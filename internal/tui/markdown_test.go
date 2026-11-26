@@ -206,6 +206,25 @@ func TestMarkdownDeltaRerendersOnlyLastChunk(t *testing.T) {
 	assert.Equal(t, 1, md.renders-before)
 }
 
+func TestMarkdownReusesListsAndOpenFences(t *testing.T) {
+	md := newMarkdown(40, mocha())
+	md.lines("k", "- a\n- b\n\npa")
+	before := md.renders
+
+	md.lines("k", "- a\n- b\n\npar")
+
+	assert.Equal(t, 1, md.renders-before)
+	assert.Equal(t, []string{"code", "", "more"}, renderMarkdown("```\ncode\n\nmore", 40))
+}
+
+func TestMarkdownInlineStylesEmitTheirSGRCode(t *testing.T) {
+	for src, code := range map[string]string{"**b**": "1", "*i*": "3", "~~s~~": "9"} {
+		got := newMarkdown(40, mocha()).lines("k", src)
+		require.Len(t, got, 1)
+		assert.Regexp(t, `\x1b\[(?:[0-9]+;)*`+code+`(?:;[0-9]+)*m`, got[0], src)
+	}
+}
+
 func TestAssistantMarkdownReflowsOnWidthAndTheme(t *testing.T) {
 	m, _ := newTestModel(t, 40, 30)
 	send(m, event.TextDelta{Text: "alpha beta gamma delta"})
@@ -316,6 +335,10 @@ func TestMarkdownLinksDrawOnceWithTheirTarget(t *testing.T) {
 	}{
 		{"autolink", "<https://e.com/a>", "https://e.com/a", "https://e.com/a"},
 		{"link text equal to the URL", "[https://e.com/a](https://e.com/a)", "https://e.com/a", "https://e.com/a"},
+		{"escaped target", "[https://e.com/a_b](https://e.com/a\\_b)", "https://e.com/a_b", "https://e.com/a_b"},
+		{"reference in target", "[a](https://e.com/?x=1&amp;y=2)", "a https://e.com/?x=1&y=2", "https://e.com/?x=1&y=2"},
+		{"empty text", "[](https://e.com)", "https://e.com", "https://e.com"},
+		{"empty image text", "![](https://e.com/i.png)", "https://e.com/i.png", "https://e.com/i.png"},
 		{"email autolink", "<me@e.com>", "me@e.com", "mailto:me@e.com"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
