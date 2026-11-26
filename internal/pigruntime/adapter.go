@@ -119,10 +119,9 @@ func (a agentTool) ExecutionMode() agent.ToolExecutionMode {
 func beforeToolCall(gate *policy.Gate) agent.BeforeToolCallHook {
 	return func(ctx context.Context, toolCallID, toolName string, args json.RawMessage) agent.ToolCallHookResult {
 		if err := gate.Before(ctx, toolCallID, toolName, args); err != nil {
-			// PiG checks ctx before the hooks run and replaces a Block's
-			// Reason with "Operation aborted" when ctx is done; an Err keeps its
-			// text unless it is the ctx error, so only Err keeps the refusal's
-			// text when an abort lands at the same moment.
+			// PiG replaces a Block's Reason with "Operation aborted" when ctx is
+			// done, but keeps an Err's text unless it is the ctx error (PiG
+			// v0.8.0 agent/tool_execution.go prepareToolCall; recheck on a bump).
 			return agent.ToolCallHookResult{Err: err}
 		}
 		return agent.ToolCallHookResult{}

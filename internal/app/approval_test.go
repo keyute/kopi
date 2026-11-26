@@ -165,6 +165,11 @@ func TestApprovalNoInterruptsTurnAndModelSeesRejection(t *testing.T) {
 			assert.Equal(t, "alpha\n", fileText(t, sb, "a.txt"))
 			assert.Equal(t, "alpha\n", fileText(t, sb, "b.txt"), "the following rule-allowed tool must not run")
 			assert.Equal(t, 1, h.faux.CallCount(), "the rejection stops the turn before another model request")
+			toolEnds := ofType[event.ToolEnd](h.rec.all())
+			require.Len(t, toolEnds, 2)
+			assert.Equal(t, "call-2", toolEnds[1].CallID)
+			assert.True(t, toolEnds[1].IsError)
+			assert.Equal(t, event.EndInterrupted, toolEnds[1].Kind)
 
 			requests := make(chan pigruntimetest.Request, 1)
 			h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "understood")})

@@ -82,8 +82,9 @@ func TestQuestionDismissalStopsTurnAndModelSeesIt(t *testing.T) {
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "understood")})
 	h.turn(t, "carry on")
 	results := receive(t, requests).ToolResults
-	require.NotEmpty(t, results)
+	require.Len(t, results, 2)
 	assert.Contains(t, results[0], "dismissed")
+	assert.Contains(t, results[1], "Operation aborted")
 }
 
 func TestQuestionClaimedDismissalSurvivesCancellation(t *testing.T) {

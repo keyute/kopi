@@ -230,15 +230,15 @@ func (s *Session) cacheExpires(model *ai.Model, messages []usageMessage) time.Ti
 	if last == nil || last.Provider != model.ProviderMeta.ProviderID || last.ModelID != model.ID || last.Timestamp <= 0 {
 		return time.Time{}
 	}
-	var env ai.ProviderEnv
+	opts := ai.StreamOptions{CacheRetention: ai.CacheRetention(tier)}
 	if tier == "" {
-		var err error
-		env, err = ai.CredentialStoreProviderEnv(context.Background(), s.inner.Services().Credentials(), model.ProviderMeta.ProviderID)
+		env, err := ai.CredentialStoreProviderEnv(context.Background(), s.inner.Services().Credentials(), model.ProviderMeta.ProviderID)
 		if err != nil {
 			return time.Time{}
 		}
+		opts.Env = env
 	}
-	ttlMs, ok := ai.GetPromptCacheTtlMs(model, ai.StreamOptions{CacheRetention: ai.CacheRetention(tier), Env: env})
+	ttlMs, ok := ai.GetPromptCacheTtlMs(model, opts)
 	if !ok {
 		return time.Time{}
 	}

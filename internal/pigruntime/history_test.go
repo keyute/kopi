@@ -603,6 +603,11 @@ func TestHistoryMapsStoredShapes(t *testing.T) {
 			msgs: []agent.AgentMessage{assistant(ai.StopReasonAborted, "", text("partial"))},
 			want: []event.Event{event.TextDelta{Text: "partial"}, event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}}},
 		},
+		{
+			name: "aborted as written before PiG v0.8.0",
+			msgs: []agent.AgentMessage{assistant(ai.StopReasonError, context.Canceled.Error(), text("partial"))},
+			want: []event.Event{event.TextDelta{Text: "partial"}, event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}}},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, history(tc.msgs))
