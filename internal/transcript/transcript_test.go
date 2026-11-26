@@ -418,6 +418,58 @@ func TestLastReplyFollowUp(t *testing.T) {
 	}
 }
 
+func TestLastReplyInterruptedByNotice(t *testing.T) {
+	events := []event.Event{
+		event.TextDelta{Text: "before\n```go\n"},
+		event.Notice{Text: "notice"},
+		event.TextDelta{Text: "code\n```\nafter"},
+	}
+	var live, restored Transcript
+	for _, ev := range events {
+		live.Apply(ev)
+	}
+	assert.Empty(t, live.LastReply())
+	restored.Restore(events)
+	want := "before\n```go\ncode\n```\nafter"
+	assert.Equal(t, want, restored.LastReply())
+	live.Apply(event.TurnEnd{})
+	assert.Equal(t, want, live.LastReply())
+	assert.Equal(t, []Block{
+		Assistant{key: "item:0", Text: "before\n```go\n"},
+		Notice{key: "item:1", Text: "notice"},
+		Assistant{key: "item:2", Text: "code\n```\nafter"},
+		Turn{key: "item:3"},
+	}, live.Blocks())
+}
+
+func TestLastReplyBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ev   event.Event
+	}{
+		{"tool", start("a")},
+		{"user", event.UserMessage{Text: "next"}},
+		{"turn start", event.TurnStart{Prompt: "next"}},
+		{"turn end", event.TurnEnd{}},
+		{"task", event.TaskEnded{ID: "t"}},
+		{"command", event.UserCommand{Command: "make"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var tr Transcript
+			tr.Apply(event.TextDelta{Text: "first"})
+			tr.Apply(event.Notice{Text: "notice"})
+			tr.Apply(event.TextDelta{Text: " reply"})
+			tr.Apply(tc.ev)
+			tr.Apply(event.TextDelta{Text: "partial"})
+			assert.Equal(t, "first reply", tr.LastReply())
+			tr.Apply(event.Notice{Text: "notice"})
+			tr.Apply(event.TextDelta{Text: " done"})
+			tr.Apply(event.TurnEnd{})
+			assert.Equal(t, "partial done", tr.LastReply())
+		})
+	}
+}
+
 func TestLastReply(t *testing.T) {
 	apply := func(evs ...event.Event) *Transcript {
 		var tr Transcript

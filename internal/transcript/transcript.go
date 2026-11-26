@@ -53,6 +53,7 @@ func (t *Transcript) Apply(ev event.Event) {
 	case event.TurnStart:
 		// A wake turn, started by a background task's end, has no prompt.
 		if ev.Prompt != "" {
+			t.finishReply()
 			t.items = append(t.items, item{kind: userItem, text: ev.Prompt})
 		}
 	case event.UserMessage:
@@ -142,12 +143,23 @@ func (t *Transcript) Apply(ev event.Event) {
 // LastReply is the raw text of the last finished assistant reply, or "" when
 // there is none. Restored text is eligible even without a reply-ending event.
 func (t *Transcript) LastReply() string {
-	for i := len(t.items) - 1; i >= 0; i-- {
-		it := t.items[i]
-		if it.kind != assistantItem || !it.visible() || !it.finished && i >= t.boundary {
-			continue
+	var parts []string
+	finished := false
+	for i := len(t.items) - 1; i >= -1; i-- {
+		if i == -1 || i == t.boundary-1 || t.items[i].kind == userItem || t.items[i].kind == callItem || t.items[i].kind == turnItem || t.items[i].kind == taskItem || t.items[i].kind == commandItem {
+			if finished {
+				slices.Reverse(parts)
+				if text := strings.Join(parts, ""); strings.TrimSpace(text) != "" {
+					return text
+				}
+			}
+			parts = nil
+			finished = false
 		}
-		return it.text
+		if i >= 0 && t.items[i].kind == assistantItem {
+			parts = append(parts, t.items[i].text)
+			finished = t.items[i].finished || i < t.boundary
+		}
 	}
 	return ""
 }
