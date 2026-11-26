@@ -13,6 +13,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -630,7 +631,7 @@ func TestBackgroundKeyWaitsForAnApproval(t *testing.T) {
 	assert.Empty(t, c.answers)
 }
 
-func TestLightBackgroundSwitchesTheme(t *testing.T) {
+func TestBackgroundSwitchesTheme(t *testing.T) {
 	m, _ := newTestModel(t, 30, 20)
 
 	m.Update(tea.BackgroundColorMsg{Color: color.Black})
@@ -639,6 +640,50 @@ func TestLightBackgroundSwitchesTheme(t *testing.T) {
 	m.Update(tea.BackgroundColorMsg{Color: color.White})
 	assert.Equal(t, latte(), m.th)
 	assert.Equal(t, latte().userMessageBg, m.composer.ta.Styles().Focused.Text.GetBackground())
+
+	m.Update(tea.BackgroundColorMsg{})
+	assert.Equal(t, latte(), m.th, "a reply with no colour changes nothing")
+
+	m.Update(tea.BackgroundColorMsg{Color: color.Black})
+	assert.Equal(t, mocha(), m.th)
+	assert.Equal(t, mocha().userMessageBg, m.composer.ta.Styles().Focused.Text.GetBackground())
+}
+
+func TestThemeSwitchRedrawsTheTranscript(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	send(m, event.Notice{Text: "hello"})
+	before := m.view().lines[len(m.view().lines)-1].text
+
+	m.Update(tea.BackgroundColorMsg{Color: color.White})
+
+	after := m.view().lines[len(m.view().lines)-1].text
+	assert.NotEqual(t, before, after)
+	assert.Equal(t, ansi.Strip(before), ansi.Strip(after))
+
+	m.Update(tea.BackgroundColorMsg{Color: color.Black})
+
+	last := m.view().lines[len(m.view().lines)-1].text
+	assert.NotEqual(t, after, last)
+	assert.Equal(t, ansi.Strip(after), ansi.Strip(last))
+}
+
+func TestColorSchemeReportsAskForTheBackground(t *testing.T) {
+	for _, msg := range []tea.Msg{uv.DarkColorSchemeEvent{}, uv.LightColorSchemeEvent{}} {
+		m, _ := newTestModel(t, 30, 20)
+		_, cmd := m.Update(msg)
+		msgs := messagesOf(cmd)
+		assert.Contains(t, msgs, tea.RequestBackgroundColor(), "%T", msg)
+		assert.Equal(t, mocha(), m.th, "the report itself changes nothing")
+	}
+}
+
+func TestInitSetsTheColorSchemeMode(t *testing.T) {
+	m, _ := newTestModel(t, 30, 20)
+	raw := recordRaw(m)
+
+	m.Init()
+
+	assert.Equal(t, []any{ansi.SetModeLightDark}, *raw)
 }
 
 func TestSessionChangedRestoresHistory(t *testing.T) {
@@ -1040,11 +1085,8 @@ func TestInitAsksForStatusSupportOnlyWithTheTitle(t *testing.T) {
 		m.bridge.push(event.Notice{Text: "early"}) // lets the bridge wait return
 		batch, ok := m.Init()().(tea.BatchMsg)
 		require.True(t, ok)
-		assert.Len(t, batch, map[bool]int{true: 3, false: 2}[title], "title %v", title)
-		var msgs []tea.Msg
-		for _, cmd := range batch {
-			msgs = append(msgs, cmd())
-		}
+		assert.Len(t, batch, map[bool]int{true: 4, false: 3}[title], "title %v", title)
+		msgs := messagesOf(func() tea.Msg { return batch })
 		assert.Equal(t, title, slices.Contains(msgs, tea.RequestProgramStatusSupport()), "title %v", title)
 	}
 }
