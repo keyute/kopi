@@ -1,263 +1,355 @@
 package tui
 
 import (
-	"fmt"
+	"bytes"
 	"image/color"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 
-	"charm.land/glamour/v2"
-	"charm.land/glamour/v2/ansi"
 	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/table"
 	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/formatters"
+	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
 	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	east "github.com/yuin/goldmark/extension/ast"
+	"github.com/yuin/goldmark/renderer/html"
+	gmtext "github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 )
 
-// markdown renders assistant text for one width and theme. Text is split
-// into top-level chunks rendered independently, and each block's rendered
-// chunks are kept, so a streaming delta re-renders only the chunks it
-// changed: in practice the last.
+var markdownEngine = goldmark.New(
+	goldmark.WithExtensions(extension.GFM),
+	goldmark.WithRendererOptions(html.WithUnsafe()),
+)
+
+// markdown draws assistant text for one width and theme. goldmark parses the
+// text; each top-level block is drawn on its own and kept, so a streaming
+// delta redraws only the blocks it changed: in practice the last.
 type markdown struct {
-	r      *glamour.TermRenderer
 	width  int
-	blocks map[string][]chunk
-	// renders counts chunk renders.
+	th     theme
+	blocks map[string]drawn
+	// renders counts block renders.
 	renders int
 }
 
+// drawn is what lines last drew for a key.
+type drawn struct {
+	text   string
+	chunks []chunk
+}
+
+// chunk is one drawn top-level block. key is the block as goldmark renders it
+// to HTML, with raw HTML kept. Its rows are kept only while the text grows and
+// the HTML stays the same: growth changes a block's drawing only through what
+// that HTML carries (its text, a link a later reference definition resolves,
+// list and table attributes, a fence's language).
 type chunk struct {
-	source string
-	lines  []string
+	key   string
+	lines []string
 }
 
 func newMarkdown(width int, th theme) *markdown {
-	// A failed renderer leaves r nil, and every chunk falls back to plain
-	// wrapped text.
-	r, _ := glamour.NewTermRenderer(
-		glamour.WithStyles(markdownStyle(width, th)),
-		glamour.WithWordWrap(width),
-		glamour.WithChromaFormatter(th.codeFormatter),
-	)
-	return &markdown{r: r, width: width, blocks: map[string][]chunk{}}
+	return &markdown{width: width, th: th, blocks: map[string]drawn{}}
 }
 
-// lines renders the text of the assistant block keyed key; chunks are
-// joined by one blank line.
+// lines draws the text of the assistant block keyed key; top-level blocks
+// are joined by one blank line.
 func (md *markdown) lines(key, text string) []string {
-	prev := md.blocks[key]
+	src := []byte(clean(text))
+	doc := markdownEngine.Parser().Parse(gmtext.NewReader(src))
+	var prev []chunk
+	if last := md.blocks[key]; strings.HasPrefix(text, last.text) {
+		prev = last.chunks
+	}
 	var chunks []chunk
 	var out []string
-	sources := splitChunks(text)
-	// Reference definitions apply across the whole document, not just a chunk.
-	if strings.Contains(text, "]:") {
-		sources = []string{text}
-	}
-	for i, src := range sources {
-		c := chunk{source: src}
-		if i < len(prev) && prev[i].source == src {
+	var buf bytes.Buffer
+	for n := doc.FirstChild(); n != nil; n = n.NextSibling() {
+		buf.Reset()
+		_ = markdownEngine.Renderer().Render(&buf, src, n)
+		c := chunk{key: buf.String()}
+		if i := len(chunks); i < len(prev) && prev[i].key == c.key {
 			c.lines = prev[i].lines
 		} else {
-			c.lines = md.render(src)
+			md.renders++
+			for _, l := range md.block(n, src, md.width, fg(md.th.text)) {
+				// Nothing is wider than the width, whatever a table needs.
+				c.lines = append(c.lines, strings.Split(xansi.Hardwrap(l, max(1, md.width), true), "\n")...)
+			}
 		}
 		chunks = append(chunks, c)
-		if len(out) > 0 {
+		if len(out) > 0 && len(c.lines) > 0 && gap(n) {
 			out = append(out, "")
 		}
 		out = append(out, c.lines...)
 	}
-	md.blocks[key] = chunks
+	md.blocks[key] = drawn{text: text, chunks: chunks}
 	return out
 }
 
-// render falls back to plain wrapped text when Glamour fails. Tabs become
-// spaces because they have no fixed width.
-func (md *markdown) render(src string) []string {
-	md.renders++
-	src = strings.ReplaceAll(src, "\t", "    ")
-	if md.r == nil {
-		return wrap(src, md.width)
-	}
-	s, err := md.r.Render(src)
-	if err != nil {
-		return wrap(src, md.width)
-	}
-	return fitLines(strings.Split(s, "\n"), md.width)
+// render draws text once, keeping nothing.
+func (md *markdown) render(text string) []string {
+	return newMarkdown(md.width, md.th).lines("", text)
 }
 
-var trailingSGR = regexp.MustCompile(`(?:\x1b\[[0-9;:]*m)+$`)
+// block draws one block node at width; st is the style of its plain text.
+func (md *markdown) block(n ast.Node, src []byte, width int, st lipgloss.Style) []string {
+	width = max(1, width)
+	switch n := n.(type) {
+	case *ast.Heading:
+		return wrapRows(md.inline(n, src, fg(md.th.heading).Bold(true)), width)
+	case *ast.Blockquote:
+		return prefixed(st, "│ ", "│ ", md.children(n, src, width-2, fg(md.th.muted), true))
+	case *ast.List:
+		var out []string
+		num := n.Start
+		for item := n.FirstChild(); item != nil; item = item.NextSibling() {
+			marker := "- "
+			if n.IsOrdered() {
+				marker = strconv.Itoa(num) + ". "
+				num++
+			}
+			rows := md.children(item, src, width-len(marker), st, !n.IsTight)
+			out = append(out, prefixed(st, marker, strings.Repeat(" ", len(marker)), rows)...)
+			if !n.IsTight && item.NextSibling() != nil {
+				out = append(out, "")
+			}
+		}
+		return out
+	case *ast.FencedCodeBlock:
+		return md.code(string(n.Language(src)), rawText(n, src), width)
+	case *ast.CodeBlock:
+		return md.code("", rawText(n, src), width)
+	case *ast.ThematicBreak:
+		return []string{fg(md.th.dim).Render(strings.Repeat("─", width))}
+	case *east.Table:
+		return md.table(n, src, width, st)
+	case *ast.Paragraph, *ast.TextBlock:
+		return wrapRows(md.inline(n, src, st), width)
+	case *ast.LinkReferenceDefinition:
+		return nil
+	}
+	// HTML and any block without a drawing of its own show as written.
+	var out []string
+	for l := range strings.SplitSeq(strings.TrimRight(rawText(n, src), "\n"), "\n") {
+		out = append(out, wrapRows(st.Render(l), width)...)
+	}
+	return out
+}
 
-// fitLines drops Glamour's trailing padding from each line and its blank
-// lines at either end, and breaks lines it leaves wider than width, such as
-// long code lines.
-func fitLines(rendered []string, width int) []string {
-	var ls []string
-	for _, l := range rendered {
-		l = xansi.Truncate(l, xansi.StringWidth(strings.TrimRight(xansi.Strip(l), " ")), "")
-		// Glamour pads every line to the width with individually styled
-		// spaces, and Truncate keeps their escapes.
-		if trailingSGR.MatchString(l) {
-			if xansi.Strip(l) == "" {
-				l = ""
+// gap reports whether a blank row goes above block n: always, except under a
+// heading the source puts text right under.
+func gap(n ast.Node) bool {
+	if prev := n.PreviousSibling(); prev == nil || prev.Kind() != ast.KindHeading {
+		return true
+	}
+	b, ok := n.(interface{ HasBlankPreviousLines() bool })
+	return !ok || b.HasBlankPreviousLines()
+}
+
+// children draws the blocks under n, a blank line between them when loose.
+func (md *markdown) children(n ast.Node, src []byte, width int, st lipgloss.Style, loose bool) []string {
+	var out []string
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		rows := md.block(c, src, width, st)
+		if loose && len(out) > 0 && len(rows) > 0 && gap(c) {
+			out = append(out, "")
+		}
+		out = append(out, rows...)
+	}
+	return out
+}
+
+// prefixed puts first before the first row and rest before the others.
+func prefixed(st lipgloss.Style, first, rest string, rows []string) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		p := rest
+		if i == 0 {
+			p = first
+		}
+		if r == "" {
+			p = strings.TrimRight(p, " ")
+		}
+		out[i] = st.Render(p) + r
+	}
+	return out
+}
+
+func wrapRows(s string, width int) []string {
+	return strings.Split(lipgloss.Wrap(s, width, ""), "\n")
+}
+
+func rawText(n ast.Node, src []byte) string {
+	var b strings.Builder
+	for i := range n.Lines().Len() {
+		seg := n.Lines().At(i)
+		b.Write(seg.Value(src))
+	}
+	// goldmark keeps the closing line of HTML block types 1 to 5 apart.
+	if h, ok := n.(*ast.HTMLBlock); ok && h.HasClosure() {
+		b.Write(h.ClosureLine.Value(src))
+	}
+	return b.String()
+}
+
+// inline draws the inline nodes under n; st is the style they inherit.
+func (md *markdown) inline(n ast.Node, src []byte, st lipgloss.Style) string {
+	var b strings.Builder
+	link := func(c ast.Node, url string) {
+		text := md.inline(c, src, st.Foreground(md.th.link).Hyperlink(url))
+		b.WriteString(text)
+		if xansi.Strip(text) != url {
+			b.WriteString(st.Render(" ") + st.Foreground(md.th.link).Hyperlink(url).Render(url))
+		}
+	}
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		switch c := c.(type) {
+		case *ast.Text:
+			text := c.Value(src)
+			if !c.IsRaw() {
+				text = util.UnescapePunctuations(util.ResolveEntityNames(util.ResolveNumericReferences(text)))
+			}
+			b.WriteString(st.Render(clean(string(text))))
+			if c.HardLineBreak() {
+				b.WriteByte('\n')
+			} else if c.SoftLineBreak() {
+				b.WriteString(st.Render(" "))
+			}
+		case *ast.String:
+			b.WriteString(st.Render(string(c.Value)))
+		case *ast.CodeSpan:
+			b.WriteString(st.Foreground(md.th.code).Render(xansi.Strip(md.inline(c, src, lipgloss.NewStyle()))))
+		case *ast.Emphasis:
+			if c.Level == 2 {
+				b.WriteString(md.inline(c, src, st.Bold(true)))
 			} else {
-				l = trailingSGR.ReplaceAllString(l, "\x1b[m")
+				b.WriteString(md.inline(c, src, st.Italic(true)))
 			}
-		}
-		if xansi.StringWidth(l) > width {
-			ls = append(ls, strings.Split(xansi.Hardwrap(l, width, true), "\n")...)
-			continue
-		}
-		ls = append(ls, l)
-	}
-	for len(ls) > 0 && xansi.Strip(ls[0]) == "" {
-		ls = ls[1:]
-	}
-	for len(ls) > 0 && xansi.Strip(ls[len(ls)-1]) == "" {
-		ls = ls[:len(ls)-1]
-	}
-	return ls
-}
-
-// splitChunks cuts text at blank lines outside a fenced code block where the
-// next line starts a new top-level block, so lists, quotes, tables and
-// indented continuations stay whole. Blank lines at a cut are dropped.
-func splitChunks(text string) []string {
-	lines := strings.Split(text, "\n")
-	var chunks []string
-	var cur []string
-	fence := ""
-	flush := func() {
-		if s := strings.Trim(strings.Join(cur, "\n"), "\n"); s != "" {
-			chunks = append(chunks, s)
-		}
-		cur = nil
-	}
-	for i := 0; i < len(lines); i++ {
-		l := lines[i]
-		if fence == "" && strings.TrimSpace(l) == "" {
-			j := i
-			for j < len(lines) && strings.TrimSpace(lines[j]) == "" {
-				j++
+		case *east.Strikethrough:
+			b.WriteString(md.inline(c, src, st.Strikethrough(true)))
+		case *ast.Link:
+			link(c, string(c.Destination))
+		case *ast.Image:
+			link(c, string(c.Destination))
+		case *ast.AutoLink:
+			url := string(c.URL(src))
+			b.WriteString(st.Foreground(md.th.link).Hyperlink(url).Render(string(c.Label(src))))
+		case *ast.RawHTML:
+			for i := range c.Segments.Len() {
+				seg := c.Segments.At(i)
+				b.WriteString(st.Render(string(seg.Value(src))))
 			}
-			if j < len(lines) && startsBlock(lines[j]) {
-				flush()
-				i = j - 1
-				continue
+		case *east.TaskCheckBox:
+			if c.IsChecked {
+				b.WriteString(st.Render("[x] "))
+			} else {
+				b.WriteString(st.Render("[ ] "))
 			}
-		}
-		fence = nextFence(fence, l)
-		cur = append(cur, l)
-	}
-	flush()
-	return chunks
-}
-
-// startsBlock reports whether a line after a blank line begins a new
-// top-level block rather than continuing the one before.
-func startsBlock(l string) bool {
-	if l == "" || l[0] == ' ' || l[0] == '\t' || l[0] == '>' || l[0] == '|' {
-		return false
-	}
-	return !isListMarker(l)
-}
-
-func isListMarker(l string) bool {
-	marker := func(rest string) bool { return rest == "" || rest[0] == ' ' || rest[0] == '\t' }
-	switch l[0] {
-	case '-', '*', '+':
-		return marker(l[1:])
-	}
-	i := 0
-	for i < len(l) && l[i] >= '0' && l[i] <= '9' {
-		i++
-	}
-	return i > 0 && i < len(l) && (l[i] == '.' || l[i] == ')') && marker(l[i+1:])
-}
-
-// nextFence is the fence open after line l: fence is the open one's marker
-// ("```" or "~~~", possibly longer), or "" outside a fence.
-func nextFence(fence, l string) string {
-	t := strings.TrimSpace(l)
-	if fence != "" {
-		if strings.HasPrefix(t, fence) && strings.Trim(t, fence[:1]) == "" {
-			return ""
-		}
-		return fence
-	}
-	for _, c := range []string{"`", "~"} {
-		n := len(t) - len(strings.TrimLeft(t, c))
-		if n >= 3 {
-			return strings.Repeat(c, n)
+		default:
+			b.WriteString(md.inline(c, src, st))
 		}
 	}
-	return ""
+	return b.String()
+}
+
+// code draws a code block: plain text in the theme's code colour, and the
+// tokens of a language Chroma knows in the code theme's colours. A line wider
+// than width is cut, not wrapped at a word.
+func (md *markdown) code(lang, body string, width int) []string {
+	var rows []string
+	lexer := lexers.Get(lang)
+	if lexer == nil {
+		for l := range strings.Lines(body) {
+			rows = append(rows, fg(md.th.code).Render(strings.TrimSuffix(l, "\n")))
+		}
+	} else if it, err := chroma.Coalesce(lexer).Tokenise(nil, body); err == nil {
+		f, style := formatters.Get(md.th.codeFormatter), codeStyle(md.th.codeTheme, md.th.code)
+		for _, tokens := range chroma.SplitTokensIntoLines(it.Tokens()) {
+			var b strings.Builder
+			_ = f.Format(&b, style, chroma.Literator(tokens...))
+			rows = append(rows, strings.ReplaceAll(b.String(), "\n", ""))
+		}
+	}
+	var out []string
+	for _, r := range rows {
+		out = append(out, strings.Split(xansi.Hardwrap(r, width, true), "\n")...)
+	}
+	return out
+}
+
+func (md *markdown) table(n *east.Table, src []byte, width int, st lipgloss.Style) []string {
+	t := table.New().Wrap(true).
+		Border(lipgloss.NormalBorder()).BorderTop(false).BorderBottom(false).BorderLeft(false).BorderRight(false).
+		BorderStyle(st).
+		StyleFunc(func(_, col int) lipgloss.Style {
+			cell := lipgloss.NewStyle().Padding(0, 1)
+			switch n.Alignments[col] {
+			case east.AlignRight:
+				return cell.Align(lipgloss.Right)
+			case east.AlignCenter:
+				return cell.Align(lipgloss.Center)
+			}
+			return cell
+		})
+	for row := n.FirstChild(); row != nil; row = row.NextSibling() {
+		var cells []string
+		for cell := row.FirstChild(); cell != nil; cell = cell.NextSibling() {
+			cells = append(cells, md.inline(cell, src, st))
+		}
+		if row.Kind() == east.KindTableHeader {
+			t.Headers(cells...)
+		} else {
+			t.Row(cells...)
+		}
+	}
+	t.Width(width)
+	rows := strings.Split(t.String(), "\n")
+	for i, r := range rows {
+		rows[i] = strings.TrimRight(r, " ")
+	}
+	return rows
 }
 
 var (
-	codeThemesMu sync.Mutex
-	codeThemes   = map[string]string{}
+	codeStylesMu sync.Mutex
+	codeStyles   = map[string]*chroma.Style{}
 )
 
-// codeStyle registers, once per base, a copy of the Chroma style base that
-// draws no background: Catppuccin shades diff lines, and only what the user
-// typed is shaded here. It returns the copy's name, or "" if the copy fails.
-func codeStyle(base string) string {
-	codeThemesMu.Lock()
-	defer codeThemesMu.Unlock()
-	if name, ok := codeThemes[base]; ok {
-		return name
+// codeStyle is the Chroma style base with no background (Catppuccin shades
+// diff lines, and only what the user typed is shaded here) and with its plain
+// text in the theme's code colour.
+func codeStyle(base string, code color.Color) *chroma.Style {
+	r, g, b, _ := code.RGBA()
+	col := chroma.NewColour(uint8(r>>8), uint8(g>>8), uint8(b>>8))
+	key := base + col.String()
+	codeStylesMu.Lock()
+	defer codeStylesMu.Unlock()
+	if s, ok := codeStyles[key]; ok {
+		return s
 	}
 	src := styles.Get(base)
-	b := chroma.NewStyleBuilder("kopi-" + base)
-	for _, tt := range src.Types() {
+	plain := src.Get(chroma.Text).Colour
+	sb := chroma.NewStyleBuilder(key)
+	for _, tt := range append(src.Types(), chroma.Background) {
 		e := src.Get(tt)
 		e.Background = 0
-		b.AddEntry(tt, e)
-	}
-	name := ""
-	if s, err := b.Build(); err == nil {
-		name = styles.Register(s).Name
-	}
-	codeThemes[base] = name
-	return name
-}
-
-func markdownStyle(width int, th theme) ansi.StyleConfig {
-	c := func(col color.Color) *string {
-		switch col := col.(type) {
-		case lipgloss.NoColor:
-			return nil
-		case xansi.BasicColor:
-			s := strconv.Itoa(int(col))
-			return &s
-		case lipgloss.ANSIColor:
-			s := strconv.Itoa(int(col))
-			return &s
+		if e.Colour == plain || tt == chroma.Background {
+			e.Colour = col
 		}
-		r, g, b, _ := col.RGBA()
-		s := fmt.Sprintf("#%02x%02x%02x", r>>8, g>>8, b>>8)
-		return &s
+		sb.AddEntry(tt, e)
 	}
-	yes := true
-	zero, one := uint(0), uint(1)
-	gutter := "│ "
-	return ansi.StyleConfig{
-		Document:       ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Color: c(th.text)}, Margin: &zero},
-		BlockQuote:     ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Color: c(th.muted)}, Indent: &one, IndentToken: &gutter},
-		List:           ansi.StyleList{LevelIndent: 2},
-		Heading:        ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Color: c(th.heading), Bold: &yes}},
-		Strong:         ansi.StylePrimitive{Bold: &yes},
-		Emph:           ansi.StylePrimitive{Italic: &yes},
-		Strikethrough:  ansi.StylePrimitive{CrossedOut: &yes},
-		HorizontalRule: ansi.StylePrimitive{Color: c(th.dim), Format: "\n" + strings.Repeat("─", width) + "\n"},
-		Item:           ansi.StylePrimitive{BlockPrefix: "- "},
-		Enumeration:    ansi.StylePrimitive{BlockPrefix: ". "},
-		Task:           ansi.StyleTask{Ticked: "[x] ", Unticked: "[ ] "},
-		Link:           ansi.StylePrimitive{Color: c(th.link)},
-		LinkText:       ansi.StylePrimitive{Color: c(th.link)},
-		Code:           ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Color: c(th.code)}},
-		CodeBlock:      ansi.StyleCodeBlock{StyleBlock: ansi.StyleBlock{Margin: &zero}, Theme: codeStyle(th.codeTheme)},
+	s, err := sb.Build()
+	if err != nil {
+		s = src
 	}
+	codeStyles[key] = s
+	return s
 }

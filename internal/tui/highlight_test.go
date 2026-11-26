@@ -194,9 +194,9 @@ func TestComposerTurnsRedWhileTheDraftIsAShellCommand(t *testing.T) {
 	typeText(m, "!ls")
 	m.syncInput(false)
 	assert.Equal(t, blank(commandShade(m.th)), view()[0])
-	assert.Contains(t, glyph(view()), commandShade(m.th).Foreground(m.th.error).Render("❯ "))
-	assert.Equal(t, []string{"!"}, pieces(m)[:1])
-	assert.Contains(t, glyph(view()), spanStyle(m.th, app.KindShell).Render("!"))
+	assert.Contains(t, glyph(view()), commandShade(m.th).Foreground(m.th.error).Render("! "))
+	assert.Equal(t, "ls", m.composer.ta.Value())
+	assert.Nil(t, pieces(m))
 
 	m.composer.reset()
 	typeText(m, " !ls")

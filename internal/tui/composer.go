@@ -74,6 +74,11 @@ type composer struct {
 	clicks int
 	unit   selection
 	spans  []app.Span
+	// bang is set while the draft is a shell command: its "!" is the prompt,
+	// not in the textarea, and value adds it back.
+	bang bool
+	// looksShell is the bang the textarea's styles and prompt were last set for.
+	looksShell bool
 	// secret draws the draft as one bullet per character; only fields set it.
 	secret bool
 }
@@ -93,12 +98,6 @@ func baseComposer(newline key.Binding) composer {
 
 func newComposer(th theme, newline key.Binding) composer {
 	c := baseComposer(newline)
-	c.ta.SetPromptFunc(promptWidth, func(p textarea.PromptInfo) string {
-		if p.LineNumber == 0 {
-			return "❯ "
-		}
-		return "  "
-	})
 	c.style(th)
 	c.ta.Focus()
 	return c
@@ -129,35 +128,67 @@ func (c *composer) fieldStyle(th theme) {
 	c.ta.SetStyles(textarea.Styles{Focused: state, Blurred: state, Cursor: textarea.CursorStyle{Color: th.text}})
 }
 
-// shell reports whether the draft is a shell command, as the controller's
-// spans say.
-func (c *composer) shell() bool {
-	return len(c.spans) > 0 && c.spans[0].Kind == app.KindShell
-}
+// shell reports whether the draft is a shell command.
+func (c *composer) shell() bool { return c.bang }
 
-// setSpans takes the draft's spans and restyles the textarea when the draft
-// became, or stopped being, a shell command.
+// stale reports that the draft stopped being, or may now be, a shell command
+// without setSpans running since.
+func (c *composer) stale() bool { return c.bang != c.looksShell }
+
+// setSpans takes the draft's spans. A draft the spans say is a shell command
+// loses its "!" and the spaces after it to the prompt, the cursor staying on
+// the same rune.
 func (c *composer) setSpans(spans []app.Span, th theme) {
-	was := c.shell()
+	if !c.bang && len(spans) > 0 && spans[0].Kind == app.KindShell {
+		c.swallow()
+	}
 	c.spans = spans
-	if c.shell() != was {
+	if c.bang {
+		c.spans = nil
+	}
+	if c.stale() {
 		c.style(th)
 	}
 }
 
+// swallow moves the "!" that opens the draft out of the textarea.
+func (c *composer) swallow() {
+	lines := strings.Split(c.ta.Value(), "\n")
+	line, col := c.ta.Line(), c.ta.Column()
+	rest := strings.TrimLeft(lines[0][1:], " ")
+	if line == 0 {
+		col = max(col-(len(lines[0])-len(rest)), 0)
+	}
+	lines[0] = rest
+	c.ta.SetValue(strings.Join(lines, "\n"))
+	c.ta.MoveToBegin()
+	for c.ta.Line() < line {
+		c.ta.CursorDown()
+	}
+	c.ta.SetCursorColumn(col)
+	c.bang = true
+}
+
 // shade is the composer's shade: the command's while the draft is a shell command.
 func (c *composer) shade(th theme) lipgloss.Style {
-	if c.shell() {
+	if c.bang {
 		return commandShade(th)
 	}
 	return shade(th)
 }
 
 func (c *composer) style(th theme) {
-	shaded, prompt := c.shade(th), th.accent
-	if c.shell() {
-		prompt = th.error
+	shaded, prompt, glyph := c.shade(th), th.accent, "❯ "
+	if c.bang {
+		prompt, glyph = th.error, "! "
 	}
+	c.looksShell = c.bang
+	c.ta.SetPromptFunc(promptWidth, func(p textarea.PromptInfo) string {
+		if p.LineNumber == 0 {
+			return glyph
+		}
+		return "  "
+	})
 	state := textarea.StyleState{
 		Text:        shaded,
 		CursorLine:  shaded,
@@ -178,14 +209,17 @@ func (c *composer) resize(width, height int) {
 // delete all of it. Input that changes the draft stops history browsing.
 func (c *composer) update(msg tea.Msg) tea.Cmd {
 	c.lastPaste = ""
-	before := c.ta.Value()
+	before := c.value()
 	defer func() {
-		if c.ta.Value() != before {
+		if c.value() != before {
 			c.stopBrowsing()
 		}
 	}()
 	if k, ok := msg.(tea.KeyPressMsg); ok && !c.ta.HasSelection() {
 		switch {
+		case key.Matches(k, c.ta.KeyMap.DeleteCharacterBackward) && c.bang && c.ta.Line() == 0 && c.ta.Column() == 0:
+			c.bang = false
+			return nil
 		case key.Matches(k, c.ta.KeyMap.DeleteCharacterBackward):
 			if mk := c.markerBefore(); mk != "" {
 				cmd := c.repeat(k, len([]rune(mk)))
@@ -411,8 +445,7 @@ func (c *composer) paste(text string) tea.Cmd {
 	}
 	// Even a marker can exceed the remaining visual capacity. Collapse the
 	// whole intended draft so no part of the insertion is silently lost.
-	full, imgs := c.expand(want)
-	c.ta.SetValue(c.collapse(full, imgs))
+	c.collapseDraft(want)
 	c.lastPaste = ""
 	return nil
 }
@@ -425,7 +458,7 @@ func (c *composer) trialPaste(text string) (composer, string, tea.Cmd) {
 		start.Row, start.Col = c.ta.Line(), c.ta.Column()
 		end = start
 	}
-	lines := strings.Split(c.value(), "\n")
+	lines := strings.Split(c.ta.Value(), "\n")
 	before := strings.Join(lines[:start.Row], "\n")
 	if start.Row > 0 {
 		before += "\n"
@@ -437,7 +470,7 @@ func (c *composer) trialPaste(text string) (composer, string, tea.Cmd) {
 	}
 	want := before + sanitizedText(text) + after
 	trial := *c
-	trial.ta.SetValue(c.value())
+	trial.ta.SetValue(c.ta.Value())
 	if selected || trial.ta.Line() != start.Row || trial.ta.Column() != start.Col {
 		ax, ay := trial.cellOf(point{start.Row, start.Col})
 		trial.ta.BeginSelection(ax, ay)
@@ -490,15 +523,24 @@ func (c *composer) insertImage(path string) tea.Cmd {
 		c.ta = trial.ta
 		return cmd
 	}
+	c.collapseDraft(want)
+	return nil
+}
+
+// collapseDraft replaces the draft with one block holding want, the intended
+// text of the textarea; a command's "!" goes into the block, which is never one.
+func (c *composer) collapseDraft(want string) {
+	if c.bang {
+		want, c.bang = "!"+want, false
+	}
 	full, imgs := c.expand(want)
 	c.ta.SetValue(c.collapse(full, imgs))
-	return nil
 }
 
 // expanded is the draft as sent: paste markers become their text, image
 // markers stay and their files are listed in order of appearance.
 func (c *composer) expanded() (text string, imgs []string) {
-	return c.expand(c.ta.Value())
+	return c.expand(c.value())
 }
 
 func (c *composer) expand(value string) (text string, imgs []string) {
@@ -517,14 +559,21 @@ func (c *composer) expand(value string) (text string, imgs []string) {
 	return text, imgs
 }
 
-func (c *composer) value() string { return c.ta.Value() }
+// value is the whole draft, the "!" of a command included.
+func (c *composer) value() string {
+	if c.bang {
+		return "!" + c.ta.Value()
+	}
+	return c.ta.Value()
+}
 
-func (c *composer) empty() bool { return c.ta.Value() == "" }
+func (c *composer) empty() bool { return c.value() == "" }
 
 // reset clears the draft and its blocks; paste numbers restart, image
 // numbers do not.
 func (c *composer) reset() {
 	c.ta.Reset()
+	c.bang = false
 	c.blocks, c.pastes, c.lastPaste = map[string]block{}, 0, ""
 	c.stopBrowsing()
 }
@@ -549,7 +598,7 @@ func (c *composer) restore(inputs []event.Input) {
 		}
 		parts = append(parts, in.Text)
 	}
-	if draft := c.ta.Value(); draft != "" {
+	if draft := c.value(); draft != "" {
 		parts = append(parts, draft)
 	}
 	joined := strings.Join(parts, "\n\n")
@@ -561,7 +610,7 @@ func (c *composer) restore(inputs []event.Input) {
 		text, imgs := c.expand(joined)
 		trial.SetValue(c.collapse(text, imgs))
 	}
-	c.ta = trial
+	c.ta, c.bang = trial, false
 	c.lastPaste = ""
 	c.stopBrowsing()
 }

@@ -231,6 +231,8 @@ The bullet is green for a call that succeeded, yellow for one you or a rule refu
 - Colour in command output is not kept.
 - Only the row's title line opens and closes it; scroll up to close a long body.
 
+In a reply, HTML is shown as written, an image is shown as its text and URL, and footnotes are not drawn.
+
 ## Menus and highlighting
 
 - `/` at the start of the input lists commands and skills; a skill is filled in rather than run.
@@ -260,6 +262,8 @@ The bullet is green for a call that succeeded, yellow for one you or a rule refu
 
 An input that starts with `!` runs the rest as a shell command of yours. A leading space makes it an ordinary prompt.
 
+- The `!` takes the place of the prompt's `❯`, red, when you type it or paste it at the start; the input holds only the command. Backspace at the start of the input turns it back into an ordinary prompt, and the text stays.
+- When a command will not work when the agent runs it, the agent gives you the `! command` line in a code block; its output is sent to the agent once you run it.
 - It runs in the session's working directory, with the same shell as the [`Bash`](tools.md#bash) tool, outside the [sandbox](sandbox.md#outside-the-sandbox) and the [permission rules](permissions.md#limitations), in both modes, with no time limit.
 - Only the fullscreen interface runs them. While you watch a subagent, a `!` command still runs for the main session and shows there.
 - It runs at once, even while the agent works. Commands run one at a time in the order typed; a later one waits (`queued`).

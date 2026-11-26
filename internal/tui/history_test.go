@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func newHistoryModel(t *testing.T, entries ...string) *model {
@@ -120,4 +121,25 @@ func TestMultiLineEntryBrowsesByRow(t *testing.T) {
 	assert.Equal(t, "a\nb", m.composer.value(), "the cursor moves to the first row")
 	press(m, up)
 	assert.Equal(t, "old", m.composer.value())
+}
+
+func TestRecalledCommandShowsSwallowedAndDownReturnsACommandDraft(t *testing.T) {
+	m := newHistoryModel(t, "!ls")
+	typeText(m, "!pwd")
+	m.syncInput(false)
+	require.True(t, m.composer.shell())
+	press(m, home)
+
+	press(m, up)
+
+	assert.Equal(t, "!ls", m.composer.value())
+	assert.True(t, m.composer.shell())
+	assert.Equal(t, "ls", m.composer.ta.Value())
+	assert.True(t, m.composer.browsing(), "the swallow does not stop browsing")
+
+	press(m, down)
+
+	assert.Equal(t, "!pwd", m.composer.value())
+	assert.True(t, m.composer.shell())
+	assert.Equal(t, "pwd", m.composer.ta.Value())
 }

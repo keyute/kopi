@@ -137,8 +137,6 @@ func spanStyle(th theme, k app.Kind) lipgloss.Style {
 		return shade(th).Foreground(th.accent)
 	case app.KindReference:
 		return shade(th).Foreground(th.link)
-	case app.KindShell:
-		return commandShade(th).Foreground(th.error)
 	}
 	return shade(th)
 }

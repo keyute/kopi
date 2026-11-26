@@ -113,30 +113,9 @@ func TestMarkdownStreamingReferenceDefinitionResolvesEarlierLink(t *testing.T) {
 	assert.Equal(t, renderMarkdown(text, 80), stripped(md.lines("k", text)))
 }
 
-func TestMarkdownFenceIsVerbatimAndOneChunk(t *testing.T) {
+func TestMarkdownFenceIsVerbatim(t *testing.T) {
 	src := "```go\nfunc A() {}\n\nfunc B() {}\n```"
-	assert.Equal(t, []string{src}, splitChunks(src))
 	assert.Equal(t, []string{"func A() {}", "", "func B() {}"}, renderMarkdown(src, 40))
-}
-
-func TestSplitChunks(t *testing.T) {
-	for _, tc := range []struct {
-		name, text string
-		want       []string
-	}{
-		{"paragraphs split", "one\n\n\ntwo", []string{"one", "two"}},
-		{"list after paragraph stays", "intro\n\n- a\n- b", []string{"intro\n\n- a\n- b"}},
-		{"list continuation stays", "- a\n\n  more of a\n\n- b", []string{"- a\n\n  more of a\n\n- b"}},
-		{"quote and table stay", "> a\n\n> b\n\n| x |", []string{"> a\n\n> b\n\n| x |"}},
-		{"paragraph after list splits", "- a\n\nafter", []string{"- a", "after"}},
-		{"unclosed fence keeps the rest", "intro\n\n```\ncode\n\nmore\n\nstill code", []string{"intro", "```\ncode\n\nmore\n\nstill code"}},
-		{"closed fence splits after", "```\ncode\n\nx\n```\n\nafter", []string{"```\ncode\n\nx\n```", "after"}},
-		{"leading and trailing blanks dropped", "\n\none\n\n", []string{"one"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, splitChunks(tc.text))
-		})
-	}
 }
 
 const streamDoc = "## Plan\n\nRead **two** files with `Read`.\n\n- first\n- second\n\n> note\n\n```go\nfunc main() {\n\n}\n```\n\nDone."
@@ -151,6 +130,56 @@ func TestMarkdownStreamingEndsLikeWholeRender(t *testing.T) {
 	}
 
 	assert.Equal(t, newMarkdown(40, mocha()).lines("k", streamDoc), got)
+}
+
+const streamTrickyDoc = " Results:\n| a | b |\n|---|---|\n| 1 | 2 |\n\nSee [docs][r].\n\n> quoted [q][r]\n>\n> [r]: http://example.com/long/path\n\n[r]: http://example.com/long/path\n\nTail."
+
+func TestMarkdownStreamingTableAndDefinitionsEndLikeWholeRender(t *testing.T) {
+	md := newMarkdown(40, mocha())
+	var text string
+	var got []string
+	for _, r := range streamTrickyDoc {
+		text += string(r)
+		got = md.lines("k", text)
+	}
+
+	assert.Equal(t, newMarkdown(40, mocha()).lines("k", streamTrickyDoc), got)
+	assert.Contains(t, strings.Join(stripped(got), "\n"), "See docs http://example.com/long/path.")
+}
+
+func TestMarkdownReplacedTextIsDrawnAfresh(t *testing.T) {
+	md := newMarkdown(40, mocha())
+	md.lines("k", "> # H\n> text")
+
+	replaced := "> # H\n>\n> text"
+	assert.Equal(t, renderMarkdown(replaced, 40), stripped(md.lines("k", replaced)))
+}
+
+func TestMarkdownTableDirectlyAfterParagraphDraws(t *testing.T) {
+	got := renderMarkdown(" Results:\n| a | b |\n|---|---|\n| 1 | 2 |", 20)
+
+	require.Len(t, got, 5)
+	assert.Equal(t, "Results:", got[0])
+	assert.Contains(t, got[3], "─")
+}
+
+func TestMarkdownDrawsNoControlBytesFromReferences(t *testing.T) {
+	got := strings.Join(renderMarkdown("x &#27;c y\n\n&#155;2J", 40), "\n")
+
+	assert.NotContains(t, got, "\x1b")
+	assert.NotContains(t, got, "\u009b")
+	assert.Contains(t, got, "2J")
+}
+
+func TestMarkdownSmallTableSpansTheWidth(t *testing.T) {
+	got := renderMarkdown("| a | b |\n|---|---|\n| 1 | 2 |", 60)
+
+	assert.Equal(t, " a                            │ b", got[0])
+}
+
+func TestMarkdownHTMLBlockKeepsItsClosingLine(t *testing.T) {
+	assert.Equal(t, []string{"<!--", "note", "-->"}, renderMarkdown("<!--\nnote\n-->", 40))
+	assert.Equal(t, []string{"<pre>", "x", "</pre>"}, renderMarkdown("<pre>\nx\n</pre>", 40))
 }
 
 func TestMarkdownDeltaRerendersOnlyLastChunk(t *testing.T) {
@@ -186,5 +215,50 @@ func TestMarkdownWrapsLongCodeLines(t *testing.T) {
 	require.Len(t, ls, 3)
 	for _, l := range ls {
 		assert.LessOrEqual(t, ansi.StringWidth(l), 10)
+	}
+}
+
+func TestMarkdownCodeBlocksUseCodeColourForPlainText(t *testing.T) {
+	r, g, b, _ := mocha().code.RGBA()
+	truecolor := fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r>>8, g>>8, b>>8)
+	for _, src := range []string{"```\n! gcloud auth login\n```", "```sh\n! gcloud auth login\n```"} {
+		got := strings.Join(newMarkdown(80, mocha()).lines("k", src), "\n")
+		assert.Equal(t, "! gcloud auth login", ansi.Strip(got))
+		assert.Contains(t, got, truecolor, src)
+	}
+
+	got := strings.Join(newMarkdown(80, builtinThemes["ansi-dark"]()).lines("k", "```\nplain\n```"), "\n")
+	assert.Regexp(t, `\x1b\[(?:[0-9]+;)*36(?:;[0-9]+)*m`, got)
+
+	got = strings.Join(newMarkdown(80, mocha()).lines("k", "```go\nfunc main() {}\n```"), "\n")
+	assert.Equal(t, "func main() {}", ansi.Strip(got))
+	assert.NotContains(t, strings.SplitN(got, "func", 2)[0], truecolor, "a keyword keeps the style's colour")
+}
+
+func TestMarkdownLooseListItemKeepsItsBlocksUnderItsText(t *testing.T) {
+	got := renderMarkdown("1. one\n\n   para in one\n\n   ```\n   code\n   ```\n2. two", 40)
+	assert.Equal(t, []string{"1. one", "", "   para in one", "", "   code", "", "2. two"}, got)
+}
+
+func TestMarkdownResolvesEscapesAndEntities(t *testing.T) {
+	assert.Equal(t, []string{"a * b & <tag>"}, renderMarkdown(`a \* b &amp; &lt;tag&gt;`, 40))
+}
+
+func TestMarkdownHardBreakStartsANewRow(t *testing.T) {
+	assert.Equal(t, []string{"one", "two"}, renderMarkdown("one\\\ntwo", 40))
+}
+
+func TestMarkdownTableAlignsColumnsPerSource(t *testing.T) {
+	got := renderMarkdown("| a | b |\n|---|--:|\n| x | 1 |\n| y | 22 |", 40)
+	require.Len(t, got, 4)
+	assert.Equal(t, " 1", got[2][len(got[2])-2:])
+	assert.Equal(t, "22", got[3][len(got[3])-2:])
+}
+
+func TestMarkdownMultiLineCommentKeepsItsColourOnEachRow(t *testing.T) {
+	got := newMarkdown(40, mocha()).lines("k", "```go\n/* one\ntwo */\n```")
+	require.Len(t, got, 2)
+	for _, l := range got {
+		assert.Regexp(t, `^\x1b\[[0-9;]*m`, l)
 	}
 }

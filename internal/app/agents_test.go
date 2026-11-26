@@ -194,7 +194,7 @@ func TestNoDefinitionsMeansNoAgentTools(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read", "AskUserQuestion"}, req.ToolNames)
-	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil)}, nil, nil, nil, false, false)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil)}, nil, nil, nil, false, false, false)), req.SystemPrompt)
 }
 
 func TestDefinitionsAddAgentAndSendMessageUnlessRuleRemovesThem(t *testing.T) {

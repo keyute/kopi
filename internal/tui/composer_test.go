@@ -265,6 +265,33 @@ func TestRestoreKeepsDraftBlocks(t *testing.T) {
 	assert.Equal(t, []string{"/tmp/a.png"}, imgs)
 }
 
+func TestBackspaceAtTheStartOfACommandTurnsItBackIntoAPrompt(t *testing.T) {
+	m, _ := newTestModel(t, 40, 20)
+	typeText(m, "!ls")
+	m.syncInput(false)
+	require.True(t, m.composer.shell())
+
+	press(m, home)
+	press(m, backspace)
+
+	assert.False(t, m.composer.shell())
+	assert.Equal(t, "ls", m.composer.value())
+	assert.Contains(t, m.composer.view(m.width, m.th)[1], shade(m.th).Foreground(m.th.accent).Render("❯ "))
+}
+
+func TestRestoreInFrontOfACommandDraftYieldsAPrompt(t *testing.T) {
+	m, _ := newTestModel(t, 60, 30)
+	typeText(m, "!ls")
+	m.syncInput(false)
+	require.True(t, m.composer.shell())
+
+	m.composer.restore([]event.Input{{Text: "queued"}})
+	m.syncInput(false)
+
+	assert.False(t, m.composer.shell())
+	assert.Equal(t, "queued\n\n!ls", m.composer.value())
+}
+
 func TestComposerDragSelectsAndCopies(t *testing.T) {
 	m, _ := newTestModel(t, 40, 30)
 	typeText(m, "hello world")

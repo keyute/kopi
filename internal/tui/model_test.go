@@ -795,9 +795,12 @@ func TestSubmitSendsOnlyAVisibleCommandAsOne(t *testing.T) {
 		text  string
 		want  string
 		shell bool
+		// box is what the textarea holds of a command.
+		box string
 	}{
-		"typed command":   {text: "!ls", want: "!ls", shell: true},
-		"short paste":     {paste: true, text: "!ls", want: "!ls", shell: true},
+		"typed command":   {text: "!ls", want: "!ls", shell: true, box: "ls"},
+		"short paste":     {paste: true, text: "!ls", want: "!ls", shell: true, box: "ls"},
+		"spaced paste":    {paste: true, text: "! ls", want: "!ls", shell: true, box: "ls"},
 		"collapsed paste": {paste: true, text: long, want: " " + long},
 		"plain prompt":    {text: "hello", want: "hello"},
 	} {
@@ -810,6 +813,9 @@ func TestSubmitSendsOnlyAVisibleCommandAsOne(t *testing.T) {
 				m.syncInput(false)
 			}
 			require.Equal(t, tc.shell, m.composer.shell())
+			if tc.shell {
+				assert.Equal(t, tc.box, m.composer.ta.Value())
+			}
 
 			press(m, enter)
 
@@ -822,6 +828,7 @@ func TestSendNowSendsACollapsedBangPasteAsAPrompt(t *testing.T) {
 	m, c := newTestModel(t, 40, 20)
 	pasteText(m, "!"+linesOf(11))
 	require.False(t, m.composer.shell())
+	assert.True(t, strings.HasPrefix(m.composer.ta.Value(), "[paste"))
 
 	press(m, ctrlEnter)
 
