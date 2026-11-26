@@ -367,10 +367,10 @@ func (c *Controller) setReach(dirs []addedDir) error {
 	return c.cfg.SandboxDirs(real)
 }
 
-// insideDir reports whether path lies strictly inside dir, by name.
+// insideDir reports whether path is dir or lies inside it, by name.
 func insideDir(path, dir string) bool {
 	rel, err := filepath.Rel(dir, path)
-	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return err == nil && filepath.IsLocal(rel)
 }
 
 // typedDir is arg as the absolute path the human spelled: ~ is the user's home as
@@ -387,16 +387,22 @@ func (c *Controller) typedDir(arg string) string {
 	return arg
 }
 
+// promptFiles is the paths of the instruction files the system prompt carries.
+func (c *Controller) promptFiles() map[string]bool {
+	files := map[string]bool{}
+	for _, g := range c.cfg.Instructions {
+		for _, f := range g.Files {
+			files[f.Path] = true
+		}
+	}
+	return files
+}
+
 // sentFilesLocked is the paths of the instruction files the system prompt
 // carries and those of the directories now added. It must be called with mu
 // held.
 func (c *Controller) sentFilesLocked() map[string]bool {
-	sent := map[string]bool{}
-	for _, g := range c.cfg.Instructions {
-		for _, f := range g.Files {
-			sent[f.Path] = true
-		}
-	}
+	sent := c.promptFiles()
 	for _, d := range liveDirs(c.dirs) {
 		for _, f := range d.files {
 			sent[f.Path] = true
@@ -409,12 +415,7 @@ func (c *Controller) sentFilesLocked() map[string]bool {
 // down, that the system prompt does not already carry. They are held in memory
 // until the human trusts dir.
 func (c *Controller) newInstructionFiles(dir string) []instruction.File {
-	held := map[string]bool{}
-	for _, g := range c.cfg.Instructions {
-		for _, f := range g.Files {
-			held[f.Path] = true
-		}
-	}
+	held := c.promptFiles()
 	groups, errs := instruction.Load("", []instruction.Root{{Dir: dir, Trusted: true}}, c.cfg.InstructionFallbacks)
 	for _, err := range errs {
 		c.report(event.Error{Err: err})
@@ -517,8 +518,7 @@ func (c *Controller) dirsText(from, to int, files bool) string {
 	for _, b := range before {
 		real := log[b].dir.Real
 		if !slices.ContainsFunc(after, func(a int) bool {
-			r := log[a].dir.Real
-			return r == real || insideDir(real, r)
+			return insideDir(real, log[a].dir.Real)
 		}) {
 			gone = append(gone, real)
 		}

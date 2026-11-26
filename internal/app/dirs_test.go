@@ -262,6 +262,26 @@ func TestAddDirSendsAnInstructionFileSharedByTwoPendingAddsOnce(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(d.c.dirsText(0, d.c.dirCount(), true), "SHARED_RULE"))
 }
 
+func TestAddDirDoesNotListAnInstructionFileAnAddedDirectoryHolds(t *testing.T) {
+	d := newDirHarness(t, Config{}, true)
+	root := canonicalTemp(t)
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("SHARED_RULE\n"), 0o600))
+	a, b := filepath.Join(root, "a"), filepath.Join(root, "b")
+	require.NoError(t, os.Mkdir(a, 0o700))
+	require.NoError(t, os.Mkdir(b, 0o700))
+	requests := subscribeTo[event.DirRequested](d.c)
+
+	require.NoError(t, d.c.AddDir(a))
+	first := receiveEvent(t, requests)
+	assert.True(t, d.c.AnswerDir(first.Token, true, true))
+	require.NoError(t, d.c.AddDir(b))
+	second := receiveEvent(t, requests)
+
+	assert.Equal(t, []string{filepath.Join(root, "AGENTS.md")}, first.Instructions)
+	assert.Empty(t, second.Instructions)
+}
+
 func TestAnswerDirSavesNothingForAFolderAnotherAnswerAlreadyAdded(t *testing.T) {
 	d := newDirHarness(t, Config{}, true)
 	dir := otherDir(t)
@@ -717,6 +737,7 @@ func TestDirsTextFoldsTheLog(t *testing.T) {
 	assert.Empty(t, c.dirsText(4, 7, true), "a directory inside another added one is not gone")
 	assert.Empty(t, c.dirsText(4, 6, true), "an add undone inside the window says nothing")
 	assert.Equal(t, "The workspace no longer includes /b.", c.dirsText(5, 7, true))
+	assert.Equal(t, also("/a")+"\nInstructions from /a/AGENTS.md:\nx", c.dirsText(3, 4, true), "a re-add after a removal already read sends its file again")
 }
 
 func TestAddDirCommandNeedsAnArgument(t *testing.T) {
