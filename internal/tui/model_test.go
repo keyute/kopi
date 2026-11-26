@@ -81,6 +81,8 @@ type fakeController struct {
 	// tasks is what Tasks returns; TaskOutput adds the output in outputs.
 	tasks   []tool.TaskInfo
 	outputs map[string]string
+	// sideStops logs the ids StopSideQuestion was called with.
+	sideStops []int
 	// stops logs StopTask, which marks the task stopped.
 	stops []string
 	// stopErr is what StopTask returns.
@@ -253,6 +255,8 @@ func (f *fakeController) TaskOutput(id string) (tool.TaskInfo, error) {
 	}
 	return tool.TaskInfo{}, tool.ErrUnknownTask
 }
+
+func (f *fakeController) StopSideQuestion(id int) { f.sideStops = append(f.sideStops, id) }
 
 func (f *fakeController) StopTask(id string) error {
 	f.stops = append(f.stops, id)

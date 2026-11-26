@@ -538,7 +538,7 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 			pureThinking = false
 		}
 		switch inner.(type) {
-		case event.SessionChanged, event.ModeChanged, event.ModelChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged, event.LimitsChanged, event.ToolsChanged, event.EffortChanged:
+		case event.SessionChanged, event.ModeChanged, event.ModelChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged, event.LimitsChanged, event.ToolsChanged, event.EffortChanged, event.SideQuestionEnded:
 			refresh = true
 		}
 		switch inner.(type) {
@@ -672,6 +672,11 @@ func (m *model) apply(ev event.Event) *view {
 		return nil
 	case event.DirRequested:
 		m.open(promptDir, newDirDialog(ev, &m.keys))
+		return nil
+	case event.SideQuestionAsked:
+		m.open(promptBtw, newBtwDialog(ev, &m.keys))
+		return nil
+	case event.SideQuestionEnded:
 		return nil
 	case event.QuestionEnded, event.PlanEnded, event.LoginEnded, event.DirEnded, event.ApprovalEnded:
 		return nil

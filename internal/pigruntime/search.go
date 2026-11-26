@@ -135,7 +135,7 @@ func (r *Runtime) Search(ctx context.Context, model, system, query string) (tool
 		return tool.SearchResult{}, Usage{}, fmt.Errorf("failed to search with model %q: %w", model, ErrNoSearch)
 	}
 	var f found
-	text, used, err := r.complete(ctx, m, system, query, func(content []ai.AssistantContentBlock) string {
+	text, used, err := r.complete(ctx, m, plainContext(system, query), func(content []ai.AssistantContentBlock) string {
 		return f.join(content, proto.sep)
 	}, ai.StreamOptions{
 		OnPayload: func(payload any, _ *ai.Model) (any, error) {

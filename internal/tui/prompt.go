@@ -21,6 +21,7 @@ const (
 	promptWorkflow
 	promptTasks
 	promptUsage
+	promptBtw
 )
 
 // waits reports that a turn is blocked on the answer.
