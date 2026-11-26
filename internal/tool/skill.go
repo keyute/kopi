@@ -147,7 +147,7 @@ func skillDescription(skills []skill.Skill) string {
 	desc := "A skill is a set of instructions for a kind of task. " +
 		"Called with a skill's name, returns its instructions; paths in them are relative to the skill's directory, and file reads one of its files, a text file or an image (PNG, JPEG, GIF or WebP). " +
 		"An image is returned whole; offset and limit do not apply. " +
-		"The user can also load a skill by naming it."
+		"A skill the user names arrives as a <skill> message, already loaded."
 	var listed []skill.Skill
 	for _, s := range skills {
 		if !s.DisableModelInvocation {
