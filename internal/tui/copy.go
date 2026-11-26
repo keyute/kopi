@@ -28,6 +28,7 @@ func (m *model) showCopy() tea.Cmd {
 		return m.flash("no reply to copy")
 	}
 	blocks := codeBlocks(text)
+	text = strings.TrimSpace(text)
 	if len(blocks) == 0 {
 		return m.copy(text)
 	}

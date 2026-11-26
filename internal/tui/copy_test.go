@@ -74,6 +74,15 @@ func TestCopyOfAReplyWithBlocksPicksOne(t *testing.T) {
 	t.Run("whole", func(t *testing.T) { pick(t, enter, strings.TrimSpace(text)) })
 }
 
+func TestCopyStandaloneIndentedCode(t *testing.T) {
+	m, c := newTestModel(t, 52, 24)
+	reply(m, "    first\n    second\n")
+	runCopyCommand(m, c)
+	require.NotNil(t, m.front())
+
+	assertCopied(t, m, press(m, tea.KeyPressMsg{Code: '2', Text: "2"}), "first\nsecond")
+}
+
 func TestCopyEscapeCopiesNothing(t *testing.T) {
 	m, c := newTestModel(t, 52, 24)
 	reply(m, "```sh\ntask test\n```")

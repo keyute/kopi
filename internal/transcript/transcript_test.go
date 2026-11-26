@@ -403,7 +403,7 @@ func TestLastReply(t *testing.T) {
 	assert.Empty(t, apply().LastReply())
 	assert.Empty(t, apply(event.TurnStart{Prompt: "go"}).LastReply())
 
-	assert.Equal(t, "second", apply(
+	assert.Equal(t, "\n second\n", apply(
 		event.TurnStart{Prompt: "a"}, event.TextDelta{Text: "first"}, event.TurnEnd{},
 		event.TurnStart{Prompt: "b"}, event.TextDelta{Text: "\n second\n"}, event.TurnEnd{},
 	).LastReply())
@@ -417,7 +417,12 @@ func TestLastReply(t *testing.T) {
 		event.TurnStart{Prompt: "b"}, event.TextDelta{Text: "sec"},
 	).LastReply(), "a reply still being written is skipped")
 
+	assert.Equal(t, "first", apply(
+		event.TurnStart{Prompt: "a"}, event.TextDelta{Text: "first"}, event.TurnEnd{},
+		event.TurnStart{Prompt: "b"}, event.TextDelta{Text: "partial"}, event.Notice{Text: "notice"},
+	).LastReply(), "a notice does not finish a reply")
+
 	var restored Transcript
 	restored.Restore([]event.Event{event.TurnStart{Prompt: "a"}, event.TextDelta{Text: " done "}})
-	assert.Equal(t, "done", restored.LastReply())
+	assert.Equal(t, " done ", restored.LastReply())
 }

@@ -32,13 +32,14 @@ const (
 )
 
 type item struct {
-	kind    kind
-	text    string
-	call    Call
-	outcome event.Outcome
-	elapsed time.Duration
-	task    event.TaskEnded
-	command event.UserCommand
+	kind     kind
+	text     string
+	finished bool
+	call     Call
+	outcome  event.Outcome
+	elapsed  time.Duration
+	task     event.TaskEnded
+	command  event.UserCommand
 }
 
 // visible reports whether the item draws a block; whitespace-only assistant
@@ -65,6 +66,7 @@ func (t *Transcript) Apply(ev event.Event) {
 		}
 		t.items = append(t.items, item{kind: assistantItem, text: ev.Text})
 	case event.ToolStart:
+		t.finishReply()
 		t.items = append(t.items, item{kind: callItem, call: Call{
 			ID:          ev.CallID,
 			Title:       ev.Title,
@@ -116,6 +118,7 @@ func (t *Transcript) Apply(ev event.Event) {
 	case event.Error:
 		t.items = append(t.items, item{kind: errorItem, text: ev.Err.Error()})
 	case event.TurnEnd:
+		t.finishReply()
 		t.settleUnfinished()
 		t.items = append(t.items, item{kind: turnItem, outcome: ev.Outcome, elapsed: ev.Elapsed})
 	case event.TaskEnded:
@@ -133,18 +136,29 @@ func (t *Transcript) Apply(ev event.Event) {
 	}
 }
 
-// LastReply is the text of the last finished assistant reply, trimmed, "" when
-// there is none. Live text still being written is not finished: it is the last
-// item, since a turn ends with an item after it; restored text has ended.
+// LastReply is the raw text of the last finished assistant reply, or "" when
+// there is none. Restored text is eligible even without a reply-ending event.
 func (t *Transcript) LastReply() string {
 	for i := len(t.items) - 1; i >= 0; i-- {
 		it := t.items[i]
-		if it.kind != assistantItem || !it.visible() || i == len(t.items)-1 && i >= t.boundary {
+		if it.kind != assistantItem || !it.visible() || !it.finished && i >= t.boundary {
 			continue
 		}
-		return strings.TrimSpace(it.text)
+		return it.text
 	}
 	return ""
+}
+
+func (t *Transcript) finishReply() {
+	for i := len(t.items) - 1; i >= t.boundary; i-- {
+		it := &t.items[i]
+		if it.kind == callItem || it.kind == turnItem {
+			break
+		}
+		if it.kind == assistantItem {
+			it.finished = true
+		}
+	}
 }
 
 // Restore must be called on an empty Transcript.
