@@ -501,7 +501,7 @@ func TestToolAddedToAResumedSessionIsNotCallableUntilLoadedAgain(t *testing.T) {
 
 	// A new process has a runtime whose extension holds no tool yet. PiG keeps
 	// the tools a transcript last declared pending until they are registered
-	// (PiG v0.7.0 coding/session_tools.go restoreToolsFromTranscript).
+	// (PiG v0.8.0 coding/session_tools.go restoreToolsFromTranscript).
 	r, faux = newTestRuntime(t, sb)
 	resumed := open(r, sess.ID())
 	t.Cleanup(func() { assert.NoError(t, resumed.Close(context.Background())) })

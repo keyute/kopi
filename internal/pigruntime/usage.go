@@ -200,11 +200,10 @@ func (s *Session) Record() Record {
 }
 
 // cacheExpires dates the last request in messages that sent a prompt, when the
-// session's model made it. PiG's GetPromptCacheTtlMs is internal; Kopi sets no
-// explicit retention, so its tier comes from the provider/process environment
-// unless a cache write reports its tier. OpenAI Responses never reports
-// CacheWrite1h. messages is the full branch history, which keeps that evidence
-// when compaction drops active messages.
+// session's model made it. Kopi sets no explicit retention, so its tier comes
+// from the provider/process environment unless a cache write reports its tier.
+// OpenAI Responses never reports CacheWrite1h. messages is the full branch
+// history, which keeps that evidence when compaction drops active messages.
 func (s *Session) cacheExpires(model *ai.Model, messages []usageMessage) time.Time {
 	var last *usageMessage
 	var tier string
@@ -231,21 +230,19 @@ func (s *Session) cacheExpires(model *ai.Model, messages []usageMessage) time.Ti
 	if last == nil || last.Provider != model.ProviderMeta.ProviderID || last.ModelID != model.ID || last.Timestamp <= 0 {
 		return time.Time{}
 	}
+	var env ai.ProviderEnv
 	if tier == "" {
-		env, err := ai.CredentialStoreProviderEnv(context.Background(), s.inner.Services().Credentials(), model.ProviderMeta.ProviderID)
+		var err error
+		env, err = ai.CredentialStoreProviderEnv(context.Background(), s.inner.Services().Credentials(), model.ProviderMeta.ProviderID)
 		if err != nil {
 			return time.Time{}
 		}
-		tier = "short"
-		if ai.GetProviderEnvValue("PI_CACHE_RETENTION", env) == "long" {
-			tier = "long"
-		}
 	}
-	seconds, ok := model.PromptCache[tier]
+	ttlMs, ok := ai.GetPromptCacheTtlMs(model, ai.StreamOptions{CacheRetention: ai.CacheRetention(tier), Env: env})
 	if !ok {
 		return time.Time{}
 	}
-	return time.UnixMilli(last.Timestamp).Add(time.Duration(seconds * float64(time.Second)))
+	return time.UnixMilli(last.Timestamp).Add(time.Duration(ttlMs * float64(time.Millisecond)))
 }
 
 // Size is the estimated tokens of one named prompt part or tool definition.

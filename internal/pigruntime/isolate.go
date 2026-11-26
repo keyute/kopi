@@ -23,9 +23,9 @@ func isolate(kopiHome, agentDir string) error {
 			return fmt.Errorf("failed to set %s: %w", k, err)
 		}
 	}
-	// PI_TELEMETRY would override the install-telemetry setting that keeps
-	// PiG's attribution headers off Kopi's requests.
-	for _, k := range []string{"PIG_USE_PI_DIRS", "PIG_TEST_FAUX", "PI_TELEMETRY"} {
+	// PIG_TELEMETRY and PI_TELEMETRY would override the install-telemetry
+	// setting that keeps PiG's attribution headers off Kopi's requests.
+	for _, k := range []string{"PIG_USE_PI_DIRS", "PIG_TEST_FAUX", "PIG_TELEMETRY", "PI_TELEMETRY"} {
 		if err := os.Unsetenv(k); err != nil {
 			return fmt.Errorf("failed to unset %s: %w", k, err)
 		}

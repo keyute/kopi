@@ -355,7 +355,7 @@ func TestLoginRewordsSignInFailure(t *testing.T) {
 	errPort := errors.New("address in use")
 	signIn := recordingSignIn(make(chan loginCall, 1), false)
 	signIn.Login = func(context.Context, ai.AuthInteraction, ai.LoginOptions) (ai.Credential, error) {
-		return ai.Credential{}, fmt.Errorf("Port 1455 is in use, probably by an unfinished login in another pi session: %w", errPort)
+		return ai.Credential{}, fmt.Errorf("Port 1455 is in use, probably by an unfinished login in another pig session: %w", errPort)
 	}
 	require.NoError(t, r.RegisterProvider(loginTestProvider(oauthProvider, ai.ProviderAuth{OAuth: signIn})))
 
@@ -363,7 +363,7 @@ func TestLoginRewordsSignInFailure(t *testing.T) {
 
 	require.ErrorIs(t, err, errPort)
 	assert.Contains(t, err.Error(), "another Kopi session")
-	assert.NotContains(t, err.Error(), "another pi session")
+	assert.NotContains(t, err.Error(), "another pig session")
 }
 
 func TestLoginAsksForMethodWhenProviderOffersBoth(t *testing.T) {

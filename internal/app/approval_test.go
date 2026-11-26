@@ -170,9 +170,10 @@ func TestApprovalNoInterruptsTurnAndModelSeesRejection(t *testing.T) {
 			h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "understood")})
 			h.turn(t, "carry on")
 			results := receive(t, requests).ToolResults
-			require.Len(t, results, 1)
+			require.Len(t, results, 2)
 			assert.Contains(t, results[0], policy.ErrRejected.Error())
 			assert.Contains(t, results[0], "stop and wait")
+			assert.Contains(t, results[1], "Operation aborted")
 		})
 	}
 }

@@ -25,6 +25,7 @@ func TestNewPinsIsolationEnv(t *testing.T) {
 	t.Setenv("PIG_HOME", filepath.Join(home, ".pig"))
 	t.Setenv("PIG_USE_PI_DIRS", "1")
 	t.Setenv("PIG_TEST_FAUX", "1")
+	t.Setenv("PIG_TELEMETRY", "1")
 	t.Setenv("PI_TELEMETRY", "1")
 
 	r, err := New(t.Context(), Options{Home: kopiHome, AgentDir: agentDir, CWD: ws})
@@ -33,7 +34,7 @@ func TestNewPinsIsolationEnv(t *testing.T) {
 
 	assert.Equal(t, agentDir, os.Getenv("PIG_CODING_AGENT_DIR"))
 	assert.Equal(t, filepath.Join(kopiHome, "pig"), os.Getenv("PIG_HOME"))
-	for _, k := range []string{"PIG_USE_PI_DIRS", "PIG_TEST_FAUX", "PI_TELEMETRY"} {
+	for _, k := range []string{"PIG_USE_PI_DIRS", "PIG_TEST_FAUX", "PIG_TELEMETRY", "PI_TELEMETRY"} {
 		_, ok := os.LookupEnv(k)
 		assert.False(t, ok, k)
 	}

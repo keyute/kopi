@@ -121,7 +121,7 @@ func TestParametersNormalised(t *testing.T) {
 	for _, schema := range []string{"", "null", "[]", `"x"`} {
 		assert.Equal(t, empty, parameters(json.RawMessage(schema)), schema)
 	}
-	assert.Equal(t, map[string]any{"type": "object"}, parameters(json.RawMessage(`{"type":"object"}`)))
+	assert.Equal(t, map[string]any{"type": "object", "properties": map[string]any{}}, parameters(json.RawMessage(`{"type":"object"}`)))
 }
 
 func TestServersSkipLongAndDuplicateNames(t *testing.T) {

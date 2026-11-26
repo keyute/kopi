@@ -71,7 +71,7 @@ func (a agentTool) run(ctx context.Context, toolCallID string, params json.RawMe
 // registration serves every root session. Its exposure is deferred so that
 // only Kopi makes it callable: on every refresh of a session's tools PiG makes
 // each tool the allowlist names callable again unless its exposure is deferred
-// (PiG v0.7.0 coding/session_tool_registry.go refreshTools; recheck on a bump).
+// (PiG v0.8.0 coding/session_tool_registry.go refreshTools; recheck on a bump).
 func registration(t tool.Tool) (extension.RegisteredTool, error) {
 	parameters, err := json.Marshal(t.Parameters)
 	if err != nil {
@@ -119,9 +119,10 @@ func (a agentTool) ExecutionMode() agent.ToolExecutionMode {
 func beforeToolCall(gate *policy.Gate) agent.BeforeToolCallHook {
 	return func(ctx context.Context, toolCallID, toolName string, args json.RawMessage) agent.ToolCallHookResult {
 		if err := gate.Before(ctx, toolCallID, toolName, args); err != nil {
-			// PiG checks Err before ctx, but replaces a Block's Reason with
-			// "Operation aborted" when ctx is done, so only Err keeps the
-			// refusal's text when an abort lands at the same moment.
+			// PiG checks ctx before the hooks run and replaces a Block's
+			// Reason with "Operation aborted" when ctx is done; an Err keeps its
+			// text unless it is the ctx error, so only Err keeps the refusal's
+			// text when an abort lands at the same moment.
 			return agent.ToolCallHookResult{Err: err}
 		}
 		return agent.ToolCallHookResult{}

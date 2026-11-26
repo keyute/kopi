@@ -73,8 +73,10 @@ func TestQuestionDismissalStopsTurnAndModelSeesIt(t *testing.T) {
 	assert.Equal(t, "alpha\n", fileText(t, sb, "b.txt"), "the following rule-allowed tool must not run")
 	assert.Equal(t, 1, h.faux.CallCount(), "the dismissal stops the turn before another model request")
 	ends := ofType[event.ToolEnd](h.rec.all())
-	require.Len(t, ends, 1)
+	require.Len(t, ends, 2)
 	assert.False(t, ends[0].IsError)
+	assert.True(t, ends[1].IsError)
+	assert.Equal(t, event.EndInterrupted, ends[1].Kind)
 
 	requests := make(chan pigruntimetest.Request, 1)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Capture(t, requests, "understood")})
