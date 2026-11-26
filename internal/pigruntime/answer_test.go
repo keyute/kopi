@@ -197,6 +197,34 @@ func TestAnswerFromSendsTheMainRequestPlusTheQuestion(t *testing.T) {
 	assert.Equal(t, []string{"Probe"}, toolSchemaNames(ai.GetCurrentTools(sideReq)))
 }
 
+func TestAnswerFromUsesCurrentModelAndEffort(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	thinker, model := registerThinker(t, r)
+	sess := openTestSession(t, r)
+	requests := make(chan struct {
+		model    string
+		thinking ai.ThinkingLevel
+	}, 1)
+	thinker.SetResponses([]ai.FauxResponseStep{
+		ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, m *ai.Model) (ai.AssistantMessage, error) {
+			requests <- struct {
+				model    string
+				thinking ai.ThinkingLevel
+			}{m.ProviderMeta.ProviderID + "/" + m.ID, o.Thinking}
+			return ai.FauxAssistantMessage(ai.FauxContentString("the answer"), ai.FauxAssistantMessageOptions{}), nil
+		}),
+	})
+
+	require.NoError(t, r.SetModel(t.Context(), sess, model))
+	require.NoError(t, sess.SetEffort(HighEffort))
+	_, _, err := r.AnswerFrom(t.Context(), sess, sideQuestion)
+	require.NoError(t, err)
+
+	got := <-requests
+	assert.Equal(t, model, got.model)
+	assert.Equal(t, ai.ThinkingLevelHigh, got.thinking)
+}
+
 func TestAnswerFromCarriesTheSessionIDWithoutContinuation(t *testing.T) {
 	r, faux := newTestRuntime(t, newSandbox(t))
 	opts := make(chan ai.StreamOptions, 1)
