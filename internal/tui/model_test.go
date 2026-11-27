@@ -712,7 +712,7 @@ func TestSessionChangedRestoresHistory(t *testing.T) {
 		"", "κ Worked for 5s",
 		"", "• Read 2 files", "  ↳ d.go · 2 lines", "  ↳ e.go · 4 lines",
 	}, body(m))
-	assert.Equal(t, "        ▄ ▄", screen(m)[0], "the header stays first")
+	assert.Equal(t, "        ▗▛▜▖", screen(m)[0], "the header stays first")
 }
 
 func TestSessionChangedClearsTranscript(t *testing.T) {
@@ -754,7 +754,7 @@ func TestFollowsTailUntilScrolledUp(t *testing.T) {
 func TestHeaderShowsVersion(t *testing.T) {
 	m, _ := newTestModel(t, 30, 30)
 	assert.Contains(t, screen(m), "  kopi v1.2.3")
-	assert.Equal(t, "        ▄ ▄", screen(m)[0])
+	assert.Equal(t, "        ▗▛▜▖", screen(m)[0])
 }
 
 // submitText types text and presses Enter, returning the key's command.

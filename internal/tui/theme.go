@@ -17,8 +17,8 @@ import (
 // theme maps semantic roles to colours; call sites use roles, never hex.
 type theme struct {
 	accent, success, error, warning, muted, dim, text, userMessageBg, userCommandBg color.Color
-	// heading, link and code colour assistant markdown; codeTheme names the
-	// Chroma style for fenced code.
+	// heading, link and code colour assistant markdown, and heading and link
+	// also the header art; codeTheme names the Chroma style for fenced code.
 	heading, link, code color.Color
 	codeTheme           string
 	// codeFormatter is the Chroma formatter for fenced code: terminal16m for

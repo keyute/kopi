@@ -241,7 +241,7 @@ type Controller struct {
 	// side requests and ended workflow agents.
 	spent pigruntime.Usage
 	// model is the session model: Config.Model, or the runtime's default once resolved.
-	model string
+	model  string
 	sessID string
 	// dirsToldBy is how many entries of dirs each session of this run has
 	// read, so a session resumed later is not told them again; queue guards it.
