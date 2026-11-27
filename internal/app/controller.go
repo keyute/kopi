@@ -1068,7 +1068,7 @@ func (c *Controller) Status() Status {
 		}
 	}
 	c.queue.Unlock()
-	s.Foreground = c.cfg.Tasks.Foreground()
+	s.ForegroundSince = c.cfg.Tasks.ForegroundSince()
 	s.Limits = c.limits.get()
 	return s
 }

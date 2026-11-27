@@ -142,7 +142,7 @@ Defaults; change them with [`keys`](configuration.md#keys).
 - Up at the top of the input pulls queued prompts back into it for editing (not your commands); with nothing queued it browses input history, and Down goes back.
 - Down from the last line of the input, with no newer history entry, moves into the [agent rows](subagents.md#agent-rows) under the status line: Up and Down move, Enter opens that session's view, `x` stops the selected subagent or workflow (a workflow's row opens its [progress dialog](workflows.md#progress-dialog)), Esc or typing returns to the input.
 - Esc interrupts the running turn of the session whose view is open: the main agent's in the main view, only that subagent's run in a [subagent's view](subagents.md#views). It never acts on another session. It leaves your [commands](#your-own-commands) alone; with no turn running it stops the command that runs.
-- The row above the input, in priority order: `Waiting for you…` while an approval, question or plan dialog is open; `<Verb>… <elapsed>` (`Brewing… 12s`) while the open view's turn runs; in the main view, Kopi's own activity such as `Connecting to MCP servers…` or `Logging in to <provider>…`; `2 agents, 1 workflow, 1 shell still running` in the main view while the main agent is idle and background tasks, subagents or [workflows](workflows.md) run.
+- The row above the input, in priority order: `Waiting for you…` while an approval, question or plan dialog is open; `<Verb>… <elapsed>` (`Brewing… 12s`) while the open view's turn runs; in the main view, Kopi's own activity such as `Connecting to MCP servers…` or `Logging in to <provider>…`, once it has lasted 2 seconds; `2 agents, 1 workflow, 1 shell still running` in the main view while the main agent is idle and background tasks, subagents or [workflows](workflows.md) run.
 - A turn ends with `κ Brewed for 41s`, `κ Interrupted after 12s` or `κ Failed after 12s` followed by the error.
 - Each turn has its own row and time, including a turn started by a task's end. The time is wall time and includes time spent waiting on an approval.
 - After an interrupt, a task's end starts no turn until the next prompt; see [background tasks](tools.md#background-tasks).
@@ -151,7 +151,7 @@ Defaults; change them with [`keys`](configuration.md#keys).
 - Ctrl+D exits when the input is empty.
 - Shift+Tab switches between plan and execute.
 - Ctrl+B moves the running foreground `Bash` command to the background, where it keeps running as a [task](tools.md#background-tasks). It moves your running [command](#your-own-commands) the same way.
-  - While one runs, the working row shows `ctrl+b to background`.
+  - Once one has run 2 seconds, the working row shows `ctrl+b to background`.
   - With none running, Ctrl+B keeps its meaning in the input.
 - Ctrl+G, while an [`ExitPlanMode`](tools.md#exitplanmode) plan is open, opens the plan file in `$VISUAL`, else `$EDITOR`.
 - Ctrl+V pastes text or an image from the clipboard.
@@ -252,7 +252,7 @@ The bullet is green for a call that succeeded, yellow for one you or a rule refu
 - An opened result is the model's text, so it includes notices written to the model, such as `use offset=2001 to continue`. A `Read` row shows its line numbers right-aligned to the widest, without the padding the model receives.
 - An edit's lines show without surrounding context or line numbers.
 - Colour in command output is not kept.
-- Only the row's title line opens and closes it; scroll up to close a long body.
+- Only the row's title line and its `↳` line open and close it; scroll up to close a long body.
 
 In a reply, HTML is shown as written, a line break inside a paragraph is kept, a link is shown as its text with the URL in parentheses and an image as its text and URL, without a title, and footnotes are not supported: a `[^1]` reads as a link reference. A table is boxed and as wide as its content; one wider than the terminal wraps its cells, with a rule between rows. A table too narrow for one cell per column is shown as pipe text.
 
@@ -303,14 +303,14 @@ A command is a shaded block: `!` and the command, a status line under it, then t
 | Status line | Meaning |
 | --- | --- |
 | `queued` | Waiting for an earlier command |
-| `running 12s · ctrl+b to background · esc to stop` | Running |
+| `running 12s · ctrl+b to background · esc to stop` | Running; the keys show once it has run 2 seconds |
 | `exit 0 · 12s` | Finished; `· unread` is added while it is above the input |
 | `stopped after 12s` | You stopped it; `· unread` is added while it is above the input |
 | `moved to background after 12s` | You moved it to the background |
 
 ## Mouse
 
-- Click a folded group to open it, and a row that [opens](#transcript) to open or close it. Only the row's title line takes the click.
+- Click a folded group to open it, and a row that [opens](#transcript) to open or close it. The row's title line and the `↳` line under it take the click; the output it opens to does not.
 - Drag in the transcript to select text; it is copied on release. Double-click selects a word, triple-click a line.
 - Drag in the input to select text; it is copied on release. A click places the cursor. Double-click selects a word, triple-click the whole line across wraps.
 - Dragging after a double- or triple-click extends the selection by words or lines.

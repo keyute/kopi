@@ -130,7 +130,7 @@ func TestRealTasksDrainCompletionDuringSessionTeardown(t *testing.T) {
 			}
 			wait(t, returned)
 			assert.Empty(t, tasks.List())
-			assert.False(t, tasks.Foreground())
+			assert.True(t, tasks.ForegroundSince().IsZero())
 			assert.Empty(t, h.queuedNotices())
 			if operation == "close" {
 				assert.Empty(t, h.c.Status().SessionID)

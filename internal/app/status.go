@@ -25,10 +25,10 @@ type Status struct {
 	// Sandboxed that it runs them under the OS sandbox.
 	Shell, Sandboxed bool
 	// Shells, Agents and Workflows count the running background shell commands,
-	// subagents and workflows; Foreground reports that a command runs in the
-	// foreground, which Background can move.
+	// subagents and workflows; ForegroundSince is when the earliest command running
+	// in the foreground began, zero when none, and Background can move it.
 	Shells, Agents, Workflows int
-	Foreground                bool
+	ForegroundSince           time.Time
 	// TotalCost is the current session's whole estimated spend in dollars: the
 	// main session, its subagents, the workflow agents that ended, and the
 	// classifier, WebFetch and WebSearch requests.
