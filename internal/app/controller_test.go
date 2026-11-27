@@ -3955,3 +3955,23 @@ func TestEffortKeyOpensNewSessionsOnly(t *testing.T) {
 	assertSwitchDone(t, h)
 	assert.Equal(t, "high", h.c.Agents()[0].Effort)
 }
+
+func TestEffortKeyDoesNotOverrideContinuedSession(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	rt := pigruntimetest.NewRuntime(t, sb)
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: fauxProvider, Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, rt.RegisterProvider(thinker.Provider()))
+	cfg := Config{Model: fauxProvider + "/thinker", Effort: pigruntime.LowEffort}
+	h := buildHarness(t, rt, thinker, sb, cfg)
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	_, err := h.c.Submit(t.Context(), Main, "/effort high")
+	require.NoError(t, err)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("answer")})
+	h.turn(t, "question")
+	savedID := h.c.Status().SessionID
+
+	next := buildHarness(t, rt, thinker, sb, cfg)
+	require.NoError(t, next.c.Open(t.Context(), OpenRequest{Continue: true}))
+	assert.Equal(t, savedID, next.c.Status().SessionID)
+	assert.Equal(t, "high", next.c.Agents()[0].Effort)
+}

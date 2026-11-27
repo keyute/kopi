@@ -256,7 +256,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	}
 	effort, err := pigruntime.ParseEffort(resolved.Config.Effort)
 	if err != nil {
-		return fmt.Errorf("failed to use effort from %s: %w", resolved.Origins["effort"], err)
+		return fmt.Errorf("failed to use %q in %s: %w", "effort", paths.ConfigFile, err)
 	}
 	fullscreen := !printOnly && isTerminal(cmd.InOrStdin()) && isTerminal(cmd.OutOrStdout())
 	var prompt string
