@@ -55,7 +55,7 @@ func NewAgent(defs []subagent.Definition, agents Agents) Tool {
 			"properties": map[string]any{
 				"description": map[string]any{
 					"type":        "string",
-					"description": "A short label for the task, shown to the user.",
+					"description": "Task title: ≤6 words; 36 display columns visible.",
 				},
 				"prompt": map[string]any{
 					"type":        "string",
