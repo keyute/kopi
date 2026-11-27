@@ -39,7 +39,7 @@ func translate(ev agent.AgentEvent) (event.Event, bool) {
 			return event.ThinkingDelta{Text: d.Delta}, true
 		}
 	case agent.MessageEndEvent:
-		if a := ev.Message.Assistant; a != nil && !provisionalReply(a) {
+		if a := ev.Message.Assistant; a != nil && !provisionalReply(a) && a.StopReason != ai.StopReasonAborted {
 			return event.ReplyEnd{Text: assistantText(a)}, true
 		}
 	case agent.ToolExecutionStartEvent:

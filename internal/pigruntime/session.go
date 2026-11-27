@@ -464,14 +464,17 @@ func (s *Session) Subscribe(fn func(event.Event)) func() {
 	s.listenersMu.Unlock()
 	var j textJoiner
 	unsubscribe := s.inner.Subscribe(func(ev agent.AgentEvent) {
-		// PiG emits recovery edits in order, including before a resumed prompt.
+		// PiG emits recovery edits in order, including before a resumed prompt
+		// (PiG v0.8.0; recheck on a bump).
 		// Snapshot at the edit ID; the session lock can be held by PiG here.
 		if appended, ok := ev.(agent.EntryAppendedEvent); ok {
 			var entry struct{ Type, ID string }
 			if json.Unmarshal(appended.Entry, &entry) == nil && entry.Type == "context_edit" {
-				if text, err := branchCopyTarget(s.inner.SessionManager().GetBranch(entry.ID), s.sendBoundary.Load()); err == nil {
-					fn(event.CopyTarget{Text: text})
+				text, err := branchCopyTarget(s.inner.SessionManager().GetBranch(entry.ID), s.sendBoundary.Load())
+				if err != nil {
+					slog.Warn("failed to read copy target", "error", err)
 				}
+				fn(event.CopyTarget{Text: text})
 			}
 		}
 		if e, ok := j.translate(ev); ok {
@@ -715,12 +718,15 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	_, _ = s.inner.ClearQueue()
 	s.inner.Agent().ClearSteeringQueue()
 	s.inner.Agent().TakePendingNextTurn()
-	// PiG can omit error or length responses with context edits after MessageEnd.
+	// PiG can omit error or length responses with context edits after MessageEnd
+	// (PiG v0.8.0; recheck on a bump).
 	// Only the retained branch is authoritative once delivery and recovery settle.
 	if provisional {
-		if text, branchErr := branchCopyTarget(s.inner.SessionManager().GetBranch(), nil); branchErr == nil {
-			s.notify(event.CopyTarget{Text: text})
+		text, branchErr := branchCopyTarget(s.inner.SessionManager().GetBranch(), nil)
+		if branchErr != nil {
+			slog.Warn("failed to read copy target", "error", branchErr)
 		}
+		s.notify(event.CopyTarget{Text: text})
 	}
 	res := SendResult{Sent: sent, Undelivered: handed, UndeliveredNotices: pending}
 	s.effortMu.Lock()

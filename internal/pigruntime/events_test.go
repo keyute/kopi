@@ -86,6 +86,7 @@ func TestTranslate(t *testing.T) {
 		{name: "assistant message end", in: agent.MessageEndEvent{Message: agent.AgentMessage{Assistant: &agent.AssistantMessage{}}}, want: event.ReplyEnd{}},
 		{name: "mixed text and tools", in: agent.MessageEndEvent{Message: agent.AgentMessage{Assistant: &agent.AssistantMessage{Content: []ai.AssistantContentBlock{ai.TextContent{Text: "before"}, ai.ToolCall{}, ai.TextContent{}, ai.TextContent{Text: "after"}}}}}, want: event.ReplyEnd{Text: "before\n\nafter"}},
 		{name: "error provisional", in: agent.MessageEndEvent{Message: agent.AgentMessage{Assistant: &agent.AssistantMessage{StopReason: ai.StopReasonError}}}},
+		{name: "aborted is not a copy target", in: agent.MessageEndEvent{Message: agent.AgentMessage{Assistant: &agent.AssistantMessage{StopReason: ai.StopReasonAborted, Content: []ai.AssistantContentBlock{ai.TextContent{Text: "cut"}}}}}},
 		{name: "length provisional", in: agent.MessageEndEvent{Message: agent.AgentMessage{Assistant: &agent.AssistantMessage{StopReason: ai.StopReasonLength}}}},
 		{name: "user message end dropped", in: agent.MessageEndEvent{Message: agent.AgentMessage{User: &agent.UserMessage{}}}},
 		{name: "custom message end dropped", in: agent.MessageEndEvent{Message: agent.AgentMessage{Custom: map[string]any{"role": agent.RoleCustom}}}},

@@ -606,9 +606,10 @@ func unwrap(ev event.Event) (string, event.Event) {
 // session's view, which it returns; nil when no view changed.
 func (m *model) apply(ev event.Event) *view {
 	id, inner := unwrap(ev)
-	if _, ok := inner.(event.CopyTarget); ok {
+	switch inner.(type) {
+	case event.CopyTarget, event.ReplyEnd:
 		m.sweep(ev)
-	} else {
+	default:
 		m.sweep(inner)
 	}
 	ev = inner

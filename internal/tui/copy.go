@@ -35,11 +35,11 @@ func (m *model) showCopy() tea.Cmd {
 	c := &copyDialog{
 		d:       &dialog{title: "Copy", hints: []string{binding(m.keys.submit, "copy"), binding(m.keys.dismiss, "cancel")}},
 		texts:   []string{text},
-		labels:  []string{"Whole reply · " + lineCount(text)},
+		labels:  []string{"Whole reply · " + lines(text)},
 		session: m.shown,
 	}
 	for _, b := range blocks {
-		label := lineCount(b.text) + " · " + firstLine(clean(b.text))
+		label := lines(b.text) + " · " + firstLine(clean(b.text))
 		if b.lang != "" {
 			label = clean(b.lang) + " · " + label
 		}
@@ -49,11 +49,9 @@ func (m *model) showCopy() tea.Cmd {
 	return nil
 }
 
-func lineCount(s string) string {
-	if n := strings.Count(s, "\n") + 1; n > 1 {
-		return fmt.Sprintf("%d lines", n)
-	}
-	return "1 line"
+// lines is the line count of s, not counting one trailing line break.
+func lines(s string) string {
+	return countText(strings.Count(strings.TrimSuffix(s, "\n"), "\n")+1, "line")
 }
 
 // firstLine is the first line of s that is not blank, trimmed.
@@ -91,8 +89,6 @@ func (c *copyDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	return cmd, true
 }
 
-type viewChangedMsg struct{}
-
 // seen ends the dialog on a view or session switch or replacement of its copy target.
 func (c *copyDialog) seen(m *model, msg tea.Msg) bool {
 	if m.shown != c.session {
@@ -103,8 +99,17 @@ func (c *copyDialog) seen(m *model, msg tea.Msg) bool {
 	}
 	if ev, ok := msg.(event.Event); ok {
 		id, inner := unwrap(ev)
-		if target, ok := inner.(event.CopyTarget); ok && id == c.session && target.Text != c.texts[0] {
-			return false
+		if id == c.session {
+			switch inner := inner.(type) {
+			case event.CopyTarget:
+				if inner.Text != c.texts[0] {
+					return false
+				}
+			case event.ReplyEnd:
+				if strings.TrimSpace(inner.Text) != "" && inner.Text != c.texts[0] {
+					return false
+				}
+			}
 		}
 	}
 	return true

@@ -151,7 +151,7 @@ func branchCopyTarget(entries []coding.SessionEntry, boundary *string) (string, 
 		return "", err
 	}
 	for i := len(msgs) - 1; i >= 0; i-- {
-		if a := msgs[i].Assistant; a != nil {
+		if a := msgs[i].Assistant; a != nil && !interrupted(a) {
 			if text := assistantText(a); strings.TrimSpace(text) != "" {
 				return text, nil
 			}
@@ -204,7 +204,9 @@ func history(msgs []agent.AgentMessage) []event.Event {
 					afterText = false
 				}
 			}
-			out = append(out, event.ReplyEnd{Text: assistantText(m.Assistant)})
+			if !interrupted(m.Assistant) {
+				out = append(out, event.ReplyEnd{Text: assistantText(m.Assistant)})
+			}
 			// PiG streams the entire assistant message before executing tools.
 			if len(toolStarts) > 0 {
 				out = append(out, toolStarts...)
@@ -239,13 +241,18 @@ func history(msgs []agent.AgentMessage) []event.Event {
 	return out
 }
 
-// storedTurnEnd mirrors Send's outcome for a stored message. A transcript
-// written before PiG v0.8.0 holds an abort during a tool as StopReason "error"
-// with "context canceled", not "aborted".
+// interrupted reports that the user stopped the message. A transcript written
+// before PiG v0.8.0 holds an abort during a tool as StopReason "error" with
+// "context canceled", not "aborted".
+func interrupted(m *agent.AssistantMessage) bool {
+	return m.StopReason == ai.StopReasonAborted ||
+		m.StopReason == ai.StopReasonError && m.ErrorMessage == context.Canceled.Error()
+}
+
+// storedTurnEnd mirrors Send's outcome for a stored message.
 func storedTurnEnd(m *agent.AssistantMessage) (event.TurnEnd, bool) {
 	switch {
-	case m.StopReason == ai.StopReasonAborted,
-		m.StopReason == ai.StopReasonError && m.ErrorMessage == context.Canceled.Error():
+	case interrupted(m):
 		return event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}}, true
 	case m.StopReason == ai.StopReasonError:
 		return event.TurnEnd{Outcome: event.Outcome{Status: event.Failed, Message: pigTexts.Replace(m.ErrorMessage)}}, true

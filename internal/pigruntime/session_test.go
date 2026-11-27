@@ -1076,6 +1076,31 @@ func TestRetainedProvisionalUsesCopyTargetNotReplyEnd(t *testing.T) {
 	}
 }
 
+func TestNoCopyTargetWithoutRetainedProvisionalText(t *testing.T) {
+	for name, step := range map[string]ai.FauxResponseStep{
+		"successful": reply("done"),
+		"blank":      ai.FauxAssistantMessage(ai.FauxContentString(" \n"), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonError), ErrorMessage: "provider exploded"}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, faux := newTestRuntime(t, newSandbox(t))
+			var settings coding.Settings
+			require.NoError(t, json.Unmarshal([]byte(`{"compaction":{"enabled":false}}`), &settings))
+			r.svcs.SettingsManager().ApplyOverrides(settings)
+			s := openTestSession(t, r)
+			var targets []event.CopyTarget
+			t.Cleanup(s.Subscribe(func(ev event.Event) {
+				if target, ok := ev.(event.CopyTarget); ok {
+					targets = append(targets, target)
+				}
+			}))
+			faux.SetResponses([]ai.FauxResponseStep{step})
+			_, err := s.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
+			require.NoError(t, err)
+			assert.Empty(t, targets)
+		})
+	}
+}
+
 func TestRetryOmissionSkipsUnsettledLengthReply(t *testing.T) {
 	r, faux := newTestRuntime(t, newSandbox(t))
 	var settings coding.Settings

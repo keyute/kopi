@@ -53,6 +53,8 @@ func (m *model) viewOf(id string) *view {
 	return v
 }
 
+type viewChangedMsg struct{}
+
 // show makes session id's view the one shown and the one human input acts on.
 // An id with no view that is not in m.agents is ignored. The command keeps the
 // spinner ticking when the view has a working row.
@@ -64,11 +66,8 @@ func (m *model) show(id string) tea.Cmd {
 	}
 	wasShown := m.tickWanted()
 	v := m.viewOf(id)
-	changed := m.shown != id
 	m.shown = id
-	if changed {
-		m.sweep(viewChangedMsg{})
-	}
+	m.sweep(viewChangedMsg{})
 	m.clearSelection()
 	m.relayout()
 	m.composer.restore(v.unsent)

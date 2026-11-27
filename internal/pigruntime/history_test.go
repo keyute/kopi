@@ -19,6 +19,7 @@ import (
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
+	"github.com/keyute/kopi/internal/transcript"
 )
 
 // unstreamed merges consecutive TextDeltas and drops ThinkingDeltas, which
@@ -303,7 +304,6 @@ func TestHistoryEndsFailedAndInterruptedTurns(t *testing.T) {
 			event.ReplyEnd{},
 			event.ToolStart{CallID: "call-1", Name: "Probe", Args: "{}"},
 			event.ToolEnd{CallID: "call-1", Name: "Probe", Args: "{}", Output: context.Canceled.Error(), IsError: true},
-			event.ReplyEnd{},
 			event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}},
 		}, resume(t, r, sess.ID(), block).History())
 	})
@@ -402,6 +402,39 @@ func TestBranchCopyTargetExcludesOnlyActiveProvisionalMessages(t *testing.T) {
 	got, err = branchCopyTarget(manager.GetBranch(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, "unsettled", got)
+}
+
+func TestBranchCopyTargetEmptyBoundaryOmitsProvisionalReply(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	s := openTestSession(t, r)
+	manager := s.inner.SessionManager()
+	appendHistoryMessage(t, manager, `{"role":"user","content":"go","timestamp":1}`)
+	appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"unsettled"}],"stopReason":"error","timestamp":2}`)
+	boundary := ""
+	got, err := branchCopyTarget(manager.GetBranch(), &boundary)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestInterruptedRepliesAreNotCopyTargets(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	s := openTestSession(t, r)
+	manager := s.inner.SessionManager()
+	appendHistoryMessage(t, manager, `{"role":"user","content":"first","timestamp":1}`)
+	appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"earlier"}],"stopReason":"stop","timestamp":2}`)
+	appendHistoryMessage(t, manager, `{"role":"user","content":"second","timestamp":3}`)
+	appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"cut"}],"stopReason":"aborted","timestamp":4}`)
+	appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"cut by tool"}],"stopReason":"error","errorMessage":"context canceled","timestamp":5}`)
+
+	got, err := branchCopyTarget(manager.GetBranch(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "earlier", got)
+
+	var tr transcript.Transcript
+	tr.Restore(s.History())
+	assert.Equal(t, "earlier", tr.LastReply())
+	assert.NotContains(t, s.History(), event.Event(event.ReplyEnd{Text: "cut"}))
+	assert.NotContains(t, s.History(), event.Event(event.ReplyEnd{Text: "cut by tool"}))
 }
 
 func TestHistoryLatestContextEditWins(t *testing.T) {
@@ -647,12 +680,12 @@ func TestHistoryMapsStoredShapes(t *testing.T) {
 		{
 			name: "aborted",
 			msgs: []agent.AgentMessage{assistant(ai.StopReasonAborted, "", text("partial"))},
-			want: []event.Event{event.TextDelta{Text: "partial"}, event.ReplyEnd{Text: "partial"}, event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}}},
+			want: []event.Event{event.TextDelta{Text: "partial"}, event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}}},
 		},
 		{
 			name: "aborted as written before PiG v0.8.0",
 			msgs: []agent.AgentMessage{assistant(ai.StopReasonError, context.Canceled.Error(), text("partial"))},
-			want: []event.Event{event.TextDelta{Text: "partial"}, event.ReplyEnd{Text: "partial"}, event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}}},
+			want: []event.Event{event.TextDelta{Text: "partial"}, event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

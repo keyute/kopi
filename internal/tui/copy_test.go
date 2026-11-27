@@ -21,6 +21,13 @@ func runCopyCommand(m *model, c *fakeController) tea.Cmd {
 	return submitText(m, "/copy")
 }
 
+// assertNotCopied checks the status flash m.copy sets at once; the clipboard
+// itself is only written by the returned command.
+func assertNotCopied(t *testing.T, m *model) {
+	t.Helper()
+	assert.NotContains(t, strings.Join(screen(m), "\n"), "Copied")
+}
+
 func TestCopyWithNoReplyFlashes(t *testing.T) {
 	m, c := newTestModel(t, 60, 20)
 
@@ -28,7 +35,7 @@ func TestCopyWithNoReplyFlashes(t *testing.T) {
 
 	assert.Nil(t, m.front())
 	assert.Contains(t, strings.Join(screen(m), "\n"), "no reply to copy")
-	assert.Empty(t, m.clip.(*fakeClipboard).written)
+	assertNotCopied(t, m)
 }
 
 func TestCopyOfAReplyWithoutCodeCopiesItWhole(t *testing.T) {
@@ -124,7 +131,7 @@ func TestCopyPickerClosesOnlyForItsReplacedTarget(t *testing.T) {
 			}
 			assert.Nil(t, m.front())
 			press(m, enter)
-			assert.Empty(t, m.clip.(*fakeClipboard).written)
+			assertNotCopied(t, m)
 		})
 	}
 }
@@ -142,7 +149,7 @@ func TestCopyPickerClosesWhenPlanShowsMain(t *testing.T) {
 	send(m, event.PlanEnded{Token: 1})
 	assert.Nil(t, m.front())
 	press(m, enter)
-	assert.Empty(t, m.clip.(*fakeClipboard).written)
+	assertNotCopied(t, m)
 }
 
 func TestCopyEscapeCopiesNothing(t *testing.T) {
@@ -153,7 +160,44 @@ func TestCopyEscapeCopiesNothing(t *testing.T) {
 	press(m, escape)
 
 	assert.Nil(t, m.front())
-	assert.Empty(t, m.clip.(*fakeClipboard).written)
+	assertNotCopied(t, m)
+}
+
+func TestCopyPickerClosesForANewReply(t *testing.T) {
+	m, c := newTestModel(t, 52, 24)
+	reply(m, "```sh\necho old\n```")
+	runCopyCommand(m, c)
+	require.NotNil(t, m.front())
+
+	send(m, event.ReplyEnd{Text: "  \n"})
+	require.NotNil(t, m.front())
+	send(m, event.ReplyEnd{Text: "```sh\necho old\n```"})
+	require.NotNil(t, m.front())
+	send(m, event.Session{ID: "other", Event: event.ReplyEnd{Text: "other"}})
+	require.NotNil(t, m.front())
+	send(m, event.ReplyEnd{Text: "newer"})
+	assert.Nil(t, m.front())
+	press(m, enter)
+	assertNotCopied(t, m)
+}
+
+func TestCopyPickerClosesWhenTheSessionChanges(t *testing.T) {
+	m, c := newTestModel(t, 52, 24)
+	reply(m, "```sh\necho old\n```")
+	runCopyCommand(m, c)
+	require.NotNil(t, m.front())
+
+	send(m, event.SessionChanged{})
+	assert.Nil(t, m.front())
+	press(m, enter)
+	assertNotCopied(t, m)
+}
+
+func TestCopyCountsLinesWithoutTheTrailingBreak(t *testing.T) {
+	assert.Equal(t, "1 line", lines("a"))
+	assert.Equal(t, "1 line", lines("a\n"))
+	assert.Equal(t, "2 lines", lines("a\nb\n"))
+	assert.Equal(t, "3 lines", lines("a\n\nb"))
 }
 
 func TestCopyLabelStaysOneRow(t *testing.T) {

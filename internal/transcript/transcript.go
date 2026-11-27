@@ -16,7 +16,8 @@ type Transcript struct {
 	// boundary is the number of items restored from history; stretches never
 	// cross it and groups before it are sealed.
 	boundary int
-	// reply is the last ended text that was not blank.
+	// reply is the copy target: the last ReplyEnd text that was not blank, or what
+	// CopyTarget last set.
 	reply string
 }
 
@@ -141,8 +142,9 @@ func (t *Transcript) Apply(ev event.Event) {
 	}
 }
 
-// LastReply is the raw text of the last assistant message that ended with text
-// other than whitespace, or "" when there is none.
+// LastReply is the copy target: the raw text of the last reply that ended with
+// text other than whitespace, as CopyTarget last corrected it, or "" when there
+// is none.
 func (t *Transcript) LastReply() string { return t.reply }
 
 // Restore must be called on an empty Transcript.
