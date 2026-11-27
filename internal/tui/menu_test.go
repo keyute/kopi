@@ -934,3 +934,22 @@ func TestSkillListsAfterCommandsAndIsOnlyFilledIn(t *testing.T) {
 		})
 	}
 }
+
+func TestEnterOnTextCommandFillsItInAndTypedQuestionSubmitsAsTyped(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, c := newMenuModel(t, 60, 30)
+		c.commands = append(c.commands, app.Command{Name: "btw", Summary: "ask about the session", Text: true})
+		keys(m, "/bt")
+
+		settle(m, press(m, enter))
+
+		assert.Empty(t, c.submitted)
+		assert.Equal(t, "/btw ", m.composer.value())
+
+		settle(m, keys(m, "what changed"))
+		assert.Zero(t, m.menuHeight())
+		settle(m, press(m, enter))
+
+		assert.Equal(t, []string{"/btw what changed"}, c.submitted)
+	})
+}

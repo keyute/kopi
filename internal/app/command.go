@@ -27,6 +27,9 @@ type Command struct {
 	Typed bool
 	// Optional reports that the command also runs without that argument.
 	Optional bool
+	// Text reports that the command's argument is free text, so a frontend fills
+	// the command in and does not run it without one.
+	Text bool
 	// Skill reports that the command is a skill, which loads with the prompt it
 	// is typed in.
 	Skill bool
@@ -61,6 +64,7 @@ func commandTable() []command {
 		{Command: Command{Name: "resume", Summary: "resume a session"}, run: (*Controller).resumeCommand, args: (*Controller).sessionCandidates},
 		{Command: Command{Name: "login", Summary: "log in to a model provider"}, run: (*Controller).loginCommand, args: (*Controller).loginCandidates},
 		{Command: Command{Name: "logout", Summary: "remove a model provider's stored credential"}, run: (*Controller).logoutCommand, args: (*Controller).logoutCandidates},
+		{Command: Command{Name: "btw", Summary: "ask about the session so far without adding to it", Text: true}, run: (*Controller).btwCommand},
 		{Command: Command{Name: "tasks", Summary: "list and stop background tasks"}, run: func(*Controller, context.Context, string) error {
 			return ErrShowTasks
 		}},

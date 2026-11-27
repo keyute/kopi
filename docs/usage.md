@@ -42,6 +42,7 @@ Commands in the fullscreen interface:
 | `/login <provider>` | Log in to a provider |
 | `/logout <provider>` | Remove a provider's stored credential |
 | `/tasks` | List background tasks, [subagents](subagents.md) and [workflows](workflows.md), show one's output, open a subagent's view or a workflow's [progress dialog](workflows.md#progress-dialog) and stop them |
+| `/btw <question>` | Ask about the session so far without adding to it, [answered in a dialog](#btw) |
 | `/usage` | Show the context and what holds it, the [plan limits](providers.md#plan-limits), the tokens and estimated cost by model, the prompt cache, compaction and time, [as a dialog](#usage-1) |
 | `/skill:<name>` | Load a skill with the prompt ([skills](skills.md)) |
 | `/quit` | Exit |
@@ -58,6 +59,28 @@ The whole word `ultrathink`, in any case, in a prompt to the main agent raises i
 - Ctrl+Enter keeps the raise, as it continues the turn. A turn that starts because a task ended or queued input followed a completed turn is not raised unless its own prompt says `ultrathink`.
 - No effect, and no highlight, on a model that does not reason.
 - A crash mid-turn leaves the raised level in the session.
+
+### /btw
+
+```text
+  Side question
+
+  what was the name of that config file again?
+
+  internal/config/ui.go. The key map is in Defaults(), lines 116-127.
+
+  esc to close
+```
+
+`/btw <question>` asks about the session so far and shows the answer in a dialog. Neither the question nor the answer is added to the session. A bare `/btw` is refused, and picking `/btw` in the menu fills it in and waits for the question.
+
+- It works while a turn runs and does not interrupt it. The answer comes from what the main session already holds, except the reply still being written.
+- No tool runs; a tool call in the reply is ignored. The reply is one answer, whole rather than streamed, by the session's model at its effort.
+- The whole context is sent once more, at the provider's cache-read price while its prompt cache is warm. The request is counted in `$total` and in `/usage`'s total.
+- Esc cancels the request while it is answering and closes the dialog after. A closed answer cannot be reopened. An approval, a question or a plan that arrives covers the dialog, and it comes back when that ends. PgUp/PgDn scroll a long answer.
+- A failed request shows its error in place of the answer.
+- Left out: follow-up questions and a history of earlier ones; asking about a subagent's transcript, as it always asks about the main session, also from a subagent's view; print mode (`-p`).
+- A session holding more images than the model takes per request may be refused.
 
 ### /usage
 

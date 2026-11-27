@@ -191,6 +191,10 @@ type Controller struct {
 	// titleCtx ends when Close starts, which stops a title request in flight.
 	titleCtx  context.Context
 	titleStop context.CancelFunc
+	// sideSeq numbers the side questions; sideStop cancels the latest, nil when
+	// none was asked or it was stopped. mu guards both.
+	sideSeq  int
+	sideStop context.CancelFunc
 	// titleCommit serialises title persistence and announcement with opening
 	// and installing a replacement, including a resume of the same session.
 	// It is never held across wg.Wait: title workers need it to finish.
@@ -1120,6 +1124,7 @@ func (c *Controller) Close(ctx context.Context) error {
 	c.queue.Lock()
 	c.mu.Lock()
 	c.closed = true
+	c.stopSideLocked()
 	c.main.notices = nil
 	c.approvals = nil
 	sess, unsubscribe, w, emit, login := c.main.sess, c.main.unsubscribe, c.main.work, c.main.emit, c.login
@@ -1405,6 +1410,7 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	c.main.told, c.main.dirsTold = "", c.dirsToldBy[id]
 	c.titled = sess.Name() != ""
 	c.spent = pigruntime.Usage{}
+	c.stopSideLocked()
 	c.deferred = nil
 	c.mu.Unlock()
 	c.queue.Unlock()

@@ -48,6 +48,8 @@ type Controller interface {
 	History() []string
 	Status() app.Status
 	Usage() app.Usage
+	// StopSideQuestion cancels the running side question with that id.
+	StopSideQuestion(id int)
 	Agents() []app.AgentStatus
 	Commands() []app.Command
 	Spans(session, text string) []app.Span
