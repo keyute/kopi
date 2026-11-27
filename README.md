@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/kopi.png" width="160" alt="Kopi mascot, a bag of iced kopi"></p>
+
 # Kopi
 
 Kopi is a coding-agent CLI built on [PiG](https://github.com/MichaelKinsy/PiG).
