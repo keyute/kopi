@@ -11,34 +11,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"golang.org/x/term"
-)
 
-// TrustRequest is what the trust prompt shows. Every field may come from an
-// untrusted file.
-type TrustRequest struct {
-	Folder string
-	// Parent is offered as a choice unless it is empty.
-	Parent string
-	// Servers has one line per server, such as "name: command args".
-	Servers []string
-	// Instructions are the paths of the folder's instruction files.
-	Instructions []string
-	// Skills are the paths of the folder's skill folders.
-	Skills []string
-}
-
-type TrustChoice int
-
-const (
-	TrustCancelled TrustChoice = iota
-	TrustFolder
-	TrustParent
-	TrustDeny
+	"github.com/keyute/kopi/internal/app"
 )
 
 // AskTrust asks whether to trust req's folder, before the main UI starts. The
-// cancel and interrupt keys and ctx's end return TrustCancelled.
-func AskTrust(ctx context.Context, in io.Reader, out io.Writer, opts Options, req TrustRequest) (TrustChoice, error) {
+// cancel and interrupt keys and ctx's end return app.TrustCancelled.
+func AskTrust(ctx context.Context, in io.Reader, out io.Writer, opts Options, req app.TrustRequest) (app.TrustChoice, error) {
 	m := newTrustModel(req, opts.Keys, opts.Themes)
 	p := tea.NewProgram(m, tea.WithInput(in), tea.WithOutput(out), tea.WithoutSignalHandler())
 	// Discard already queued input, not establish a render/readiness boundary.
@@ -46,7 +25,7 @@ func AskTrust(ctx context.Context, in io.Reader, out io.Writer, opts Options, re
 	// first draw; that timing limitation is accepted.
 	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 		if err := discardInput(f); err != nil {
-			return TrustCancelled, fmt.Errorf("failed to discard typed-ahead input before the trust prompt: %w", err)
+			return app.TrustCancelled, fmt.Errorf("failed to discard typed-ahead input before the trust prompt: %w", err)
 		}
 	}
 	// Started only once Run is certain: Quit blocks until Run reads it.
@@ -60,38 +39,38 @@ func AskTrust(ctx context.Context, in io.Reader, out io.Writer, opts Options, re
 		}
 	}()
 	if _, err := p.Run(); err != nil {
-		return TrustCancelled, fmt.Errorf("failed to run the trust prompt: %w", err)
+		return app.TrustCancelled, fmt.Errorf("failed to run the trust prompt: %w", err)
 	}
 	return m.choice, nil
 }
 
 type trustModel struct {
-	req           TrustRequest
+	req           app.TrustRequest
 	keys          keyMap
 	th            theme
 	themes        Themes
 	width, height int
 	dialog        *dialog
 	// choices[i] is what option i picks.
-	choices []TrustChoice
-	choice  TrustChoice
+	choices []app.TrustChoice
+	choice  app.TrustChoice
 	// body is the lists drawn for bodyWidth and bodyTheme, kept across renders.
 	body      []string
 	bodyWidth int
 	bodyTheme theme
 }
 
-func newTrustModel(req TrustRequest, keys map[string][]string, themes Themes) *trustModel {
+func newTrustModel(req app.TrustRequest, keys map[string][]string, themes Themes) *trustModel {
 	m := &trustModel{req: req, keys: newKeyMap(keys), themes: themes, th: themes.dark, dialog: &dialog{title: "Do you trust this folder?"}}
-	add := func(label string, c TrustChoice) {
+	add := func(label string, c app.TrustChoice) {
 		m.dialog.options = append(m.dialog.options, option{label: label})
 		m.choices = append(m.choices, c)
 	}
-	add("Yes, trust this folder", TrustFolder)
+	add("Yes, trust this folder", app.TrustFolder)
 	if req.Parent != "" {
-		add("Yes, trust the parent folder ("+oneLine(req.Parent)+")", TrustParent)
+		add("Yes, trust the parent folder ("+oneLine(req.Parent)+")", app.TrustParent)
 	}
-	add("No, don't trust", TrustDeny)
+	add("No, don't trust", app.TrustDeny)
 	return m
 }
 

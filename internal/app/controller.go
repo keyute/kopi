@@ -1,3 +1,5 @@
+// Package app is the controller that frontends drive: it opens and switches
+// sessions, queues prompts and answers, and reports what happens as events.
 package app
 
 import (
@@ -64,9 +66,6 @@ type Config struct {
 	// InstructionFallbacks are the file names read where AGENTS.md is missing,
 	// in an added directory too.
 	InstructionFallbacks []string
-	// Covers lists what a trust answer saved for dir would cover when Kopi starts
-	// there, as shown: the MCP servers and the skill folders; nil lists nothing.
-	Covers func(dir string) (servers, skills []string)
 	// Instructions are added to the system prompt in order: the global
 	// file's group first, then each root's.
 	Instructions []instruction.Group
