@@ -3931,27 +3931,7 @@ func TestPreCancelledFreshPromptKeepsItsExplicitRaise(t *testing.T) {
 	assert.Equal(t, 1, h.faux.CallCount())
 }
 
-func TestEffortKeyOpensNewSessionsOnly(t *testing.T) {
-	h := openThinkerHarness(t, Config{Effort: pigruntime.LowEffort})
-	assert.Equal(t, "low", h.c.Agents()[0].Effort)
-	_, err := h.c.Submit(t.Context(), Main, "/effort high")
-	require.NoError(t, err)
-	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("answer")})
-	h.turn(t, "question")
-	savedID := h.c.Status().SessionID
-
-	require.NoError(t, h.c.NewSession(t.Context()))
-	assert.Equal(t, "low", h.c.Agents()[0].Effort)
-
-	sessions := subscribeTo[event.SessionChanged](h.c)
-	_, err = h.c.Submit(t.Context(), Main, "/resume "+savedID)
-	require.NoError(t, err)
-	assert.Equal(t, savedID, receiveEvent(t, sessions).SessionID)
-	assertSwitchDone(t, h)
-	assert.Equal(t, "high", h.c.Agents()[0].Effort)
-}
-
-func TestEffortKeyDoesNotOverrideContinuedSession(t *testing.T) {
+func TestEffortKeyOpensNewContinuedAndResumedSessions(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	rt := pigruntimetest.NewRuntime(t, sb)
 	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: fauxProvider, Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
@@ -3959,14 +3939,40 @@ func TestEffortKeyDoesNotOverrideContinuedSession(t *testing.T) {
 	cfg := Config{Model: fauxProvider + "/thinker", Effort: pigruntime.LowEffort}
 	h := buildHarness(t, rt, thinker, sb, cfg)
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
-	_, err := h.c.Submit(t.Context(), Main, "/effort high")
-	require.NoError(t, err)
+	assert.Equal(t, "low", h.c.Agents()[0].Effort)
+	require.NoError(t, h.c.main.sess.SetEffort(pigruntime.HighEffort))
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("answer")})
 	h.turn(t, "question")
 	savedID := h.c.Status().SessionID
 
-	next := buildHarness(t, rt, thinker, sb, cfg)
-	require.NoError(t, next.c.Open(t.Context(), OpenRequest{Continue: true}))
-	assert.Equal(t, savedID, next.c.Status().SessionID)
-	assert.Equal(t, "high", next.c.Agents()[0].Effort)
+	continued := buildHarness(t, rt, thinker, sb, cfg)
+	require.NoError(t, continued.c.Open(t.Context(), OpenRequest{Continue: true}))
+	assert.Equal(t, savedID, continued.c.Status().SessionID)
+	assert.Equal(t, "low", continued.c.Agents()[0].Effort)
+
+	resumed := buildHarness(t, rt, thinker, sb, cfg)
+	require.NoError(t, resumed.c.Open(t.Context(), OpenRequest{ResumeID: savedID}))
+	assert.Equal(t, savedID, resumed.c.Status().SessionID)
+	assert.Equal(t, "low", resumed.c.Agents()[0].Effort)
+}
+
+func TestEffortCommandCarriesToNewAndResumedSessions(t *testing.T) {
+	h := openThinkerHarness(t, Config{Effort: pigruntime.LowEffort})
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("answer")})
+	h.turn(t, "question")
+	savedID := h.c.Status().SessionID
+	_, err := h.c.Submit(t.Context(), Main, "/effort high")
+	require.NoError(t, err)
+
+	require.NoError(t, h.c.NewSession(t.Context()))
+	assert.Equal(t, "high", h.c.Agents()[0].Effort)
+
+	_, err = h.c.Submit(t.Context(), Main, "/effort off")
+	require.NoError(t, err)
+	sessions := subscribeTo[event.SessionChanged](h.c)
+	_, err = h.c.Submit(t.Context(), Main, "/resume "+savedID)
+	require.NoError(t, err)
+	assert.Equal(t, savedID, receiveEvent(t, sessions).SessionID)
+	assertSwitchDone(t, h)
+	assert.Equal(t, "off", h.c.Agents()[0].Effort)
 }

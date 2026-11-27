@@ -19,7 +19,7 @@ git diff | kopi -p "review this"
 - Ctrl+C interrupts the turn. A failed or interrupted turn exits with status 1.
 - `-c` and `-r` work with `-p`.
 - Resuming (`-c`, `-r` or `/resume`) redraws the earlier conversation in the fullscreen interface, with its tool activity folded. With `-c` and `-r` the session is open at once, while the [MCP servers](mcp.md#startup) connect.
-- A session resumed with `-c` or `-r` runs on that run's [session model](configuration.md#model), not the one it last ran on.
+- A session resumed with `-c`, `-r` or `/resume` runs on that run's [session model](configuration.md#model) and [effort](configuration.md#effort), not the ones it last ran with.
 - On exit from a session with messages, the fullscreen interface prints the command to resume it.
 - `--add-dir <path>` adds a directory to the [workspace](tools.md#file-tools) as [`/add-dir`](#commands) does. It is repeatable, and a path that cannot be added stops the start. In print mode a folder no [trust](trust.md#added-directories) decision covers is added with file access only, and nothing is saved.
 - `--mode` and `--allowed-tools` are described in [tools](tools.md#modes) and [permissions](permissions.md#rules). `kopi mcp list` is in [MCP](mcp.md#kopi-mcp-list).
@@ -33,10 +33,10 @@ Commands in the fullscreen interface:
 | `/plan` | Switch to plan mode |
 | `/plan open` | Open the session's [plan file](tools.md#exitplanmode) in `$VISUAL`, else `$EDITOR` |
 | `/execute` | Switch to execute mode |
-| `/effort <level>` | Set the main agent's reasoning effort for this session; never saved to `config.json`, see [`effort`](configuration.md#effort). `/model` keeps the level |
+| `/effort <level>` | Set the main agent's reasoning effort until Kopi exits; `config.json` is untouched and `/new`, `/resume` and `/model` keep the level, subject to the exception under [`effort`](configuration.md#effort) |
 | `/new` | Start a new session |
 | `/resume <id>` | Resume a session |
-| `/model <provider/id>` | Switch the model until Kopi exits; `config.json` is untouched and `/new` and `/resume` keep the choice, and running subagents keep their model. A running workflow's later `agent()` calls, and the `WebFetch`, `WebSearch` and classifier calls of running agents, use the new model when no key pins one. The session's effort carries over, clamped to the new model's levels, `medium` for a session resumed on a model that does not reason; `WebSearch` is offered or withdrawn with the new model's hosted search when `smallModel` is unset. Refused while a turn runs; it returns at once, and a provider without a credential or an unknown model is reported as an error, with a pointer to `/login` for the former, while no turn starts until the change ends |
+| `/model <provider/id>` | Switch the model until Kopi exits; `config.json` is untouched and `/new` and `/resume` keep the choice, and running subagents keep their model. A running workflow's later `agent()` calls, and the `WebFetch`, `WebSearch` and classifier calls of running agents, use the new model when no key pins one. The session's effort carries over, clamped to the new model's levels; `WebSearch` is offered or withdrawn with the new model's hosted search when `smallModel` is unset. Refused while a turn runs; it returns at once, and a provider without a credential or an unknown model is reported as an error, with a pointer to `/login` for the former, while no turn starts until the change ends |
 | `/add-dir <path>` | Add a directory to the [workspace](tools.md#file-tools) until `/remove-dir` removes it or Kopi exits; see [what it refuses](tools.md#file-tools) and [trust](trust.md#added-directories) for what it asks. Allowed while a turn runs |
 | `/remove-dir <path>` | Remove an added directory from the workspace. `<path>` is the spelling it was added in, its real path, or a path that resolves to it, as `/add-dir` reads one; the start directory cannot be removed. Takes effect at once for the session, its subagents and workflow agents; see [what it refuses](tools.md#file-tools) and [what it does not undo](trust.md#added-directories). Allowed while a turn runs |
 | `/login <provider>` | Log in to a provider |
@@ -48,8 +48,6 @@ Commands in the fullscreen interface:
 | `/skill:<name>` | Load a skill with the prompt ([skills](skills.md)) |
 | `/quit` | Exit |
 | `//text` | Send a prompt that starts with `/` |
-
-- A session whose transcript was last run on a model that does not reason, resumed on one that does, comes back at effort `off`; `/model` keeps that level like one set with `/effort`, and `/effort <level>` sets it again.
 
 ### ultrathink
 
