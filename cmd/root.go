@@ -661,7 +661,7 @@ func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHom
 		}
 	}
 	w := sandbox.Workspace{CWD: cwd, UserHome: userHome, KopiHome: kopiHome, AllowWrite: cfg.AllowWrite, DenyRead: cfg.DenyRead, Network: cfg.Network, Proxy: proxy}
-	sb, plan, setDirs, validateDirs, err = sandbox.OpenWorkspace(ctx, filepath.Join(kopiHome, "sandbox"), w)
+	sb, plan, setDirs, validateDirs, err = sandbox.OpenWorkspace(ctx, w)
 	switch {
 	case cfg.Enabled == nil && errors.Is(err, sandbox.ErrUnavailable):
 		return nil, nil, nil, nil, err, nil

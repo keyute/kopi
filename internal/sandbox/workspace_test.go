@@ -38,7 +38,7 @@ func newWorkspaceEnv(t *testing.T) workspaceEnv {
 // open is OpenWorkspace for w in e's workspace, with the sandboxes' directory in Kopi's home.
 func (e workspaceEnv) open(ctx context.Context, w Workspace) (execute, plan *Sandbox, setDirs, validateDirs func(dirs []string) error, err error) {
 	w.CWD, w.UserHome, w.KopiHome = e.workspace, e.home, e.kopiHome
-	return OpenWorkspace(ctx, filepath.Join(e.kopiHome, "sandbox"), w)
+	return OpenWorkspace(ctx, w)
 }
 
 func withCWD(w Workspace, cwd string) Workspace {
@@ -306,6 +306,67 @@ func TestOpenWorkspaceSetDirsMakesTheDirectoryWritableOnlyInExecuteMode(t *testi
 		require.Error(t, err, tc.name)
 		assert.Contains(t, string(out), refused(tc.linux), tc.name)
 		assert.NoFileExists(t, filepath.Join(added, tc.name))
+	}
+}
+
+func TestOpenWorkspaceSetDirsAppliesAllRootProtections(t *testing.T) {
+	newSandbox(t, Policy{})
+	e := newWorkspaceEnv(t)
+	first, second := filepath.Join(e.root, "first"), filepath.Join(e.root, "second")
+	for _, dir := range []string{first, second} {
+		require.NoError(t, os.Mkdir(dir, 0o700))
+	}
+	require.NoError(t, os.Mkdir(filepath.Join(first, ".git"), 0o700))
+	write, read := filepath.Join(e.root, "allowed"), filepath.Join(e.root, "secret")
+	execute, plan, setDirs, _, err := e.open(t.Context(), Workspace{AllowWrite: []string{write}, DenyRead: []string{read}})
+	require.NoError(t, err)
+	require.NoError(t, setDirs([]string{first, second}))
+
+	for _, tc := range []struct {
+		name string
+		sb   *Sandbox
+		plan bool
+	}{{"execute", execute, false}, {"plan", plan, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			contains := func(kind, path string) {
+				t.Helper()
+				if tc.sb.bwrap != nil {
+					p := tc.sb.bwrap.policy
+					paths := map[string][]string{"WRITE": p.Write, "DENY_READ": p.DenyRead, "DENY_WRITE": p.DenyWrite}
+					assert.Contains(t, paths[kind], path)
+					return
+				}
+				var found bool
+				for _, arg := range tc.sb.prefix {
+					found = found || (strings.HasPrefix(arg, "-D"+kind+"_") && strings.HasSuffix(arg, "="+path))
+				}
+				assert.True(t, found, "%s %s", kind, path)
+			}
+			for _, root := range []string{e.workspace, first, second} {
+				contains("WRITE", root)
+				for _, name := range []string{"hooks", "config", "commondir", "config.worktree", "worktrees", "modules"} {
+					contains("DENY_WRITE", filepath.Join(root, ".git", name))
+				}
+				contains("DENY_WRITE", filepath.Join(root, ".mcp.json"))
+				if runtime.GOOS == "linux" {
+					contains("DENY_WRITE", filepath.Join(root, ".git"))
+				}
+				if runtime.GOOS == "linux" || root != first {
+					contains("DENY_WRITE", filepath.Join(root, "HEAD"))
+				}
+				if tc.plan {
+					contains("DENY_WRITE", root)
+				}
+			}
+			contains("WRITE", write)
+			contains("DENY_READ", read)
+			contains("DENY_READ", e.kopiHome)
+			if tc.sb.bwrap != nil {
+				assert.Contains(t, tc.sb.bwrap.policy.DenyWriteNames, ".mcp.json")
+			} else {
+				assert.Contains(t, strings.Join(tc.sb.prefix, "\n"), "-DDENY_WRITE_NAME_")
+			}
+		})
 	}
 }
 

@@ -18,17 +18,18 @@ type Workspace struct {
 	CWD, UserHome, KopiHome string
 	AllowWrite, DenyRead    []string
 	Network                 bool
-	// Proxy, when set, is the only way commands reach the network.
+	// Proxy, when set, is the only way commands reach the network. It
+	// conflicts with Network.
 	Proxy *Proxy
 }
 
 // OpenWorkspace returns the sandboxes Bash runs under in execute and in plan
-// mode, made in dir. setDirs makes the added directories the workspace's other
+// mode, with state under KopiHome/sandbox. setDirs makes the added directories the workspace's other
 // roots in both; validateDirs checks them without applying them. The error is
 // New's, so it can still be tested for ErrUnavailable.
-func OpenWorkspace(ctx context.Context, dir string, w Workspace) (execute, plan *Sandbox, setDirs, validateDirs func(dirs []string) error, err error) {
+func OpenWorkspace(ctx context.Context, w Workspace) (execute, plan *Sandbox, setDirs, validateDirs func(dirs []string) error, err error) {
 	p := workspacePolicy(w)
-	sandboxes, err := New(ctx, dir, p, planPolicy(p, w.CWD, nil))
+	sandboxes, err := New(ctx, filepath.Join(w.KopiHome, "sandbox"), p, planPolicy(p, w.CWD, nil))
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}

@@ -1,5 +1,5 @@
 // Package config reads Kopi's settings: defaults, the global config file and
-// the flags, layered in that order, with the file and flag that set each value.
+// the flags, layered in that order, recording the last layer that set each key.
 // It also reads a project's .mcp.json and names the paths under Kopi's home.
 package config
 

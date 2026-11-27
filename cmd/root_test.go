@@ -2047,6 +2047,42 @@ func TestRootSandboxedBashCannotWriteWorkspaceInPlan(t *testing.T) {
 	assert.Equal(t, "workspace\n", string(content))
 }
 
+func TestOpenSandboxValidateAndApplyDirs(t *testing.T) {
+	if !sandboxAvailable(t) {
+		t.Skip("OS sandbox unavailable")
+	}
+	if runtime.GOOS == "linux" {
+		t.Setenv("TMPDIR", "/var/tmp")
+	}
+	e := newSandboxedEnv(t)
+	temp := filepath.Join(e.root, "tmp")
+	require.NoError(t, os.Mkdir(temp, 0o700))
+	t.Setenv("TMPDIR", temp)
+	added := filepath.Join(e.root, "added")
+	require.NoError(t, os.Mkdir(added, 0o700))
+	added, err := filepath.EvalSymlinks(added)
+	require.NoError(t, err)
+	execute, plan, apply, validate, unavailable, err := openSandbox(t.Context(), config.Sandbox{}, e.workspace, e.home, e.kopiHome)
+	require.NoError(t, err)
+	require.NoError(t, unavailable)
+	require.NotNil(t, apply)
+	require.NotNil(t, validate)
+	attempt := func(sb *sandbox.Sandbox) error {
+		cmd, done, err := sb.Command([]string{"/bin/sh", "-c", `printf x > "$1"`, "sh", filepath.Join(added, "file")})
+		require.NoError(t, err)
+		defer done()
+		cmd.Dir = e.workspace
+		return cmd.Run()
+	}
+	require.NoError(t, validate([]string{added}))
+	assert.Error(t, attempt(execute))
+	assert.Error(t, attempt(plan))
+	require.NoError(t, apply([]string{added}))
+	assert.Error(t, attempt(plan))
+	require.NoError(t, attempt(execute))
+	assert.FileExists(t, filepath.Join(added, "file"))
+}
+
 func TestOpenSandboxSetDirsIsNilWithoutTheSandbox(t *testing.T) {
 	e := newTestEnv(t)
 	off := false
