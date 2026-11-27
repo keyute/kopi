@@ -7,8 +7,9 @@ import (
 	"github.com/keyute/kopi/internal/event"
 )
 
-// sideQuestionPrefix wraps a side question: the tools stay declared in the
-// request, so the model is told a call does nothing.
+// sideQuestionPrefix wraps a side question: the tools declared as of the
+// session's last request stay in this one, so the model is told a call does
+// nothing.
 const sideQuestionPrefix = "Side question, answered outside the conversation. Reply once in text; no tool runs here."
 
 // btwCommand asks the main session's model a side question: the question and
@@ -36,7 +37,7 @@ func (c *Controller) btwCommand(_ context.Context, question string) error {
 	c.sideSeq++
 	id := c.sideSeq
 	ctx, cancel := context.WithCancel(context.Background())
-	c.sideID, c.sideStop = id, cancel
+	c.sideStop = cancel
 	// Added under mu, which Close sets closed under, so it never races Wait.
 	c.wg.Add(1)
 	c.mu.Unlock()
@@ -48,11 +49,6 @@ func (c *Controller) btwCommand(_ context.Context, question string) error {
 		defer cancel()
 		text, used, err := c.rt.AnswerFrom(ctx, sess, sideQuestionPrefix+"\n\n"+question)
 		c.charge(sess, used)
-		c.mu.Lock()
-		if c.sideID == id {
-			c.sideStop = nil
-		}
-		c.mu.Unlock()
 		// Not through the session's epoch: a request cancelled by a switch or
 		// by Close must still end, and the epoch drops what a switch outdates.
 		c.relay.emit(event.SideQuestionEnded{ID: id, Answer: text, Err: err})
@@ -66,7 +62,7 @@ func (c *Controller) btwCommand(_ context.Context, question string) error {
 func (c *Controller) StopSideQuestion(id int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.sideID == id {
+	if c.sideSeq == id {
 		c.stopSideLocked()
 	}
 }

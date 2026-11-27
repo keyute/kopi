@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -70,6 +71,15 @@ func TestBtwIgnoresAnotherIDsEnd(t *testing.T) {
 	send(m, event.SideQuestionEnded{ID: 1, Answer: "old"})
 
 	assert.Equal(t, before, dialogRows(t, m))
+	assert.False(t, btwOf(m).ended)
+}
+
+func TestBtwIgnoresACancelledEnd(t *testing.T) {
+	m, _ := newTestModel(t, 72, 30)
+	asked(m, 1, "why?")
+
+	send(m, event.SideQuestionEnded{ID: 1, Err: fmt.Errorf("failed to answer: %w", context.Canceled)})
+
 	assert.False(t, btwOf(m).ended)
 }
 

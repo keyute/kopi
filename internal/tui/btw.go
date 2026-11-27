@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"context"
+	"errors"
+
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
@@ -40,13 +43,14 @@ func (b *btwDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 }
 
 // seen fills the dialog with its own SideQuestionEnded; a session switch or a
-// newer question ends it.
+// newer question ends it. A cancelled request leaves it as it is, for the
+// switch or the newer question that cancelled it to close.
 func (b *btwDialog) seen(_ *model, msg tea.Msg) bool {
 	switch ev := msg.(type) {
 	case event.SessionChanged, event.SideQuestionAsked:
 		return false
 	case event.SideQuestionEnded:
-		if ev.ID == b.id {
+		if ev.ID == b.id && !errors.Is(ev.Err, context.Canceled) {
 			b.answer, b.err, b.ended, b.bodyWidth = ev.Answer, ev.Err, true, 0
 		}
 	}

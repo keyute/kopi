@@ -676,9 +676,7 @@ func (m *model) apply(ev event.Event) *view {
 	case event.SideQuestionAsked:
 		m.open(promptBtw, newBtwDialog(ev, &m.keys))
 		return nil
-	case event.SideQuestionEnded:
-		return nil
-	case event.QuestionEnded, event.PlanEnded, event.LoginEnded, event.DirEnded, event.ApprovalEnded:
+	case event.QuestionEnded, event.PlanEnded, event.LoginEnded, event.DirEnded, event.ApprovalEnded, event.SideQuestionEnded:
 		return nil
 	}
 	v := m.viewOf(id)

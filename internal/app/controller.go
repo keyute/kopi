@@ -191,10 +191,9 @@ type Controller struct {
 	// titleCtx ends when Close starts, which stops a title request in flight.
 	titleCtx  context.Context
 	titleStop context.CancelFunc
-	// sideSeq numbers the side questions; sideID and sideStop are the running
-	// one's id and cancel, nil when none runs. mu guards all three.
+	// sideSeq numbers the side questions; sideStop cancels the latest, nil when
+	// none was asked or it was stopped. mu guards both.
 	sideSeq  int
-	sideID   int
 	sideStop context.CancelFunc
 	// titleCommit serialises title persistence and announcement with opening
 	// and installing a replacement, including a resume of the same session.

@@ -88,12 +88,13 @@ func (r *Runtime) Answer(ctx context.Context, model string, effort Effort, syste
 // tool call in the reply is ignored and never runs, and the session's turn, if
 // one is running, is not disturbed. A reply of no text fails with ErrNoAnswer.
 func (r *Runtime) AnswerFrom(ctx context.Context, sess *Session, prompt string) (string, Usage, error) {
-	// PiG keeps the system message, which carries the prompt sections and the
-	// tool declarations, at the head of the session's own messages, so they go
-	// out as they are. PiG's loop also runs per-request steps it keeps
-	// unexported (re-projecting the session, hiding the declarations a loadout
-	// hook hides, which Kopi installs none of, and the per-request image limit);
-	// this request skips them.
+	// PiG writes the system message, which carries the prompt sections and the
+	// tool declarations, into the session's messages before each of its loop's
+	// requests, so they go out as of the last one: none before the first prompt,
+	// and a change since is not in them yet. PiG's loop also runs per-request
+	// steps it keeps unexported (re-projecting the session, hiding the
+	// declarations a loadout hook hides, which Kopi installs none of, and the
+	// per-request image limit); this request skips them.
 	c := ai.Context{Messages: append(agent.ConvertToLLM(sess.inner.Messages()),
 		ai.UserMessage{Content: ai.UserText(prompt), Timestamp: time.Now().UnixMilli()})}
 	// The session's id routes the provider's prompt cache as the loop's own
@@ -102,7 +103,7 @@ func (r *Runtime) AnswerFrom(ctx context.Context, sess *Session, prompt string) 
 	// threads), as PiG's cache warming sets it for a replay. The request goes
 	// over SSE because PiG's Codex websocket transport keeps per-session
 	// connection and fallback state under that id, which the loop owns.
-	// RepairToolFlow closes a tool call still in flight in this request only.
+	// RepairToolFlow repairs tool results as the loop's requests do.
 	opts := ai.StreamOptions{
 		Thinking:            sess.inner.ThinkingLevel().ReasoningOption(),
 		RepairToolFlow:      true,

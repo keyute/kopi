@@ -213,7 +213,9 @@ func TestCloseCancelsASideQuestion(t *testing.T) {
 	asked := sideAsked(t, side)
 	wait(t, reached)
 
-	require.NoError(t, h.c.Close(t.Context()))
+	closed := make(chan error, 1)
+	go func() { closed <- h.c.Close(t.Context()) }()
+	require.NoError(t, receiveErr(t, closed))
 
 	ended := nextEnded(t, side)
 	assert.Equal(t, asked.ID, ended.ID)

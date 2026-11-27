@@ -310,6 +310,7 @@ func TestAnswerFromReplyOfOnlyAToolCallFailsAndRunsNothing(t *testing.T) {
 	_, _, err := r.AnswerFrom(t.Context(), sess, "what is it?")
 
 	require.ErrorIs(t, err, ErrNoAnswer)
+	assert.ErrorContains(t, err, "failed to answer the side question")
 	assert.False(t, ran)
 }
 
