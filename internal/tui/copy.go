@@ -91,8 +91,13 @@ func (c *copyDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	return cmd, true
 }
 
-// seen ends the dialog on a session switch or replacement of its copy target.
-func (c *copyDialog) seen(_ *model, msg tea.Msg) bool {
+type viewChangedMsg struct{}
+
+// seen ends the dialog on a view or session switch or replacement of its copy target.
+func (c *copyDialog) seen(m *model, msg tea.Msg) bool {
+	if m.shown != c.session {
+		return false
+	}
 	if _, switched := msg.(event.SessionChanged); switched {
 		return false
 	}

@@ -64,7 +64,11 @@ func (m *model) show(id string) tea.Cmd {
 	}
 	wasShown := m.tickWanted()
 	v := m.viewOf(id)
+	changed := m.shown != id
 	m.shown = id
+	if changed {
+		m.sweep(viewChangedMsg{})
+	}
 	m.clearSelection()
 	m.relayout()
 	m.composer.restore(v.unsent)

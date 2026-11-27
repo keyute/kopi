@@ -129,6 +129,22 @@ func TestCopyPickerClosesOnlyForItsReplacedTarget(t *testing.T) {
 	}
 }
 
+func TestCopyPickerClosesWhenPlanShowsMain(t *testing.T) {
+	m, c := newTestModel(t, 52, 24)
+	m.viewOf("child")
+	m.show("child")
+	send(m, event.Session{ID: "child", Event: event.ReplyEnd{Text: "```sh\necho old\n```"}})
+	runCopyCommand(m, c)
+	require.NotNil(t, m.front())
+
+	send(m, event.PlanRequested{Token: 1, Plan: "# plan"})
+	assert.Equal(t, app.Main, m.shown)
+	send(m, event.PlanEnded{Token: 1})
+	assert.Nil(t, m.front())
+	press(m, enter)
+	assert.Empty(t, m.clip.(*fakeClipboard).written)
+}
+
 func TestCopyEscapeCopiesNothing(t *testing.T) {
 	m, c := newTestModel(t, 52, 24)
 	reply(m, "```sh\ntask test\n```")
