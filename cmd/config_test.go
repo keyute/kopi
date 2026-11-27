@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/keyute/kopi/internal/config"
+	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/pigruntime/pigruntimetest"
 )
 
@@ -53,4 +54,15 @@ func TestConfigRejectsUnknownKeyNamingTheLayer(t *testing.T) {
 
 	require.ErrorIs(t, err, config.ErrUnknownKey)
 	assert.Contains(t, err.Error(), "global ("+configFile+")")
+}
+
+func TestConfigRejectsInvalidEffort(t *testing.T) {
+	e := newTestEnv(t)
+	path := filepath.Join(e.kopiHome, "config.json")
+	e.writeFile(t, path, `{"effort":"huge"}`)
+
+	_, _, err := execute(t, "", "config")
+
+	require.ErrorIs(t, err, pigruntime.ErrUnknownEffort)
+	assert.Contains(t, err.Error(), "global ("+path+")")
 }

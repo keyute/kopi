@@ -69,6 +69,7 @@ func TestResolveEffortFromGlobalFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "high", r.Config.Effort)
 	assert.Equal(t, global.Name, r.Origins["effort"])
+	assert.Contains(t, r.Entries(), Entry{Key: "effort", Value: "high", Origin: global.Name})
 }
 
 func TestResolveRejectsInvalidModeNamingLayer(t *testing.T) {
@@ -935,6 +936,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	assert.Contains(t, entries, Entry{Key: "smallModel", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "version", Value: "1", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "mode", Value: "plan", Origin: "default"})
+	assert.Contains(t, entries, Entry{Key: "effort", Value: "medium", Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "instructionFallbacks", Value: `["CLAUDE.md"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "keys.submit", Value: `["enter"]`, Origin: "default"})
 	assert.Contains(t, entries, Entry{Key: "keys.newline", Value: `["shift+enter","alt+enter","ctrl+j"]`, Origin: "default"})

@@ -3932,12 +3932,7 @@ func TestPreCancelledFreshPromptKeepsItsExplicitRaise(t *testing.T) {
 }
 
 func TestEffortKeyOpensNewSessionsOnly(t *testing.T) {
-	sb := pigruntimetest.NewSandbox(t)
-	rt := pigruntimetest.NewRuntime(t, sb)
-	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: fauxProvider, Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
-	require.NoError(t, rt.RegisterProvider(thinker.Provider()))
-	h := buildHarness(t, rt, thinker, sb, Config{Model: fauxProvider + "/thinker", Effort: pigruntime.LowEffort})
-	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	h := openThinkerHarness(t, Config{Effort: pigruntime.LowEffort})
 	assert.Equal(t, "low", h.c.Agents()[0].Effort)
 	_, err := h.c.Submit(t.Context(), Main, "/effort high")
 	require.NoError(t, err)

@@ -191,27 +191,35 @@ func isTerminal(v any) bool {
 }
 
 // resolveConfig layers defaults, the global file and the flags the user set.
-func resolveConfig(cmd *cobra.Command, paths config.Paths) (*config.Resolved, error) {
+func resolveConfig(cmd *cobra.Command, paths config.Paths) (*config.Resolved, pigruntime.Effort, error) {
 	global, err := config.GlobalFile(paths.ConfigFile)
 	if err != nil {
-		return nil, err
+		return nil, pigruntime.DefaultEffort, err
 	}
 	flags := map[string]any{}
 	if cmd.Flags().Changed("model") {
 		model, err := cmd.Flags().GetString("model")
 		if err != nil {
-			return nil, err
+			return nil, pigruntime.DefaultEffort, err
 		}
 		flags["model"] = model
 	}
 	if cmd.Flags().Changed("mode") {
 		mode, err := cmd.Flags().GetString("mode")
 		if err != nil {
-			return nil, err
+			return nil, pigruntime.DefaultEffort, err
 		}
 		flags["mode"] = mode
 	}
-	return config.Resolve(config.Defaults(), global, config.Map("flags", flags))
+	resolved, err := config.Resolve(config.Defaults(), global, config.Map("flags", flags))
+	if err != nil {
+		return nil, pigruntime.DefaultEffort, err
+	}
+	effort, err := pigruntime.ParseEffort(resolved.Config.Effort)
+	if err != nil {
+		return nil, pigruntime.DefaultEffort, fmt.Errorf("failed to use %q in %s: %w", "effort", resolved.Origins["effort"], err)
+	}
+	return resolved, effort, nil
 }
 
 func openRuntime(ctx context.Context, paths config.Paths, cwd string) (*pigruntime.Runtime, error) {
@@ -246,17 +254,13 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	if err != nil {
 		return err
 	}
-	resolved, err := resolveConfig(cmd, paths)
+	resolved, effort, err := resolveConfig(cmd, paths)
 	if err != nil {
 		return err
 	}
 	mode, err := policy.ParseMode(resolved.Config.Mode)
 	if err != nil {
 		return err
-	}
-	effort, err := pigruntime.ParseEffort(resolved.Config.Effort)
-	if err != nil {
-		return fmt.Errorf("failed to use %q in %s: %w", "effort", paths.ConfigFile, err)
 	}
 	fullscreen := !printOnly && isTerminal(cmd.InOrStdin()) && isTerminal(cmd.OutOrStdout())
 	var prompt string
