@@ -201,7 +201,7 @@ func TestEffortCommandSetsTheLevelForAReasoningModel(t *testing.T) {
 	_, err = h.c.Submit(t.Context(), Main, "/effort max")
 	require.NoError(t, err)
 	receiveEvent(t, changed)
-	assert.Equal(t, event.Notice{Text: "Effort set to high until kopi exits. Set \"effort\" in /kopi/config.json to keep it."}, receiveEvent(t, notices))
+	assert.Equal(t, event.Notice{Text: "Effort set to max until kopi exits. Set \"effort\" in /kopi/config.json to keep it. This model uses high."}, receiveEvent(t, notices))
 
 	_, err = h.c.Submit(t.Context(), Main, "/effort low")
 	require.NoError(t, err)
@@ -237,6 +237,46 @@ func TestEffortCommandSetsTheLevelForAReasoningModel(t *testing.T) {
 	receiveEvent(t, switched)
 	assertSwitchDone(t, h)
 	assert.Equal(t, "high", h.c.Agents()[0].Effort, "/new keeps the level typed last")
+}
+
+func TestEffortCommandFailedSaveKeepsTheRequestedLevel(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	rt := pigruntimetest.NewRuntime(t, sb)
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: fauxProvider, Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, rt.RegisterProvider(thinker.Provider()))
+	h := buildHarness(t, rt, thinker, sb, Config{Model: fauxProvider + "/thinker"})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	thinker.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("answer")})
+	h.turn(t, "hello")
+	var files []string
+	require.NoError(t, filepath.WalkDir(sb.KopiHome, func(path string, _ fs.DirEntry, err error) error {
+		if err == nil && strings.HasSuffix(path, ".jsonl") {
+			files = append(files, path)
+		}
+		return err
+	}))
+	require.Len(t, files, 1)
+	require.NoError(t, os.Chmod(files[0], 0o400))
+	t.Cleanup(func() { _ = os.Chmod(files[0], 0o600) })
+	if f, err := os.OpenFile(files[0], os.O_WRONLY|os.O_APPEND, 0); err == nil {
+		_ = f.Close()
+		t.Skip("file permissions do not stop this user from appending")
+	}
+	changed := subscribeTo[event.EffortChanged](h.c)
+	notices := subscribeTo[event.Notice](h.c)
+	switched := subscribeTo[event.SessionChanged](h.c)
+
+	_, err := h.c.Submit(t.Context(), Main, "/effort high")
+	require.Error(t, err)
+	assert.Equal(t, event.EffortChanged{}, receiveEvent(t, changed))
+	assert.Empty(t, notices)
+	assert.Equal(t, "high", h.c.Agents()[0].Effort)
+
+	_, err = h.c.Submit(t.Context(), Main, "/new")
+	require.NoError(t, err)
+	receiveEvent(t, switched)
+	assertSwitchDone(t, h)
+	assert.Equal(t, "high", h.c.Agents()[0].Effort)
 }
 
 func TestEffortCommandRefusesAModelThatDoesNotReason(t *testing.T) {
