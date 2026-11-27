@@ -74,5 +74,3 @@ The Seatbelt policy in `internal/sandbox/codex/` is adapted from [OpenAI Codex](
 ## License
 
 MIT, see `LICENSE`.
-
-<p align="center"><img src="docs/assets/kopi.png" width="96" alt="The Kopi mascot"><br><sub>Kopi peng, iced kopi in a takeaway bag.</sub></p>
