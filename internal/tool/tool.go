@@ -1,3 +1,5 @@
+// Package tool defines the tools a model can call, with the workspace, shell
+// and background tasks they act through.
 package tool
 
 import (

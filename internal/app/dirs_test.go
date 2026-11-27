@@ -208,15 +208,17 @@ func TestAddDirAsksWhenNoDecisionCoversTheDirectory(t *testing.T) {
 		{"decline", false, false, "", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d := newDirHarness(t, Config{Covers: func(string) ([]string, []string) { return []string{"docs: npx docs"}, []string{"skills in x"} }}, true)
+			d := newDirHarness(t, Config{}, true)
 			dir := otherDir(t)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(`{"mcpServers":{"docs":{"command":"npx","args":["docs"]}}}`), 0o600))
+			require.NoError(t, os.MkdirAll(filepath.Join(dir, ".agents", "skills"), 0o700))
 			requests, ended, notices := subscribeTo[event.DirRequested](d.c), subscribeTo[event.DirEnded](d.c), subscribeTo[event.Notice](d.c)
 
 			require.NoError(t, d.c.AddDir(dir))
 			req := receiveEvent(t, requests)
 			assert.Equal(t, event.DirRequested{
 				Token: req.Token, Dir: dir, Instructions: []string{filepath.Join(dir, "AGENTS.md")},
-				Servers: []string{"docs: npx docs"}, Skills: []string{"skills in x"}, Saved: true,
+				Servers: []string{"docs: npx docs"}, Skills: []string{filepath.Join(dir, ".agents", "skills")}, Saved: true,
 			}, req)
 			assert.NotZero(t, req.Token)
 			assert.Empty(t, d.sandboxed, "nothing is added before the answer")
@@ -882,11 +884,11 @@ func TestAddDirNoticeWhileASwitchIsRegisteredButNotStarted(t *testing.T) {
 }
 
 func TestAddDirKeepsNoRequestOnceTheControllerClosed(t *testing.T) {
-	d := newDirHarness(t, Config{Covers: nil}, true)
-	d.c.cfg.Covers = func(string) ([]string, []string) {
+	d := newDirHarness(t, Config{}, true)
+	d.c.cfg.ValidateSandboxDirs = func([]string) error {
 		// Between AddDir's first check and registering the request.
 		assert.NoError(t, d.c.Close(t.Context()))
-		return nil, nil
+		return nil
 	}
 
 	err := d.c.AddDir(canonicalTemp(t))

@@ -15,12 +15,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/config"
 )
 
-var trustReq = TrustRequest{Folder: "/w/proj", Parent: "/w", Servers: []string{"docs: npx -y docs-mcp", "remote: https://example.com/mcp"}}
+var trustReq = app.TrustRequest{Folder: "/w/proj", Parent: "/w", Servers: []string{"docs: npx -y docs-mcp", "remote: https://example.com/mcp"}}
 
-func newTrustTestModel(req TrustRequest) *trustModel {
+func newTrustTestModel(req app.TrustRequest) *trustModel {
 	m := newTrustModel(req, config.DefaultKeys(), testThemes)
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
 	return m
@@ -66,7 +67,7 @@ func TestTrustRows(t *testing.T) {
 func TestTrustRowsListInstructionFiles(t *testing.T) {
 	rule := strings.Repeat("─", 60)
 	files := []string{"/w/AGENTS.md", "/w/proj/CLAUDE.md"}
-	filesOnly := TrustRequest{Folder: "/w/proj", Parent: "/w", Instructions: files}
+	filesOnly := app.TrustRequest{Folder: "/w/proj", Parent: "/w", Instructions: files}
 	assert.Equal(t, append(make([]string, 15),
 		rule,
 		"  Do you trust this folder?",
@@ -139,7 +140,7 @@ func TestTrustRowsScrollTheInstructionFilesBelowTheServers(t *testing.T) {
 }
 
 func TestTrustRowsScrollInstructionFilesToTheHeight(t *testing.T) {
-	req := TrustRequest{Folder: "/w/proj", Parent: "/w"}
+	req := app.TrustRequest{Folder: "/w/proj", Parent: "/w"}
 	for i := range 20 {
 		req.Instructions = append(req.Instructions, fmt.Sprintf("/w/%d/AGENTS.md", i))
 	}
@@ -208,7 +209,7 @@ func TestTrustRowsShowTheScrollHintOnlyWhileCut(t *testing.T) {
 }
 
 func TestTrustRowsKeepTheMarkerWithoutTheHintWhenTheHintWouldStarveTheLists(t *testing.T) {
-	req := TrustRequest{Folder: "/w/proj", Parent: "/w", Instructions: []string{"/w/proj/AGENTS.md"}, Servers: []string{"a: a-mcp", "b: b-mcp", "c: c-mcp"}}
+	req := app.TrustRequest{Folder: "/w/proj", Parent: "/w", Instructions: []string{"/w/proj/AGENTS.md"}, Servers: []string{"a: a-mcp", "b: b-mcp", "c: c-mcp"}}
 	m := newTrustTestModel(req)
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 10})
 	screen := strings.Join(trustScreen(m), "\n")
@@ -218,7 +219,7 @@ func TestTrustRowsKeepTheMarkerWithoutTheHintWhenTheHintWouldStarveTheLists(t *t
 
 func TestTrustRowsScrollWrappedInstructionPaths(t *testing.T) {
 	path := "/w/" + strings.Repeat("a", 60) + "/AGENTS.md"
-	req := TrustRequest{Folder: "/w/proj", Parent: "/w", Instructions: []string{path, path, "/w/AGENTS.md"}}
+	req := app.TrustRequest{Folder: "/w/proj", Parent: "/w", Instructions: []string{path, path, "/w/AGENTS.md"}}
 	m := newTrustTestModel(req)
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 17})
 	rows := trustScreen(m)
@@ -235,7 +236,7 @@ func TestTrustRowsScrollWrappedInstructionPaths(t *testing.T) {
 
 func TestTrustRowsScrollWrappedInstructionPathsAtANarrowWidth(t *testing.T) {
 	path := "/w/" + strings.Repeat("a", 30) + "/AGENTS.md"
-	req := TrustRequest{Folder: "/w/proj"}
+	req := app.TrustRequest{Folder: "/w/proj"}
 	for range 20 {
 		req.Instructions = append(req.Instructions, path)
 	}
@@ -283,7 +284,7 @@ func TestTrustRowsKeepTheServersInViewWhileInstructionFilesScroll(t *testing.T) 
 
 func TestTrustRowsListSkillFolders(t *testing.T) {
 	rule := strings.Repeat("─", 60)
-	skillsOnly := TrustRequest{Folder: "/w/proj", Parent: "/w", Skills: []string{"/w/.agents/skills", "/w/proj/.agents/skills"}}
+	skillsOnly := app.TrustRequest{Folder: "/w/proj", Parent: "/w", Skills: []string{"/w/.agents/skills", "/w/proj/.agents/skills"}}
 	assert.Equal(t, append(make([]string, 16),
 		rule,
 		"  Do you trust this folder?",
@@ -322,7 +323,7 @@ func TestTrustRowsListSkillFolders(t *testing.T) {
 }
 
 func TestTrustRowsScrollSkillFolders(t *testing.T) {
-	req := TrustRequest{Folder: "/w/proj", Skills: []string{"/a/.agents/skills", "/b/.agents/skills", "/c/.agents/skills"}}
+	req := app.TrustRequest{Folder: "/w/proj", Skills: []string{"/a/.agents/skills", "/b/.agents/skills", "/c/.agents/skills"}}
 	m := newTrustTestModel(req)
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 12})
 	rows := trustScreen(m)
@@ -338,17 +339,17 @@ func TestTrustChoices(t *testing.T) {
 	noParent.Parent = ""
 	for _, tt := range []struct {
 		name string
-		req  TrustRequest
+		req  app.TrustRequest
 		keys []tea.KeyPressMsg
-		want TrustChoice
+		want app.TrustChoice
 	}{
-		{name: "enter trusts the folder", req: trustReq, keys: []tea.KeyPressMsg{enter}, want: TrustFolder},
-		{name: "down then enter trusts the parent", req: trustReq, keys: []tea.KeyPressMsg{down, enter}, want: TrustParent},
-		{name: "digit 3 denies", req: trustReq, keys: []tea.KeyPressMsg{digit('3')}, want: TrustDeny},
-		{name: "without a parent 2 denies", req: noParent, keys: []tea.KeyPressMsg{digit('2')}, want: TrustDeny},
-		{name: "without a parent 3 does nothing", req: noParent, keys: []tea.KeyPressMsg{digit('3'), up, enter}, want: TrustFolder},
-		{name: "cancel", req: trustReq, keys: []tea.KeyPressMsg{down, ctrlC}, want: TrustCancelled},
-		{name: "interrupt cancels", req: trustReq, keys: []tea.KeyPressMsg{escape}, want: TrustCancelled},
+		{name: "enter trusts the folder", req: trustReq, keys: []tea.KeyPressMsg{enter}, want: app.TrustFolder},
+		{name: "down then enter trusts the parent", req: trustReq, keys: []tea.KeyPressMsg{down, enter}, want: app.TrustParent},
+		{name: "digit 3 denies", req: trustReq, keys: []tea.KeyPressMsg{digit('3')}, want: app.TrustDeny},
+		{name: "without a parent 2 denies", req: noParent, keys: []tea.KeyPressMsg{digit('2')}, want: app.TrustDeny},
+		{name: "without a parent 3 does nothing", req: noParent, keys: []tea.KeyPressMsg{digit('3'), up, enter}, want: app.TrustFolder},
+		{name: "cancel", req: trustReq, keys: []tea.KeyPressMsg{down, ctrlC}, want: app.TrustCancelled},
+		{name: "interrupt cancels", req: trustReq, keys: []tea.KeyPressMsg{escape}, want: app.TrustCancelled},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newTrustTestModel(tt.req)
@@ -496,7 +497,7 @@ func TestTrustHintNamesBoundKeys(t *testing.T) {
 
 func TestAskTrustReturnsCancelledWhenContextEnds(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan TrustChoice, 1)
+	done := make(chan app.TrustChoice, 1)
 	errs := make(chan error, 1)
 	// The input never ends, so only ctx stops the prompt.
 	in, w := io.Pipe()
@@ -510,7 +511,7 @@ func TestAskTrustReturnsCancelledWhenContextEnds(t *testing.T) {
 	select {
 	case err := <-errs:
 		require.NoError(t, err)
-		assert.Equal(t, TrustCancelled, <-done)
+		assert.Equal(t, app.TrustCancelled, <-done)
 	case <-time.After(waitLimit):
 		t.Fatal("AskTrust did not return")
 	}
@@ -519,5 +520,5 @@ func TestAskTrustReturnsCancelledWhenContextEnds(t *testing.T) {
 func TestAskTrustReturnsThePick(t *testing.T) {
 	c, err := AskTrust(t.Context(), strings.NewReader("3"), &bytes.Buffer{}, testOptions(), trustReq)
 	require.NoError(t, err)
-	assert.Equal(t, TrustDeny, c)
+	assert.Equal(t, app.TrustDeny, c)
 }

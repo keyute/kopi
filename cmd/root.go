@@ -1,3 +1,5 @@
+// Package cmd is Kopi's command line: the flags and subcommands, and the
+// wiring that opens a session and hands it to a frontend.
 package cmd
 
 import (
@@ -7,11 +9,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -31,7 +31,6 @@ import (
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/sandbox"
-	"github.com/keyute/kopi/internal/skill"
 	"github.com/keyute/kopi/internal/subagent"
 	"github.com/keyute/kopi/internal/tool"
 	"github.com/keyute/kopi/internal/trust"
@@ -287,9 +286,9 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	if err != nil {
 		return fmt.Errorf("failed to use \"theme\" in %s: %w", paths.ConfigFile, err)
 	}
-	var ask askTrust
+	var ask app.AskTrust
 	if fullscreen {
-		ask = func(req tui.TrustRequest) (tui.TrustChoice, error) {
+		ask = func(req app.TrustRequest) (app.TrustChoice, error) {
 			askCtx, stopAsk := signal.NotifyContext(ctx, os.Interrupt)
 			defer stopAsk()
 			return tui.AskTrust(askCtx, cmd.InOrStdin(), cmd.OutOrStdout(), tui.Options{Keys: resolved.Config.Keys, Themes: themes}, req)
@@ -305,15 +304,14 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	if err != nil {
 		return err
 	}
-	// The user's own skills are not project skills when Kopi starts in the home directory.
-	projectSkills := skill.Find(instructionDir, filepath.Join(canonicalHome, ".agents", "skills"))
-	set, err := resolveServers(resolved.Config.MCPServers, paths.TrustFile, cwd, userHome, projectInstructions, projectSkills, ask)
+	projectSkills := app.ProjectSkills(instructionDir, canonicalHome)
+	set, err := app.ResolveServers(resolved.Config.MCPServers, paths.TrustFile, cwd, userHome, projectInstructions, projectSkills, ask)
 	if err != nil {
 		return err
 	}
-	if set.undecided {
+	if set.Undecided {
 		var parts []string
-		if len(set.untrusted) > 0 {
+		if len(set.Untrusted) > 0 {
 			parts = append(parts, "the MCP servers in its "+policy.ProjectMCPFile)
 		}
 		if len(projectInstructions) > 0 {
@@ -324,7 +322,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		}
 		slog.Warn("this folder is not trusted, so " + skippedList(parts) + " skipped; run kopi here in a terminal to be asked whether to trust it")
 	}
-	instructions, instructionErrs := instruction.Load(paths.InstructionFile, []instruction.Root{{Dir: instructionDir, Trusted: set.trusted}}, resolved.Config.InstructionFallbacks)
+	instructions, instructionErrs := instruction.Load(paths.InstructionFile, []instruction.Root{{Dir: instructionDir, Trusted: set.Trusted}}, resolved.Config.InstructionFallbacks)
 	// From here until the frontend runs, SIGINT does not kill Kopi: stdio
 	// servers run in their own process group, so the terminal's SIGINT does not
 	// reach them, and the deferred Close must run. It ends startup at Start or
@@ -340,7 +338,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	var workRunning bool
 	outputs := tool.NewOutputs(paths.OutputsDir)
 	outputs.Prune(time.Now())
-	servers := pigruntime.StartServers(pigruntime.ServerOptions{Servers: set.servers, CWD: cwd, Version: kopiVersion(), Outputs: outputs})
+	servers := pigruntime.StartServers(pigruntime.ServerOptions{Servers: set.Servers, CWD: cwd, Version: kopiVersion(), Outputs: outputs})
 	// Closed even under running work: stdio servers would outlive the process,
 	// and a call they are serving can fail as the process exits anyway.
 	defer servers.Close()
@@ -478,7 +476,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 		}
 	}
 	var skillDirs []string
-	if set.trusted {
+	if set.Trusted {
 		skillDirs = projectSkills
 	}
 	skillDirs = append(skillDirs, paths.SkillsDir, filepath.Join(userHome, ".agents", "skills"))
@@ -490,8 +488,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	cfg := app.Config{
 		Model: resolved.Config.Model, SmallModel: resolved.Config.SmallModel, ConfigFile: paths.ConfigFile, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Effort: effort, Files: ws,
 		SandboxDirs: setDirs, ValidateSandboxDirs: validateSandboxDirs, TrustFile: paths.TrustFile, Home: tool.Dir{Given: userHome, Real: canonicalHome}, InstructionFallbacks: resolved.Config.InstructionFallbacks,
-		Covers: func(dir string) ([]string, []string) { return covers(dir, canonicalHome) },
-		Errors: slices.Concat(set.errs, instructionErrs, skillErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review, Outputs: outputs,
+		Errors: slices.Concat(set.Errs, instructionErrs, skillErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review, Outputs: outputs,
 		Skills: skills, SkillPrefix: resolved.Config.Skills.Prefix,
 		WorkflowModel: resolved.Config.Workflows.Model, MaxWorkflows: resolved.Config.Workflows.MaxWorkflows, MaxAgents: resolved.Config.Workflows.MaxAgents,
 		Title: fullscreen && resolved.Config.Terminal.Title,
@@ -507,7 +504,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	}
 	cfg.Agents = agents
 	cfg.AgentTools = agentTools(tools, ws, outputs, shell, planShell, resolved.Config.Sandbox.AllowUnsandboxed)
-	if len(set.servers) > 0 {
+	if len(set.Servers) > 0 {
 		cfg.Servers = servers
 	}
 	// Only the fullscreen interface records prompts.
@@ -634,86 +631,6 @@ func skippedList(parts []string) string {
 	return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1] + " are"
 }
 
-// mcpServers is the MCP server set of a run in one folder, and whether the
-// folder is trusted.
-type mcpServers struct {
-	// servers are the servers to start: the global ones and, in a trusted
-	// folder, the project ones, which replace global ones of the same name.
-	servers map[string]config.MCPServer
-	// project names the servers in servers that the project declares.
-	project map[string]bool
-	// untrusted are the project's servers, skipped as the folder is not trusted.
-	untrusted map[string]config.MCPServer
-	// undecided means no trust decision applies and none was asked for.
-	undecided bool
-	// trusted means the folder is trusted, so its servers and instruction
-	// files and skills are used.
-	trusted bool
-	invalid map[string]error
-	errs    []error
-}
-
-// askTrust asks the human whether to trust a folder; nil means no human can
-// be asked.
-type askTrust func(tui.TrustRequest) (tui.TrustChoice, error)
-
-// resolveServers decides whether the folder is trusted and merges the
-// project's servers over global ones when it is. The trust file is opened
-// only when the project declares a server or has instruction files or skill
-// folders, which instructions and skills list; an undecided folder is asked
-// about through ask and the answer saved, and without ask it is untrusted for
-// this run.
-func resolveServers(global map[string]config.MCPServer, trustFile, cwd, userHome string, instructions, skills []string, ask askTrust) (mcpServers, error) {
-	s := mcpServers{servers: maps.Clone(global), project: map[string]bool{}}
-	if s.servers == nil {
-		s.servers = map[string]config.MCPServer{}
-	}
-	project, invalid, err := config.ProjectServers(filepath.Join(cwd, policy.ProjectMCPFile))
-	if err != nil {
-		s.errs = append(s.errs, fmt.Errorf("skipped this folder's MCP servers: %w", err))
-		project, invalid = nil, nil
-	}
-	for _, name := range slices.Sorted(maps.Keys(invalid)) {
-		s.errs = append(s.errs, fmt.Errorf("MCP server %s: %w", name, invalid[name]))
-		project[name] = config.MCPServer{}
-	}
-	if len(project) == 0 && len(instructions) == 0 && len(skills) == 0 {
-		return s, nil
-	}
-	store, err := trust.Open(trustFile)
-	if err != nil {
-		return mcpServers{}, err
-	}
-	d, ok, err := store.Lookup(cwd)
-	if err != nil {
-		return mcpServers{}, err
-	}
-	switch {
-	case ok:
-	case ask == nil:
-		s.undecided = true
-	default:
-		if d, err = decideTrust(store, cwd, userHome, project, invalid, instructions, skills, ask); err != nil {
-			return mcpServers{}, err
-		}
-	}
-	if d != trust.Trusted {
-		s.untrusted = project
-		return s, nil
-	}
-	s.trusted = true
-	s.invalid = invalid
-	for name, p := range project {
-		s.project[name] = true
-		if invalid[name] != nil {
-			delete(s.servers, name)
-			continue
-		}
-		s.servers[name] = p
-	}
-	return s, nil
-}
-
 // waitServers waits for every server to settle; it fails when ctx ends first,
 // so that startup stops rather than going on without the servers.
 func waitServers(ctx context.Context, servers *pigruntime.Servers) ([]pigruntime.ServerStatus, error) {
@@ -724,246 +641,34 @@ func waitServers(ctx context.Context, servers *pigruntime.Servers) ([]pigruntime
 	return statuses, nil
 }
 
-// decideTrust asks about cwd and saves the answer; a cancelled prompt saves
-// nothing and returns no decision. The folder and parent are resolved first,
-// so what is shown is what is saved, and the home check sees through
-// symlinks and the case a name was typed in. An answer saved for the user's
-// home or the root would cover almost every folder below it, so there either
-// answer holds for this run only.
-func decideTrust(store *trust.Store, cwd, userHome string, project map[string]config.MCPServer, invalid map[string]error, instructions, skills []string, ask askTrust) (trust.Decision, error) {
-	cwd, err := trust.Canonical(cwd)
-	if err != nil {
-		return 0, err
-	}
-	userHome, err = trust.Canonical(userHome)
-	if err != nil {
-		return 0, err
-	}
-	broad := trust.Broad(cwd, userHome)
-	req := tui.TrustRequest{Folder: cwd, Instructions: instructions, Skills: skills}
-	if parent := filepath.Dir(cwd); !broad && parent != filepath.Dir(parent) && parent != userHome {
-		req.Parent = parent
-	}
-	req.Servers = serverLines(project, invalid)
-	choice, err := ask(req)
-	if err != nil {
-		return 0, err
-	}
-	dir, d := cwd, trust.Trusted
-	switch choice {
-	case tui.TrustFolder:
-		if broad {
-			return trust.Trusted, nil
-		}
-	case tui.TrustParent:
-		dir = req.Parent
-	case tui.TrustDeny:
-		if broad {
-			return trust.Untrusted, nil
-		}
-		d = trust.Untrusted
-	default:
-		return 0, nil
-	}
-	if err := store.Set(dir, d); err != nil {
-		return 0, fmt.Errorf("failed to save the trust decision: %w", err)
-	}
-	return d, nil
-}
-
-// serverLines lists project's servers and the invalid ones by name as the trust
-// question shows them.
-func serverLines(project map[string]config.MCPServer, invalid map[string]error) []string {
-	names := map[string]bool{}
-	for name := range project {
-		names[name] = true
-	}
-	for name := range invalid {
-		names[name] = true
-	}
-	var lines []string
-	for _, name := range slices.Sorted(maps.Keys(names)) {
-		target := serverTarget(project[name])
-		if invalid[name] != nil {
-			target = "invalid, will not start"
-		}
-		lines = append(lines, name+": "+target)
-	}
-	return lines
-}
-
-// covers is what a trust answer saved for dir would cover when Kopi starts
-// there: its .mcp.json servers and project skill folders. An unreadable
-// .mcp.json lists no servers.
-func covers(dir, canonicalHome string) (servers, skills []string) {
-	project, invalid, err := config.ProjectServers(filepath.Join(dir, policy.ProjectMCPFile))
-	if err == nil {
-		servers = serverLines(project, invalid)
-	}
-	return servers, skill.Find(dir, filepath.Join(canonicalHome, ".agents", "skills"))
-}
-
-// serverTarget is what a server runs or connects to, as configured: the
-// command and its arguments, or the URL, then the names, never the values, of
-// the environment variables and headers it sets.
-func serverTarget(s config.MCPServer) string {
-	target := s.URL
-	if s.Command != "" {
-		target = strings.Join(append([]string{s.Command}, s.Args...), " ")
-	}
-	if len(s.Env) > 0 {
-		target += " (env: " + strings.Join(slices.Sorted(maps.Keys(s.Env)), ", ") + ")"
-	}
-	if len(s.Headers) > 0 {
-		target += " (headers: " + strings.Join(slices.Sorted(maps.Keys(s.Headers)), ", ") + ")"
-	}
-	return target
-}
-
 // openSandbox returns the sandboxes Bash runs under in execute and in plan
 // mode, both or neither; neither when sandbox.enabled is false. With enabled
 // unset, a machine without a usable sandbox is not an error: the sandboxes
-// are nil and unavailable says why. setDirs makes the added directories the
-// workspace's other roots in both; validateDirs checks them without applying
-// them. Both callbacks are nil without the sandboxes.
+// are nil and unavailable says why. Both callbacks are nil without the
+// sandboxes.
 func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHome string) (sb, plan *sandbox.Sandbox, setDirs, validateDirs func(dirs []string) error, unavailable, err error) {
 	if cfg.Enabled != nil && !*cfg.Enabled {
 		return nil, nil, nil, nil, nil, nil
 	}
-	p := sandboxPolicy(cfg, cwd, nil, userHome, kopiHome)
+	var proxy *sandbox.Proxy
 	if len(cfg.AllowDomains) > 0 {
 		exe, err := os.Executable()
 		if err != nil {
 			return nil, nil, nil, nil, nil, fmt.Errorf("failed to start the sandbox: failed to find the kopi binary: %w", err)
 		}
-		if p.Proxy, err = sandbox.NewProxy(cfg.AllowDomains, cfg.DenyDomains, []string{exe, "sandbox-listen", "--"}); err != nil {
+		if proxy, err = sandbox.NewProxy(cfg.AllowDomains, cfg.DenyDomains, []string{exe, "sandbox-listen", "--"}); err != nil {
 			return nil, nil, nil, nil, nil, fmt.Errorf("failed to start the sandbox: %w", err)
 		}
 	}
-	sandboxes, err := sandbox.New(ctx, filepath.Join(kopiHome, "sandbox"), p, planPolicy(p, cwd, nil))
+	w := sandbox.Workspace{CWD: cwd, UserHome: userHome, KopiHome: kopiHome, AllowWrite: cfg.AllowWrite, DenyRead: cfg.DenyRead, Network: cfg.Network, Proxy: proxy}
+	sb, plan, setDirs, validateDirs, err = sandbox.OpenWorkspace(ctx, w)
 	switch {
 	case cfg.Enabled == nil && errors.Is(err, sandbox.ErrUnavailable):
 		return nil, nil, nil, nil, err, nil
 	case err != nil:
 		return nil, nil, nil, nil, nil, fmt.Errorf("failed to start the sandbox: %w", err)
 	}
-	// Keep each root's original protection list even if its git metadata changes.
-	protected := map[string][]string{cwd: slices.Clone(p.DenyWrite)}
-	build := func(dirs []string, remember bool) sandbox.Policy {
-		next := p
-		next.Write = slices.Clone(p.Write)
-		next.DenyWrite = slices.Clone(p.DenyWrite)
-		for _, dir := range dirs {
-			paths, ok := protected[dir]
-			if !ok {
-				paths = protectedWrites(dir)
-				if remember {
-					protected[dir] = paths
-				}
-			}
-			next.Write = append(next.Write, dir)
-			next.DenyWrite = append(next.DenyWrite, paths...)
-		}
-		return next
-	}
-	validateDirs = func(dirs []string) error {
-		next := build(dirs, false)
-		if err := sandboxes[1].ValidatePolicy(planPolicy(next, cwd, dirs)); err != nil {
-			return err
-		}
-		return sandboxes[0].ValidatePolicy(next)
-	}
-	// The plan sandbox first: a failure between the two leaves the directory
-	// read-only rather than writable.
-	setDirs = func(dirs []string) error {
-		next := build(dirs, true)
-		if err := sandboxes[1].SetPolicy(planPolicy(next, cwd, dirs)); err != nil {
-			return err
-		}
-		return sandboxes[0].SetPolicy(next)
-	}
-	return sandboxes[0], sandboxes[1], setDirs, validateDirs, nil, nil
-}
-
-// sandboxPolicy lets commands write only the workspace (the start directory
-// and dirs, the directories added to it), temporary directories and the paths
-// the user allowed, never read Kopi's home, and never write the git files that
-// decide which config and hooks git runs (on Linux, nothing in a workspace
-// directory's .git), nor any .mcp.json or what a workspace directory's
-// .mcp.json resolves to, either of which would run code outside the sandbox.
-// Relative paths in cfg start at cwd.
-func sandboxPolicy(cfg config.Sandbox, cwd string, dirs []string, userHome, kopiHome string) sandbox.Policy {
-	expand := func(paths []string) []string {
-		out := make([]string, 0, len(paths))
-		for _, p := range paths {
-			switch {
-			case filepath.IsAbs(p):
-			case p == "~":
-				p = userHome
-			case strings.HasPrefix(p, "~/"):
-				p = userHome + string(filepath.Separator) + p[2:]
-			default:
-				p = cwd + string(filepath.Separator) + p
-			}
-			out = append(out, p)
-		}
-		return out
-	}
-	denyWrite := protectedWrites(cwd)
-	write := []string{cwd, "/tmp", os.TempDir()}
-	write = append(write, expand(cfg.AllowWrite)...)
-	for _, dir := range dirs {
-		denyWrite = append(denyWrite, protectedWrites(dir)...)
-		write = append(write, dir)
-	}
-	return sandbox.Policy{
-		Write:          write,
-		DenyRead:       append([]string{kopiHome}, expand(cfg.DenyRead)...),
-		DenyWrite:      denyWrite,
-		DenyWriteNames: []string{policy.ProjectMCPFile},
-		Network:        cfg.Network,
-	}
-}
-
-// protectedWrites are the paths under a workspace directory that commands may
-// not write.
-func protectedWrites(dir string) []string {
-	gitDir := filepath.Join(dir, ".git")
-	// The names stay listed on Linux, though gitDir covers them: with paths
-	// listed beneath it, a missing .git gets a directory placeholder rather than
-	// an empty file, so git in a subdirectory of another repository still walks
-	// up. The whole directory is denied there because bubblewrap can block
-	// creating a path only by mounting a placeholder on it, and git refuses an
-	// empty commondir and, in a reftable repository, any commondir.
-	var denyWrite []string
-	for _, name := range []string{"hooks", "config", "commondir", "config.worktree", "worktrees", "modules"} {
-		denyWrite = append(denyWrite, filepath.Join(gitDir, name))
-	}
-	_, err := os.Lstat(gitDir)
-	missing := errors.Is(err, os.ErrNotExist)
-	if missing || runtime.GOOS == "linux" {
-		// Git takes a directory holding HEAD, objects and refs for a git
-		// directory and runs its config. On Linux another command's .git
-		// placeholder can hide that .git was missing.
-		denyWrite = append(denyWrite, filepath.Join(dir, "HEAD"))
-	}
-	if runtime.GOOS == "linux" {
-		denyWrite = append(denyWrite, gitDir)
-	} else if info, err := os.Stat(gitDir); !missing && (err != nil || !info.IsDir()) {
-		// A .git file, as in a linked worktree or submodule, names the git directory.
-		denyWrite = append(denyWrite, gitDir)
-	}
-	// Unconditional: the sandbox also denies what a link resolves to, and a
-	// linked directory is denied whole rather than left to be swapped for a file.
-	return append(denyWrite, filepath.Join(dir, policy.ProjectMCPFile))
-}
-
-// planPolicy is p with the workspace denied rather than dropped from the write
-// roots: a workspace under /tmp, the temporary directory or an allowWrite path
-// would stay writable through that root.
-func planPolicy(p sandbox.Policy, cwd string, dirs []string) sandbox.Policy {
-	p.DenyWrite = slices.Concat(p.DenyWrite, []string{cwd}, dirs)
-	return p
+	return sb, plan, setDirs, validateDirs, nil, nil
 }
 
 // sameProviderNoCredential reports whether err is the missing credential of

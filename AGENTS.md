@@ -10,6 +10,7 @@
 
 - Root `main.go` only calls `cmd.Execute()`.
 - `cmd/` holds one file per cobra subcommand, each as `func xCmd() *cobra.Command`; a nested subcommand lives in its parent's file. No `init()`.
+- `cmd/` holds flags, wiring and command-line wording; a decision, such as folder trust or the sandbox's policy, lives under `internal/`.
 - Everything else lives under `internal/<noun>`.
 - Behaviour lives in `internal/app`, the frontend-neutral controller. Frontends (`internal/tui`, `internal/headless`) only pass input in and render events.
 

@@ -1,3 +1,5 @@
+// Package pigruntime is Kopi's runtime over PiG: it opens sessions, runs
+// turns and connects MCP servers and providers, in Kopi's terms.
 package pigruntime
 
 import (
