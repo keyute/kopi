@@ -26,6 +26,7 @@ func globalLayer(t *testing.T, content string) Layer {
 // withDefaults returns c with the default UI blocks filled in.
 func withDefaults(c Config) Config {
 	c.Mode = "plan"
+	c.Effort = "medium"
 	c.InstructionFallbacks = []string{"CLAUDE.md"}
 	c.Keys = DefaultKeys()
 	c.StatusLine = DefaultStatusLine()
@@ -60,6 +61,14 @@ func TestResolveModeFromGlobalFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "execute", r.Config.Mode)
 	assert.Equal(t, global.Name, r.Origins["mode"])
+}
+
+func TestResolveEffortFromGlobalFile(t *testing.T) {
+	global := globalLayer(t, `{"effort": "high"}`)
+	r, err := Resolve(Defaults(), global)
+	require.NoError(t, err)
+	assert.Equal(t, "high", r.Config.Effort)
+	assert.Equal(t, global.Name, r.Origins["effort"])
 }
 
 func TestResolveRejectsInvalidModeNamingLayer(t *testing.T) {
@@ -920,7 +929,7 @@ func TestEntriesSortedWithUnsetKeysAndOrigins(t *testing.T) {
 	r, err := Resolve(Defaults())
 	require.NoError(t, err)
 	entries := r.Entries()
-	assert.Len(t, entries, 33+len(KeyActions))
+	assert.Len(t, entries, 34+len(KeyActions))
 	assert.IsIncreasing(t, entryKeys(entries))
 	assert.Contains(t, entries, Entry{Key: "model", Value: "", Origin: "unset"})
 	assert.Contains(t, entries, Entry{Key: "smallModel", Value: "", Origin: "unset"})

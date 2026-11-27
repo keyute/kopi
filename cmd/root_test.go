@@ -610,6 +610,20 @@ func TestRootAgentEffortFailsAtStart(t *testing.T) {
 	assert.Empty(t, server.requests)
 }
 
+func TestRootEffortFailsAtStart(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
+	e.writeMockModels(t, server.URL)
+	path := filepath.Join(e.kopiHome, "config.json")
+	e.writeFile(t, path, `{"effort":"huge"}`)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.ErrorIs(t, err, pigruntime.ErrUnknownEffort)
+	assert.Contains(t, err.Error(), path)
+	assert.Empty(t, server.requests)
+}
+
 func TestRootAgentRules(t *testing.T) {
 	t.Run("accepted without definitions", func(t *testing.T) {
 		e := newTestEnv(t)

@@ -3930,3 +3930,28 @@ func TestPreCancelledFreshPromptKeepsItsExplicitRaise(t *testing.T) {
 	assert.Equal(t, "low", h.c.main.sess.Effort())
 	assert.Equal(t, 1, h.faux.CallCount())
 }
+
+func TestEffortKeyOpensNewSessionsOnly(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	rt := pigruntimetest.NewRuntime(t, sb)
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: fauxProvider, Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, rt.RegisterProvider(thinker.Provider()))
+	h := buildHarness(t, rt, thinker, sb, Config{Model: fauxProvider + "/thinker", Effort: pigruntime.LowEffort})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+	assert.Equal(t, "low", h.c.Agents()[0].Effort)
+	_, err := h.c.Submit(t.Context(), Main, "/effort high")
+	require.NoError(t, err)
+	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("answer")})
+	h.turn(t, "question")
+	savedID := h.c.Status().SessionID
+
+	require.NoError(t, h.c.NewSession(t.Context()))
+	assert.Equal(t, "low", h.c.Agents()[0].Effort)
+
+	sessions := subscribeTo[event.SessionChanged](h.c)
+	_, err = h.c.Submit(t.Context(), Main, "/resume "+savedID)
+	require.NoError(t, err)
+	assert.Equal(t, savedID, receiveEvent(t, sessions).SessionID)
+	assertSwitchDone(t, h)
+	assert.Equal(t, "high", h.c.Agents()[0].Effort)
+}
