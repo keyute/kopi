@@ -1892,7 +1892,7 @@ func TestPromptHidesTheFooterAndTheDialogEndsTheScreen(t *testing.T) {
 			submitText(m, "/tasks")
 		}},
 		{"copy", func(m *model, c *fakeController) {
-			send(m, event.TurnStart{Prompt: "go"}, event.TextDelta{Text: "```sh\ntask test\n```"}, event.ReplyEnd{}, event.TurnEnd{})
+			reply(m, "```sh\ntask test\n```")
 			c.submitErr = app.ErrCopy
 			submitText(m, "/copy")
 		}},

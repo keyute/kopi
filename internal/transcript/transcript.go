@@ -16,9 +16,8 @@ type Transcript struct {
 	// boundary is the number of items restored from history; stretches never
 	// cross it and groups before it are sealed.
 	boundary int
-	// writing is the assistant text since the last ReplyEnd; reply is the last
-	// ended text that was not blank.
-	writing, reply string
+	// reply is the last ended text that was not blank.
+	reply string
 }
 
 type kind int
@@ -62,17 +61,15 @@ func (t *Transcript) Apply(ev event.Event) {
 		// same block.
 		t.items = append(t.items, item{kind: userItem, text: ev.Text})
 	case event.TextDelta:
-		t.writing += ev.Text
 		if n := len(t.items); n > t.boundary && t.items[n-1].kind == assistantItem {
 			t.items[n-1].text += ev.Text
 			return
 		}
 		t.items = append(t.items, item{kind: assistantItem, text: ev.Text})
 	case event.ReplyEnd:
-		if strings.TrimSpace(t.writing) != "" {
-			t.reply = t.writing
+		if strings.TrimSpace(ev.Text) != "" {
+			t.reply = ev.Text
 		}
-		t.writing = ""
 	case event.ToolStart:
 		t.items = append(t.items, item{kind: callItem, call: Call{
 			ID:          ev.CallID,

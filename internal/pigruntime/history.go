@@ -166,7 +166,7 @@ func history(msgs []agent.AgentMessage) []event.Event {
 					afterText = false
 				}
 			}
-			out = append(out, event.ReplyEnd{})
+			out = append(out, event.ReplyEnd{Text: assistantText(m.Assistant)})
 			// PiG streams the entire assistant message before executing tools.
 			if len(toolStarts) > 0 {
 				out = append(out, toolStarts...)

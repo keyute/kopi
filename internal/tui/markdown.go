@@ -548,7 +548,12 @@ func codeBlocks(text string) []codeBlock {
 		default:
 			return ast.WalkContinue, nil
 		}
-		b.text = strings.TrimSuffix(rawText(n, src), "\n")
+		b.text = rawText(n, src)
+		if strings.HasSuffix(b.text, "\r\n") {
+			b.text = strings.TrimSuffix(b.text, "\r\n")
+		} else {
+			b.text = strings.TrimSuffix(b.text, "\n")
+		}
 		if b.text != "" {
 			out = append(out, b)
 		}

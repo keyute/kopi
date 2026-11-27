@@ -24,6 +24,7 @@ import (
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
+	"github.com/keyute/kopi/internal/transcript"
 )
 
 // heldProbe closes started when called and returns once release is closed.
@@ -976,6 +977,46 @@ func TestReply(t *testing.T) {
 	}
 }
 
+func TestRetryOmittedPartialOnCancellation(t *testing.T) {
+	r, faux := newTestRuntime(t, newSandbox(t))
+	var settings coding.Settings
+	require.NoError(t, json.Unmarshal([]byte(`{"retry":{"baseDelayMs":0}}`), &settings))
+	r.svcs.SettingsManager().ApplyOverrides(settings)
+	sess := openTestSession(t, r)
+	var tr transcript.Transcript
+	t.Cleanup(sess.Subscribe(func(ev event.Event) { tr.Apply(ev) }))
+	faux.SetResponses([]ai.FauxResponseStep{reply("earlier")})
+	_, err := sess.Send(t.Context(), Prompt{Text: "first"}, nil, nil)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var atRetry string
+	retried := false
+	t.Cleanup(sess.inner.Subscribe(func(ev agent.AgentEvent) {
+		if _, ok := ev.(agent.AutoRetryStartEvent); ok {
+			retried = true
+			atRetry = tr.LastReply()
+			cancel()
+		}
+	}))
+	failed := ai.FauxAssistantMessage(ai.FauxContentString("omitted"), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonError), ErrorMessage: "overloaded"})
+	faux.SetResponses([]ai.FauxResponseStep{failed, reply("unreached")})
+	_, err = sess.Send(ctx, Prompt{Text: "retry"}, nil, nil)
+	require.NoError(t, err)
+	require.True(t, retried)
+	assert.Equal(t, "earlier", atRetry)
+	assert.Equal(t, "earlier", tr.LastReply())
+	var raw string
+	for _, entry := range sess.inner.SessionManager().GetBranch() {
+		raw += string(entry.Raw())
+	}
+	assert.Contains(t, raw, `"text":"omitted"`)
+	assert.Contains(t, raw, `"replacement":null`)
+	var restored transcript.Transcript
+	restored.Restore(sess.History())
+	assert.Equal(t, "earlier", restored.LastReply())
+}
+
 // PiG answers a call "Operation aborted" when the turn was cancelled while the
 // call's before hook ran.
 func TestCancelledTurnMarksAbortedCallInterrupted(t *testing.T) {
@@ -1083,7 +1124,7 @@ func TestSendQueuesModeAfterSkillsBeforeNotices(t *testing.T) {
 		event.TurnStart{Prompt: "prompt"},
 		n.Shown,
 		event.TextDelta{Text: "done"},
-		event.ReplyEnd{},
+		event.ReplyEnd{Text: "done"},
 	}, resume(t, r, sess.ID()).History())
 }
 

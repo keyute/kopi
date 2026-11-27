@@ -583,6 +583,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	// last is the run's last assistant message. SendContent returns PiG's
 	// whole transcript, so it cannot say which assistant message is this run's.
 	var last *agent.AssistantMessage
+	var provisional bool
 	unsubscribe := s.inner.Subscribe(func(ev agent.AgentEvent) {
 		abortInLoop(ev)
 		switch ev := ev.(type) {
@@ -619,6 +620,9 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 		case agent.MessageEndEvent:
 			if ev.Message.Assistant != nil {
 				last = ev.Message.Assistant
+				if provisionalReply(last) && strings.TrimSpace(assistantText(last)) != "" {
+					provisional = true
+				}
 			}
 		case agent.TurnEndEvent:
 			// A steer after a failed or aborted turn would continue a run
@@ -691,6 +695,21 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	_, _ = s.inner.ClearQueue()
 	s.inner.Agent().ClearSteeringQueue()
 	s.inner.Agent().TakePendingNextTurn()
+	// PiG can omit error or length responses with context edits after MessageEnd.
+	// Only the retained branch is authoritative once delivery and recovery settle.
+	if provisional {
+		msgs, branchErr := branchMessages(s.inner.SessionManager().GetBranch())
+		if branchErr == nil {
+			for i := len(msgs) - 1; i >= 0; i-- {
+				if a := msgs[i].Assistant; a != nil {
+					if text := assistantText(a); strings.TrimSpace(text) != "" {
+						s.notify(event.ReplyEnd{Text: text})
+						break
+					}
+				}
+			}
+		}
+	}
 	res := SendResult{Sent: sent, Undelivered: handed, UndeliveredNotices: pending}
 	s.effortMu.Lock()
 	if s.raised != DefaultEffort {
@@ -717,13 +736,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 		res.Outcome = event.Outcome{Status: event.Failed, Message: pigTexts.Replace(last.ErrorMessage)}
 	default:
 		res.Outcome = event.Outcome{Status: event.Completed}
-		var parts []string
-		for _, block := range last.Content {
-			if b, ok := block.(ai.TextContent); ok && b.Text != "" {
-				parts = append(parts, b.Text)
-			}
-		}
-		res.Reply = strings.Join(parts, "\n\n")
+		res.Reply = assistantText(last)
 	}
 	return res, nil
 }

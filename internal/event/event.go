@@ -70,8 +70,8 @@ type TextDelta struct{ Text string }
 
 type ThinkingDelta struct{ Text string }
 
-// ReplyEnd follows the text of one assistant message, however the message ended.
-type ReplyEnd struct{}
+// ReplyEnd carries one assistant message's text; provisional replies may be delayed until the send settles.
+type ReplyEnd struct{ Text string }
 
 // ToolStart carries the call's JSON arguments, compacted. Title names the call
 // and Done names it once it succeeded, "" when Title serves. Change is the

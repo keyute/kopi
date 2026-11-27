@@ -13,7 +13,7 @@ import (
 )
 
 func reply(m *model, text string) {
-	send(m, event.TurnStart{Prompt: "go"}, event.TextDelta{Text: text}, event.ReplyEnd{}, event.TurnEnd{})
+	send(m, event.TurnStart{Prompt: "go"}, event.TextDelta{Text: text}, event.ReplyEnd{Text: text}, event.TurnEnd{})
 }
 
 func runCopyCommand(m *model, c *fakeController) tea.Cmd {
@@ -38,7 +38,7 @@ func TestCopyOfAReplyWithoutCodeCopiesItWhole(t *testing.T) {
 	cmd := runCopyCommand(m, c)
 
 	assert.Nil(t, m.front())
-	assertCopied(t, m, cmd, "Hello **there**")
+	assertCopied(t, m, cmd, "\nHello **there**\n")
 }
 
 func TestCopyOfAReplyWithBlocksPicksOne(t *testing.T) {
@@ -71,7 +71,7 @@ func TestCopyOfAReplyWithBlocksPicksOne(t *testing.T) {
 		press(m, tea.KeyPressMsg{Code: tea.KeyDown})
 		assertCopied(t, m, press(m, enter), "func main() {\n}")
 	})
-	t.Run("whole", func(t *testing.T) { pick(t, enter, strings.TrimSpace(text)) })
+	t.Run("whole", func(t *testing.T) { pick(t, enter, text) })
 }
 
 func TestCopyStandaloneIndentedCode(t *testing.T) {
@@ -81,6 +81,16 @@ func TestCopyStandaloneIndentedCode(t *testing.T) {
 	require.NotNil(t, m.front())
 
 	assertCopied(t, m, press(m, tea.KeyPressMsg{Code: '2', Text: "2"}), "first\nsecond")
+}
+
+func TestCopyWholeReplyWithLeadingIndentedCode(t *testing.T) {
+	m, c := newTestModel(t, 52, 24)
+	text := "    first\n    second\n\nDone.\n"
+	reply(m, text)
+	runCopyCommand(m, c)
+	require.NotNil(t, m.front())
+
+	assertCopied(t, m, press(m, enter), text)
 }
 
 func TestCopyEscapeCopiesNothing(t *testing.T) {
@@ -108,6 +118,25 @@ func TestCopyLabelStaysOneRow(t *testing.T) {
 	require.NotEmpty(t, row)
 	assert.True(t, strings.HasSuffix(row, "…"), row)
 	assert.LessOrEqual(t, len([]rune(row)), 30)
+}
+
+func TestCopyLanguageLabelWithTabStaysOneRow(t *testing.T) {
+	m, c := newTestModel(t, 30, 24)
+	reply(m, "```long\tlanguage\nbody\n```")
+	runCopyCommand(m, c)
+	require.NotNil(t, m.front())
+
+	var row string
+	for _, r := range screen(m) {
+		if strings.HasPrefix(r, "  2. long") {
+			row = r
+		}
+	}
+	require.NotEmpty(t, row)
+	assert.NotContains(t, row, "\t")
+	assert.True(t, strings.HasSuffix(row, "…"), row)
+	assert.LessOrEqual(t, len([]rune(row)), 30)
+	assertCopied(t, m, press(m, tea.KeyPressMsg{Code: '2', Text: "2"}), "body")
 }
 
 func TestCopyLabelWithTabsStaysOneRowAndCopiesTheTabs(t *testing.T) {

@@ -669,4 +669,6 @@ func TestCodeBlocks(t *testing.T) {
 		{"sh", "task test"},
 	}, codeBlocks(text))
 	assert.Empty(t, codeBlocks("no code `inline`"))
+	assert.Equal(t, []codeBlock{{"", "first\r\n\r\nsecond"}}, codeBlocks("```\r\nfirst\r\n\r\nsecond\r\n```\r\n"))
+	assert.Empty(t, codeBlocks("```\r\n\r\n```\r\n"))
 }

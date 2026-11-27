@@ -28,7 +28,6 @@ func (m *model) showCopy() tea.Cmd {
 		return m.flash("no reply to copy")
 	}
 	blocks := codeBlocks(text)
-	text = strings.TrimSpace(text)
 	if len(blocks) == 0 {
 		return m.copy(text)
 	}
@@ -40,7 +39,7 @@ func (m *model) showCopy() tea.Cmd {
 	for _, b := range blocks {
 		label := lineCount(b.text) + " · " + firstLine(clean(b.text))
 		if b.lang != "" {
-			label = b.lang + " · " + label
+			label = clean(b.lang) + " · " + label
 		}
 		c.texts, c.labels = append(c.texts, b.text), append(c.labels, label)
 	}
