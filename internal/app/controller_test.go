@@ -3967,12 +3967,12 @@ func TestEffortCommandCarriesToNewAndResumedSessions(t *testing.T) {
 	require.NoError(t, h.c.NewSession(t.Context()))
 	assert.Equal(t, "high", h.c.Agents()[0].Effort)
 
-	_, err = h.c.Submit(t.Context(), Main, "/effort medium")
+	_, err = h.c.Submit(t.Context(), Main, "/effort off")
 	require.NoError(t, err)
 	sessions := subscribeTo[event.SessionChanged](h.c)
 	_, err = h.c.Submit(t.Context(), Main, "/resume "+savedID)
 	require.NoError(t, err)
 	assert.Equal(t, savedID, receiveEvent(t, sessions).SessionID)
 	assertSwitchDone(t, h)
-	assert.Equal(t, "medium", h.c.Agents()[0].Effort)
+	assert.Equal(t, "off", h.c.Agents()[0].Effort)
 }

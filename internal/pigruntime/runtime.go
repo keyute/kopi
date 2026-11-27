@@ -293,6 +293,7 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	// session from restoring the model it was saved with. The same holds for
 	// ThinkingLevel, and PiG restores the saved level when it is empty, so
 	// DefaultEffort is sent as medium.
+	level := cmp.Or(o.Effort.thinkingLevel(), MediumEffort.thinkingLevel())
 	start := coding.SessionStartOptions{
 		Model:                  model,
 		SystemPromptSections:   sections,
@@ -302,7 +303,7 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 		AllowedTools:           allowed,
 		InitialActiveToolNames: names,
 		BeforeToolCall:         []agent.BeforeToolCallHook{beforeToolCall(gate)},
-		ThinkingLevel:          cmp.Or(o.Effort.thinkingLevel(), MediumEffort.thinkingLevel()),
+		ThinkingLevel:          level,
 	}
 	if o.Parent != nil {
 		// PiG lists, resumes and continues only the *.jsonl files directly in a
@@ -405,9 +406,7 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	if o.Recall != nil {
 		s.recallAfterCompaction(o.Recall)
 	}
-	if o.Effort != DefaultEffort {
-		s.asked = o.Effort.thinkingLevel()
-	}
+	s.asked = level
 	return s, nil
 }
 

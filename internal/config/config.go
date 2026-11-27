@@ -38,7 +38,7 @@ type Config struct {
 	SmallModel string `koanf:"smallModel"` // "provider/id"; empty means model
 	// Mode is the mode sessions start in, plan or execute.
 	Mode string `koanf:"mode"`
-	// Effort is the reasoning level a new main session opens at.
+	// Effort is the reasoning level every main session opens at, new or resumed.
 	Effort string `koanf:"effort"`
 	// InstructionFallbacks are file names tried in order in a directory
 	// without an AGENTS.md.

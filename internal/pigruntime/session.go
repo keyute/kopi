@@ -1,7 +1,6 @@
 package pigruntime
 
 import (
-	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -49,8 +48,8 @@ type Session struct {
 	effortMu       sync.Mutex
 	effortRevision uint64
 	// asked is the level last asked for (SetEffort, or open), before PiG clamped
-	// it to the model; empty when none was. A model switch applies it again; a
-	// raise never changes it.
+	// it to the model. A model switch applies it again; a raise never changes
+	// it.
 	asked ai.ModelThinkingLevel
 	// raised is the Effort that lifted the level while a Send runs, and
 	// DefaultEffort when none did; restore is the level to put back when it ends.
@@ -352,12 +351,12 @@ func (s *Session) SetEffort(e Effort) error {
 }
 
 // setModel switches the model, then asks again for the level the session was
-// given, which the old model may have clamped; with nothing asked the level is
-// the default PiG applies on a switch. PiG sets the agent's model before it
-// appends the change and then the level to the session file (PiG v0.8.0
-// coding/session.go beginModelChangeState; recheck on a bump), so a failed
-// append of either leaves the session on model: that error wraps ErrModelNotSaved. A
-// failure that left the model as it was is returned as it is.
+// given, which the old model may have clamped. PiG sets the agent's model
+// before it appends the change and then the level to the session file (PiG
+// v0.8.0 coding/session.go beginModelChangeState; recheck on a bump), so a
+// failed append of either leaves the session on model: that error wraps
+// ErrModelNotSaved. A failure that left the model as it was is returned as it
+// is.
 func (s *Session) setModel(model *ai.Model) error {
 	s.effortMu.Lock()
 	defer s.effortMu.Unlock()
@@ -370,7 +369,7 @@ func (s *Session) setModel(model *ai.Model) error {
 		}
 		err = fmt.Errorf("%w: %w", ErrModelNotSaved, err)
 	}
-	if lerr := s.inner.SetThinkingLevel(cmp.Or(s.asked, MediumEffort.thinkingLevel())); lerr != nil {
+	if lerr := s.inner.SetThinkingLevel(s.asked); lerr != nil {
 		err = errors.Join(err, fmt.Errorf("failed to restore the effort after the model change: %w: %w", ErrModelNotSaved, lerr))
 	}
 	return err
@@ -382,8 +381,7 @@ func sameModel(a, b *ai.Model) bool {
 
 // raise lifts the level to e for the rest of the Send, remembering the level
 // to restore. PiG re-reads the level before every provider request, so a raise
-// between turns reaches the next request. Every level change is a
-// thinking_level_change entry in PiG's session file.
+// between turns reaches the next request.
 func (s *Session) raise(e Effort, continuation *EffortContinuation) {
 	s.effortMu.Lock()
 	defer s.effortMu.Unlock()

@@ -1390,6 +1390,10 @@ func TestSetModelKeepsAResumedSessionsOpenedEffort(t *testing.T) {
 	onPlain := openOn(t, r, fauxModel, DefaultEffort, saved.ID())
 	require.NoError(t, r.SetModel(t.Context(), onPlain, thinker))
 	assert.Equal(t, "medium", onPlain.Effort())
+
+	onPlainLow := openOn(t, r, fauxModel, LowEffort, saved.ID())
+	require.NoError(t, r.SetModel(t.Context(), onPlainLow, thinker))
+	assert.Equal(t, "low", onPlainLow.Effort())
 }
 
 func TestModelsListsCredentialedProvidersSorted(t *testing.T) {
