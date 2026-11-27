@@ -39,6 +39,7 @@ func TestWorkflowDescribesItself(t *testing.T) {
 	assert.True(t, tool.Deferred)
 	assert.Equal(t, Action{Verb: "Launched", One: "workflow", Many: "workflows"}, tool.Display.Action)
 	assert.Contains(t, tool.Description, "agentType names one of the agent types below")
+	assert.Contains(t, tool.Description, "The user typed ultracode to have this task done by such a script, with agents checking what other agents found before you report it.")
 	assert.Contains(t, tool.Description, "agent(prompt, {agentType, schema, label, phase})")
 	assert.Contains(t, tool.Description, "- phase(title): sets the heading the user sees the agents under that agent() starts after it; the phase option of agent() sets it for that one agent.")
 	assert.Contains(t, tool.Description, `phase: "Find"}`)
