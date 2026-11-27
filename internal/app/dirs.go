@@ -72,9 +72,7 @@ func (c *Controller) AddDir(arg string) error {
 			req.Instructions = append(req.Instructions, f.Path)
 		}
 	}
-	if c.cfg.Covers != nil {
-		req.Servers, req.Skills = c.cfg.Covers(p.dir.Real)
-	}
+	req.Servers, req.Skills = covers(p.dir.Real, c.cfg.Home.Real)
 	// The registration and its event stay ordered against the end of the
 	// request, or a dialog could open after its DirEnded.
 	c.dirEventsMu.Lock()

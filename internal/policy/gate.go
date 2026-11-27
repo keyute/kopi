@@ -1,3 +1,5 @@
+// Package policy decides what a tool call may do: the mode, the permission
+// rules and the gate that admits or refuses each call.
 package policy
 
 import (
