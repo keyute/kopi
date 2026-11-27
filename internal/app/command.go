@@ -50,7 +50,7 @@ func commandTable() []command {
 			c.EnterExecute()
 			return nil
 		}},
-		{Command: Command{Name: "effort", Summary: "set the reasoning effort for this session"}, run: (*Controller).effortCommand, args: (*Controller).effortCandidates},
+		{Command: Command{Name: "effort", Summary: "set the reasoning effort until kopi exits"}, run: (*Controller).effortCommand, args: (*Controller).effortCandidates},
 		{Command: Command{Name: "model", Summary: "switch the model until kopi exits"}, run: (*Controller).modelCommand, args: (*Controller).modelCandidates},
 		{Command: Command{Name: "add-dir", Summary: "add a directory to the workspace until kopi exits", Typed: true}, run: func(c *Controller, _ context.Context, arg string) error {
 			return c.AddDir(arg)
@@ -168,8 +168,11 @@ func (c *Controller) effortCommand(_ context.Context, arg string) error {
 	if err := sess.SetEffort(e); err != nil {
 		return err
 	}
+	c.mu.Lock()
+	c.effort = e
+	c.mu.Unlock()
 	c.relay.emit(event.EffortChanged{})
-	c.relay.emit(event.Notice{Text: fmt.Sprintf("Effort set to %s for this session.", sess.Effort())})
+	c.relay.emit(event.Notice{Text: fmt.Sprintf("Effort set to %s until kopi exits. Set \"effort\" in %s to keep it.", sess.Effort(), c.cfg.ConfigFile)})
 	return nil
 }
 

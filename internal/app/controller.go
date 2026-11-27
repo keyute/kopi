@@ -46,7 +46,7 @@ type Config struct {
 	// Mode is the controller's initial mode, which the first session starts
 	// in, and the mode every later session starts in.
 	Mode policy.Mode
-	// Effort is the level a new main session opens at; a resumed one keeps its own.
+	// Effort is the level every main session opens at until /effort replaces it.
 	Effort pigruntime.Effort
 	// Files lists the entries that @ references complete to, and is the workspace
 	// /add-dir adds to and completes in, so /add-dir needs it.
@@ -239,7 +239,10 @@ type Controller struct {
 	// side requests and ended workflow agents.
 	spent pigruntime.Usage
 	// model is the session model: Config.Model, or the runtime's default once resolved.
-	model  string
+	model string
+	// effort is the level the next main session opens at: Config.Effort, or what
+	// /effort last set.
+	effort pigruntime.Effort
 	sessID string
 	// dirsToldBy is how many entries of dirs each session of this run has
 	// read, so a session resumed later is not told them again; queue guards it.
@@ -311,7 +314,7 @@ func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
 	if cfg.Tasks == nil {
 		cfg.Tasks = tool.NewTasks()
 	}
-	c := &Controller{rt: rt, cfg: cfg, model: cfg.Model, authority: policy.NewAuthority()}
+	c := &Controller{rt: rt, cfg: cfg, model: cfg.Model, effort: cfg.Effort, authority: policy.NewAuthority()}
 	c.titleCtx, c.titleStop = context.WithCancel(context.Background())
 	c.main = &runner{c: c, role: mainRole{c}}
 	var reserved []string
@@ -1320,10 +1323,9 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	}
 	c.titleCommit.Lock()
 	defer c.titleCommit.Unlock()
-	effort := pigruntime.DefaultEffort
-	if req.ResumeID == "" && !req.Continue {
-		effort = c.cfg.Effort
-	}
+	c.mu.Lock()
+	effort := c.effort
+	c.mu.Unlock()
 	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
 		Model:        c.Model(),
 		Effort:       effort,

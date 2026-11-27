@@ -186,7 +186,7 @@ func TestEffortCommandSetsTheLevelForAReasoningModel(t *testing.T) {
 	rt := pigruntimetest.NewRuntime(t, sb)
 	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: fauxProvider, Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
 	require.NoError(t, rt.RegisterProvider(thinker.Provider()))
-	h := buildHarness(t, rt, thinker, sb, Config{Model: fauxProvider + "/thinker"})
+	h := buildHarness(t, rt, thinker, sb, Config{Model: fauxProvider + "/thinker", ConfigFile: "/kopi/config.json"})
 	_, err := h.c.Submit(t.Context(), Main, "/effort high")
 	require.ErrorIs(t, err, ErrNoSession)
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
@@ -201,13 +201,13 @@ func TestEffortCommandSetsTheLevelForAReasoningModel(t *testing.T) {
 	_, err = h.c.Submit(t.Context(), Main, "/effort max")
 	require.NoError(t, err)
 	receiveEvent(t, changed)
-	assert.Equal(t, event.Notice{Text: "Effort set to high for this session."}, receiveEvent(t, notices))
+	assert.Equal(t, event.Notice{Text: "Effort set to high until kopi exits. Set \"effort\" in /kopi/config.json to keep it."}, receiveEvent(t, notices))
 
 	_, err = h.c.Submit(t.Context(), Main, "/effort low")
 	require.NoError(t, err)
 	assert.Equal(t, "low", h.c.Agents()[0].Effort)
 	receiveEvent(t, changed)
-	assert.Equal(t, event.Notice{Text: "Effort set to low for this session."}, receiveEvent(t, notices))
+	assert.Equal(t, event.Notice{Text: "Effort set to low until kopi exits. Set \"effort\" in /kopi/config.json to keep it."}, receiveEvent(t, notices))
 	cs, err := h.c.Arguments("effort", "")
 	require.NoError(t, err)
 	var current []string
@@ -223,7 +223,7 @@ func TestEffortCommandSetsTheLevelForAReasoningModel(t *testing.T) {
 		_, err = h.c.Submit(t.Context(), Main, "/effort "+level)
 		require.NoError(t, err)
 		receiveEvent(t, changed)
-		assert.Equal(t, event.Notice{Text: "Effort set to " + level + " for this session."}, receiveEvent(t, notices))
+		assert.Equal(t, event.Notice{Text: "Effort set to " + level + " until kopi exits. Set \"effort\" in /kopi/config.json to keep it."}, receiveEvent(t, notices))
 	}
 
 	// A switch holds the old session until it finishes.
@@ -231,12 +231,12 @@ func TestEffortCommandSetsTheLevelForAReasoningModel(t *testing.T) {
 	h.c.life.Lock()
 	_, err = h.c.Submit(t.Context(), Main, "/new")
 	assert.NoError(t, err)
-	_, err = h.c.Submit(t.Context(), Main, "/effort high")
+	_, err = h.c.Submit(t.Context(), Main, "/effort low")
 	assert.ErrorIs(t, err, ErrBusy)
 	h.c.life.Unlock()
 	receiveEvent(t, switched)
 	assertSwitchDone(t, h)
-	assert.Equal(t, "medium", h.c.Agents()[0].Effort)
+	assert.Equal(t, "high", h.c.Agents()[0].Effort, "/new keeps the level typed last")
 }
 
 func TestEffortCommandRefusesAModelThatDoesNotReason(t *testing.T) {

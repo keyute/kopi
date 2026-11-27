@@ -336,9 +336,9 @@ func (s *Session) Effort() string {
 	return string(s.inner.ThinkingLevel())
 }
 
-// SetEffort changes the level the session runs at, from the next prompt, for
-// this session only. e is not DefaultEffort. PiG clamps a level the model lacks
-// to the nearest it has; Effort reports the level in effect.
+// SetEffort changes the level the session runs at, from the next prompt. e is
+// not DefaultEffort. PiG clamps a level the model lacks to the nearest it has;
+// Effort reports the level in effect.
 func (s *Session) SetEffort(e Effort) error {
 	s.effortMu.Lock()
 	defer s.effortMu.Unlock()
@@ -383,8 +383,7 @@ func sameModel(a, b *ai.Model) bool {
 // raise lifts the level to e for the rest of the Send, remembering the level
 // to restore. PiG re-reads the level before every provider request, so a raise
 // between turns reaches the next request. Every level change is a
-// thinking_level_change entry in PiG's session file, so the restore is what a
-// resume reads; a crash mid-run leaves the raised level saved.
+// thinking_level_change entry in PiG's session file.
 func (s *Session) raise(e Effort, continuation *EffortContinuation) {
 	s.effortMu.Lock()
 	defer s.effortMu.Unlock()

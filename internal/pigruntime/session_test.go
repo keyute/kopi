@@ -1486,7 +1486,7 @@ func openThinker(t *testing.T, r *Runtime, tools ...tool.Tool) (*Session, *ai.Fa
 
 func TestSendRaisesEffortForTheRunAndRestoresIt(t *testing.T) {
 	r, _ := newTestRuntime(t, newSandbox(t))
-	sess, thinker, opts := openThinker(t, r)
+	sess, thinker, _ := openThinker(t, r)
 	levels := make(chan ai.ThinkingLevel, 1)
 	thinker.SetResponses([]ai.FauxResponseStep{
 		ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
@@ -1507,12 +1507,6 @@ func TestSendRaisesEffortForTheRunAndRestoresIt(t *testing.T) {
 	assert.Equal(t, ai.ThinkingLevelHigh, got, "PiG clamps max to the model's highest level")
 	assert.Equal(t, "low", sess.Effort())
 	assert.Equal(t, 2, changes, "raise and restore")
-
-	opts.Effort, opts.ResumeID = DefaultEffort, sess.ID()
-	resumed, err := r.Open(t.Context(), opts)
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, resumed.Close(context.Background())) })
-	assert.Equal(t, "low", resumed.Effort())
 }
 
 func TestSendRaisesEffortForAHandedOverPrompt(t *testing.T) {

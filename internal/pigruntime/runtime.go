@@ -1,6 +1,7 @@
 package pigruntime
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -289,7 +290,9 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	sections := promptSections(o.SystemPrompt)
 	// InitialActiveToolNames must be set too: nil falls back to PiG's
 	// read/bash/edit/write defaults. An explicit Model also stops a resumed
-	// session from restoring the model it was saved with.
+	// session from restoring the model it was saved with. The same holds for
+	// ThinkingLevel, and PiG restores the saved level when it is empty, so
+	// DefaultEffort is sent as medium.
 	start := coding.SessionStartOptions{
 		Model:                  model,
 		SystemPromptSections:   sections,
@@ -299,7 +302,7 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 		AllowedTools:           allowed,
 		InitialActiveToolNames: names,
 		BeforeToolCall:         []agent.BeforeToolCallHook{beforeToolCall(gate)},
-		ThinkingLevel:          o.Effort.thinkingLevel(),
+		ThinkingLevel:          cmp.Or(o.Effort.thinkingLevel(), MediumEffort.thinkingLevel()),
 	}
 	if o.Parent != nil {
 		// PiG lists, resumes and continues only the *.jsonl files directly in a
@@ -402,13 +405,8 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	if o.Recall != nil {
 		s.recallAfterCompaction(o.Recall)
 	}
-	// On resume asked is PiG's restored level, already clamped to the model the
-	// session is reopened on, so a more capable model later keeps that level.
-	switch {
-	case o.Effort != DefaultEffort:
+	if o.Effort != DefaultEffort {
 		s.asked = o.Effort.thinkingLevel()
-	case (o.ResumeID != "" || o.Continue) && reasons(sess.AvailableThinkingLevels()):
-		s.asked = sess.ThinkingLevel()
 	}
 	return s, nil
 }

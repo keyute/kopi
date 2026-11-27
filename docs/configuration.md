@@ -30,7 +30,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `version` | `1` |
 | `model` | `provider/id` of the model, optional, see [`model`](#model) |
 | `mode` | Mode sessions start in, see [`mode`](#mode) |
-| `effort` | Reasoning effort a new main session opens at, see [`effort`](#effort) |
+| `effort` | Reasoning effort every main session opens at, new or resumed, see [`effort`](#effort) |
 | `smallModel` | Model that answers `WebFetch` and `WebSearch` and writes session titles, see [`smallModel`](#smallmodel) |
 | `instructionFallbacks` | Fallback names for project instruction files, see [`instructionFallbacks`](#instructionfallbacks) |
 | `skills` | `skills.prefix`, see [`skills.prefix`](#skillsprefix) |
@@ -58,8 +58,8 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 ## `effort`
 
-- `off`, `minimal`, `low`, `medium` (default), `high`, `xhigh` or `max`: the reasoning effort a new main session opens at, at start and on `/new`. A level the model lacks is clamped to the nearest it has.
-- A resumed session keeps the level it was saved with, and [`/effort`](usage.md#commands) overrides it for the session. [Subagents](subagents.md) use their definition's `effort`.
+- `off`, `minimal`, `low`, `medium` (default), `high`, `xhigh` or `max`: the reasoning effort every main session opens at, new or resumed. [`/effort`](usage.md#commands) replaces it until Kopi exits. A level the model lacks is clamped to the nearest it has.
+- [Subagents](subagents.md) use their definition's `effort`.
 - A wrong value fails at start.
 
 ## `smallModel`

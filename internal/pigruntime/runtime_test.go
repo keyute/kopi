@@ -1124,6 +1124,30 @@ func TestOpenEffortReachesProviderRequest(t *testing.T) {
 	assert.Equal(t, ai.ThinkingLevelLow, <-levels)
 }
 
+func TestResumedEffortComesFromOpenNotTheSavedLevel(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	provider, thinker := registerThinker(t, r)
+	saved := openOn(t, r, thinker, HighEffort, "")
+	provider.SetResponses([]ai.FauxResponseStep{reply("noted")})
+	_, err := saved.Send(t.Context(), Prompt{Text: "hello"}, nil, nil)
+	require.NoError(t, err)
+
+	levels := make(chan ai.ThinkingLevel, 1)
+	provider.SetResponses([]ai.FauxResponseStep{
+		ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
+			levels <- o.Thinking
+			return ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{}), nil
+		}),
+	})
+	resumed := openOn(t, r, thinker, LowEffort, saved.ID())
+	assert.Equal(t, "low", resumed.Effort())
+	_, err = resumed.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, ai.ThinkingLevelLow, <-levels)
+
+	assert.Equal(t, "medium", openOn(t, r, thinker, DefaultEffort, saved.ID()).Effort(), "DefaultEffort is medium, not the saved level")
+}
+
 func TestOpenWithParentSavesBesideParentUnlisted(t *testing.T) {
 	sb := newSandbox(t)
 	r, faux := newTestRuntime(t, sb)
@@ -1342,7 +1366,7 @@ func TestSetModelGivesAnUnaskedSessionTheNewModelsDefault(t *testing.T) {
 	assert.Equal(t, openOn(t, r, thinker, DefaultEffort, "").Effort(), s.Effort())
 }
 
-func TestSetModelKeepsAResumedSessionsEffort(t *testing.T) {
+func TestSetModelKeepsAResumedSessionsOpenedEffort(t *testing.T) {
 	r, _ := newTestRuntime(t, newSandbox(t))
 	provider, thinker := registerThinker(t, r)
 	saved := openOn(t, r, thinker, LowEffort, "")
@@ -1351,17 +1375,17 @@ func TestSetModelKeepsAResumedSessionsEffort(t *testing.T) {
 	_, err := saved.Send(t.Context(), Prompt{Text: "hello"}, nil, nil)
 	require.NoError(t, err)
 
-	resumed := openOn(t, r, thinker, DefaultEffort, saved.ID())
+	resumed := openOn(t, r, thinker, LowEffort, saved.ID())
 	require.NoError(t, r.SetModel(t.Context(), resumed, fauxModel))
 	require.NoError(t, r.SetModel(t.Context(), resumed, thinker))
-	assert.Equal(t, "high", resumed.Effort())
+	assert.Equal(t, "low", resumed.Effort())
 
-	continued, err := r.Open(t.Context(), OpenOptions{Model: thinker, Continue: true, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
+	continued, err := r.Open(t.Context(), OpenOptions{Model: thinker, Effort: LowEffort, Continue: true, SystemPrompt: kopiPrompt, Authority: policy.NewAuthority()})
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, continued.Close(context.Background())) })
 	require.NoError(t, r.SetModel(t.Context(), continued, fauxModel))
 	require.NoError(t, r.SetModel(t.Context(), continued, thinker))
-	assert.Equal(t, "high", continued.Effort())
+	assert.Equal(t, "low", continued.Effort())
 
 	onPlain := openOn(t, r, fauxModel, DefaultEffort, saved.ID())
 	require.NoError(t, r.SetModel(t.Context(), onPlain, thinker))
