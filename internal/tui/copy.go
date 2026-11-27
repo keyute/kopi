@@ -16,8 +16,9 @@ type copyDialog struct {
 	// texts is what each option copies.
 	texts []string
 	// labels is each option's label before it is cut to a width.
-	labels []string
-	width  int
+	labels  []string
+	width   int
+	session string
 }
 
 // showCopy copies the last finished reply of the shown session, or opens the
@@ -32,9 +33,10 @@ func (m *model) showCopy() tea.Cmd {
 		return m.copy(text)
 	}
 	c := &copyDialog{
-		d:      &dialog{title: "Copy", hints: []string{binding(m.keys.submit, "copy"), binding(m.keys.dismiss, "cancel")}},
-		texts:  []string{text},
-		labels: []string{"Whole reply · " + lineCount(text)},
+		d:       &dialog{title: "Copy", hints: []string{binding(m.keys.submit, "copy"), binding(m.keys.dismiss, "cancel")}},
+		texts:   []string{text},
+		labels:  []string{"Whole reply · " + lineCount(text)},
+		session: m.shown,
 	}
 	for _, b := range blocks {
 		label := lineCount(b.text) + " · " + firstLine(clean(b.text))
@@ -89,8 +91,16 @@ func (c *copyDialog) key(m *model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	return cmd, true
 }
 
-// seen ends the dialog with a session switch.
+// seen ends the dialog on a session switch or replacement of its copy target.
 func (c *copyDialog) seen(_ *model, msg tea.Msg) bool {
-	_, switched := msg.(event.SessionChanged)
-	return !switched
+	if _, switched := msg.(event.SessionChanged); switched {
+		return false
+	}
+	if ev, ok := msg.(event.Event); ok {
+		id, inner := unwrap(ev)
+		if target, ok := inner.(event.CopyTarget); ok && id == c.session && target.Text != c.texts[0] {
+			return false
+		}
+	}
+	return true
 }

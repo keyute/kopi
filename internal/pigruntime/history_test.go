@@ -389,6 +389,21 @@ func TestHistoryOmitsFailedRetryAttempt(t *testing.T) {
 	}, resume(t, r, sess.ID()).History())
 }
 
+func TestBranchCopyTargetExcludesOnlyActiveProvisionalMessages(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	s := openTestSession(t, r)
+	manager := s.inner.SessionManager()
+	appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"settled partial"}],"stopReason":"length","timestamp":1}`)
+	boundary := appendHistoryMessage(t, manager, `{"role":"user","content":"next","timestamp":2}`)
+	appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"unsettled"}],"stopReason":"error","timestamp":3}`)
+	got, err := branchCopyTarget(manager.GetBranch(), &boundary)
+	require.NoError(t, err)
+	assert.Equal(t, "settled partial", got)
+	got, err = branchCopyTarget(manager.GetBranch(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "unsettled", got)
+}
+
 func TestHistoryLatestContextEditWins(t *testing.T) {
 	replacement := &extension.ContextEditReplacement{Content: json.RawMessage(`[{"type":"text","text":"model-only replacement"}]`)}
 	for _, tc := range []struct {

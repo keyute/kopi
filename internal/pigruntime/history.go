@@ -122,6 +122,44 @@ func branchMessages(entries []coding.SessionEntry) ([]agent.AgentMessage, error)
 	return msgs, nil
 }
 
+func branchCopyTarget(entries []coding.SessionEntry, boundary *string) (string, error) {
+	if boundary != nil {
+		// During Send, provisional messages after its starting leaf have not settled.
+		filtered := make([]coding.SessionEntry, 0, len(entries))
+		active := *boundary == ""
+		for _, entry := range entries {
+			if active && entry.Base().Type == "message" {
+				var record struct {
+					Message agent.AgentMessage `json:"message"`
+				}
+				if err := json.Unmarshal(entry.Raw(), &record); err != nil {
+					return "", fmt.Errorf("failed to decode history message %s: %w", entry.Base().ID, err)
+				}
+				if a := record.Message.Assistant; a != nil && provisionalReply(a) {
+					continue
+				}
+			}
+			filtered = append(filtered, entry)
+			if entry.Base().ID == *boundary {
+				active = true
+			}
+		}
+		entries = filtered
+	}
+	msgs, err := branchMessages(entries)
+	if err != nil {
+		return "", err
+	}
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if a := msgs[i].Assistant; a != nil {
+			if text := assistantText(a); strings.TrimSpace(text) != "" {
+				return text, nil
+			}
+		}
+	}
+	return "", nil
+}
+
 func storedDetails[T any](entry coding.SessionEntry) (T, error) {
 	var stored struct {
 		Details T `json:"details"`

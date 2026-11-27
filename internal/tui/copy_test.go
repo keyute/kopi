@@ -93,6 +93,42 @@ func TestCopyWholeReplyWithLeadingIndentedCode(t *testing.T) {
 	assertCopied(t, m, press(m, enter), text)
 }
 
+func TestCopyPickerClosesOnlyForItsReplacedTarget(t *testing.T) {
+	for _, session := range []string{"main", "child"} {
+		t.Run(session, func(t *testing.T) {
+			m, c := newTestModel(t, 52, 24)
+			if session == "child" {
+				m.viewOf("child")
+				m.show("child")
+			}
+			text := "```sh\necho old\n```"
+			if session == "main" {
+				reply(m, text)
+			} else {
+				send(m, event.Session{ID: "child", Event: event.ReplyEnd{Text: text}})
+			}
+			runCopyCommand(m, c)
+			require.NotNil(t, m.front())
+			send(m, event.TextDelta{Text: "streaming"}, event.Session{ID: "other", Event: event.CopyTarget{}}, event.Notice{Text: "notice"})
+			require.NotNil(t, m.front())
+			if session == "main" {
+				send(m, event.CopyTarget{Text: text})
+			} else {
+				send(m, event.Session{ID: "child", Event: event.CopyTarget{Text: text}})
+			}
+			require.NotNil(t, m.front())
+			if session == "main" {
+				send(m, event.CopyTarget{Text: "earlier"})
+			} else {
+				send(m, event.Session{ID: "child", Event: event.CopyTarget{}})
+			}
+			assert.Nil(t, m.front())
+			press(m, enter)
+			assert.Empty(t, m.clip.(*fakeClipboard).written)
+		})
+	}
+}
+
 func TestCopyEscapeCopiesNothing(t *testing.T) {
 	m, c := newTestModel(t, 52, 24)
 	reply(m, "```sh\ntask test\n```")

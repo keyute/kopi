@@ -605,8 +605,13 @@ func unwrap(ev event.Event) (string, event.Event) {
 // apply routes an event: the global ones act on the model, the rest on their
 // session's view, which it returns; nil when no view changed.
 func (m *model) apply(ev event.Event) *view {
-	id, ev := unwrap(ev)
-	m.sweep(ev)
+	id, inner := unwrap(ev)
+	if _, ok := inner.(event.CopyTarget); ok {
+		m.sweep(ev)
+	} else {
+		m.sweep(inner)
+	}
+	ev = inner
 	switch ev := ev.(type) {
 	case event.StatusCommandResult:
 		if ev.Err != nil {

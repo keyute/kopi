@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -35,6 +36,8 @@ type Session struct {
 	partsMu        sync.Mutex
 	parts          []PromptPart
 	sendInProgress atomic.Bool
+	// sendBoundary is the leaf before the active Send; an empty ID means no leaf.
+	sendBoundary atomic.Pointer[string]
 	// listenersMu guards listeners and nextID. notify holds it while calling
 	// listeners, so no listener may call back into Session.
 	listenersMu sync.Mutex
@@ -448,8 +451,9 @@ func (s *Session) Usage() (toolCalls int, cost float64) {
 }
 
 // Subscribe registers fn to run synchronously on PiG's event executor, and for
-// event.ToolsChanged on the goroutine that changed the active tools, so fn may
-// run concurrently with executor events. A slow fn stalls the turn, and fn must
+// event.ToolsChanged on the goroutine that changed the active tools and recovery
+// reconciliation on Send's caller goroutine, so fn may run concurrently with
+// executor events. A slow fn stalls the turn, and fn must
 // not call back into the Session. Every call for a turn has run when Send
 // returns.
 func (s *Session) Subscribe(fn func(event.Event)) func() {
@@ -460,6 +464,16 @@ func (s *Session) Subscribe(fn func(event.Event)) func() {
 	s.listenersMu.Unlock()
 	var j textJoiner
 	unsubscribe := s.inner.Subscribe(func(ev agent.AgentEvent) {
+		// PiG emits recovery edits in order, including before a resumed prompt.
+		// Snapshot at the edit ID; the session lock can be held by PiG here.
+		if appended, ok := ev.(agent.EntryAppendedEvent); ok {
+			var entry struct{ Type, ID string }
+			if json.Unmarshal(appended.Entry, &entry) == nil && entry.Type == "context_edit" {
+				if text, err := branchCopyTarget(s.inner.SessionManager().GetBranch(entry.ID), s.sendBoundary.Load()); err == nil {
+					fn(event.CopyTarget{Text: text})
+				}
+			}
+		}
 		if e, ok := j.translate(ev); ok {
 			fn(e)
 		}
@@ -552,6 +566,12 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 		return SendResult{UndeliveredNotices: notices}, fmt.Errorf("failed to send prompt: %w", ErrSendInProgress)
 	}
 	defer s.sendInProgress.Store(false)
+	boundary := ""
+	if leaf := s.inner.SessionManager().GetLeafID(); leaf != nil {
+		boundary = *leaf
+	}
+	s.sendBoundary.Store(&boundary)
+	defer s.sendBoundary.Store(nil)
 	var aborted atomic.Bool
 	interrupt := &turnInterrupt{abort: func() {
 		aborted.Store(true)
@@ -698,16 +718,8 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	// PiG can omit error or length responses with context edits after MessageEnd.
 	// Only the retained branch is authoritative once delivery and recovery settle.
 	if provisional {
-		msgs, branchErr := branchMessages(s.inner.SessionManager().GetBranch())
-		if branchErr == nil {
-			for i := len(msgs) - 1; i >= 0; i-- {
-				if a := msgs[i].Assistant; a != nil {
-					if text := assistantText(a); strings.TrimSpace(text) != "" {
-						s.notify(event.ReplyEnd{Text: text})
-						break
-					}
-				}
-			}
+		if text, branchErr := branchCopyTarget(s.inner.SessionManager().GetBranch(), nil); branchErr == nil {
+			s.notify(event.CopyTarget{Text: text})
 		}
 	}
 	res := SendResult{Sent: sent, Undelivered: handed, UndeliveredNotices: pending}

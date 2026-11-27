@@ -70,6 +70,8 @@ func (t *Transcript) Apply(ev event.Event) {
 		if strings.TrimSpace(ev.Text) != "" {
 			t.reply = ev.Text
 		}
+	case event.CopyTarget:
+		t.reply = ev.Text
 	case event.ToolStart:
 		t.items = append(t.items, item{kind: callItem, call: Call{
 			ID:          ev.CallID,

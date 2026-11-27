@@ -70,8 +70,13 @@ type TextDelta struct{ Text string }
 
 type ThinkingDelta struct{ Text string }
 
-// ReplyEnd carries one assistant message's text; provisional replies may be delayed until the send settles.
+// ReplyEnd carries one non-provisional live assistant message's text at its end.
+// History also emits it for retained error and length messages; live recovery
+// instead reports their settled copy target with CopyTarget.
 type ReplyEnd struct{ Text string }
+
+// CopyTarget replaces the retained reply, including with an empty value.
+type CopyTarget struct{ Text string }
 
 // ToolStart carries the call's JSON arguments, compacted. Title names the call
 // and Done names it once it succeeded, "" when Title serves. Change is the
@@ -321,6 +326,7 @@ func (Unsent) isEvent()              {}
 func (TextDelta) isEvent()           {}
 func (ThinkingDelta) isEvent()       {}
 func (ReplyEnd) isEvent()            {}
+func (CopyTarget) isEvent()          {}
 func (ToolStart) isEvent()           {}
 func (ToolEnd) isEvent()             {}
 func (ApprovalRequested) isEvent()   {}

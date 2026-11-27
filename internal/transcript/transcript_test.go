@@ -439,6 +439,15 @@ func TestLastReply(t *testing.T) {
 	assert.Equal(t, "last", restored.LastReply())
 }
 
+func TestCopyTargetReplacesAndClears(t *testing.T) {
+	var tr Transcript
+	tr.Apply(event.ReplyEnd{Text: "later"})
+	tr.Apply(event.CopyTarget{Text: "earlier"})
+	assert.Equal(t, "earlier", tr.LastReply())
+	tr.Apply(event.CopyTarget{})
+	assert.Empty(t, tr.LastReply())
+}
+
 func TestLastReplyInterruptedByNotice(t *testing.T) {
 	events := []event.Event{
 		event.TextDelta{Text: "before\n```go\n"},
