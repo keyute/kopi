@@ -1,3 +1,5 @@
+// Package event defines what the Controller reports to a frontend as a session
+// runs.
 package event
 
 import (

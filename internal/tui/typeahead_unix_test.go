@@ -12,6 +12,8 @@ import (
 	"github.com/creack/pty"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/keyute/kopi/internal/app"
 )
 
 func TestAskTrustDiscardsTypeahead(t *testing.T) {
@@ -57,7 +59,7 @@ func TestAskTrustDiscardsTypeahead(t *testing.T) {
 	_, err = io.WriteString(master, "1")
 	require.NoError(t, err)
 	type result struct {
-		c   TrustChoice
+		c   app.TrustChoice
 		err error
 	}
 	done := make(chan result, 1)
@@ -78,7 +80,7 @@ func TestAskTrustDiscardsTypeahead(t *testing.T) {
 	select {
 	case r := <-done:
 		require.NoError(t, r.err)
-		assert.Equal(t, TrustDeny, r.c)
+		assert.Equal(t, app.TrustDeny, r.c)
 	case <-time.After(waitLimit):
 		t.Fatal("AskTrust did not return")
 	}

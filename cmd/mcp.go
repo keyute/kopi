@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/keyute/kopi/internal/app"
 	"github.com/keyute/kopi/internal/config"
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/policy"
@@ -54,17 +55,17 @@ func mcpListCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to resolve working directory: %w", err)
 			}
-			set, err := resolveServers(resolved.Config.MCPServers, paths.TrustFile, cwd, userHome, nil, nil, nil)
+			set, err := app.ResolveServers(resolved.Config.MCPServers, paths.TrustFile, cwd, userHome, nil, nil, nil)
 			if err != nil {
 				return err
 			}
-			for _, err := range set.errs {
+			for _, err := range set.Errs {
 				slog.Warn(printable(err.Error(), "    "))
 			}
 			out := cmd.OutOrStdout()
-			if len(set.servers) == 0 && len(set.untrusted) == 0 && len(set.invalid) == 0 {
+			if len(set.Servers) == 0 && len(set.Untrusted) == 0 && len(set.Invalid) == 0 {
 				// The warning already says why this folder's servers are missing.
-				if len(set.errs) > 0 {
+				if len(set.Errs) > 0 {
 					return nil
 				}
 				_, err := fmt.Fprintf(out, "No MCP servers configured: declare them under mcpServers in %s or in %s in this folder.\n", printable(paths.ConfigFile, ""), policy.ProjectMCPFile)
@@ -74,7 +75,7 @@ func mcpListCmd() *cobra.Command {
 			// Close runs must not kill Kopi and orphan the servers.
 			waitCtx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			servers := pigruntime.StartServers(pigruntime.ServerOptions{Servers: set.servers, CWD: cwd, Version: kopiVersion()})
+			servers := pigruntime.StartServers(pigruntime.ServerOptions{Servers: set.Servers, CWD: cwd, Version: kopiVersion()})
 			defer servers.Close()
 			statuses, err := waitServers(waitCtx, servers)
 			if err != nil {
@@ -84,15 +85,15 @@ func mcpListCmd() *cobra.Command {
 			blocks := map[string][]string{}
 			for _, st := range statuses {
 				where := "global (" + paths.ConfigFile + ")"
-				if set.project[st.Name] {
+				if set.Project[st.Name] {
 					where = "project (" + projectFile + ")"
 				}
 				blocks[st.Name] = append(blocks[st.Name], serverBlock(st, where))
 			}
-			for name, err := range set.invalid {
+			for name, err := range set.Invalid {
 				blocks[name] = append(blocks[name], serverBlock(pigruntime.ServerStatus{Name: name, Err: err}, "project ("+projectFile+")"))
 			}
-			for _, name := range slices.Sorted(maps.Keys(set.untrusted)) {
+			for _, name := range slices.Sorted(maps.Keys(set.Untrusted)) {
 				blocks[name] = append(blocks[name], fmt.Sprintf("%s  project (%s)\n  not trusted, not started\n", printable(name, ""), printable(projectFile, "")))
 			}
 			var all []string
