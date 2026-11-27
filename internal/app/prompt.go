@@ -50,7 +50,7 @@ func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group
 	case workflow:
 		lines = append(lines, "You are a workflow agent: a script gave you your task, and your final message is returned to that script as the result.")
 	case def != nil:
-		lines = append(lines, fmt.Sprintf("You are the subagent %s: another agent gave you your task, and your final message is returned to that agent as the result.", def.Name))
+		lines = append(lines, fmt.Sprintf("You are the subagent %s: another agent gave you your task and may message you as you work. Only your final message is returned to that agent, and it is your whole result.", def.Name))
 	}
 	modes := "The session has a plan mode and an execute mode; only the user can switch between them."
 	works := "Read-only tools work in both modes, the others only in execute mode"

@@ -141,12 +141,12 @@ func TestSubagentPromptStatesItsRoleThenBodyInstructionsAndItsServers(t *testing
 
 	assert.Equal(t, []string{"preamble", "agent explorer", "instructions global /home/.kopi", "mcp-servers"}, partNames(parts))
 	assert.Equal(t, "You are Kopi, a coding agent working in /w.\n"+
-		"You are the subagent explorer: another agent gave you your task, and your final message is returned to that agent as the result.\n"+
+		"You are the subagent explorer: another agent gave you your task and may message you as you work. Only your final message is returned to that agent, and it is your whole result.\n"+
 		"The session has a plan mode and an execute mode; only the user can switch between them.", parts[0].Text)
 	assert.Equal(t, "Explore only.", parts[1].Text)
 	assert.NotContains(t, partNames(parts), "tools")
 	assert.NotContains(t, partNames(parts), "rules")
-	assert.Equal(t, buildPrompt("/w", []tool.Tool{read}, nil, nil, nil, false, false, false)[0].Text, strings.Replace(parts[0].Text, "You are the subagent explorer: another agent gave you your task, and your final message is returned to that agent as the result.\n", "", 1))
+	assert.Equal(t, buildPrompt("/w", []tool.Tool{read}, nil, nil, nil, false, false, false)[0].Text, strings.Replace(parts[0].Text, "You are the subagent explorer: another agent gave you your task and may message you as you work. Only your final message is returned to that agent, and it is your whole result.\n", "", 1))
 }
 
 func TestSubagentPromptOmitsEmptyBodyAndInstructionsWhenOff(t *testing.T) {
