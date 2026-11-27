@@ -31,7 +31,6 @@ import (
 	"github.com/keyute/kopi/internal/pigruntime"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/sandbox"
-	"github.com/keyute/kopi/internal/skill"
 	"github.com/keyute/kopi/internal/subagent"
 	"github.com/keyute/kopi/internal/tool"
 	"github.com/keyute/kopi/internal/trust"
@@ -305,8 +304,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	if err != nil {
 		return err
 	}
-	// The user's own skills are not project skills when Kopi starts in the home directory.
-	projectSkills := skill.Find(instructionDir, filepath.Join(canonicalHome, ".agents", "skills"))
+	projectSkills := app.ProjectSkills(instructionDir, canonicalHome)
 	set, err := app.ResolveServers(resolved.Config.MCPServers, paths.TrustFile, cwd, userHome, projectInstructions, projectSkills, ask)
 	if err != nil {
 		return err
@@ -646,9 +644,8 @@ func waitServers(ctx context.Context, servers *pigruntime.Servers) ([]pigruntime
 // openSandbox returns the sandboxes Bash runs under in execute and in plan
 // mode, both or neither; neither when sandbox.enabled is false. With enabled
 // unset, a machine without a usable sandbox is not an error: the sandboxes
-// are nil and unavailable says why. setDirs makes the added directories the
-// workspace's other roots in both; validateDirs checks them without applying
-// them. Both callbacks are nil without the sandboxes.
+// are nil and unavailable says why. Both callbacks are nil without the
+// sandboxes.
 func openSandbox(ctx context.Context, cfg config.Sandbox, cwd, userHome, kopiHome string) (sb, plan *sandbox.Sandbox, setDirs, validateDirs func(dirs []string) error, unavailable, err error) {
 	if cfg.Enabled != nil && !*cfg.Enabled {
 		return nil, nil, nil, nil, nil, nil

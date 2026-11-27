@@ -27,7 +27,7 @@ type Workspace struct {
 // roots in both; validateDirs checks them without applying them. The error is
 // New's, so it can still be tested for ErrUnavailable.
 func OpenWorkspace(ctx context.Context, dir string, w Workspace) (execute, plan *Sandbox, setDirs, validateDirs func(dirs []string) error, err error) {
-	p := workspacePolicy(w, nil)
+	p := workspacePolicy(w)
 	sandboxes, err := New(ctx, dir, p, planPolicy(p, w.CWD, nil))
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -70,14 +70,13 @@ func OpenWorkspace(ctx context.Context, dir string, w Workspace) (execute, plan 
 	return sandboxes[0], sandboxes[1], setDirs, validateDirs, nil
 }
 
-// workspacePolicy lets commands write only the workspace (the start directory
-// and dirs, the directories added to it), temporary directories and the paths
-// the user allowed, never read Kopi's home, and never write the git files that
-// decide which config and hooks git runs (on Linux, nothing in a workspace
-// directory's .git), nor any .mcp.json or what a workspace directory's
-// .mcp.json resolves to, either of which would run code outside the sandbox.
-// Relative paths in w start at its CWD.
-func workspacePolicy(w Workspace, dirs []string) Policy {
+// workspacePolicy lets commands write only the start directory, temporary
+// directories and the paths the user allowed, never read Kopi's home, and
+// never write the git files that decide which config and hooks git runs (on
+// Linux, nothing in a workspace directory's .git), nor any .mcp.json or what a
+// workspace directory's .mcp.json resolves to, either of which would run code
+// outside the sandbox.
+func workspacePolicy(w Workspace) Policy {
 	expand := func(paths []string) []string {
 		out := make([]string, 0, len(paths))
 		for _, p := range paths {
@@ -97,10 +96,6 @@ func workspacePolicy(w Workspace, dirs []string) Policy {
 	denyWrite := protectedWrites(w.CWD)
 	write := []string{w.CWD, "/tmp", os.TempDir()}
 	write = append(write, expand(w.AllowWrite)...)
-	for _, dir := range dirs {
-		denyWrite = append(denyWrite, protectedWrites(dir)...)
-		write = append(write, dir)
-	}
 	return Policy{
 		Write:          write,
 		DenyRead:       append([]string{w.KopiHome}, expand(w.DenyRead)...),

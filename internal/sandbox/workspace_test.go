@@ -104,7 +104,7 @@ func TestSandboxPolicyProtectsHEADWithConcurrentLinuxPlaceholder(t *testing.T) {
 			require.Equal(t, "ready\n", line)
 			assert.DirExists(t, filepath.Join(e.workspace, ".git"))
 
-			p := workspacePolicy(Workspace{CWD: e.workspace, UserHome: e.home, KopiHome: e.kopiHome}, nil)
+			p := workspacePolicy(Workspace{CWD: e.workspace, UserHome: e.home, KopiHome: e.kopiHome})
 			assert.Contains(t, p.DenyWrite, head)
 			second, _, _, _, err := e.open(t.Context(), Workspace{})
 			require.NoError(t, err)
@@ -157,7 +157,7 @@ func TestSandboxPolicy(t *testing.T) {
 		expanded := []string{absolute, filepath.Join(home, "x"), home, filepath.Join(cwd, "rel")}
 		write := []string{cwd, "/tmp", os.TempDir()}
 
-		p := workspacePolicy(withCWD(cfg, cwd), nil)
+		p := workspacePolicy(withCWD(cfg, cwd))
 
 		assert.Equal(t, append(write, expanded...), p.Write)
 		for _, path := range append(p.Write, p.DenyRead...) {
@@ -173,7 +173,7 @@ func TestSandboxPolicy(t *testing.T) {
 		cwd := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(cwd, ".git"), []byte("gitdir: /elsewhere\n"), 0o600))
 
-		p := workspacePolicy(withCWD(cfg, cwd), nil)
+		p := workspacePolicy(withCWD(cfg, cwd))
 
 		git := linuxGit(cwd)
 		if runtime.GOOS != "linux" {
@@ -186,7 +186,7 @@ func TestSandboxPolicy(t *testing.T) {
 	t.Run("no git", func(t *testing.T) {
 		cwd := t.TempDir()
 
-		p := workspacePolicy(withCWD(cfg, cwd), nil)
+		p := workspacePolicy(withCWD(cfg, cwd))
 
 		git := linuxGit(cwd)
 		if runtime.GOOS != "linux" {
@@ -200,7 +200,7 @@ func TestSandboxPolicy(t *testing.T) {
 		cwd := t.TempDir()
 		require.NoError(t, os.Symlink(t.TempDir(), filepath.Join(cwd, ".git")))
 
-		p := workspacePolicy(withCWD(cfg, cwd), nil)
+		p := workspacePolicy(withCWD(cfg, cwd))
 
 		assert.Equal(t, slices.Concat(gitFiles(cwd), linuxGit(cwd), []string{filepath.Join(cwd, ".mcp.json")}), p.DenyWrite)
 		assert.Equal(t, []string{".mcp.json"}, p.DenyWriteNames)
@@ -209,7 +209,7 @@ func TestSandboxPolicy(t *testing.T) {
 	t.Run("plan", func(t *testing.T) {
 		cwd := t.TempDir()
 		require.NoError(t, os.Mkdir(filepath.Join(cwd, ".git"), 0o755))
-		p := workspacePolicy(withCWD(cfg, cwd), nil)
+		p := workspacePolicy(withCWD(cfg, cwd))
 
 		plan := planPolicy(p, cwd, nil)
 
@@ -223,22 +223,12 @@ func TestSandboxPolicy(t *testing.T) {
 	})
 }
 
-func TestSandboxPolicyAddedDirectories(t *testing.T) {
+func TestPlanPolicyDeniesAddedDirectories(t *testing.T) {
 	cwd, home, kopiHome := t.TempDir(), t.TempDir(), t.TempDir()
 	first, second := t.TempDir(), t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(first, ".git"), 0o755))
-	cfg := Workspace{CWD: cwd, UserHome: home, KopiHome: kopiHome, AllowWrite: []string{"rel"}}
+	cfg := Workspace{CWD: cwd, UserHome: home, KopiHome: kopiHome}
 
-	p := workspacePolicy(cfg, []string{first, second})
-
-	assert.Equal(t, []string{cwd, "/tmp", os.TempDir(), filepath.Join(cwd, "rel"), first, second}, p.Write)
-	for _, dir := range []string{cwd, first, second} {
-		assert.Subset(t, p.DenyWrite, protectedWrites(dir))
-		assert.Contains(t, p.DenyWrite, filepath.Join(dir, ".mcp.json"))
-		assert.Contains(t, p.DenyWrite, filepath.Join(dir, ".git", "config"))
-	}
-	assert.Equal(t, workspacePolicy(cfg, nil).DenyRead, p.DenyRead)
-
+	p := workspacePolicy(cfg)
 	plan := planPolicy(p, cwd, []string{first, second})
 
 	assert.Subset(t, plan.DenyWrite, []string{cwd, first, second})
@@ -258,7 +248,7 @@ func TestSandboxPolicyPreservesSymlinkParent(t *testing.T) {
 		{"absolute", cwd + string(filepath.Separator) + "link/../target", cwd + string(filepath.Separator) + "link/../target"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := workspacePolicy(Workspace{CWD: cwd, UserHome: home, KopiHome: kopiHome, AllowWrite: []string{tc.path}, DenyRead: []string{tc.path}}, nil)
+			p := workspacePolicy(Workspace{CWD: cwd, UserHome: home, KopiHome: kopiHome, AllowWrite: []string{tc.path}, DenyRead: []string{tc.path}})
 			assert.Equal(t, tc.want, p.Write[len(p.Write)-1])
 			assert.Equal(t, tc.want, p.DenyRead[len(p.DenyRead)-1])
 		})

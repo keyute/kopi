@@ -192,7 +192,13 @@ func covers(dir, canonicalHome string) (servers, skills []string) {
 	if err == nil {
 		servers = serverLines(project, invalid)
 	}
-	return servers, skill.Find(dir, filepath.Join(canonicalHome, ".agents", "skills"))
+	return servers, ProjectSkills(dir, canonicalHome)
+}
+
+// ProjectSkills is dir's project skill folders. The user's own skills are not
+// project skills when dir is the home directory.
+func ProjectSkills(dir, canonicalHome string) []string {
+	return skill.Find(dir, filepath.Join(canonicalHome, ".agents", "skills"))
 }
 
 // serverTarget is what a server runs or connects to, as configured: the
