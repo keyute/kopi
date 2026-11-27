@@ -1269,7 +1269,8 @@ func TestSetModelKeepsTheEffortAskedFor(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			if name == "SetEffort" {
-				require.NoError(t, s.SetEffort(HighEffort))
+				_, err := s.SetEffort(HighEffort)
+				require.NoError(t, err)
 			}
 			require.NoError(t, r.SetModel(t.Context(), s, fauxModel))
 			assert.Empty(t, s.Effort())
@@ -1370,9 +1371,10 @@ func TestSetModelKeepsAResumedSessionsOpenedEffort(t *testing.T) {
 	r, _ := newTestRuntime(t, newSandbox(t))
 	provider, thinker := registerThinker(t, r)
 	saved := openOn(t, r, thinker, LowEffort, "")
-	require.NoError(t, saved.SetEffort(HighEffort))
+	_, err := saved.SetEffort(HighEffort)
+	require.NoError(t, err)
 	provider.SetResponses([]ai.FauxResponseStep{reply("noted")})
-	_, err := saved.Send(t.Context(), Prompt{Text: "hello"}, nil, nil)
+	_, err = saved.Send(t.Context(), Prompt{Text: "hello"}, nil, nil)
 	require.NoError(t, err)
 
 	resumed := openOn(t, r, thinker, LowEffort, saved.ID())

@@ -3509,7 +3509,8 @@ func TestSetEffortThenSendNowKeepsTheUsersLevel(t *testing.T) {
 	require.NoError(t, err)
 	wait(t, started)
 	require.NotEqual(t, "low", h.c.main.sess.Effort())
-	require.NoError(t, h.c.main.sess.SetEffort(pigruntime.LowEffort))
+	_, err = h.c.main.sess.SetEffort(pigruntime.LowEffort)
+	require.NoError(t, err)
 	require.NoError(t, h.c.SendNow(t.Context(), Main, "instead"))
 	wait(t, w.Done())
 
@@ -3898,7 +3899,8 @@ func TestSetEffortAtTheContinuationBoundaryInvalidatesTheRaise(t *testing.T) {
 					w.cancel()
 					return
 				}
-				assert.NoError(t, h.c.main.sess.SetEffort(pigruntime.LowEffort))
+				_, err := h.c.main.sess.SetEffort(pigruntime.LowEffort)
+				assert.NoError(t, err)
 			})
 			require.NoError(t, h.c.SendNow(t.Context(), Main, "instead"))
 			wait(t, w.Done())
@@ -3921,7 +3923,8 @@ func TestPreCancelledFreshPromptKeepsItsExplicitRaise(t *testing.T) {
 		if _, ok := ev.(event.TurnStart); ok {
 			if starts++; starts == 1 {
 				h.c.main.work.cancel()
-				assert.NoError(t, h.c.main.sess.SetEffort(pigruntime.LowEffort))
+				_, err := h.c.main.sess.SetEffort(pigruntime.LowEffort)
+				assert.NoError(t, err)
 			}
 		}
 	})
@@ -3940,7 +3943,8 @@ func TestEffortKeyOpensNewContinuedAndResumedSessions(t *testing.T) {
 	h := buildHarness(t, rt, thinker, sb, cfg)
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
 	assert.Equal(t, "low", h.c.Agents()[0].Effort)
-	require.NoError(t, h.c.main.sess.SetEffort(pigruntime.HighEffort))
+	_, err := h.c.main.sess.SetEffort(pigruntime.HighEffort)
+	require.NoError(t, err)
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("answer")})
 	h.turn(t, "question")
 	savedID := h.c.Status().SessionID

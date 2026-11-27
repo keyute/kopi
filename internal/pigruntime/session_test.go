@@ -1539,7 +1539,8 @@ func TestSetEffortDuringARaisedRunKeepsTheUsersLevel(t *testing.T) {
 	sess, thinker, _ := openThinker(t, r)
 	thinker.SetResponses([]ai.FauxResponseStep{
 		ai.FauxFactoryStep(func(_ ai.TranscriptContext, _ ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
-			assert.NoError(t, sess.SetEffort(MediumEffort))
+			_, err := sess.SetEffort(MediumEffort)
+			assert.NoError(t, err)
 			return ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{}), nil
 		}),
 	})
@@ -1566,7 +1567,8 @@ func TestSetEffortFailedSaveStillCountsAsAskedForALaterModelSwitch(t *testing.T)
 		t.Skip("file permissions do not stop this user from appending")
 	}
 
-	require.Error(t, sess.SetEffort(HighEffort))
+	_, err = sess.SetEffort(HighEffort)
+	require.Error(t, err)
 	require.ErrorIs(t, r.SetModel(t.Context(), sess, fauxModel), ErrModelNotSaved)
 	require.ErrorIs(t, r.SetModel(t.Context(), sess, "faux-thinker/thinker"), ErrModelNotSaved)
 
@@ -1651,7 +1653,8 @@ func TestSendEffortContinuation(t *testing.T) {
 				assert.Equal(t, 1, thinker.CallCount())
 			}
 			if tc.setEffort {
-				require.NoError(t, sess.SetEffort(LowEffort))
+				_, err := sess.SetEffort(LowEffort)
+				require.NoError(t, err)
 			}
 			p := Prompt{Text: "continue", Continuation: res.Continuation}
 			if tc.explicit {

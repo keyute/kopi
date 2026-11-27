@@ -743,7 +743,14 @@ func TestSetEffortChangesTheLevelForTheSessionNotItsResume(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
 
-	require.NoError(t, sess.SetEffort(HighEffort))
+	level, err := sess.SetEffort(MaxEffort)
+	require.NoError(t, err)
+	assert.Equal(t, "high", level, "the thinker has no max")
+	level, err = sess.SetEffort(LowEffort)
+	require.NoError(t, err)
+	assert.Equal(t, "low", level)
+	_, err = sess.SetEffort(HighEffort)
+	require.NoError(t, err)
 	assert.Equal(t, "high", sess.Effort())
 	assert.Contains(t, sess.Efforts(), "high")
 	for _, name := range sess.Efforts() {
