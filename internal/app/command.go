@@ -165,8 +165,7 @@ func (c *Controller) effortCommand(_ context.Context, arg string) error {
 		c.relay.emit(event.Notice{Text: "This model does not reason."})
 		return nil
 	}
-	var level string
-	level, err = sess.SetEffort(e)
+	err = sess.SetEffort(e)
 	c.mu.Lock()
 	c.effort = e
 	c.mu.Unlock()
@@ -174,6 +173,7 @@ func (c *Controller) effortCommand(_ context.Context, arg string) error {
 	if err != nil {
 		return err
 	}
+	level := sess.Effort()
 	notice := fmt.Sprintf("Effort set to %s until kopi exits. Set \"effort\" in %s to keep it.", arg, c.cfg.ConfigFile)
 	if level != arg {
 		notice += fmt.Sprintf(" This model uses %s.", level)

@@ -31,7 +31,7 @@ import (
 // thinking level is PiG's own at open; set, it is also what PiG's
 // thinkingLevelForModelSwitch picks, which otherwise carries over the level
 // the old model clamped (PiG v0.8.0; recheck on a bump). Session.setModel
-// applies the same default when PiG returned before setting a level.
+// reapplies the level the session was opened with or last given by SetEffort.
 // "steeringMode":"all" is what Session.Send's mode-line bookkeeping rests on:
 // everything handed over at a turn boundary is in the session before the next
 // boundary (PiG v0.8.0; recheck on a bump).

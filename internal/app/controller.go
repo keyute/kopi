@@ -28,7 +28,7 @@ type Config struct {
 	Model string
 	// SmallModel is "provider/id"; empty means the session model.
 	SmallModel string
-	// ConfigFile is the path the notice about a chosen model names.
+	// ConfigFile is the path the notices about a chosen model or effort name.
 	ConfigFile string
 	Workspace  string
 	// Tools are the built-in tools; the MCP servers' tools come from Servers.

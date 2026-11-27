@@ -337,17 +337,17 @@ func (s *Session) Effort() string {
 
 // SetEffort changes the level the session runs at, from the next prompt. e is
 // not DefaultEffort. PiG clamps a level the model lacks to the nearest it has;
-// the result is the level in effect, in the names ParseEffort takes.
-func (s *Session) SetEffort(e Effort) (string, error) {
+// Effort reports the level in effect.
+func (s *Session) SetEffort(e Effort) error {
 	s.effortMu.Lock()
 	defer s.effortMu.Unlock()
 	s.raised = DefaultEffort
 	s.effortRevision++
 	s.asked = e.thinkingLevel()
 	if err := s.inner.SetThinkingLevel(e.thinkingLevel()); err != nil {
-		return "", fmt.Errorf("failed to set effort: %w", err)
+		return fmt.Errorf("failed to save the effort to the session file: %w", err)
 	}
-	return string(s.inner.ThinkingLevel()), nil
+	return nil
 }
 
 // setModel switches the model, then asks again for the level the session was

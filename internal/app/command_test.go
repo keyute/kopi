@@ -239,6 +239,27 @@ func TestEffortCommandSetsTheLevelForAReasoningModel(t *testing.T) {
 	assert.Equal(t, "high", h.c.Agents()[0].Effort, "/new keeps the level typed last")
 }
 
+// readOnlySessionFile makes the one session file under the sandbox's Kopi
+// home refuse appends, and skips the test when that does not stop this user.
+func readOnlySessionFile(t *testing.T, sb pigruntimetest.Sandbox) {
+	t.Helper()
+	var files []string
+	require.NoError(t, filepath.WalkDir(sb.KopiHome, func(path string, _ fs.DirEntry, err error) error {
+		if err == nil && strings.HasSuffix(path, ".jsonl") {
+			files = append(files, path)
+		}
+		return err
+	}))
+	require.Len(t, files, 1)
+	// The write is refused as the file is opened for appending.
+	require.NoError(t, os.Chmod(files[0], 0o400))
+	t.Cleanup(func() { _ = os.Chmod(files[0], 0o600) })
+	if f, err := os.OpenFile(files[0], os.O_WRONLY|os.O_APPEND, 0); err == nil {
+		_ = f.Close()
+		t.Skip("file permissions do not stop this user from appending")
+	}
+}
+
 func TestEffortCommandFailedSaveKeepsTheRequestedLevel(t *testing.T) {
 	sb := pigruntimetest.NewSandbox(t)
 	rt := pigruntimetest.NewRuntime(t, sb)
@@ -248,26 +269,13 @@ func TestEffortCommandFailedSaveKeepsTheRequestedLevel(t *testing.T) {
 	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
 	thinker.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("answer")})
 	h.turn(t, "hello")
-	var files []string
-	require.NoError(t, filepath.WalkDir(sb.KopiHome, func(path string, _ fs.DirEntry, err error) error {
-		if err == nil && strings.HasSuffix(path, ".jsonl") {
-			files = append(files, path)
-		}
-		return err
-	}))
-	require.Len(t, files, 1)
-	require.NoError(t, os.Chmod(files[0], 0o400))
-	t.Cleanup(func() { _ = os.Chmod(files[0], 0o600) })
-	if f, err := os.OpenFile(files[0], os.O_WRONLY|os.O_APPEND, 0); err == nil {
-		_ = f.Close()
-		t.Skip("file permissions do not stop this user from appending")
-	}
+	readOnlySessionFile(t, sb)
 	changed := subscribeTo[event.EffortChanged](h.c)
 	notices := subscribeTo[event.Notice](h.c)
 	switched := subscribeTo[event.SessionChanged](h.c)
 
 	_, err := h.c.Submit(t.Context(), Main, "/effort high")
-	require.Error(t, err)
+	require.ErrorContains(t, err, "failed to save the effort to the session file")
 	assert.Equal(t, event.EffortChanged{}, receiveEvent(t, changed))
 	assert.Empty(t, notices)
 	assert.Equal(t, "high", h.c.Agents()[0].Effort)
@@ -609,21 +617,7 @@ func TestModelCommandReportsAFailedSaveAfterSwitching(t *testing.T) {
 	_, otherRef := pigruntimetest.RegisterFaux(t, h.c.rt, "kopi-other")
 	h.faux.SetResponses([]ai.FauxResponseStep{pigruntimetest.Text("answer")})
 	h.turn(t, "hello")
-	var files []string
-	require.NoError(t, filepath.WalkDir(sb.KopiHome, func(path string, _ fs.DirEntry, err error) error {
-		if err == nil && strings.HasSuffix(path, ".jsonl") {
-			files = append(files, path)
-		}
-		return err
-	}))
-	require.Len(t, files, 1)
-	// The write is refused as the file is opened for appending.
-	require.NoError(t, os.Chmod(files[0], 0o400))
-	t.Cleanup(func() { _ = os.Chmod(files[0], 0o600) })
-	if f, err := os.OpenFile(files[0], os.O_WRONLY|os.O_APPEND, 0); err == nil {
-		_ = f.Close()
-		t.Skip("file permissions do not stop this user from appending")
-	}
+	readOnlySessionFile(t, sb)
 	changed := subscribeTo[event.ModelChanged](h.c)
 	errs := subscribeTo[event.Error](h.c)
 	notices := subscribeTo[event.Notice](h.c)

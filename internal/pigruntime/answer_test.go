@@ -216,9 +216,8 @@ func TestAnswerFromUsesCurrentModelAndEffort(t *testing.T) {
 	})
 
 	require.NoError(t, r.SetModel(t.Context(), sess, model))
-	_, err := sess.SetEffort(HighEffort)
-	require.NoError(t, err)
-	_, _, err = r.AnswerFrom(t.Context(), sess, sideQuestion)
+	require.NoError(t, sess.SetEffort(HighEffort))
+	_, _, err := r.AnswerFrom(t.Context(), sess, sideQuestion)
 	require.NoError(t, err)
 
 	got := <-requests
