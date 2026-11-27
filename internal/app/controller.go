@@ -361,7 +361,8 @@ func (c *Controller) setup() {
 		})}
 		tools = append(tools, c.search...)
 	}
-	if len(c.cfg.Agents) > 0 && !c.cfg.Rules.Removes("Agent") {
+	agentOffered := len(c.cfg.Agents) > 0 && !c.cfg.Rules.Removes("Agent")
+	if agentOffered {
 		launcher := agentLauncher{c}
 		tools = append(tools, tool.NewAgent(c.cfg.Agents, launcher))
 		if send := tool.NewSendMessage(launcher); !c.cfg.Rules.Removes(send.Name) {
@@ -379,7 +380,7 @@ func (c *Controller) setup() {
 	// Workflow never reaches a subagent's tools, which buildAgents builds from
 	// search and the servers' tools.
 	if c.workflowOffered() {
-		c.workflow = []tool.Tool{tool.NewWorkflow(c.cfg.Agents, workflowLauncher{c}, c.cfg.MaxWorkflows, c.cfg.MaxAgents)}
+		c.workflow = []tool.Tool{tool.NewWorkflow(c.cfg.Agents, workflowLauncher{c}, c.cfg.MaxWorkflows, c.cfg.MaxAgents, agentOffered)}
 	}
 	c.rebuild()
 }
@@ -408,7 +409,7 @@ func (c *Controller) rebuild() {
 		servers = append(servers, server)
 	}
 	tools := slices.Concat(c.builtin, serverTools, c.workflow)
-	prompt := buildPrompt(c.cfg.Workspace, tools, c.cfg.Instructions, servers, nil, false, c.cfg.Servers != nil, c.cfg.UserShell != nil)
+	prompt := buildPrompt(c.cfg.Workspace, tools, c.cfg.Instructions, servers, nil, false, c.cfg.Servers != nil, c.cfg.UserShell != nil, false)
 	agents, workflowSpecs := c.buildAgents(c.search, serverTools, servers)
 	c.mu.Lock()
 	defer c.mu.Unlock()

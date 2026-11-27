@@ -42,7 +42,9 @@ type mcpServer struct {
 //
 // userShell reports that the human can run commands with "!": only the main
 // session in the fullscreen interface has it.
-func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group, servers []mcpServer, def *subagent.Definition, workflow, joining, userShell bool) []pigruntime.PromptPart {
+//
+// messaged reports that the parent can message a subagent with SendMessage.
+func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group, servers []mcpServer, def *subagent.Definition, workflow, joining, userShell, messaged bool) []pigruntime.PromptPart {
 	lines := []string{
 		fmt.Sprintf("You are Kopi, a coding agent working in %s.", workspace),
 	}
@@ -50,7 +52,11 @@ func buildPrompt(workspace string, tools []tool.Tool, groups []instruction.Group
 	case workflow:
 		lines = append(lines, "You are a workflow agent: a script gave you your task, and your final message is returned to that script as the result.")
 	case def != nil:
-		lines = append(lines, fmt.Sprintf("You are the subagent %s: another agent gave you your task, and your final message is returned to that agent as the result.", def.Name))
+		task := "another agent gave you your task"
+		if messaged {
+			task += " and may message you as you work"
+		}
+		lines = append(lines, fmt.Sprintf("You are the subagent %s: %s. Only your final message is returned to that agent, and it is your whole result.", def.Name, task))
 	}
 	modes := "The session has a plan mode and an execute mode; only the user can switch between them."
 	works := "Read-only tools work in both modes, the others only in execute mode"

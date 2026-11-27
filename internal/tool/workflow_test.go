@@ -26,7 +26,7 @@ func (f *fakeWorkflows) Start(_ context.Context, description, script string) (st
 }
 
 func TestWorkflowDescribesItself(t *testing.T) {
-	tool := NewWorkflow(testDefs, &fakeWorkflows{}, 3, 7)
+	tool := NewWorkflow(testDefs, &fakeWorkflows{}, 3, 7, false)
 
 	assert.Equal(t, "Workflow", tool.Name)
 	assert.Equal(t, []string{"description", "script"}, tool.Parameters["required"])
@@ -39,6 +39,7 @@ func TestWorkflowDescribesItself(t *testing.T) {
 	assert.True(t, tool.Deferred)
 	assert.Equal(t, Action{Verb: "Launched", One: "workflow", Many: "workflows"}, tool.Display.Action)
 	assert.Contains(t, tool.Description, "agentType names one of the agent types below")
+	assert.Contains(t, tool.Description, "The user typed ultracode to have this task done by such a script, with agents checking what other agents found before you report it.")
 	assert.Contains(t, tool.Description, "agent(prompt, {agentType, schema, label, phase})")
 	assert.Contains(t, tool.Description, "- phase(title): sets the heading the user sees the agents under that agent() starts after it; the phase option of agent() sets it for that one agent.")
 	assert.Contains(t, tool.Description, `phase: "Find"}`)
@@ -47,8 +48,15 @@ func TestWorkflowDescribesItself(t *testing.T) {
 	assert.Contains(t, tool.Description, "At most 7 of a script's agents run at once and the rest wait; an agent() call beyond the first 1000 fails the script. At most 3 scripts run at once.")
 }
 
+func TestWorkflowDescriptionWithAgentTool(t *testing.T) {
+	tool := NewWorkflow(testDefs, nil, 3, 7, true)
+
+	assert.Contains(t, tool.Description, "agentType names one of the Agent tool's subagents")
+	assert.NotContains(t, tool.Description, "Agent types:")
+}
+
 func TestWorkflowDescriptionWithoutDefinitions(t *testing.T) {
-	tool := NewWorkflow(nil, nil, 4, 16)
+	tool := NewWorkflow(nil, nil, 4, 16, false)
 
 	assert.Contains(t, tool.Description, "agent(prompt, {schema, label, phase})")
 	assert.Contains(t, tool.Description, "The agent has the tools a subagent can have.")
@@ -68,17 +76,17 @@ func TestWorkflowStarts(t *testing.T) {
 		return policy.Execute, nil
 	}
 
-	out, err := NewWorkflow(nil, w, 4, 16).Run(t.Context(), json.RawMessage(`{"description":"audit","script":"return 1"}`), admit)
+	out, err := NewWorkflow(nil, w, 4, 16, false).Run(t.Context(), json.RawMessage(`{"description":"audit","script":"return 1"}`), admit)
 
 	require.NoError(t, err)
 	assert.True(t, admitted)
-	assert.Equal(t, "Workflow t3 started. You are told when it ends, in a new turn if yours has ended: do not do its task yourself meanwhile.", out.Text)
+	assert.Equal(t, "Workflow t3 started. Its end is reported to you and starts a new turn if yours has ended: to wait for it, end your turn, and do not sleep or do its task yourself.", out.Text)
 	assert.Equal(t, [][2]string{{"audit", "return 1"}}, w.started)
 }
 
 func TestWorkflowRejectsInvalidArgsBeforeAdmission(t *testing.T) {
 	w := &fakeWorkflows{}
-	tool := NewWorkflow(nil, w, 4, 16)
+	tool := NewWorkflow(nil, w, 4, 16, false)
 	admit := func(policy.Target) (policy.Mode, error) {
 		t.Error("admit called")
 		return policy.Execute, nil
@@ -100,7 +108,7 @@ func TestWorkflowDoesNotStartWithoutAdmission(t *testing.T) {
 	w := &fakeWorkflows{}
 	refused := errors.New("refused")
 
-	_, err := NewWorkflow(nil, w, 4, 16).Run(t.Context(), json.RawMessage(`{"description":"d","script":"s"}`), func(policy.Target) (policy.Mode, error) {
+	_, err := NewWorkflow(nil, w, 4, 16, false).Run(t.Context(), json.RawMessage(`{"description":"d","script":"s"}`), func(policy.Target) (policy.Mode, error) {
 		return policy.Execute, refused
 	})
 
@@ -111,17 +119,17 @@ func TestWorkflowDoesNotStartWithoutAdmission(t *testing.T) {
 func TestWorkflowReturnsStartError(t *testing.T) {
 	failed := errors.New("too many")
 
-	_, err := NewWorkflow(nil, &fakeWorkflows{err: failed}, 4, 16).Run(t.Context(), json.RawMessage(`{"description":"d","script":"s"}`), allowTarget)
+	_, err := NewWorkflow(nil, &fakeWorkflows{err: failed}, 4, 16, false).Run(t.Context(), json.RawMessage(`{"description":"d","script":"s"}`), allowTarget)
 
 	assert.ErrorIs(t, err, failed)
 }
 
 func TestWorkflowDisplay(t *testing.T) {
-	tool := NewWorkflow(nil, nil, 4, 16)
+	tool := NewWorkflow(nil, nil, 4, 16, false)
 
 	assert.Equal(t, "Workflow › audit", tool.Display.Title(json.RawMessage(`{"description":"audit","script":"s"}`)))
 	assert.Equal(t, "Workflow", tool.Display.Title(json.RawMessage(`{`)))
-	assert.Equal(t, "launched", tool.Display.Summary("Workflow t3 started. You are told when it ends, in a new turn if yours has ended: do not do its task yourself meanwhile."))
+	assert.Equal(t, "launched", tool.Display.Summary("Workflow t3 started. Its end is reported to you and starts a new turn if yours has ended: to wait for it, end your turn, and do not sleep or do its task yourself."))
 	assert.Equal(t, "launched", tool.Display.Summary("Workflow t3 started."))
 	assert.Empty(t, tool.Display.Summary("too many"))
 	assert.Nil(t, tool.Display.Done)
@@ -159,7 +167,7 @@ func TestStructuredOutputDoesNotRecordWithoutAdmission(t *testing.T) {
 }
 
 func TestWorkflowDisplayOpensToTheScript(t *testing.T) {
-	display := NewWorkflow(nil, nil, 4, 16).Display
+	display := NewWorkflow(nil, nil, 4, 16, false).Display
 
 	summary, lines := display.Change(json.RawMessage(`{"description":"audit","script":"const a = 1\r\nreturn a\n"}`))
 

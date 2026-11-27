@@ -29,12 +29,13 @@ type workflowArgs struct {
 }
 
 // NewWorkflow returns the tool that starts a script whose agents may use the types in defs;
-// maxWorkflows and maxAgents are the limits the description states.
-func NewWorkflow(defs []subagent.Definition, w Workflows, maxWorkflows, maxAgents int) Tool {
+// maxWorkflows and maxAgents are the limits the description states. agentOffered says the
+// Agent tool is offered with the same defs, so the description does not list them again.
+func NewWorkflow(defs []subagent.Definition, w Workflows, maxWorkflows, maxAgents int, agentOffered bool) Tool {
 	return Tool{
 		Name:        "Workflow",
 		Label:       "Workflow",
-		Description: workflowDescription(defs, maxWorkflows, maxAgents),
+		Description: workflowDescription(defs, maxWorkflows, maxAgents, agentOffered),
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -124,15 +125,18 @@ func NewStructuredOutput(schema map[string]any, record func(json.RawMessage)) To
 	}
 }
 
-func workflowDescription(defs []subagent.Definition, maxWorkflows, maxAgents int) string {
+func workflowDescription(defs []subagent.Definition, maxWorkflows, maxAgents int, agentOffered bool) string {
 	agentCall := "agent(prompt, {agentType, schema, label, phase}): starts an agent with its own context, which sees only prompt, and returns a promise of its final message. " +
 		"agentType names one of the agent types below; without it the agent has the tools a subagent can have."
+	if agentOffered {
+		agentCall = strings.Replace(agentCall, "one of the agent types below", "one of the Agent tool's subagents", 1)
+	}
 	if len(defs) == 0 {
 		agentCall = "agent(prompt, {schema, label, phase}): starts an agent with its own context, which sees only prompt, and returns a promise of its final message. " +
 			"The agent has the tools a subagent can have."
 	}
 	var b strings.Builder
-	b.WriteString("Runs a JavaScript script that starts agents and combines their results. It is available because the user typed ultracode.\n" +
+	b.WriteString("Runs a JavaScript script that starts agents and combines their results. The user typed ultracode to have this task done by such a script, with agents checking what other agents found before you report it.\n" +
 		"The script is the body of an async function. The call returns at once with a task id while the script runs in the background; " +
 		"its end is reported to you with the value it returned or the error it threw. TaskStop stops the script and its agents.\n" +
 		"Agents share the working directory and the session's mode with you and with each other; nothing isolates those that write at the same time.\n" +
@@ -142,7 +146,7 @@ func workflowDescription(defs []subagent.Definition, maxWorkflows, maxAgents int
 		"- parallel(thunks): calls the functions together and returns a promise of their results in order, null for one that threw.\n" +
 		"- pipeline(items, ...stages): passes every item through the stages in order, each called as stage(previous, item, index), the items together; returns a promise of the last stage's results in order, null for an item whose stage threw.\n" +
 		fmt.Sprintf("At most %d of a script's agents run at once and the rest wait; an agent() call beyond the first %d fails the script. At most %d scripts run at once. A script has no files, network, timers or imports.", maxAgents, WorkflowCalls, maxWorkflows))
-	if len(defs) > 0 {
+	if len(defs) > 0 && !agentOffered {
 		b.WriteString("\nAgent types:")
 		writeDefinitions(&b, defs)
 	}

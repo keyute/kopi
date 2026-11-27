@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -194,7 +195,7 @@ func TestNoDefinitionsMeansNoAgentTools(t *testing.T) {
 
 	req := receive(t, requests)
 	assert.Equal(t, []string{"Read", "AskUserQuestion"}, req.ToolNames)
-	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil)}, nil, nil, nil, false, false, false)), req.SystemPrompt)
+	assert.Equal(t, joinPrompt(buildPrompt(sb.Workspace, []tool.Tool{read, tool.NewAskUserQuestion(nil)}, nil, nil, nil, false, false, false, false)), req.SystemPrompt)
 }
 
 func TestDefinitionsAddAgentAndSendMessageUnlessRuleRemovesThem(t *testing.T) {
@@ -203,10 +204,12 @@ func TestDefinitionsAddAgentAndSendMessageUnlessRuleRemovesThem(t *testing.T) {
 		name string
 		deny string
 		want []string
+		// listed is whether the Workflow description lists agent types.
+		listed bool
 	}{
-		{"no rule", "", []string{"AskUserQuestion", "WebSearch", "Agent", "SendMessage", "Workflow"}},
-		{"agent", "Agent", []string{"AskUserQuestion", "WebSearch", "Workflow"}},
-		{"send message", "SendMessage", []string{"AskUserQuestion", "WebSearch", "Agent", "Workflow"}},
+		{"no rule", "", []string{"AskUserQuestion", "WebSearch", "Agent", "SendMessage", "Workflow"}, false},
+		{"agent", "Agent", []string{"AskUserQuestion", "WebSearch", "Workflow"}, true},
+		{"send message", "SendMessage", []string{"AskUserQuestion", "WebSearch", "Agent", "Workflow"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sb := pigruntimetest.NewSandbox(t)
@@ -218,6 +221,9 @@ func TestDefinitionsAddAgentAndSendMessageUnlessRuleRemovesThem(t *testing.T) {
 			}
 			a := newAgentHarness(t, sb, cfg, agentDef("explorer"))
 			assert.Equal(t, tc.want, toolNames(a.c.tools))
+			i := slices.IndexFunc(a.c.tools, func(t tool.Tool) bool { return t.Name == "Workflow" })
+			require.NotEqual(t, -1, i)
+			assert.Equal(t, tc.listed, strings.Contains(a.c.tools[i].Description, "Agent types:"))
 		})
 	}
 }

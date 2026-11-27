@@ -93,8 +93,8 @@ func (c *Controller) buildSpecs(base, serverTools []tool.Tool, servers []mcpServ
 	}
 	spec.tools = tools
 	child := spec
-	child.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, def, false, false, false)
-	spec.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, def, true, false, false)
+	child.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, def, false, false, false, !c.cfg.Rules.Removes("SendMessage"))
+	spec.prompt = buildPrompt(c.cfg.Workspace, tools, groups, childServers, def, true, false, false, false)
 	return [2]agentSpec{child, spec}
 }
 

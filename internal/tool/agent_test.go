@@ -84,7 +84,7 @@ func TestAgentLaunches(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, admitted)
-	assert.Equal(t, "Agent t3 started. You are told when it ends, in a new turn if yours has ended: do not do its task yourself meanwhile.", out.Text)
+	assert.Equal(t, "Agent t3 started. Its end is reported to you and starts a new turn if yours has ended: to wait for it, end your turn, and do not sleep or do its task yourself.", out.Text)
 	assert.Equal(t, [][3]string{{"explore", "look", "find it"}}, agents.launched)
 }
 
@@ -139,7 +139,7 @@ func TestAgentDisplay(t *testing.T) {
 
 	assert.Equal(t, "explore › look", tool.Display.Title(json.RawMessage(`{"description":"look","prompt":"p","subagent_type":"explore"}`)))
 	assert.Equal(t, "Agent", tool.Display.Title(json.RawMessage(`{`)))
-	assert.Equal(t, "launched", tool.Display.Summary("Agent t3 started. You are told when it ends, in a new turn if yours has ended: do not do its task yourself meanwhile."))
+	assert.Equal(t, "launched", tool.Display.Summary("Agent t3 started. Its end is reported to you and starts a new turn if yours has ended: to wait for it, end your turn, and do not sleep or do its task yourself."))
 	assert.Equal(t, "launched", tool.Display.Summary("Agent t3 started."), "a session saved before the result said how the end arrives")
 	_, lines := tool.Display.Change(json.RawMessage(`{"description":"look","prompt":"a\nb","subagent_type":"explore"}`))
 	assert.Equal(t, []PreviewLine{{Kind: Context, Text: "a"}, {Kind: Context, Text: "b"}}, lines)

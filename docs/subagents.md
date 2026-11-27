@@ -1,6 +1,6 @@
 # Subagents
 
-A subagent is another agent that the main agent starts for one task. It has its own context, instructions, model and tools, sees only the prompt it is given, and its final message is returned to the main agent.
+A subagent is another agent that the main agent starts for one task. It has its own context, instructions, model and tools, sees only the prompt it is given, and may be messaged by the main agent while it works, unless a `deny` rule removes `SendMessage`. Only its final message is returned to the main agent, as its whole result.
 
 ## Format
 
