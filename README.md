@@ -1,7 +1,13 @@
+<p align="center"><img src="docs/assets/banner.png" alt="A terminal prompt typing kopi, next to the Kopi mascot: a smiling bag of iced kopi tied with a purple string"></p>
+
 # Kopi
 
-Kopi is a coding-agent CLI built on [PiG](https://github.com/MichaelKinsy/PiG).
-It is early: tools to read, search, write and edit files and to run commands, tools from MCP servers, a fullscreen terminal interface, and a print mode that answers one prompt.
+> **kopi** *(n.)*: coffee, in Singapore.
+>
+> Send a prompt, go for a kopi, come back to click approve.
+
+Kopi is a terminal coding agent in Go, one binary, built on [PiG](https://github.com/MichaelKinsy/PiG). PiG runs the agent loop, sessions, providers, compaction, the MCP client and skill parsing; Kopi owns the interface, tools, subagents, workflows, permissions and the OS sandbox.
+It starts in plan mode and asks before acting outside the sandbox.
 
 ## Install
 
@@ -14,7 +20,7 @@ brew install keyute/tap/kopi
 To build from source instead:
 
 - Needs Go (version in `go.mod`) and [Task](https://taskfile.dev/) to build; the built binary needs nothing else at runtime.
-- Builds for macOS, Linux and Windows only.
+- Builds for macOS, Linux and Windows; releases and CI cover macOS and Linux.
 
 ```sh
 task build    # writes bin/kopi
@@ -43,9 +49,9 @@ Shift+Tab or `/execute` switches from plan to execute mode.
 
 ## Documentation
 
-- [Usage](docs/usage.md): fullscreen and print mode, commands, keys, mouse, paste
-- [Configuration](docs/configuration.md): home, `config.json` keys, key bindings, status line, themes
-- [Providers](docs/providers.md): login and credentials
+- [Usage](docs/usage.md): fullscreen and print mode, commands, keys
+- [Configuration](docs/configuration.md): `config.json`, key bindings, status line, themes
+- [Providers](docs/providers.md): login, models, plan limits
 - [Tools](docs/tools.md): modes, built-in tools, background tasks, web tools
 - [Permissions](docs/permissions.md): rules, approval dialog, classifier
 - [Sandbox](docs/sandbox.md): the OS sandbox for `Bash`
