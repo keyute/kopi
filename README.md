@@ -6,8 +6,7 @@
 >
 > Send a prompt, go for a kopi, come back to click approve.
 
-Kopi is a terminal coding agent, brewed in Go on [PiG](https://github.com/MichaelKinsy/PiG).
-It is one binary. PiG runs the agent loop, sessions, providers and login, compaction and retry, the MCP client and skill parsing; Kopi owns the terminal interface, the tools, subagents, workflows, permissions and the OS sandbox.
+Kopi is a terminal coding agent in Go, one binary, built on [PiG](https://github.com/MichaelKinsy/PiG). PiG runs the agent loop, sessions, providers, compaction, the MCP client and skill parsing; Kopi owns the interface, tools, subagents, workflows, permissions and the OS sandbox.
 It starts in plan mode and asks before acting outside the sandbox.
 
 ## Install
@@ -50,9 +49,9 @@ Shift+Tab or `/execute` switches from plan to execute mode.
 
 ## Documentation
 
-- [Usage](docs/usage.md): fullscreen and print mode, commands, keys, mouse, paste
-- [Configuration](docs/configuration.md): home, `config.json` keys, key bindings, status line, themes
-- [Providers](docs/providers.md): login, credentials, models, plan limits
+- [Usage](docs/usage.md): fullscreen and print mode, commands, keys
+- [Configuration](docs/configuration.md): `config.json`, key bindings, status line, themes
+- [Providers](docs/providers.md): login, models, plan limits
 - [Tools](docs/tools.md): modes, built-in tools, background tasks, web tools
 - [Permissions](docs/permissions.md): rules, approval dialog, classifier
 - [Sandbox](docs/sandbox.md): the OS sandbox for `Bash`

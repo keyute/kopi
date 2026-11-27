@@ -3,6 +3,7 @@
 package pigruntime
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -32,7 +33,7 @@ import (
 // thinking level is PiG's own at open; set, it is also what PiG's
 // thinkingLevelForModelSwitch picks, which otherwise carries over the level
 // the old model clamped (PiG v0.8.0; recheck on a bump). Session.setModel
-// applies the same default when PiG returned before setting a level.
+// reapplies the level the session was opened with or last given by SetEffort.
 // "steeringMode":"all" is what Session.Send's mode-line bookkeeping rests on:
 // everything handed over at a turn boundary is in the session before the next
 // boundary (PiG v0.8.0; recheck on a bump).
@@ -291,7 +292,10 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	sections := promptSections(o.SystemPrompt)
 	// InitialActiveToolNames must be set too: nil falls back to PiG's
 	// read/bash/edit/write defaults. An explicit Model also stops a resumed
-	// session from restoring the model it was saved with.
+	// session from restoring the model it was saved with. The same holds for
+	// ThinkingLevel, and PiG restores the saved level when it is empty, so
+	// DefaultEffort is sent as medium.
+	level := cmp.Or(o.Effort.thinkingLevel(), MediumEffort.thinkingLevel())
 	start := coding.SessionStartOptions{
 		Model:                  model,
 		SystemPromptSections:   sections,
@@ -301,7 +305,7 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 		AllowedTools:           allowed,
 		InitialActiveToolNames: names,
 		BeforeToolCall:         []agent.BeforeToolCallHook{beforeToolCall(gate)},
-		ThinkingLevel:          o.Effort.thinkingLevel(),
+		ThinkingLevel:          level,
 	}
 	if o.Parent != nil {
 		// PiG lists, resumes and continues only the *.jsonl files directly in a
@@ -404,14 +408,7 @@ func (r *Runtime) open(ctx context.Context, o OpenOptions, gate *policy.Gate) (*
 	if o.Recall != nil {
 		s.recallAfterCompaction(o.Recall)
 	}
-	// On resume asked is PiG's restored level, already clamped to the model the
-	// session is reopened on, so a more capable model later keeps that level.
-	switch {
-	case o.Effort != DefaultEffort:
-		s.asked = o.Effort.thinkingLevel()
-	case (o.ResumeID != "" || o.Continue) && reasons(sess.AvailableThinkingLevels()):
-		s.asked = sess.ThinkingLevel()
-	}
+	s.asked = level
 	return s, nil
 }
 

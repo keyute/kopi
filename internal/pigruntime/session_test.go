@@ -1473,7 +1473,7 @@ func TestSetNameSurvivesResume(t *testing.T) {
 }
 
 // openThinker opens a session on a reasoning model at low effort.
-func openThinker(t *testing.T, r *Runtime, tools ...tool.Tool) (*Session, *ai.FauxProviderHandle, OpenOptions) {
+func openThinker(t *testing.T, r *Runtime, tools ...tool.Tool) (*Session, *ai.FauxProviderHandle) {
 	t.Helper()
 	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "faux-thinker", Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
 	require.NoError(t, r.RegisterProvider(thinker.Provider()))
@@ -1481,12 +1481,12 @@ func openThinker(t *testing.T, r *Runtime, tools ...tool.Tool) (*Session, *ai.Fa
 	sess, err := r.Open(t.Context(), opts)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
-	return sess, thinker, opts
+	return sess, thinker
 }
 
 func TestSendRaisesEffortForTheRunAndRestoresIt(t *testing.T) {
 	r, _ := newTestRuntime(t, newSandbox(t))
-	sess, thinker, opts := openThinker(t, r)
+	sess, thinker := openThinker(t, r)
 	levels := make(chan ai.ThinkingLevel, 1)
 	thinker.SetResponses([]ai.FauxResponseStep{
 		ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
@@ -1507,17 +1507,11 @@ func TestSendRaisesEffortForTheRunAndRestoresIt(t *testing.T) {
 	assert.Equal(t, ai.ThinkingLevelHigh, got, "PiG clamps max to the model's highest level")
 	assert.Equal(t, "low", sess.Effort())
 	assert.Equal(t, 2, changes, "raise and restore")
-
-	opts.Effort, opts.ResumeID = DefaultEffort, sess.ID()
-	resumed, err := r.Open(t.Context(), opts)
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, resumed.Close(context.Background())) })
-	assert.Equal(t, "low", resumed.Effort())
 }
 
 func TestSendRaisesEffortForAHandedOverPrompt(t *testing.T) {
 	r, _ := newTestRuntime(t, newSandbox(t))
-	sess, thinker, _ := openThinker(t, r, probeTool(okProbe))
+	sess, thinker := openThinker(t, r, probeTool(okProbe))
 	levels := make(chan ai.ThinkingLevel, 2)
 	final := ai.FauxFactoryStep(func(_ ai.TranscriptContext, o ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
 		levels <- o.Thinking
@@ -1542,7 +1536,7 @@ func TestSendRaisesEffortForAHandedOverPrompt(t *testing.T) {
 
 func TestSetEffortDuringARaisedRunKeepsTheUsersLevel(t *testing.T) {
 	r, _ := newTestRuntime(t, newSandbox(t))
-	sess, thinker, _ := openThinker(t, r)
+	sess, thinker := openThinker(t, r)
 	thinker.SetResponses([]ai.FauxResponseStep{
 		ai.FauxFactoryStep(func(_ ai.TranscriptContext, _ ai.StreamOptions, _ *ai.FauxProviderState, _ *ai.Model) (ai.AssistantMessage, error) {
 			assert.NoError(t, sess.SetEffort(MediumEffort))
@@ -1558,7 +1552,7 @@ func TestSetEffortDuringARaisedRunKeepsTheUsersLevel(t *testing.T) {
 func TestSetEffortFailedSaveStillCountsAsAskedForALaterModelSwitch(t *testing.T) {
 	sb := newSandbox(t)
 	r, _ := newTestRuntime(t, sb)
-	sess, thinker, _ := openThinker(t, r)
+	sess, thinker := openThinker(t, r)
 	thinker.SetResponses([]ai.FauxResponseStep{ai.FauxAssistantMessage(ai.FauxContentString("ok"), ai.FauxAssistantMessageOptions{})})
 	_, err := sess.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
 	require.NoError(t, err)
@@ -1581,7 +1575,7 @@ func TestSetEffortFailedSaveStillCountsAsAskedForALaterModelSwitch(t *testing.T)
 
 func TestSendKeepsTheFirstRaiseWhenAHandedOverPromptRaisesAgain(t *testing.T) {
 	r, _ := newTestRuntime(t, newSandbox(t))
-	sess, thinker, _ := openThinker(t, r, probeTool(okProbe))
+	sess, thinker := openThinker(t, r, probeTool(okProbe))
 	thinker.SetResponses([]ai.FauxResponseStep{
 		ai.FauxAssistantMessage(
 			ai.FauxContentBlocks{ai.FauxToolCall("Probe", map[string]any{}, &ai.FauxToolCallOptions{ID: "call-1"})},
@@ -1635,7 +1629,7 @@ func TestSendEffortContinuation(t *testing.T) {
 			r, _ := newTestRuntime(t, newSandbox(t))
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			sess, thinker, _ := openThinker(t, r, probeTool(func(context.Context, json.RawMessage) (string, error) {
+			sess, thinker := openThinker(t, r, probeTool(func(context.Context, json.RawMessage) (string, error) {
 				cancel()
 				return toolOutput, nil
 			}))

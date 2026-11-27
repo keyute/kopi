@@ -732,7 +732,7 @@ func TestEffortNamesTheLevelOnlyForAReasoningModel(t *testing.T) {
 	assert.Equal(t, "low", sess.Effort())
 }
 
-func TestSetEffortChangesTheLevelForTheSessionAndItsResume(t *testing.T) {
+func TestSetEffortChangesTheLevelForTheSessionNotItsResume(t *testing.T) {
 	r, _ := newTestRuntime(t, newSandbox(t))
 	assert.Nil(t, openTestSession(t, r).Efforts(), "faux-1 does not reason")
 
@@ -743,6 +743,10 @@ func TestSetEffortChangesTheLevelForTheSessionAndItsResume(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, sess.Close(context.Background())) })
 
+	require.NoError(t, sess.SetEffort(MaxEffort))
+	assert.Equal(t, "high", sess.Effort(), "the thinker has no max")
+	require.NoError(t, sess.SetEffort(LowEffort))
+	assert.Equal(t, "low", sess.Effort())
 	require.NoError(t, sess.SetEffort(HighEffort))
 	assert.Equal(t, "high", sess.Effort())
 	assert.Contains(t, sess.Efforts(), "high")
@@ -754,11 +758,11 @@ func TestSetEffortChangesTheLevelForTheSessionAndItsResume(t *testing.T) {
 	thinker.SetResponses([]ai.FauxResponseStep{reply("noted")})
 	_, err = sess.Send(t.Context(), Prompt{Text: "hello"}, nil, nil)
 	require.NoError(t, err)
-	opts.Effort, opts.ResumeID = DefaultEffort, sess.ID()
+	opts.ResumeID = sess.ID()
 	resumed, err := r.Open(t.Context(), opts)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, resumed.Close(context.Background())) })
-	assert.Equal(t, "high", resumed.Effort())
+	assert.Equal(t, "low", resumed.Effort(), "the level given to Open, not the saved one")
 }
 
 func TestEffortTreatsAMaxThinkingModelAsReasoning(t *testing.T) {

@@ -30,7 +30,7 @@ type Config struct {
 	Model string
 	// SmallModel is "provider/id"; empty means the session model.
 	SmallModel string
-	// ConfigFile is the path the notice about a chosen model names.
+	// ConfigFile is the path the notices about a chosen model or effort name.
 	ConfigFile string
 	Workspace  string
 	// Tools are the built-in tools; the MCP servers' tools come from Servers.
@@ -48,7 +48,7 @@ type Config struct {
 	// Mode is the controller's initial mode, which the first session starts
 	// in, and the mode every later session starts in.
 	Mode policy.Mode
-	// Effort is the level a new main session opens at; a resumed one keeps its own.
+	// Effort is the level every main session opens at until /effort replaces it.
 	Effort pigruntime.Effort
 	// Files lists the entries that @ references complete to, and is the workspace
 	// /add-dir adds to and completes in, so /add-dir needs it.
@@ -209,6 +209,9 @@ type Controller struct {
 
 	// life serialises session start, switch and close.
 	life sync.Mutex
+	// effort is the level the next main session opens at: Config.Effort, or what
+	// /effort last set; life guards it.
+	effort pigruntime.Effort
 	// stopAllDone retains a task cleanup across timed-out Close calls; life guards it.
 	stopAllDone chan struct{}
 	// queue makes queueing input atomic with taking it from the queue and with
@@ -238,7 +241,7 @@ type Controller struct {
 	// side requests and ended workflow agents.
 	spent pigruntime.Usage
 	// model is the session model: Config.Model, or the runtime's default once resolved.
-	model  string
+	model string
 	sessID string
 	// dirsToldBy is how many entries of dirs each session of this run has
 	// read, so a session resumed later is not told them again; queue guards it.
@@ -310,7 +313,7 @@ func NewController(rt *pigruntime.Runtime, cfg Config) *Controller {
 	if cfg.Tasks == nil {
 		cfg.Tasks = tool.NewTasks()
 	}
-	c := &Controller{rt: rt, cfg: cfg, model: cfg.Model, authority: policy.NewAuthority()}
+	c := &Controller{rt: rt, cfg: cfg, model: cfg.Model, effort: cfg.Effort, authority: policy.NewAuthority()}
 	c.titleCtx, c.titleStop = context.WithCancel(context.Background())
 	c.main = &runner{c: c, role: mainRole{c}}
 	var reserved []string
@@ -1319,13 +1322,9 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	}
 	c.titleCommit.Lock()
 	defer c.titleCommit.Unlock()
-	effort := pigruntime.DefaultEffort
-	if req.ResumeID == "" && !req.Continue {
-		effort = c.cfg.Effort
-	}
 	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
 		Model:        c.Model(),
-		Effort:       effort,
+		Effort:       c.effort,
 		ResumeID:     req.ResumeID,
 		Continue:     req.Continue,
 		SystemPrompt: c.prompt,

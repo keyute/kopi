@@ -1,6 +1,6 @@
 # Contributing
 
-Kopi is opinionated and built around how I work, so I don't accept feature requests or feature PRs. Bug reports are welcome as issues, and bug fixes are the only contributions I consider.
+Kopi is built around how I work, so I take no feature requests or feature PRs. Bug reports are welcome as issues; bug fixes are the only contributions I consider.
 
 ## Development
 
@@ -10,7 +10,7 @@ task lint   # needs golangci-lint
 task fmt
 ```
 
-Tests are mock-backed (PiG's faux provider and a local HTTP mock server); none use a live provider.
+Tests use PiG's faux provider and a local HTTP mock server, never a live provider.
 
 ### Manual live check
 
@@ -41,14 +41,14 @@ Background tasks:
 
 ## Releasing
 
-Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`: it builds the four archives (macOS and Linux, arm64 and amd64), tests the formula, creates the GitHub release and pushes the formula to `keyute/homebrew-tap`. Push one tag at a time.
+Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`: it builds four archives (macOS and Linux, arm64 and amd64), tests the formula, creates the GitHub release and pushes the formula to `keyute/homebrew-tap`. Push one tag at a time.
 
-- The formula source is `.github/homebrew/kopi.rb`. The copy in the tap is overwritten on every release, so edit the template, not the tap.
-- A run uses the workflow and formula of its tag. Re-running an old tag's run leaves a newer formula in the tap untouched.
+- Edit the formula in `.github/homebrew/kopi.rb`; every release overwrites the tap's copy.
+- A run uses its tag's workflow and formula, so re-running an old tag leaves a newer formula in the tap untouched.
 - `gh attestation verify <file> -R keyute/kopi` checks a downloaded archive.
 
 One-time setup:
 
-1. Create the public repository `keyute/homebrew-tap` with an initial commit. If its ruleset requires the `ci` check, list deploy keys as a bypass actor: the release pushes straight to its `main`, and the required check would reject that push.
+1. Create the public repository `keyute/homebrew-tap` with an initial commit. If its ruleset requires the `ci` check, list deploy keys as a bypass actor: the release pushes straight to `main`, which the check would reject.
 2. Generate a key with `ssh-keygen -t ed25519 -N "" -C kopi-release -f tap-deploy-key`. Add `tap-deploy-key.pub` to the tap as a deploy key with write access, create the environment `homebrew-release` in `keyute/kopi`, limit its deployment branches and tags to the tag pattern `v*`, add the private half as that environment's secret `HOMEBREW_TAP_DEPLOY_KEY`, then delete both files.
 3. Optionally, enable immutable releases in the settings of `keyute/kopi`.

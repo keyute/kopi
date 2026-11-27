@@ -50,7 +50,7 @@ func commandTable() []command {
 			c.EnterExecute()
 			return nil
 		}},
-		{Command: Command{Name: "effort", Summary: "set the reasoning effort for this session"}, run: (*Controller).effortCommand, args: (*Controller).effortCandidates},
+		{Command: Command{Name: "effort", Summary: "set the reasoning effort until kopi exits"}, run: (*Controller).effortCommand, args: (*Controller).effortCandidates},
 		{Command: Command{Name: "model", Summary: "switch the model until kopi exits"}, run: (*Controller).modelCommand, args: (*Controller).modelCandidates},
 		{Command: Command{Name: "add-dir", Summary: "add a directory to the workspace until kopi exits", Typed: true}, run: func(c *Controller, _ context.Context, arg string) error {
 			return c.AddDir(arg)
@@ -165,11 +165,18 @@ func (c *Controller) effortCommand(_ context.Context, arg string) error {
 		c.relay.emit(event.Notice{Text: "This model does not reason."})
 		return nil
 	}
-	if err := sess.SetEffort(e); err != nil {
+	err = sess.SetEffort(e)
+	c.effort = e
+	c.relay.emit(event.EffortChanged{})
+	if err != nil {
 		return err
 	}
-	c.relay.emit(event.EffortChanged{})
-	c.relay.emit(event.Notice{Text: fmt.Sprintf("Effort set to %s for this session.", sess.Effort())})
+	level := sess.Effort()
+	notice := fmt.Sprintf("Effort set to %s until kopi exits. Set \"effort\" in %s to keep it.", arg, c.cfg.ConfigFile)
+	if level != arg {
+		notice += fmt.Sprintf(" This model uses %s.", level)
+	}
+	c.relay.emit(event.Notice{Text: notice})
 	return nil
 }
 
