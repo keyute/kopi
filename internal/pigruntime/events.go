@@ -38,6 +38,10 @@ func translate(ev agent.AgentEvent) (event.Event, bool) {
 		case ai.ThinkingDeltaEvent:
 			return event.ThinkingDelta{Text: d.Delta}, true
 		}
+	case agent.MessageEndEvent:
+		if a := ev.Message.Assistant; a != nil && !provisionalReply(a) && a.StopReason != ai.StopReasonAborted {
+			return event.ReplyEnd{Text: assistantText(a)}, true
+		}
 	case agent.ToolExecutionStartEvent:
 		return event.ToolStart{CallID: ev.ToolCallID, Name: ev.ToolName, Args: compactJSON(ev.Args)}, true
 	case agent.ToolExecutionEndEvent:
@@ -117,11 +121,25 @@ func (j *textJoiner) translate(ev agent.AgentEvent) (event.Event, bool) {
 			e = event.TextDelta{Text: "\n\n" + d.Text}
 		}
 		j.newBlock, j.afterText = false, true
-	case event.ThinkingDelta, nil:
+	case event.ThinkingDelta, event.ReplyEnd, nil:
 	default:
 		j.afterText = false
 	}
 	return e, ok
+}
+
+func provisionalReply(m *agent.AssistantMessage) bool {
+	return m.StopReason == ai.StopReasonError || m.StopReason == ai.StopReasonLength
+}
+
+func assistantText(m *agent.AssistantMessage) string {
+	var parts []string
+	for _, block := range m.Content {
+		if text, ok := block.(ai.TextContent); ok && text.Text != "" {
+			parts = append(parts, text.Text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func compactJSON(raw json.RawMessage) string {

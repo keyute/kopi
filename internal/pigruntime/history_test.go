@@ -19,6 +19,7 @@ import (
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
+	"github.com/keyute/kopi/internal/transcript"
 )
 
 // unstreamed merges consecutive TextDeltas and drops ThinkingDeltas, which
@@ -146,7 +147,14 @@ func TestHistoryReplaysTextAroundToolCallsAsLiveEvents(t *testing.T) {
 			unsubscribe()
 			require.NoError(t, sess.Close(t.Context()))
 
-			assert.Equal(t, unstreamed(live), unstreamed(resume(t, r, sess.ID(), probe).History()))
+			got := resume(t, r, sess.ID(), probe).History()
+			assert.Equal(t, unstreamed(live), unstreamed(got))
+			want := "after"
+			if tc.name == "tool between text" {
+				want = "before\n\nafter"
+			}
+			assert.Contains(t, live, event.Event(event.ReplyEnd{Text: want}))
+			assert.Contains(t, got, event.Event(event.ReplyEnd{Text: want}))
 		})
 	}
 }
@@ -173,10 +181,12 @@ func TestHistoryRestoresNotices(t *testing.T) {
 	resumed := resume(t, r, sess.ID(), probe)
 	assert.Equal(t, []event.Event{
 		event.TurnStart{Prompt: "go"},
+		event.ReplyEnd{},
 		event.ToolStart{CallID: "call-1", Name: "Probe", Args: "{}"},
 		event.ToolEnd{CallID: "call-1", Name: "Probe", Args: "{}", Output: toolOutput},
 		n.Shown,
 		event.TextDelta{Text: "noted"},
+		event.ReplyEnd{Text: "noted"},
 	}, resumed.History())
 	assert.Equal(t, unstreamed(live), unstreamed(resumed.History()))
 
@@ -202,9 +212,11 @@ func TestHistoryRestoresDeliveredNotices(t *testing.T) {
 		event.TurnStart{Prompt: "go"},
 		n1.Shown,
 		event.TextDelta{Text: "done"},
+		event.ReplyEnd{Text: "done"},
 		n2.Shown,
 		n3.Shown,
 		event.TextDelta{Text: "noted"},
+		event.ReplyEnd{Text: "noted"},
 	}, resume(t, r, sess.ID()).History())
 }
 
@@ -222,6 +234,7 @@ func TestHistorySkipsForeignCustomMessages(t *testing.T) {
 	assert.Equal(t, []event.Event{
 		event.TurnStart{Prompt: "go"},
 		event.TextDelta{Text: "done"},
+		event.ReplyEnd{Text: "done"},
 	}, resume(t, r, sess.ID()).History())
 }
 
@@ -240,6 +253,7 @@ func TestHistoryEndsFailedAndInterruptedTurns(t *testing.T) {
 
 		assert.Equal(t, []event.Event{
 			event.TurnStart{Prompt: "go"},
+			event.ReplyEnd{},
 			event.TurnEnd{Outcome: event.Outcome{Status: event.Failed, Message: "invalid request: bad thing"}},
 		}, resume(t, r, sess.ID()).History())
 	})
@@ -258,7 +272,7 @@ func TestHistoryEndsFailedAndInterruptedTurns(t *testing.T) {
 
 		want := event.Outcome{Status: event.Failed, Message: "not logged in (run `kopi login github-copilot`)"}
 		assert.Equal(t, want, res.Outcome)
-		assert.Equal(t, []event.Event{event.TurnStart{Prompt: "go"}, event.TurnEnd{Outcome: want}}, resume(t, r, sess.ID()).History())
+		assert.Equal(t, []event.Event{event.TurnStart{Prompt: "go"}, event.ReplyEnd{}, event.TurnEnd{Outcome: want}}, resume(t, r, sess.ID()).History())
 	})
 
 	t.Run("interrupted during a tool", func(t *testing.T) {
@@ -287,6 +301,7 @@ func TestHistoryEndsFailedAndInterruptedTurns(t *testing.T) {
 
 		assert.Equal(t, []event.Event{
 			event.TurnStart{Prompt: "block"},
+			event.ReplyEnd{},
 			event.ToolStart{CallID: "call-1", Name: "Probe", Args: "{}"},
 			event.ToolEnd{CallID: "call-1", Name: "Probe", Args: "{}", Output: context.Canceled.Error(), IsError: true},
 			event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}},
@@ -324,11 +339,14 @@ func TestHistoryRetainsCompactedConversationOnActiveBranch(t *testing.T) {
 	assert.Equal(t, []event.Event{
 		event.TurnStart{Prompt: "old prompt"},
 		event.TextDelta{Text: "old answer"},
+		event.ReplyEnd{Text: "old answer"},
 		event.ToolStart{CallID: "old-call", Name: "Probe", Args: "{}"},
 		event.ToolEnd{CallID: "old-call", Name: "Probe", Args: "{}", Output: "old output"},
 		event.TextDelta{Text: "old conclusion"},
+		event.ReplyEnd{Text: "old conclusion"},
 		event.TurnStart{Prompt: "new prompt"},
 		event.TextDelta{Text: "new answer"},
+		event.ReplyEnd{Text: "new answer"},
 	}, resumed.History())
 	assert.NotContains(t, history(resumed.inner.Messages()), event.Event(event.TurnStart{Prompt: "old prompt"}))
 }
@@ -361,11 +379,62 @@ func TestHistoryOmitsFailedRetryAttempt(t *testing.T) {
 	assert.Equal(t, []event.Event{
 		event.TurnStart{Prompt: "earlier prompt"},
 		event.TextDelta{Text: "earlier answer"},
+		event.ReplyEnd{Text: "earlier answer"},
 		event.TurnStart{Prompt: "try again"},
+		event.ReplyEnd{},
 		event.ToolStart{CallID: "call-1", Name: "Probe", Args: "{}"},
 		event.ToolEnd{CallID: "call-1", Name: "Probe", Args: "{}", Output: "kept output"},
 		event.TextDelta{Text: "recovered"},
+		event.ReplyEnd{Text: "recovered"},
 	}, resume(t, r, sess.ID()).History())
+}
+
+func TestBranchCopyTargetExcludesOnlyActiveProvisionalMessages(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	s := openTestSession(t, r)
+	manager := s.inner.SessionManager()
+	appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"settled partial"}],"stopReason":"length","timestamp":1}`)
+	boundary := appendHistoryMessage(t, manager, `{"role":"user","content":"next","timestamp":2}`)
+	appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"unsettled"}],"stopReason":"error","timestamp":3}`)
+	got, err := branchCopyTarget(manager.GetBranch(), &boundary)
+	require.NoError(t, err)
+	assert.Equal(t, "settled partial", got)
+	got, err = branchCopyTarget(manager.GetBranch(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "unsettled", got)
+}
+
+func TestBranchCopyTargetEmptyBoundaryOmitsProvisionalReply(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	s := openTestSession(t, r)
+	manager := s.inner.SessionManager()
+	appendHistoryMessage(t, manager, `{"role":"user","content":"go","timestamp":1}`)
+	appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"unsettled"}],"stopReason":"error","timestamp":2}`)
+	boundary := ""
+	got, err := branchCopyTarget(manager.GetBranch(), &boundary)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestInterruptedRepliesAreNotCopyTargets(t *testing.T) {
+	r, _ := newTestRuntime(t, newSandbox(t))
+	s := openTestSession(t, r)
+	manager := s.inner.SessionManager()
+	appendHistoryMessage(t, manager, `{"role":"user","content":"first","timestamp":1}`)
+	appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"earlier"}],"stopReason":"stop","timestamp":2}`)
+	appendHistoryMessage(t, manager, `{"role":"user","content":"second","timestamp":3}`)
+	appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"cut"}],"stopReason":"aborted","timestamp":4}`)
+	appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"cut by tool"}],"stopReason":"error","errorMessage":"context canceled","timestamp":5}`)
+
+	got, err := branchCopyTarget(manager.GetBranch(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "earlier", got)
+
+	var tr transcript.Transcript
+	tr.Restore(s.History())
+	assert.Equal(t, "earlier", tr.LastReply())
+	assert.NotContains(t, s.History(), event.Event(event.ReplyEnd{Text: "cut"}))
+	assert.NotContains(t, s.History(), event.Event(event.ReplyEnd{Text: "cut by tool"}))
 }
 
 func TestHistoryLatestContextEditWins(t *testing.T) {
@@ -378,7 +447,7 @@ func TestHistoryLatestContextEditWins(t *testing.T) {
 		{
 			name:  "non-null edit restores original display content",
 			edits: []*extension.ContextEditReplacement{nil, replacement},
-			want:  []event.Event{event.TurnStart{Prompt: "go"}, event.TextDelta{Text: "original"}},
+			want:  []event.Event{event.TurnStart{Prompt: "go"}, event.TextDelta{Text: "original"}, event.ReplyEnd{Text: "original"}},
 		},
 		{
 			name:  "null edit omits replaced message",
@@ -419,6 +488,7 @@ func TestHistoryIgnoresSiblingContextEdits(t *testing.T) {
 	assert.Equal(t, []event.Event{
 		event.TurnStart{Prompt: "go"},
 		event.TextDelta{Text: "shared answer"},
+		event.ReplyEnd{Text: "shared answer"},
 		event.TurnStart{Prompt: "active prompt"},
 	}, resume(t, r, sess.ID()).History())
 }
@@ -514,7 +584,7 @@ func TestHistoryMapsStoredShapes(t *testing.T) {
 				{Custom: map[string]any{"role": agent.RoleBranchSummary, "summary": "elsewhere"}},
 				assistant(ai.StopReasonStop, "", text("kept")),
 			},
-			want: []event.Event{event.TextDelta{Text: "kept"}},
+			want: []event.Event{event.TextDelta{Text: "kept"}, event.ReplyEnd{Text: "kept"}},
 		},
 		{
 			name: "adjacent text is separated by a blank line",
@@ -522,7 +592,7 @@ func TestHistoryMapsStoredShapes(t *testing.T) {
 				assistant(ai.StopReasonStop, "", text("one"), ai.ThinkingContent{Thinking: "hmm"}, text("two")),
 				assistant(ai.StopReasonStop, "", text("three")),
 			},
-			want: []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: "\n\ntwo"}, event.TextDelta{Text: "\n\nthree"}},
+			want: []event.Event{event.TextDelta{Text: "one"}, event.TextDelta{Text: "\n\ntwo"}, event.ReplyEnd{Text: "one\n\ntwo"}, event.TextDelta{Text: "\n\nthree"}, event.ReplyEnd{Text: "three"}},
 		},
 		{
 			name: "text after a tool call is not separated",
@@ -532,8 +602,10 @@ func TestHistoryMapsStoredShapes(t *testing.T) {
 			},
 			want: []event.Event{
 				event.TextDelta{Text: "before"},
+				event.ReplyEnd{Text: "before"},
 				event.ToolStart{CallID: "c", Name: "Probe", Args: "{}"},
 				event.TextDelta{Text: "after"},
+				event.ReplyEnd{Text: "after"},
 			},
 		},
 		{
@@ -543,6 +615,7 @@ func TestHistoryMapsStoredShapes(t *testing.T) {
 			},
 			want: []event.Event{
 				event.TextDelta{Text: "after"},
+				event.ReplyEnd{Text: "after"},
 				event.ToolStart{CallID: "c", Name: "Probe", Args: "{}"},
 			},
 		},
@@ -555,8 +628,10 @@ func TestHistoryMapsStoredShapes(t *testing.T) {
 			want: []event.Event{
 				event.TextDelta{Text: "before"},
 				event.TextDelta{Text: "after"},
+				event.ReplyEnd{Text: "before\n\nafter"},
 				event.ToolStart{CallID: "c", Name: "Probe", Args: "{}"},
 				event.TextDelta{Text: "next message"},
+				event.ReplyEnd{Text: "next message"},
 			},
 		},
 		{
@@ -568,10 +643,12 @@ func TestHistoryMapsStoredShapes(t *testing.T) {
 			want: []event.Event{
 				event.TextDelta{Text: "before"},
 				event.TextDelta{Text: "after"},
+				event.ReplyEnd{Text: "before\n\nafter"},
 				event.ToolStart{CallID: "c1", Name: "Probe", Args: "{}"},
 				event.ToolStart{CallID: "c2", Name: "Probe", Args: "{}"},
 				event.TurnEnd{Outcome: event.Outcome{Status: event.Failed, Message: "failed"}},
 				event.TextDelta{Text: "next message"},
+				event.ReplyEnd{Text: "next message"},
 			},
 		},
 		{
@@ -583,8 +660,10 @@ func TestHistoryMapsStoredShapes(t *testing.T) {
 			},
 			want: []event.Event{
 				event.TextDelta{Text: "before"},
+				event.ReplyEnd{Text: "before"},
 				event.TaskEnded{ID: "t1", Command: "make", Status: "failed", Elapsed: 2500 * time.Millisecond},
 				event.TextDelta{Text: "after"},
+				event.ReplyEnd{Text: "after"},
 			},
 		},
 		{
@@ -730,6 +809,7 @@ func TestHistoryAndSessionListOmitSkills(t *testing.T) {
 	assert.Equal(t, []event.Event{
 		event.TurnStart{Prompt: "go"},
 		event.TextDelta{Text: "done"},
+		event.ReplyEnd{Text: "done"},
 	}, resumed.History())
 	infos, err := r.Sessions()
 	require.NoError(t, err)
@@ -844,6 +924,7 @@ func TestHistoryRestoresTaskResultEnvelopes(t *testing.T) {
 
 			assert.Equal(t, []event.Event{
 				event.TurnStart{Prompt: "go"},
+				event.ReplyEnd{},
 				event.ToolStart{CallID: "call-1", Name: "TaskStop", Args: `{"task_id":"t1"}`},
 				event.ToolEnd{CallID: "call-1", Name: "TaskStop", Args: `{"task_id":"t1"}`, Output: output},
 			}, resume(t, r, sess.ID(), tool.NewTaskStop(nil)).History())

@@ -122,6 +122,44 @@ func branchMessages(entries []coding.SessionEntry) ([]agent.AgentMessage, error)
 	return msgs, nil
 }
 
+func branchCopyTarget(entries []coding.SessionEntry, boundary *string) (string, error) {
+	if boundary != nil {
+		// During Send, provisional messages after its starting leaf have not settled.
+		filtered := make([]coding.SessionEntry, 0, len(entries))
+		active := *boundary == ""
+		for _, entry := range entries {
+			if active && entry.Base().Type == "message" {
+				var record struct {
+					Message agent.AgentMessage `json:"message"`
+				}
+				if err := json.Unmarshal(entry.Raw(), &record); err != nil {
+					return "", fmt.Errorf("failed to decode history message %s: %w", entry.Base().ID, err)
+				}
+				if a := record.Message.Assistant; a != nil && provisionalReply(a) {
+					continue
+				}
+			}
+			filtered = append(filtered, entry)
+			if entry.Base().ID == *boundary {
+				active = true
+			}
+		}
+		entries = filtered
+	}
+	msgs, err := branchMessages(entries)
+	if err != nil {
+		return "", err
+	}
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if a := msgs[i].Assistant; a != nil && !interrupted(a) {
+			if text := assistantText(a); strings.TrimSpace(text) != "" {
+				return text, nil
+			}
+		}
+	}
+	return "", nil
+}
+
 func storedDetails[T any](entry coding.SessionEntry) (T, error) {
 	var stored struct {
 		Details T `json:"details"`
@@ -166,6 +204,9 @@ func history(msgs []agent.AgentMessage) []event.Event {
 					afterText = false
 				}
 			}
+			if !interrupted(m.Assistant) {
+				out = append(out, event.ReplyEnd{Text: assistantText(m.Assistant)})
+			}
 			// PiG streams the entire assistant message before executing tools.
 			if len(toolStarts) > 0 {
 				out = append(out, toolStarts...)
@@ -200,13 +241,18 @@ func history(msgs []agent.AgentMessage) []event.Event {
 	return out
 }
 
-// storedTurnEnd mirrors Send's outcome for a stored message. A transcript
-// written before PiG v0.8.0 holds an abort during a tool as StopReason "error"
-// with "context canceled", not "aborted".
+// interrupted reports that the user stopped the message. A transcript written
+// before PiG v0.8.0 holds an abort during a tool as StopReason "error" with
+// "context canceled", not "aborted".
+func interrupted(m *agent.AssistantMessage) bool {
+	return m.StopReason == ai.StopReasonAborted ||
+		m.StopReason == ai.StopReasonError && m.ErrorMessage == context.Canceled.Error()
+}
+
+// storedTurnEnd mirrors Send's outcome for a stored message.
 func storedTurnEnd(m *agent.AssistantMessage) (event.TurnEnd, bool) {
 	switch {
-	case m.StopReason == ai.StopReasonAborted,
-		m.StopReason == ai.StopReasonError && m.ErrorMessage == context.Canceled.Error():
+	case interrupted(m):
 		return event.TurnEnd{Outcome: event.Outcome{Status: event.Interrupted}}, true
 	case m.StopReason == ai.StopReasonError:
 		return event.TurnEnd{Outcome: event.Outcome{Status: event.Failed, Message: pigTexts.Replace(m.ErrorMessage)}}, true

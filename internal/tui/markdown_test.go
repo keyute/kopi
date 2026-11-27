@@ -659,3 +659,16 @@ func FuzzMarkdown(f *testing.F) {
 		require.Equal(t, rows, streamed, "streamed reply differs")
 	})
 }
+
+func TestCodeBlocks(t *testing.T) {
+	text := "```go\nfunc main() {\n\treturn\n}\n```\n\n```\nplain\n```\n\n    indented\n\n- item\n\n  ```sh\n  task test\n  ```\n\n```\n```\n"
+	assert.Equal(t, []codeBlock{
+		{"go", "func main() {\n\treturn\n}"},
+		{"", "plain"},
+		{"", "indented"},
+		{"sh", "task test"},
+	}, codeBlocks(text))
+	assert.Empty(t, codeBlocks("no code `inline`"))
+	assert.Equal(t, []codeBlock{{"", "first\r\n\r\nsecond"}}, codeBlocks("```\r\nfirst\r\n\r\nsecond\r\n```\r\n"))
+	assert.Empty(t, codeBlocks("```\r\n\r\n```\r\n"))
+}

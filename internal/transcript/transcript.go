@@ -16,6 +16,9 @@ type Transcript struct {
 	// boundary is the number of items restored from history; stretches never
 	// cross it and groups before it are sealed.
 	boundary int
+	// reply is the copy target: the last ReplyEnd text that was not blank, or what
+	// CopyTarget last set.
+	reply string
 }
 
 type kind int
@@ -64,6 +67,12 @@ func (t *Transcript) Apply(ev event.Event) {
 			return
 		}
 		t.items = append(t.items, item{kind: assistantItem, text: ev.Text})
+	case event.ReplyEnd:
+		if strings.TrimSpace(ev.Text) != "" {
+			t.reply = ev.Text
+		}
+	case event.CopyTarget:
+		t.reply = ev.Text
 	case event.ToolStart:
 		t.items = append(t.items, item{kind: callItem, call: Call{
 			ID:          ev.CallID,
@@ -132,6 +141,11 @@ func (t *Transcript) Apply(ev event.Event) {
 		}
 	}
 }
+
+// LastReply is the copy target: the raw text of the last reply that ended with
+// text other than whitespace, as CopyTarget last corrected it, or "" when there
+// is none.
+func (t *Transcript) LastReply() string { return t.reply }
 
 // Restore must be called on an empty Transcript.
 func (t *Transcript) Restore(history []event.Event) {

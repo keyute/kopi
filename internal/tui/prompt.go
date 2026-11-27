@@ -21,6 +21,7 @@ const (
 	promptWorkflow
 	promptTasks
 	promptUsage
+	promptCopy
 	promptBtw
 )
 

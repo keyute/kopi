@@ -36,6 +36,7 @@ Background tasks:
 - [ ] The status line shows `1 shell`
 - [ ] When it ends, the `• task t1 finished` row appears and the model replies without a prompt
 - [ ] `/tasks` lists and stops a task
+- [ ] `/copy` on a reply with two code blocks, then `2`, pastes the first block without its fence; on a reply without code it pastes the whole reply
 - [ ] After quitting, `pgrep sleep` finds nothing
 
 ## Releasing

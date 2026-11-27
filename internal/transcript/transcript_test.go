@@ -391,3 +391,83 @@ func TestWorkflowTaskEndedCarriesItsOutcome(t *testing.T) {
 	assert.Equal(t, want, live.Blocks())
 	assert.Equal(t, want, restored.Blocks())
 }
+
+func TestLastReply(t *testing.T) {
+	apply := func(evs ...event.Event) *Transcript {
+		var tr Transcript
+		for _, ev := range evs {
+			tr.Apply(ev)
+		}
+		return &tr
+	}
+	end := func(text string) event.ReplyEnd { return event.ReplyEnd{Text: text} }
+	assert.Empty(t, apply().LastReply())
+	assert.Empty(t, apply(event.TurnStart{Prompt: "go"}).LastReply())
+
+	assert.Equal(t, "first", apply(
+		event.TurnStart{Prompt: "a"}, event.TextDelta{Text: "first"}, end("first"), event.TurnEnd{},
+		event.TurnStart{Prompt: "b"}, event.TextDelta{Text: "sec"},
+	).LastReply(), "a reply still being written is skipped")
+
+	assert.Equal(t, "before", apply(
+		event.TurnStart{Prompt: "a"}, event.TextDelta{Text: "before"}, end("before"), start("a"),
+	).LastReply(), "text ended before a tool call is a reply")
+
+	assert.Equal(t, "first", apply(
+		event.TextDelta{Text: "first"}, end("first"), event.TextDelta{Text: " \n"}, end(" \n"),
+	).LastReply(), "blank text does not replace the earlier reply")
+
+	assert.Equal(t, "\n second\n", apply(
+		event.TurnStart{Prompt: "a"}, event.TextDelta{Text: "\n second\n"}, end("\n second\n"), event.TurnEnd{},
+	).LastReply(), "raw text is not trimmed")
+
+	assert.Equal(t, "Hello world", apply(
+		event.TextDelta{Text: "Hel"}, end("Hel"), event.Notice{Text: "retrying"}, event.TextDelta{Text: "Hello world"}, end("Hello world"),
+	).LastReply(), "a retried reply replaces the failed one")
+
+	events := []event.Event{
+		event.TurnStart{Prompt: "a"},
+		event.TextDelta{Text: "first"},
+		end("first"), start("a"),
+		event.TextDelta{Text: "last"},
+		end("last"),
+		event.TurnEnd{},
+	}
+	var restored Transcript
+	restored.Restore(events)
+	assert.Equal(t, apply(events...).LastReply(), restored.LastReply())
+	assert.Equal(t, "last", restored.LastReply())
+}
+
+func TestCopyTargetReplacesAndClears(t *testing.T) {
+	var tr Transcript
+	tr.Apply(event.ReplyEnd{Text: "later"})
+	tr.Apply(event.CopyTarget{Text: "earlier"})
+	assert.Equal(t, "earlier", tr.LastReply())
+	tr.Apply(event.CopyTarget{})
+	assert.Empty(t, tr.LastReply())
+}
+
+func TestLastReplyInterruptedByNotice(t *testing.T) {
+	events := []event.Event{
+		event.TextDelta{Text: "before\n```go\n"},
+		event.Notice{Text: "notice"},
+		event.TextDelta{Text: "code\n```\nafter"},
+		event.ReplyEnd{Text: "before\n```go\ncode\n```\nafter"},
+		event.TurnEnd{},
+	}
+	var live, restored Transcript
+	for _, ev := range events {
+		live.Apply(ev)
+	}
+	restored.Restore(events)
+	want := "before\n```go\ncode\n```\nafter"
+	assert.Equal(t, want, live.LastReply())
+	assert.Equal(t, want, restored.LastReply())
+	assert.Equal(t, []Block{
+		Assistant{key: "item:0", Text: "before\n```go\n"},
+		Notice{key: "item:1", Text: "notice"},
+		Assistant{key: "item:2", Text: "code\n```\nafter"},
+		Turn{key: "item:3"},
+	}, live.Blocks())
+}

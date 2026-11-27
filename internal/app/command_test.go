@@ -94,7 +94,7 @@ func TestCommandsReportWhetherTheirArgumentsAreTyped(t *testing.T) {
 		assert.False(t, byName[name].Typed, name)
 	}
 	assert.True(t, byName["btw"].Text)
-	for _, name := range []string{"execute", "new", "tasks", "usage", "quit", "btw"} {
+	for _, name := range []string{"execute", "new", "tasks", "usage", "copy", "quit", "btw"} {
 		assert.False(t, byName[name].Argument, name)
 		assert.False(t, byName[name].Typed, name)
 	}
@@ -350,6 +350,15 @@ func TestUsageCommandShowsUsage(t *testing.T) {
 	got, err := h.c.Submit(t.Context(), Main, "/usage")
 
 	assert.ErrorIs(t, err, ErrShowUsage)
+	assert.Nil(t, got)
+}
+
+func TestCopyCommandAsksForTheCopyDialog(t *testing.T) {
+	h, _ := openHarness(t, Config{})
+
+	got, err := h.c.Submit(t.Context(), Main, "/copy")
+
+	assert.ErrorIs(t, err, ErrCopy)
 	assert.Nil(t, got)
 }
 

@@ -509,6 +509,9 @@ func (m *model) submitted(err error) tea.Cmd {
 	case errors.Is(err, app.ErrShowUsage):
 		m.composer.reset()
 		return m.showUsage()
+	case errors.Is(err, app.ErrCopy):
+		m.composer.reset()
+		return m.showCopy()
 	case errors.Is(err, app.ErrOpenPlan):
 		m.composer.reset()
 		return m.openEditor(m.c.PlanFile())
@@ -602,8 +605,14 @@ func unwrap(ev event.Event) (string, event.Event) {
 // apply routes an event: the global ones act on the model, the rest on their
 // session's view, which it returns; nil when no view changed.
 func (m *model) apply(ev event.Event) *view {
-	id, ev := unwrap(ev)
-	m.sweep(ev)
+	id, inner := unwrap(ev)
+	switch inner.(type) {
+	case event.CopyTarget, event.ReplyEnd:
+		m.sweep(ev)
+	default:
+		m.sweep(inner)
+	}
+	ev = inner
 	switch ev := ev.(type) {
 	case event.StatusCommandResult:
 		if ev.Err != nil {

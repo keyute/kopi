@@ -24,6 +24,7 @@ import (
 	"github.com/keyute/kopi/internal/event"
 	"github.com/keyute/kopi/internal/policy"
 	"github.com/keyute/kopi/internal/tool"
+	"github.com/keyute/kopi/internal/transcript"
 )
 
 // heldProbe closes started when called and returns once release is closed.
@@ -976,6 +977,232 @@ func TestReply(t *testing.T) {
 	}
 }
 
+func TestRetryOmittedPartialOnCancellation(t *testing.T) {
+	r, faux := newTestRuntime(t, newSandbox(t))
+	var settings coding.Settings
+	require.NoError(t, json.Unmarshal([]byte(`{"retry":{"baseDelayMs":0}}`), &settings))
+	r.svcs.SettingsManager().ApplyOverrides(settings)
+	sess := openTestSession(t, r)
+	var tr transcript.Transcript
+	t.Cleanup(sess.Subscribe(func(ev event.Event) { tr.Apply(ev) }))
+	faux.SetResponses([]ai.FauxResponseStep{reply("earlier")})
+	_, err := sess.Send(t.Context(), Prompt{Text: "first"}, nil, nil)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var atRetry string
+	retried := false
+	t.Cleanup(sess.inner.Subscribe(func(ev agent.AgentEvent) {
+		if _, ok := ev.(agent.AutoRetryStartEvent); ok {
+			retried = true
+			atRetry = tr.LastReply()
+			cancel()
+		}
+	}))
+	failed := ai.FauxAssistantMessage(ai.FauxContentString("omitted"), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonError), ErrorMessage: "overloaded"})
+	faux.SetResponses([]ai.FauxResponseStep{failed, reply("unreached")})
+	_, err = sess.Send(ctx, Prompt{Text: "retry"}, nil, nil)
+	require.NoError(t, err)
+	require.True(t, retried)
+	assert.Equal(t, "earlier", atRetry)
+	assert.Equal(t, "earlier", tr.LastReply())
+	var raw string
+	for _, entry := range sess.inner.SessionManager().GetBranch() {
+		raw += string(entry.Raw())
+	}
+	assert.Contains(t, raw, `"text":"omitted"`)
+	assert.Contains(t, raw, `"replacement":null`)
+	var restored transcript.Transcript
+	restored.Restore(sess.History())
+	assert.Equal(t, "earlier", restored.LastReply())
+}
+
+func TestRetryTextSuccessEmitsOneReplyEnd(t *testing.T) {
+	r, faux := newTestRuntime(t, newSandbox(t))
+	var settings coding.Settings
+	require.NoError(t, json.Unmarshal([]byte(`{"retry":{"baseDelayMs":0}}`), &settings))
+	r.svcs.SettingsManager().ApplyOverrides(settings)
+	s := openTestSession(t, r)
+	var ends []event.ReplyEnd
+	var tr transcript.Transcript
+	t.Cleanup(s.Subscribe(func(ev event.Event) {
+		tr.Apply(ev)
+		if end, ok := ev.(event.ReplyEnd); ok {
+			ends = append(ends, end)
+		}
+	}))
+	failed := ai.FauxAssistantMessage(ai.FauxContentString("partial"), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonError), ErrorMessage: "overloaded"})
+	faux.SetResponses([]ai.FauxResponseStep{failed, reply("recovered")})
+	_, err := s.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []event.ReplyEnd{{Text: "recovered"}}, ends)
+	assert.Equal(t, "recovered", tr.LastReply())
+	var restored transcript.Transcript
+	restored.Restore(s.History())
+	assert.Equal(t, restored.LastReply(), tr.LastReply())
+}
+
+func TestRetainedProvisionalUsesCopyTargetNotReplyEnd(t *testing.T) {
+	for _, reason := range []ai.StopReason{ai.StopReasonLength, ai.StopReasonError} {
+		t.Run(string(reason), func(t *testing.T) {
+			r, faux := newTestRuntime(t, newSandbox(t))
+			var settings coding.Settings
+			require.NoError(t, json.Unmarshal([]byte(`{"compaction":{"enabled":false}}`), &settings))
+			r.svcs.SettingsManager().ApplyOverrides(settings)
+			s := openTestSession(t, r)
+			var ends []event.ReplyEnd
+			var targets []event.CopyTarget
+			var tr transcript.Transcript
+			t.Cleanup(s.Subscribe(func(ev event.Event) {
+				tr.Apply(ev)
+				switch ev := ev.(type) {
+				case event.ReplyEnd:
+					ends = append(ends, ev)
+				case event.CopyTarget:
+					targets = append(targets, ev)
+				}
+			}))
+			faux.SetResponses([]ai.FauxResponseStep{ai.FauxAssistantMessage(ai.FauxContentString("partial"), ai.FauxAssistantMessageOptions{StopReason: string(reason), ErrorMessage: "provider exploded"})})
+			_, err := s.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
+			require.NoError(t, err)
+			assert.Empty(t, ends)
+			assert.Equal(t, []event.CopyTarget{{Text: "partial"}}, targets)
+			assert.Equal(t, "partial", tr.LastReply())
+			assert.Contains(t, s.History(), event.Event(event.ReplyEnd{Text: "partial"}))
+			var restored transcript.Transcript
+			restored.Restore(s.History())
+			assert.Equal(t, "partial", restored.LastReply())
+		})
+	}
+}
+
+func TestNoCopyTargetWithoutRetainedProvisionalText(t *testing.T) {
+	for name, step := range map[string]ai.FauxResponseStep{
+		"successful": reply("done"),
+		"blank":      ai.FauxAssistantMessage(ai.FauxContentString(" \n"), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonError), ErrorMessage: "provider exploded"}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, faux := newTestRuntime(t, newSandbox(t))
+			var settings coding.Settings
+			require.NoError(t, json.Unmarshal([]byte(`{"compaction":{"enabled":false}}`), &settings))
+			r.svcs.SettingsManager().ApplyOverrides(settings)
+			s := openTestSession(t, r)
+			var targets []event.CopyTarget
+			t.Cleanup(s.Subscribe(func(ev event.Event) {
+				if target, ok := ev.(event.CopyTarget); ok {
+					targets = append(targets, target)
+				}
+			}))
+			faux.SetResponses([]ai.FauxResponseStep{step})
+			_, err := s.Send(t.Context(), Prompt{Text: "go"}, nil, nil)
+			require.NoError(t, err)
+			assert.Empty(t, targets)
+		})
+	}
+}
+
+func TestRetryOmissionSkipsUnsettledLengthReply(t *testing.T) {
+	r, faux := newTestRuntime(t, newSandbox(t))
+	var settings coding.Settings
+	require.NoError(t, json.Unmarshal([]byte(`{"retry":{"baseDelayMs":0}}`), &settings))
+	r.svcs.SettingsManager().ApplyOverrides(settings)
+	s := openTestSession(t, r, probeTool(okProbe))
+	var tr transcript.Transcript
+	t.Cleanup(s.Subscribe(func(ev event.Event) { tr.Apply(ev) }))
+	faux.SetResponses([]ai.FauxResponseStep{reply("earlier")})
+	_, err := s.Send(t.Context(), Prompt{Text: "first"}, nil, nil)
+	require.NoError(t, err)
+	started, release := make(chan struct{}), make(chan struct{})
+	var atOmission string
+	var omittedError bool
+	t.Cleanup(s.inner.Subscribe(func(ev agent.AgentEvent) {
+		if appended, ok := ev.(agent.EntryAppendedEvent); ok {
+			var edit struct {
+				Type        string          `json:"type"`
+				TargetID    string          `json:"targetId"`
+				Replacement json.RawMessage `json:"replacement"`
+			}
+			if json.Unmarshal(appended.Entry, &edit) == nil && edit.Type == "context_edit" && string(edit.Replacement) == "null" {
+				if entry, ok := s.inner.SessionManager().GetEntry(edit.TargetID); ok && strings.Contains(string(entry.Raw()), "error partial") {
+					omittedError, atOmission = true, tr.LastReply()
+				}
+			}
+		}
+	}))
+	length := ai.FauxAssistantMessage(ai.FauxContentBlocks{ai.FauxText("length partial"), ai.FauxToolCall("Probe", map[string]any{}, &ai.FauxToolCallOptions{ID: "c"})}, ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonLength)})
+	failed := ai.FauxAssistantMessage(ai.FauxContentString("error partial"), ai.FauxAssistantMessageOptions{StopReason: string(ai.StopReasonError), ErrorMessage: "overloaded"})
+	faux.SetResponses([]ai.FauxResponseStep{length, failed, ai.FauxFactoryStep(func(ai.TranscriptContext, ai.StreamOptions, *ai.FauxProviderState, *ai.Model) (ai.AssistantMessage, error) {
+		close(started)
+		<-release
+		return ai.FauxAssistantMessage(ai.FauxContentString(""), ai.FauxAssistantMessageOptions{}), nil
+	})})
+	done := sendAsync(t, s, "next")
+	<-started
+	assert.True(t, omittedError)
+	assert.Equal(t, "earlier", atOmission)
+	assert.Equal(t, "earlier", tr.LastReply())
+	close(release)
+	require.NoError(t, <-done)
+}
+
+func TestResumedLengthRecoveryReplacesCopyTargetBeforeResponse(t *testing.T) {
+	for _, earlier := range []string{"", "earlier"} {
+		t.Run(earlier, func(t *testing.T) {
+			r, faux := newTestRuntime(t, newSandbox(t))
+			s := openTestSession(t, r)
+			manager := s.inner.SessionManager()
+			if earlier != "" {
+				appendHistoryMessage(t, manager, `{"role":"user","content":"first","timestamp":1}`)
+				appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"earlier"}],"stopReason":"stop","timestamp":2}`)
+			}
+			appendHistoryMessage(t, manager, `{"role":"user","content":"check","timestamp":3}`)
+			target := appendHistoryMessage(t, manager, `{"role":"assistant","content":[{"type":"text","text":"truncated"},{"type":"toolCall","id":"c","name":"Probe","arguments":{}}],"provider":"kopi-faux","model":"faux-1","stopReason":"length","timestamp":4,"usage":{"input":100,"output":16,"totalTokens":116}}`)
+			appendHistoryMessage(t, manager, `{"role":"toolResult","toolCallId":"c","toolName":"Probe","content":[{"type":"text","text":"not executed"}],"isError":true,"timestamp":5}`)
+			require.NoError(t, s.Close(t.Context()))
+			s = resume(t, r, s.ID())
+			var tr transcript.Transcript
+			tr.Restore(s.History())
+			require.Equal(t, "truncated", tr.LastReply())
+			t.Cleanup(s.Subscribe(func(ev event.Event) { tr.Apply(ev) }))
+			var omissionBeforePrompt bool
+			promptStarted := false
+			t.Cleanup(s.inner.Subscribe(func(ev agent.AgentEvent) {
+				switch ev := ev.(type) {
+				case agent.MessageStartEvent:
+					if ev.Message.User != nil {
+						promptStarted = true
+					}
+				case agent.EntryAppendedEvent:
+					var edit struct {
+						Type        string          `json:"type"`
+						TargetID    string          `json:"targetId"`
+						Replacement json.RawMessage `json:"replacement"`
+					}
+					if json.Unmarshal(ev.Entry, &edit) == nil && edit.Type == "context_edit" && edit.TargetID == target && string(edit.Replacement) == "null" {
+						omissionBeforePrompt = !promptStarted && tr.LastReply() == earlier
+					}
+				}
+			}))
+			started, release := make(chan struct{}), make(chan struct{})
+			faux.SetResponses([]ai.FauxResponseStep{ai.FauxFactoryStep(func(ai.TranscriptContext, ai.StreamOptions, *ai.FauxProviderState, *ai.Model) (ai.AssistantMessage, error) {
+				close(started)
+				<-release
+				return ai.FauxAssistantMessage(ai.FauxContentString(""), ai.FauxAssistantMessageOptions{}), nil
+			})})
+			done := sendAsync(t, s, "continue")
+			<-started
+			assert.Equal(t, earlier, tr.LastReply())
+			assert.True(t, omissionBeforePrompt, "the null edit rolled back the target before the next user message")
+			close(release)
+			require.NoError(t, <-done)
+			var restored transcript.Transcript
+			restored.Restore(s.History())
+			assert.Equal(t, earlier, tr.LastReply())
+			assert.Equal(t, earlier, restored.LastReply())
+		})
+	}
+}
+
 // PiG answers a call "Operation aborted" when the turn was cancelled while the
 // call's before hook ran.
 func TestCancelledTurnMarksAbortedCallInterrupted(t *testing.T) {
@@ -1083,6 +1310,7 @@ func TestSendQueuesModeAfterSkillsBeforeNotices(t *testing.T) {
 		event.TurnStart{Prompt: "prompt"},
 		n.Shown,
 		event.TextDelta{Text: "done"},
+		event.ReplyEnd{Text: "done"},
 	}, resume(t, r, sess.ID()).History())
 }
 

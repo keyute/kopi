@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -35,6 +36,8 @@ type Session struct {
 	partsMu        sync.Mutex
 	parts          []PromptPart
 	sendInProgress atomic.Bool
+	// sendBoundary is the leaf before the active Send; an empty ID means no leaf.
+	sendBoundary atomic.Pointer[string]
 	// listenersMu guards listeners and nextID. notify holds it while calling
 	// listeners, so no listener may call back into Session.
 	listenersMu sync.Mutex
@@ -448,8 +451,9 @@ func (s *Session) Usage() (toolCalls int, cost float64) {
 }
 
 // Subscribe registers fn to run synchronously on PiG's event executor, and for
-// event.ToolsChanged on the goroutine that changed the active tools, so fn may
-// run concurrently with executor events. A slow fn stalls the turn, and fn must
+// event.ToolsChanged on the goroutine that changed the active tools and recovery
+// reconciliation on Send's caller goroutine, so fn may run concurrently with
+// executor events. A slow fn stalls the turn, and fn must
 // not call back into the Session. Every call for a turn has run when Send
 // returns.
 func (s *Session) Subscribe(fn func(event.Event)) func() {
@@ -460,6 +464,19 @@ func (s *Session) Subscribe(fn func(event.Event)) func() {
 	s.listenersMu.Unlock()
 	var j textJoiner
 	unsubscribe := s.inner.Subscribe(func(ev agent.AgentEvent) {
+		// PiG emits recovery edits in order, including before a resumed prompt
+		// (PiG v0.8.0; recheck on a bump).
+		// Snapshot at the edit ID; the session lock can be held by PiG here.
+		if appended, ok := ev.(agent.EntryAppendedEvent); ok {
+			var entry struct{ Type, ID string }
+			if json.Unmarshal(appended.Entry, &entry) == nil && entry.Type == "context_edit" {
+				text, err := branchCopyTarget(s.inner.SessionManager().GetBranch(entry.ID), s.sendBoundary.Load())
+				if err != nil {
+					slog.Warn("failed to read copy target", "error", err)
+				}
+				fn(event.CopyTarget{Text: text})
+			}
+		}
 		if e, ok := j.translate(ev); ok {
 			fn(e)
 		}
@@ -552,6 +569,12 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 		return SendResult{UndeliveredNotices: notices}, fmt.Errorf("failed to send prompt: %w", ErrSendInProgress)
 	}
 	defer s.sendInProgress.Store(false)
+	boundary := ""
+	if leaf := s.inner.SessionManager().GetLeafID(); leaf != nil {
+		boundary = *leaf
+	}
+	s.sendBoundary.Store(&boundary)
+	defer s.sendBoundary.Store(nil)
 	var aborted atomic.Bool
 	interrupt := &turnInterrupt{abort: func() {
 		aborted.Store(true)
@@ -583,6 +606,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	// last is the run's last assistant message. SendContent returns PiG's
 	// whole transcript, so it cannot say which assistant message is this run's.
 	var last *agent.AssistantMessage
+	var provisional bool
 	unsubscribe := s.inner.Subscribe(func(ev agent.AgentEvent) {
 		abortInLoop(ev)
 		switch ev := ev.(type) {
@@ -619,6 +643,9 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 		case agent.MessageEndEvent:
 			if ev.Message.Assistant != nil {
 				last = ev.Message.Assistant
+				if provisionalReply(last) && strings.TrimSpace(assistantText(last)) != "" {
+					provisional = true
+				}
 			}
 		case agent.TurnEndEvent:
 			// A steer after a failed or aborted turn would continue a run
@@ -691,6 +718,16 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 	_, _ = s.inner.ClearQueue()
 	s.inner.Agent().ClearSteeringQueue()
 	s.inner.Agent().TakePendingNextTurn()
+	// PiG can omit error or length responses with context edits after MessageEnd
+	// (PiG v0.8.0; recheck on a bump).
+	// Only the retained branch is authoritative once delivery and recovery settle.
+	if provisional {
+		text, branchErr := branchCopyTarget(s.inner.SessionManager().GetBranch(), nil)
+		if branchErr != nil {
+			slog.Warn("failed to read copy target", "error", branchErr)
+		}
+		s.notify(event.CopyTarget{Text: text})
+	}
 	res := SendResult{Sent: sent, Undelivered: handed, UndeliveredNotices: pending}
 	s.effortMu.Lock()
 	if s.raised != DefaultEffort {
@@ -717,13 +754,7 @@ func (s *Session) Send(ctx context.Context, p Prompt, notices []Notice, more fun
 		res.Outcome = event.Outcome{Status: event.Failed, Message: pigTexts.Replace(last.ErrorMessage)}
 	default:
 		res.Outcome = event.Outcome{Status: event.Completed}
-		var parts []string
-		for _, block := range last.Content {
-			if b, ok := block.(ai.TextContent); ok && b.Text != "" {
-				parts = append(parts, b.Text)
-			}
-		}
-		res.Reply = strings.Join(parts, "\n\n")
+		res.Reply = assistantText(last)
 	}
 	return res, nil
 }

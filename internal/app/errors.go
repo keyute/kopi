@@ -11,6 +11,7 @@ var (
 	ErrQuit               = errors.New("quit requested")
 	ErrShowTasks          = errors.New("task list requested")
 	ErrShowUsage          = errors.New("usage requested")
+	ErrCopy               = errors.New("copy requested")
 	ErrBusy               = errors.New("a session switch or model change is under way")
 	ErrBadImage           = errors.New("not a supported image")
 	ErrUnknownCommand     = errors.New("unknown command")
