@@ -345,14 +345,16 @@ func (m *model) menuKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 
 // accept puts the selected candidate in place of the token; with run it then
 // submits, except for a file reference, a candidate ending in "/" that is not
-// already the argument as typed, or a command that needs an argument or a
-// skill, which are only ever filled in.
+// already the argument as typed, or a command that needs an argument or takes
+// free text, or a skill, which are only ever filled in.
 func (m *model) accept(run bool) tea.Cmd {
 	q, cd := m.menu.q, m.menu.shown[m.menu.sel]
 	var ins string
 	switch q.Kind {
 	case app.KindCommand:
-		if slices.ContainsFunc(m.c.Commands(), func(c app.Command) bool { return c.Name == cd.Value && ((c.Argument && !c.Optional) || c.Skill) }) {
+		if slices.ContainsFunc(m.c.Commands(), func(c app.Command) bool {
+			return c.Name == cd.Value && ((c.Argument && !c.Optional) || c.Text || c.Skill)
+		}) {
 			run = false
 		}
 		ins = "/" + cd.Value

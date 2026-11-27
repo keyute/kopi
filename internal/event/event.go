@@ -206,6 +206,21 @@ type DirRequested struct {
 // cancelled.
 type DirEnded struct{ Token uint64 }
 
+// SideQuestionAsked reports a side question the human asked about the main
+// session; ID is the controller's id for it.
+type SideQuestionAsked struct {
+	ID       int
+	Question string
+}
+
+// SideQuestionEnded follows every SideQuestionAsked, answered, failed or
+// cancelled. Err is nil when Answer is the reply.
+type SideQuestionEnded struct {
+	ID     int
+	Answer string
+	Err    error
+}
+
 // Notice reports retry and compaction progress, the MCP server tools the
 // first session skipped, and a login's progress and result.
 type Notice struct{ Text string }
@@ -318,6 +333,8 @@ func (LoginRequested) isEvent()      {}
 func (LoginEnded) isEvent()          {}
 func (DirRequested) isEvent()        {}
 func (DirEnded) isEvent()            {}
+func (SideQuestionAsked) isEvent()   {}
+func (SideQuestionEnded) isEvent()   {}
 func (Notice) isEvent()              {}
 func (Activity) isEvent()            {}
 func (TurnEnd) isEvent()             {}

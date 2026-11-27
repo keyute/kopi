@@ -42,6 +42,7 @@ Commands in the fullscreen interface:
 | `/login <provider>` | Log in to a provider |
 | `/logout <provider>` | Remove a provider's stored credential |
 | `/tasks` | List background tasks, [subagents](subagents.md) and [workflows](workflows.md), show one's output, open a subagent's view or a workflow's [progress dialog](workflows.md#progress-dialog) and stop them |
+| `/btw <question>` | Ask about the session so far without adding to it, [answered in a dialog](#btw) |
 | `/usage` | Show the context and what holds it, the [plan limits](providers.md#plan-limits), the tokens and estimated cost by model, the prompt cache, compaction and time, [as a dialog](#usage-1) |
 | `/copy` | Copy the last finished reply as the agent wrote it (markdown), or, when it has code blocks, pick the whole reply or one block in a dialog (a block is copied without its fence). A reply still being written is skipped for the one before it. Earlier replies, quotes and writing to a file are not offered. Where copies go: see [Mouse](#mouse) |
 | `/skill:<name>` | Load a skill with the prompt ([skills](skills.md)) |
@@ -59,6 +60,28 @@ The whole word `ultrathink`, in any case, in a prompt to the main agent raises i
 - Ctrl+Enter keeps the raise, as it continues the turn. A turn that starts because a task ended or queued input followed a completed turn is not raised unless its own prompt says `ultrathink`.
 - No effect, and no highlight, on a model that does not reason.
 - A crash mid-turn leaves the raised level in the session.
+
+### /btw
+
+```text
+  Side question
+
+  what was the name of that config file again?
+
+  internal/config/ui.go. The key map is in Defaults(), lines 116-127.
+
+  esc to close
+```
+
+`/btw <question>` asks about the session so far and shows the answer in a dialog. Neither the question nor the answer is added to the session. A bare `/btw` is refused, and picking `/btw` in the menu fills it in and waits for the question.
+
+- It works while a turn runs and does not interrupt it. The answer comes from what the main session already holds, except the reply still being written.
+- No tool runs; a tool call in the reply is ignored. The reply is one answer, whole rather than streamed, by the session's model at its effort.
+- The whole context is sent once more, at the provider's cache-read price while its prompt cache is warm. The request is counted in `$total` and in `/usage`'s total.
+- Esc cancels the request while it is answering and closes the dialog after. A closed answer cannot be reopened. An approval, a question or a plan that arrives covers the dialog, and it comes back when that ends. PgUp/PgDn scroll a long answer.
+- A failed request shows its error in place of the answer.
+- Left out: follow-up questions and a history of earlier ones; asking about a subagent's transcript, as it always asks about the main session, also from a subagent's view; print mode (`-p`).
+- A session holding more images than the model takes per request may be refused.
 
 ### /usage
 
@@ -120,7 +143,7 @@ Defaults; change them with [`keys`](configuration.md#keys).
 - Up at the top of the input pulls queued prompts back into it for editing (not your commands); with nothing queued it browses input history, and Down goes back.
 - Down from the last line of the input, with no newer history entry, moves into the [agent rows](subagents.md#agent-rows) under the status line: Up and Down move, Enter opens that session's view, `x` stops the selected subagent or workflow (a workflow's row opens its [progress dialog](workflows.md#progress-dialog)), Esc or typing returns to the input.
 - Esc interrupts the running turn of the session whose view is open: the main agent's in the main view, only that subagent's run in a [subagent's view](subagents.md#views). It never acts on another session. It leaves your [commands](#your-own-commands) alone; with no turn running it stops the command that runs.
-- The row above the input, in priority order: `Waiting for you…` while an approval, question or plan dialog is open; `<Verb>… <elapsed>` (`Brewing… 12s`) while the open view's turn runs; in the main view, Kopi's own activity such as `Connecting to MCP servers…` or `Logging in to <provider>…`; `2 agents, 1 workflow, 1 shell still running` in the main view while the main agent is idle and background tasks, subagents or [workflows](workflows.md) run.
+- The row above the input, in priority order: `Waiting for you…` while an approval, question or plan dialog is open; `<Verb>… <elapsed>` (`Brewing… 12s`) while the open view's turn runs; in the main view, Kopi's own activity such as `Connecting to MCP servers…` or `Logging in to <provider>…`, once it has lasted 2 seconds; `2 agents, 1 workflow, 1 shell still running` in the main view while the main agent is idle and background tasks, subagents or [workflows](workflows.md) run.
 - A turn ends with `κ Brewed for 41s`, `κ Interrupted after 12s` or `κ Failed after 12s` followed by the error.
 - Each turn has its own row and time, including a turn started by a task's end. The time is wall time and includes time spent waiting on an approval.
 - After an interrupt, a task's end starts no turn until the next prompt; see [background tasks](tools.md#background-tasks).
@@ -129,7 +152,7 @@ Defaults; change them with [`keys`](configuration.md#keys).
 - Ctrl+D exits when the input is empty.
 - Shift+Tab switches between plan and execute.
 - Ctrl+B moves the running foreground `Bash` command to the background, where it keeps running as a [task](tools.md#background-tasks). It moves your running [command](#your-own-commands) the same way.
-  - While one runs, the working row shows `ctrl+b to background`.
+  - Once one has run 2 seconds, the working row shows `ctrl+b to background`.
   - With none running, Ctrl+B keeps its meaning in the input.
 - Ctrl+G, while an [`ExitPlanMode`](tools.md#exitplanmode) plan is open, opens the plan file in `$VISUAL`, else `$EDITOR`.
 - Ctrl+V pastes text or an image from the clipboard.
@@ -230,7 +253,7 @@ The bullet is green for a call that succeeded, yellow for one you or a rule refu
 - An opened result is the model's text, so it includes notices written to the model, such as `use offset=2001 to continue`. A `Read` row shows its line numbers right-aligned to the widest, without the padding the model receives.
 - An edit's lines show without surrounding context or line numbers.
 - Colour in command output is not kept.
-- Only the row's title line opens and closes it; scroll up to close a long body.
+- Only the row's title line and its `↳` line open and close it; scroll up to close a long body.
 
 In a reply, HTML is shown as written, a line break inside a paragraph is kept, a link is shown as its text with the URL in parentheses and an image as its text and URL, without a title, and footnotes are not supported: a `[^1]` reads as a link reference. A table is boxed and as wide as its content; one wider than the terminal wraps its cells, with a rule between rows. A table too narrow for one cell per column is shown as pipe text.
 
@@ -281,14 +304,14 @@ A command is a shaded block: `!` and the command, a status line under it, then t
 | Status line | Meaning |
 | --- | --- |
 | `queued` | Waiting for an earlier command |
-| `running 12s · ctrl+b to background · esc to stop` | Running |
+| `running 12s · ctrl+b to background · esc to stop` | Running; the keys show once it has run 2 seconds |
 | `exit 0 · 12s` | Finished; `· unread` is added while it is above the input |
 | `stopped after 12s` | You stopped it; `· unread` is added while it is above the input |
 | `moved to background after 12s` | You moved it to the background |
 
 ## Mouse
 
-- Click a folded group to open it, and a row that [opens](#transcript) to open or close it. Only the row's title line takes the click.
+- Click a folded group to open it, and a row that [opens](#transcript) to open or close it. The row's title line and the `↳` line under it take the click; the output it opens to does not.
 - Drag in the transcript to select text; it is copied on release. Double-click selects a word, triple-click a line.
 - Drag in the input to select text; it is copied on release. A click places the cursor. Double-click selects a word, triple-click the whole line across wraps.
 - Dragging after a double- or triple-click extends the selection by words or lines.

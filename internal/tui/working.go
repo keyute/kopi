@@ -10,6 +10,10 @@ import (
 	"github.com/keyute/kopi/internal/app"
 )
 
+// hintDelay is how long a command, a connection or a login runs before the
+// text about it shows, so one that ends at once never flashes.
+const hintDelay = 2 * time.Second
+
 // newSpinner uses MiniDot, whose frames are one column wide, so the text
 // after it starts two in.
 func newSpinner(th theme) spinner.Model {
@@ -39,7 +43,7 @@ func (m *model) workingText() (string, bool) {
 		return v.verb.ing + "… " + formatDuration(time.Since(v.turnStart)), true
 	case m.shown != app.Main:
 		return "", false
-	case m.activity != "":
+	case m.activity != "" && time.Since(m.activitySince) >= hintDelay:
 		return m.activity, true
 	case m.waiting():
 		return m.waitingOn() + " still running", true
@@ -85,7 +89,7 @@ func countText(n int, noun string) string {
 // command can be moved to the background, "" otherwise.
 func (m *model) workingHint() string {
 	ks := m.keys.background.Keys()
-	if m.shown != app.Main || !m.view().busy || m.front() != nil || !m.status.Foreground || len(ks) == 0 {
+	if m.shown != app.Main || !m.view().busy || m.front() != nil || m.status.ForegroundSince.IsZero() || time.Since(m.status.ForegroundSince) < hintDelay || len(ks) == 0 {
 		return ""
 	}
 	return " · " + ks[0] + " to background"

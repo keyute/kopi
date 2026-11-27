@@ -99,7 +99,7 @@ func TestTasksDetachMovesCommand(t *testing.T) {
 	result := runAsync(ctx, m, sh, command)
 	f := openWriter(t, fifo)
 
-	assert.True(t, m.Foreground())
+	assert.False(t, m.ForegroundSince().IsZero())
 	assert.True(t, m.Detach())
 	r := waitResult(t, result)
 
@@ -107,7 +107,7 @@ func TestTasksDetachMovesCommand(t *testing.T) {
 	assert.Empty(t, r.out)
 	assert.Equal(t, dir, filepath.Dir(r.moved.OutputFile))
 	assert.Equal(t, Moved{ID: "t1", OutputFile: r.moved.OutputFile}, r.moved)
-	assert.False(t, m.Foreground())
+	assert.True(t, m.ForegroundSince().IsZero())
 	assert.False(t, m.Detach())
 	assert.Equal(t, TaskRunning, nextEvent(t, events).Status)
 	// A cancel of the original call no longer reaches the moved command.
@@ -153,7 +153,7 @@ func TestLiveWaitEndsInForeground(t *testing.T) {
 	assert.Equal(t, command, info.Command)
 	assert.Equal(t, "ok\n", info.Output)
 	assert.False(t, info.Ended.IsZero())
-	assert.False(t, m.Foreground())
+	assert.True(t, m.ForegroundSince().IsZero())
 
 	failed, err := m.Begin(t.Context(), sh, "exit 3")
 	require.NoError(t, err)
@@ -161,6 +161,31 @@ func TestLiveWaitEndsInForeground(t *testing.T) {
 	assert.Equal(t, TaskFailed, failed.Info().Status)
 	assert.Equal(t, "exit code 3", failed.Info().Reason)
 	assert.Empty(t, events)
+}
+
+func TestForegroundSinceIsTheEarliestLiveStart(t *testing.T) {
+	sh := NewShell(t.TempDir(), nil)
+	m, _ := newTasks(t)
+	firstCommand, firstFIFO := echoFIFO(t)
+	first, err := m.Begin(t.Context(), sh, firstCommand)
+	require.NoError(t, err)
+	firstDone := waitAsync(t.Context(), first)
+	firstSince := m.ForegroundSince()
+	assert.False(t, firstSince.IsZero())
+
+	secondCommand, secondFIFO := echoFIFO(t)
+	second, err := m.Begin(t.Context(), sh, secondCommand)
+	require.NoError(t, err)
+	secondDone := waitAsync(t.Context(), second)
+	assert.Equal(t, firstSince, m.ForegroundSince(), "a later command leaves the earliest start")
+
+	writeLine(t, openWriter(t, firstFIFO), "a\n")
+	assert.Equal(t, Moved{}, waitMoved(t, firstDone))
+	assert.True(t, m.ForegroundSince().After(firstSince), "the start moves to the command still live")
+
+	writeLine(t, openWriter(t, secondFIFO), "b\n")
+	assert.Equal(t, Moved{}, waitMoved(t, secondDone))
+	assert.True(t, m.ForegroundSince().IsZero())
 }
 
 func TestLiveOutputWhileRunning(t *testing.T) {
@@ -322,7 +347,7 @@ func TestTasksStopAllOwnsCancellationCleanup(t *testing.T) {
 	}()
 	waitFor(t, stopped, "StopAll to finish cancellation cleanup")
 	assert.True(t, ended(p), "StopAll must wait for the cancelling process")
-	assert.True(t, m.Foreground(), "Run retains ownership until cleanup finishes")
+	assert.False(t, m.ForegroundSince().IsZero(), "Run retains ownership until cleanup finishes")
 	release()
 	r := waitResult(t, result)
 	waitFor(t, dead, "the grandchild to die")
@@ -389,7 +414,7 @@ func TestTasksStopAllOwnsPromotion(t *testing.T) {
 	command, started, dead := holdFIFO(t, t.TempDir())
 	leaving, release := make(chan struct{}), make(chan struct{})
 	m.OnForeground(func() {
-		if !m.Foreground() {
+		if m.ForegroundSince().IsZero() {
 			close(leaving)
 			<-release
 		}
@@ -423,10 +448,10 @@ func TestTasksStopAllOwnsPromotion(t *testing.T) {
 	assert.Empty(t, events, "a forgotten task must not report its end")
 }
 
-// foregroundSignals records Foreground as each foreground signal observes it.
+// foregroundSignals records whether a foreground command runs as each foreground signal observes it.
 func foregroundSignals(m *Tasks) <-chan bool {
 	ch := make(chan bool, 16)
-	m.OnForeground(func() { ch <- m.Foreground() })
+	m.OnForeground(func() { ch <- !m.ForegroundSince().IsZero() })
 	return ch
 }
 

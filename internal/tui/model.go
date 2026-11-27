@@ -61,6 +61,9 @@ type interruptMsg struct{}
 // flashMsg ends the flash numbered seq; a later flash outlives it.
 type flashMsg struct{ seq int }
 
+// hintMsg wakes the screen once an activity has lasted hintDelay.
+type hintMsg struct{}
+
 // barMsg is a tick of the progress bar's keepalive.
 type barMsg struct{}
 
@@ -147,6 +150,8 @@ type model struct {
 	agentFrom int
 	// activity is the Controller's latest event.Activity text.
 	activity string
+	// activitySince is when activity last went from empty to text.
+	activitySince time.Time
 	// pending is the shown view's queued rows.
 	pending      []string
 	pendingCache pendingCache
@@ -281,6 +286,10 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return m.cancel()
 	case editorDoneMsg:
 		return m.editorDone(msg)
+	case hintMsg:
+		if m.tickWanted() {
+			return m.spinner.Tick
+		}
 	case barMsg:
 		m.barBeating = false
 		m.barBeat = 1 - m.barBeat
@@ -531,7 +540,7 @@ func isPrompt(q event.Queued) bool { return q.Command == nil }
 // applyBatch applies events in order, refreshes the status when one of them
 // can change it, and starts the spinner when the working row appears.
 func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
-	wasShown := m.tickWanted()
+	wasShown, wasSince := m.tickWanted(), m.activitySince
 	refresh, redraw, respan := false, false, false
 	dropped := 0
 	pureThinking := len(evs) > 0
@@ -541,7 +550,7 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 			pureThinking = false
 		}
 		switch inner.(type) {
-		case event.SessionChanged, event.ModeChanged, event.ModelChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged, event.LimitsChanged, event.ToolsChanged, event.EffortChanged:
+		case event.SessionChanged, event.ModeChanged, event.ModelChanged, event.ToolEnd, event.TurnEnd, event.TasksChanged, event.LimitsChanged, event.ToolsChanged, event.EffortChanged, event.SideQuestionEnded:
 			refresh = true
 		}
 		switch inner.(type) {
@@ -573,6 +582,9 @@ func (m *model) applyBatch(evs eventsMsg) tea.Cmd {
 	}
 	if m.tickWanted() && !wasShown {
 		cmds = append(cmds, m.spinner.Tick)
+	}
+	if m.activity != "" && !m.activitySince.Equal(wasSince) {
+		cmds = append(cmds, tea.Tick(hintDelay, func(time.Time) tea.Msg { return hintMsg{} }))
 	}
 	return tea.Batch(cmds...)
 }
@@ -653,6 +665,9 @@ func (m *model) apply(ev event.Event) *view {
 	case event.ModeChanged:
 		return nil
 	case event.Activity:
+		if m.activity == "" && ev.Text != "" {
+			m.activitySince = time.Now()
+		}
 		m.activity = ev.Text
 		return nil
 	case event.ApprovalRequested:
@@ -676,7 +691,10 @@ func (m *model) apply(ev event.Event) *view {
 	case event.DirRequested:
 		m.open(promptDir, newDirDialog(ev, &m.keys))
 		return nil
-	case event.QuestionEnded, event.PlanEnded, event.LoginEnded, event.DirEnded, event.ApprovalEnded:
+	case event.SideQuestionAsked:
+		m.open(promptBtw, newBtwDialog(ev, &m.keys))
+		return nil
+	case event.QuestionEnded, event.PlanEnded, event.LoginEnded, event.DirEnded, event.ApprovalEnded, event.SideQuestionEnded:
 		return nil
 	}
 	v := m.viewOf(id)
@@ -825,7 +843,9 @@ func (m *model) place() {
 		m.geo.menu = max(0, min(m.menu.want(), free-input))
 	}
 	free -= input + m.geo.menu
-	m.pendingCache.tail, m.pendingCache.stoppable = nil, m.shown == app.Main && !m.view().busy && m.front() == nil && (m.menuHeight() == 0 || m.holding())
+	m.pendingCache.tail = nil
+	m.pendingCache.backgroundable = m.front() == nil
+	m.pendingCache.stoppable = m.pendingCache.backgroundable && m.shown == app.Main && !m.view().busy && (m.menuHeight() == 0 || m.holding())
 	if m.queuedRunning() {
 		m.pendingCache.tail = m.c.CommandOutput
 	}

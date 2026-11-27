@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MichaelKinsy/PiG/agent"
 	"github.com/MichaelKinsy/PiG/ai"
 )
 
@@ -69,7 +70,7 @@ func (r *Runtime) Answer(ctx context.Context, model string, effort Effort, syste
 		return "", Usage{}, fmt.Errorf("failed to answer with model %q: %w", model, err)
 	}
 	opts := ai.StreamOptions{Thinking: effort.thinkingLevel().ReasoningOption()}
-	text, used, err := r.complete(ctx, m, system, prompt, func(content []ai.AssistantContentBlock) string {
+	text, used, err := r.complete(ctx, m, plainContext(system, prompt), func(content []ai.AssistantContentBlock) string {
 		return ai.ContentText(content, "\n")
 	}, opts)
 	if err != nil {
@@ -81,14 +82,59 @@ func (r *Runtime) Answer(ctx context.Context, model string, effort Effort, syste
 	return text, used, nil
 }
 
+// AnswerFrom has sess's own model, at its current effort, reply once to prompt
+// after the session so far, and returns the reply's text and what the request
+// used. The prompt and the reply are not added to the session or its file, a
+// tool call in the reply is ignored and never runs, and the session's turn, if
+// one is running, is not disturbed. A reply of no text fails with ErrNoAnswer.
+func (r *Runtime) AnswerFrom(ctx context.Context, sess *Session, prompt string) (string, Usage, error) {
+	// PiG writes the system message, which carries the prompt sections and the
+	// tool declarations, into the session's messages before each of its loop's
+	// requests, so they go out as of the last one: none before the first prompt,
+	// and a change since is not in them yet. PiG's loop also runs per-request
+	// steps it keeps unexported (re-projecting the session, hiding the
+	// declarations a loadout hook hides, which Kopi installs none of, and the
+	// per-request image limit); this request skips them.
+	c := ai.Context{Messages: append(agent.ConvertToLLM(sess.inner.Messages()),
+		ai.UserMessage{Content: ai.UserText(prompt), Timestamp: time.Now().UnixMilli()})}
+	// The session's id routes the provider's prompt cache as the loop's own
+	// requests do. DisableContinuation keeps this request from using or
+	// replacing the session's server-side continuation state (Anthropic message
+	// threads), as PiG's cache warming sets it for a replay. The request goes
+	// over SSE because PiG's Codex websocket transport keeps per-session
+	// connection and fallback state under that id, which the loop owns.
+	// RepairToolFlow repairs tool results as the loop's requests do.
+	opts := ai.StreamOptions{
+		Thinking:            sess.inner.ThinkingLevel().ReasoningOption(),
+		RepairToolFlow:      true,
+		SessionID:           sess.inner.ID(),
+		DisableContinuation: true,
+		Transport:           ai.TransportSSE,
+	}
+	text, used, err := r.complete(ctx, sess.inner.Model(), c, func(content []ai.AssistantContentBlock) string {
+		return ai.ContentText(content, "\n")
+	}, opts)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", used, err
+		}
+		return "", used, fmt.Errorf("failed to answer the side question: %w", err)
+	}
+	return text, used, nil
+}
+
+func plainContext(system, prompt string) ai.Context {
+	return ai.Context{
+		SystemPrompt: system,
+		Messages:     []ai.Message{ai.UserMessage{Content: ai.UserText(prompt), Timestamp: time.Now().UnixMilli()}},
+	}
+}
+
 // complete asks m once and returns the text join makes of its content and what
 // the request used, also when it fails. Without text it fails with
 // ErrNoAnswer.
-func (r *Runtime) complete(ctx context.Context, m *ai.Model, system, prompt string, join func([]ai.AssistantContentBlock) string, opts ...ai.StreamOptions) (string, Usage, error) {
-	msg := r.svcs.ModelRuntime().CompleteSimple(ctx, m, ai.Context{
-		SystemPrompt: system,
-		Messages:     []ai.Message{ai.UserMessage{Content: ai.UserText(prompt), Timestamp: time.Now().UnixMilli()}},
-	}, opts...)
+func (r *Runtime) complete(ctx context.Context, m *ai.Model, c ai.Context, join func([]ai.AssistantContentBlock) string, opts ...ai.StreamOptions) (string, Usage, error) {
+	msg := r.svcs.ModelRuntime().CompleteSimple(ctx, m, c, opts...)
 	var used Usage
 	if msg != nil {
 		used = usageOf(msg, m)

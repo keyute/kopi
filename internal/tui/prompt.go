@@ -22,6 +22,7 @@ const (
 	promptTasks
 	promptUsage
 	promptCopy
+	promptBtw
 )
 
 // waits reports that a turn is blocked on the answer.

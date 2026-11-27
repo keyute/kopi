@@ -129,7 +129,7 @@ func TestTasksRunPassesForegroundResult(t *testing.T) {
 
 	assert.Empty(t, events)
 	assert.Empty(t, m.List())
-	assert.False(t, m.Foreground())
+	assert.True(t, m.ForegroundSince().IsZero())
 }
 
 func TestTasksDoNotStartCanceled(t *testing.T) {
@@ -144,6 +144,7 @@ func TestTasksDoNotStartCanceled(t *testing.T) {
 	assert.Equal(t, Moved{}, moved)
 	_, err = m.Start(ctx, sh, "echo unexpected")
 	require.ErrorIs(t, err, context.Canceled)
+	assert.True(t, m.ForegroundSince().IsZero())
 
 	info, err := m.Start(t.Context(), sh, "true")
 	require.NoError(t, err)

@@ -93,7 +93,8 @@ func TestCommandsReportWhetherTheirArgumentsAreTyped(t *testing.T) {
 		assert.True(t, byName[name].Argument, name)
 		assert.False(t, byName[name].Typed, name)
 	}
-	for _, name := range []string{"execute", "new", "tasks", "usage", "copy", "quit"} {
+	assert.True(t, byName["btw"].Text)
+	for _, name := range []string{"execute", "new", "tasks", "usage", "copy", "quit", "btw"} {
 		assert.False(t, byName[name].Argument, name)
 		assert.False(t, byName[name].Typed, name)
 	}
