@@ -191,27 +191,35 @@ func isTerminal(v any) bool {
 }
 
 // resolveConfig layers defaults, the global file and the flags the user set.
-func resolveConfig(cmd *cobra.Command, paths config.Paths) (*config.Resolved, error) {
+func resolveConfig(cmd *cobra.Command, paths config.Paths) (*config.Resolved, pigruntime.Effort, error) {
 	global, err := config.GlobalFile(paths.ConfigFile)
 	if err != nil {
-		return nil, err
+		return nil, pigruntime.DefaultEffort, err
 	}
 	flags := map[string]any{}
 	if cmd.Flags().Changed("model") {
 		model, err := cmd.Flags().GetString("model")
 		if err != nil {
-			return nil, err
+			return nil, pigruntime.DefaultEffort, err
 		}
 		flags["model"] = model
 	}
 	if cmd.Flags().Changed("mode") {
 		mode, err := cmd.Flags().GetString("mode")
 		if err != nil {
-			return nil, err
+			return nil, pigruntime.DefaultEffort, err
 		}
 		flags["mode"] = mode
 	}
-	return config.Resolve(config.Defaults(), global, config.Map("flags", flags))
+	resolved, err := config.Resolve(config.Defaults(), global, config.Map("flags", flags))
+	if err != nil {
+		return nil, pigruntime.DefaultEffort, err
+	}
+	effort, err := pigruntime.ParseEffort(resolved.Config.Effort)
+	if err != nil {
+		return nil, pigruntime.DefaultEffort, fmt.Errorf("failed to use %q in %s: %w", "effort", resolved.Origins["effort"], err)
+	}
+	return resolved, effort, nil
 }
 
 func openRuntime(ctx context.Context, paths config.Paths, cwd string) (*pigruntime.Runtime, error) {
@@ -246,7 +254,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	if err != nil {
 		return err
 	}
-	resolved, err := resolveConfig(cmd, paths)
+	resolved, effort, err := resolveConfig(cmd, paths)
 	if err != nil {
 		return err
 	}
@@ -480,7 +488,7 @@ func run(cmd *cobra.Command, args []string, printOnly bool, flagRules []policy.S
 	}
 	// Only the fullscreen interface has a human to answer approvals.
 	cfg := app.Config{
-		Model: resolved.Config.Model, SmallModel: resolved.Config.SmallModel, ConfigFile: paths.ConfigFile, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Files: ws,
+		Model: resolved.Config.Model, SmallModel: resolved.Config.SmallModel, ConfigFile: paths.ConfigFile, Workspace: cwd, Tools: tools, JoinTimeout: joinTimeout, Rules: rules, Unattended: !fullscreen, Mode: mode, Effort: effort, Files: ws,
 		SandboxDirs: setDirs, ValidateSandboxDirs: validateSandboxDirs, TrustFile: paths.TrustFile, Home: tool.Dir{Given: userHome, Real: canonicalHome}, InstructionFallbacks: resolved.Config.InstructionFallbacks,
 		Covers: func(dir string) ([]string, []string) { return covers(dir, canonicalHome) },
 		Errors: slices.Concat(set.errs, instructionErrs, skillErrs), Instructions: instructions, Tasks: tasks, Wake: fullscreen, Classifier: review, Outputs: outputs,

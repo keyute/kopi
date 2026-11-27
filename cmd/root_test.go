@@ -610,6 +610,33 @@ func TestRootAgentEffortFailsAtStart(t *testing.T) {
 	assert.Empty(t, server.requests)
 }
 
+func TestRootPrintUsesConfiguredEffort(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "ok") })
+	e.writeFile(t, filepath.Join(e.agentDir, "models.json"), fmt.Sprintf(`{"providers":{"kopi-mock":{"baseUrl":%q,"api":"openai-completions","apiKey":%q,"models":[{"id":"mock-1","reasoning":true}]}}}`, server.URL+"/v1", syntheticKey))
+	e.writeFile(t, filepath.Join(e.kopiHome, "config.json"), `{"effort":"high"}`)
+
+	stdout, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.NoError(t, err)
+	assert.Equal(t, "ok\n", stdout)
+	assert.Equal(t, "high", server.next(t).body["reasoning_effort"])
+}
+
+func TestRootEffortFailsAtStart(t *testing.T) {
+	e := newTestEnv(t)
+	server := newMockProvider(t, func(w http.ResponseWriter) { streamText(w, "unused") })
+	e.writeMockModels(t, server.URL)
+	path := filepath.Join(e.kopiHome, "config.json")
+	e.writeFile(t, path, `{"effort":"huge"}`)
+
+	_, _, err := execute(t, "", "--model", mockModel, "-p", "hi")
+
+	require.ErrorIs(t, err, pigruntime.ErrUnknownEffort)
+	assert.Contains(t, err.Error(), path)
+	assert.Empty(t, server.requests)
+}
+
 func TestRootAgentRules(t *testing.T) {
 	t.Run("accepted without definitions", func(t *testing.T) {
 		e := newTestEnv(t)

@@ -46,6 +46,8 @@ type Config struct {
 	// Mode is the controller's initial mode, which the first session starts
 	// in, and the mode every later session starts in.
 	Mode policy.Mode
+	// Effort is the level a new main session opens at; a resumed one keeps its own.
+	Effort pigruntime.Effort
 	// Files lists the entries that @ references complete to, and is the workspace
 	// /add-dir adds to and completes in, so /add-dir needs it.
 	Files *tool.Workspace
@@ -1317,8 +1319,13 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	}
 	c.titleCommit.Lock()
 	defer c.titleCommit.Unlock()
+	effort := pigruntime.DefaultEffort
+	if req.ResumeID == "" && !req.Continue {
+		effort = c.cfg.Effort
+	}
 	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
 		Model:        c.Model(),
+		Effort:       effort,
 		ResumeID:     req.ResumeID,
 		Continue:     req.Continue,
 		SystemPrompt: c.prompt,

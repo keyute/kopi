@@ -42,7 +42,7 @@ func mcpListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			resolved, err := resolveConfig(cmd, paths)
+			resolved, _, err := resolveConfig(cmd, paths)
 			if err != nil {
 				return err
 			}

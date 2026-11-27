@@ -38,6 +38,8 @@ type Config struct {
 	SmallModel string `koanf:"smallModel"` // "provider/id"; empty means model
 	// Mode is the mode sessions start in, plan or execute.
 	Mode string `koanf:"mode"`
+	// Effort is the reasoning level a new main session opens at.
+	Effort string `koanf:"effort"`
 	// InstructionFallbacks are file names tried in order in a directory
 	// without an AGENTS.md.
 	InstructionFallbacks []string `koanf:"instructionFallbacks"`
@@ -139,6 +141,7 @@ func Defaults() Layer {
 	values := uiDefaults()
 	values["version"] = Version
 	values["mode"] = policy.Plan.String()
+	values["effort"] = "medium"
 	values["instructionFallbacks"] = []string{"CLAUDE.md"}
 	values["permissions"] = map[string]any{"allow": []string{}, "ask": []string{}, "deny": []string{}}
 	values["sandbox"] = map[string]any{"allowWrite": []string{}, "denyRead": []string{}, "network": false, "allowDomains": []string{}, "denyDomains": []string{}, "allowUnsandboxed": true}
@@ -468,6 +471,7 @@ func (r *Resolved) Entries() []Entry {
 		"model":                    c.Model,
 		"smallModel":               c.SmallModel,
 		"mode":                     c.Mode,
+		"effort":                   c.Effort,
 		"instructionFallbacks":     c.InstructionFallbacks,
 		"version":                  c.Version,
 		"statusline.left":          c.StatusLine.Left,
