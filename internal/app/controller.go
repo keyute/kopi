@@ -210,6 +210,9 @@ type Controller struct {
 
 	// life serialises session start, switch and close.
 	life sync.Mutex
+	// effort is the level the next main session opens at: Config.Effort, or what
+	// /effort last set; life guards it.
+	effort pigruntime.Effort
 	// stopAllDone retains a task cleanup across timed-out Close calls; life guards it.
 	stopAllDone chan struct{}
 	// queue makes queueing input atomic with taking it from the queue and with
@@ -240,9 +243,6 @@ type Controller struct {
 	spent pigruntime.Usage
 	// model is the session model: Config.Model, or the runtime's default once resolved.
 	model string
-	// effort is the level the next main session opens at: Config.Effort, or what
-	// /effort last set.
-	effort pigruntime.Effort
 	sessID string
 	// dirsToldBy is how many entries of dirs each session of this run has
 	// read, so a session resumed later is not told them again; queue guards it.
@@ -1323,12 +1323,9 @@ func (c *Controller) startSwitch(ctx context.Context, req OpenRequest, op *sessi
 	}
 	c.titleCommit.Lock()
 	defer c.titleCommit.Unlock()
-	c.mu.Lock()
-	effort := c.effort
-	c.mu.Unlock()
 	sess, err := c.rt.Open(ctx, pigruntime.OpenOptions{
 		Model:        c.Model(),
-		Effort:       effort,
+		Effort:       c.effort,
 		ResumeID:     req.ResumeID,
 		Continue:     req.Continue,
 		SystemPrompt: c.prompt,

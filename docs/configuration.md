@@ -59,6 +59,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 ## `effort`
 
 - `off`, `minimal`, `low`, `medium` (default), `high`, `xhigh` or `max`: the reasoning effort every main session opens at, new or resumed. [`/effort`](usage.md#commands) replaces it until Kopi exits. A level the model lacks is clamped to the nearest it has.
+- On a model that does not reason, `/effort` leaves the process-wide choice unchanged; switch to a reasoning model first to change it.
 - [Subagents](subagents.md) use their definition's `effort`.
 - A wrong value fails at start.
 

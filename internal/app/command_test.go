@@ -239,6 +239,32 @@ func TestEffortCommandSetsTheLevelForAReasoningModel(t *testing.T) {
 	assert.Equal(t, "high", h.c.Agents()[0].Effort, "/new keeps the level typed last")
 }
 
+func TestEffortCommandKeepsRequestedMaxAcrossNewAndModelSwitch(t *testing.T) {
+	sb := pigruntimetest.NewSandbox(t)
+	rt := pigruntimetest.NewRuntime(t, sb)
+	thinker := ai.NewFauxProvider(ai.FauxConfig{ProviderID: fauxProvider, Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	require.NoError(t, rt.RegisterProvider(thinker.Provider()))
+	other := ai.NewFauxProvider(ai.FauxConfig{ProviderID: "kopi-other", Models: []ai.FauxModelDefinition{{ID: "thinker", Reasoning: true}}})
+	other.Models()[0].Capabilities.MaxThinking = ai.ThinkingLevelMax
+	other.Models()[0].ThinkingLevelMap = ai.ThinkingLevelMap{ai.ThinkingMax: new("max")}
+	require.NoError(t, rt.RegisterProvider(other.Provider()))
+	h := buildHarness(t, rt, thinker, sb, Config{Model: fauxProvider + "/thinker"})
+	require.NoError(t, h.c.Open(t.Context(), OpenRequest{}))
+
+	_, err := h.c.Submit(t.Context(), Main, "/effort max")
+	require.NoError(t, err)
+	require.Equal(t, "high", h.c.Agents()[0].Effort)
+	require.NoError(t, h.c.NewSession(t.Context()))
+	require.Equal(t, "high", h.c.Agents()[0].Effort)
+
+	changed := subscribeTo[event.ModelChanged](h.c)
+	_, err = h.c.Submit(t.Context(), Main, "/model kopi-other/thinker")
+	require.NoError(t, err)
+	receiveEvent(t, changed)
+	assertModelChangeDone(t, h)
+	assert.Equal(t, "max", h.c.Agents()[0].Effort)
+}
+
 // readOnlySessionFile makes the one session file under the sandbox's Kopi
 // home refuse appends, and skips the test when that does not stop this user.
 func readOnlySessionFile(t *testing.T, sb pigruntimetest.Sandbox) {

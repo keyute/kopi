@@ -33,7 +33,7 @@ Commands in the fullscreen interface:
 | `/plan` | Switch to plan mode |
 | `/plan open` | Open the session's [plan file](tools.md#exitplanmode) in `$VISUAL`, else `$EDITOR` |
 | `/execute` | Switch to execute mode |
-| `/effort <level>` | Set the main agent's reasoning effort until Kopi exits; `config.json` is untouched and `/new`, `/resume` and `/model` keep the level, see [`effort`](configuration.md#effort) |
+| `/effort <level>` | Set the main agent's reasoning effort until Kopi exits; `config.json` is untouched and `/new`, `/resume` and `/model` keep the level, subject to the exception under [`effort`](configuration.md#effort) |
 | `/new` | Start a new session |
 | `/resume <id>` | Resume a session |
 | `/model <provider/id>` | Switch the model until Kopi exits; `config.json` is untouched and `/new` and `/resume` keep the choice, and running subagents keep their model. A running workflow's later `agent()` calls, and the `WebFetch`, `WebSearch` and classifier calls of running agents, use the new model when no key pins one. The session's effort carries over, clamped to the new model's levels; `WebSearch` is offered or withdrawn with the new model's hosted search when `smallModel` is unset. Refused while a turn runs; it returns at once, and a provider without a credential or an unknown model is reported as an error, with a pointer to `/login` for the former, while no turn starts until the change ends |

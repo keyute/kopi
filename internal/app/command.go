@@ -166,9 +166,7 @@ func (c *Controller) effortCommand(_ context.Context, arg string) error {
 		return nil
 	}
 	err = sess.SetEffort(e)
-	c.mu.Lock()
 	c.effort = e
-	c.mu.Unlock()
 	c.relay.emit(event.EffortChanged{})
 	if err != nil {
 		return err
