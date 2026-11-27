@@ -58,19 +58,19 @@ Permission rules in `config.json` allow, ask about or deny calls:
 
 The fullscreen interface asks before a call that needs approval.
 
-- It shows the whole change, command or arguments. A preview with added or removed lines draws `+ ` and `- ` before them, and context lines two spaces in; one without (a command, a URL) is drawn flush left. A preview that does not fit scrolls, with `… N earlier lines` and `… N more lines` counting the screen rows left out and the scroll hint on the last row, which also names the keys that answer and reject. An `unsandboxed` call's title reads `Bash (unsandboxed) …`.
+- It shows the whole change, command or arguments, scrolling when it does not fit. An `unsandboxed` call's title reads `Bash (unsandboxed) …`.
 - Options:
   - `Yes`
   - `Yes, allow all edits this session` (for `Write` and `Edit` when no rule asked)
   - `No`, which takes an optional reason typed on its row
 - While it waits, the working row reads `Waiting for you…`.
 - `No` with a reason refuses the call, gives the model the reason and lets the turn go on. A blank `No` stops the turn.
-- In the transcript a call you refused is `↳ rejected` with your reason under it. A call a rule, the mode or the [classifier](#classifier) refused is `↳ denied` followed by why (`denied by rule …`, `denied · plan mode`, `denied by the classifier: <reason>`, `denied · this run cannot ask for approval`), with nothing under it. Both have the call's name as the title (`Bash rm -rf build`), not a past-tense verb; a `Bash` title that cut its command opens to the whole command. See [Transcript](usage.md#transcript).
+- How a refused call shows in the transcript is under [Transcript](usage.md#transcript).
 - Keys:
   - The `menu-up` and `menu-down` keys choose and `submit` answers.
   - A digit answers with that option, or moves to `No` to type the reason.
   - `interrupt` answers `No` without a reason.
-  - The `page-up` and `page-down` keys, or the mouse wheel over the dialog, scroll a preview that does not fit; when it fits they scroll the transcript, and they never move in the reason.
+  - The `page-up` and `page-down` keys, or the mouse wheel over the dialog, scroll a preview that does not fit; when it fits they scroll the transcript.
   - In the reason, `newline` starts a line, `paste` and terminal paste insert text, and digits are text.
 - Allowing all edits never overrides a deny or ask rule, never covers `Bash`, and lasts until the session ends.
 - When the [classifier](#classifier) left a call to the user, the dialog shows why and does not offer `Yes, allow all edits this session`:
@@ -84,15 +84,11 @@ The fullscreen interface asks before a call that needs approval.
 
 ## Subagents
 
-- A [subagent](subagents.md)'s calls follow the same rules, workspace confinement and sandbox as the main agent's.
-- The approval dialog names the subagent and its task (`explorer t3 › …`), and `Yes, allow all edits this session` covers the main agent and its subagents.
-- A bare `Agent` in `deny` removes the subagent tools.
+A [subagent](subagents.md#permissions)'s calls follow the same rules, workspace confinement and sandbox as the main agent's. A bare `Agent` in `deny` removes the subagent tools.
 
 ## Workflows
 
-- A [workflow](workflows.md) agent's calls follow the same rules, workspace confinement and sandbox as the main agent's.
-- The approval dialog names the agent, its number and label, and the workflow's task (`workflow #2 auth t3 › Bash npm test`); `No` without a reason stops that agent only.
-- A bare `Workflow` in `deny` removes the tool; `StructuredOutput` is the tool a workflow agent with a `schema` returns its result through, and a bare `deny` rule for it makes an `agent()` with a `schema` reject at once, without opening a session.
+A [workflow](workflows.md#permissions-and-approvals) agent's calls follow the same rules, workspace confinement and sandbox as the main agent's. A bare `Workflow` in `deny` removes the tool; a bare `deny` rule for `StructuredOutput` makes an `agent()` with a `schema` reject at once.
 
 ## Classifier
 
@@ -111,9 +107,7 @@ The fullscreen interface asks before a call that needs approval.
 
 - `classifier.enabled` (default `false`) has the classifier review calls that would otherwise ask, in both modes.
 - `classifier.model` (`provider/id`) is the model that reviews; unset, it is the session model and follows [`/model`](usage.md#commands).
-  - A value that is not `provider/id` fails at start.
-  - When the classifier is enabled, an unknown model or one whose provider has no credential also fails at start.
-  - In the fullscreen interface, a `classifier.model` that shares the provider of a configured `model` without a credential gets the first-run login instead when that provider offers a sign-in or an API key and the id is one Kopi knows; an unknown id fails at start with the login hint.
+  - It is checked at start as [any model key](configuration.md#model) is, its model and credential only when the classifier is enabled.
 - `classifier.instructions` lists your own rules for the classifier, added after Kopi's. A blank entry is rejected at start. A later layer's list replaces an earlier one's whole.
 
 Behaviour with `classifier.enabled`:
@@ -127,7 +121,7 @@ Behaviour with `classifier.enabled`:
   - A review that fails, times out or returns anything else is left to you too.
   - Sandboxed `Bash` without `unsandboxed` never asks, so it is never reviewed.
   - `sandbox.allowUnsandboxed` false keeps `unsandboxed` calls from being offered, reviewed or allowed.
-- The third denial in a row, and the twentieth in a session, goes to you instead of being denied. A call the classifier allows or you approve ends the run of denials.
+- From the third denial in a row, every denial goes to you instead of being denied, until the classifier allows a call or you approve one. The twentieth denial in a session goes to you and restarts that count.
 - The classifier is sent:
   - the session's prompts (the last 8,000 bytes)
   - its last 20 tool calls with their arguments (each cut to 2,000 bytes) and whether each failed

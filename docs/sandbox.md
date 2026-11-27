@@ -78,10 +78,9 @@ On macOS and Linux, `Bash` runs inside an OS sandbox when it is available (unles
 
 - When `Bash` runs sandboxed it takes an optional boolean `unsandboxed`; a call that sets it runs that one command outside the sandbox.
 - Such a call is treated as `Bash` without the sandbox, see [permissions](permissions.md#precedence): plan mode refuses it before any rule; in execute mode rules apply and otherwise it asks, or the [classifier](permissions.md#classifier) reviews it.
-- Its title reads `Bash (unsandboxed) …`, in the approval dialog too. Once it succeeded its row reads `Ran <command> · unsandboxed`, and a group of rows counts it: `ran 9 commands (1 unsandboxed)`.
 - A [subagent](subagents.md) can use it like the main agent; one whose definition pins plan mode is always refused.
 - Without the sandbox, or with `sandbox.allowUnsandboxed` false, the parameter is not offered.
-- A command you type with `!` is your action, not the agent's: it runs outside the sandbox, and plan mode does not restrict it. See [your own commands](usage.md#your-own-commands).
+- A command you type with `!` is not a tool call and runs outside the sandbox; see [permissions](permissions.md#limitations).
 
 ## Limitations
 

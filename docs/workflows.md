@@ -27,16 +27,15 @@ A workflow is a JavaScript script the main agent writes to start agents and comb
 
 - A workflow agent is not a [subagent](subagents.md). Each `agent()` call opens a session, sends it the one prompt, takes the reply and closes the session. It has no task of its own, no row in the main transcript and no agent row, cannot be sent a message, does not restart, and does not count towards the 20 running subagents.
 - Without `agentType` the agent has every tool a subagent can have, the instruction files and the default effort. With one, it has that [definition](subagents.md#format)'s effort, tools, `instructions` setting, `mode` and prompt. An unknown name makes `agent()` reject. Workflow agents work with no definitions.
-- An agent never gets `Workflow`, `Agent`, `SendMessage`, `AskUserQuestion`, `ExitPlanMode` or `TaskStop`.
-- Its `Read` and `Grep` reach the session's [saved output](tools.md#saved-output), as a subagent's do.
-- Its model is the definition's `model`, else [`workflows.model`](configuration.md#workflows), else the session's model.
-- Its preamble says it is a workflow agent in place of the subagent sentence.
+- An agent never gets `Workflow`, `Agent`, `SendMessage`, `AskUserQuestion`, `ExitPlanMode`, `TaskStop`; naming one of these in a definition's `tools` fails at start as an unknown tool.
+- Its `Read` and `Grep` reach the session's [saved output](tools.md#saved-output).
+- Its model is the definition's `model`, else [`workflows.model`](#configuration), else the session's model.
 
 ## Configuration
 
 | Key | Meaning |
 | --- | --- |
-| `workflows.model` | `provider/id` of the model of workflow agents without a definition `model`; default: the session's model. A value that is not `provider/id` fails at start in every mode; its model and credential are checked only in the fullscreen interface with no rule denying `Workflow` |
+| `workflows.model` | `provider/id` of the model of workflow agents without a definition `model`; default: the session's model. Checked at start as [any model key](configuration.md#model) is, its model and credential only in the fullscreen interface with no rule denying `Workflow`; the first-run login rule applies |
 | `workflows.maxWorkflows` | How many workflows run at once, default 4, at least 1; a further `Workflow` call is refused with an error naming the limit |
 | `workflows.maxAgents` | How many agents of one workflow run at once, default 16, at least 1; the rest wait |
 
@@ -52,9 +51,9 @@ The 1000 calls and the memory limit are fixed.
 
 ## What you see
 
-- The call shows as `• Workflow › <description>` with `↳ launched`, and returns a task id such as `t3`. Opening the row shows the script. A `TaskStop` row on it reads `Stopped workflow › <description>`.
+- The call shows as `• Workflow › <description>` with `↳ launched`, and returns a task id such as `t3`. Opening the row shows the script.
 - While the main agent is idle and a workflow runs, the row above the input reads `1 workflow still running`; the status line's `workflows` segment shows the count.
-- The end shows as `• workflow finished · <description> · 6m 3s` (`failed` or `stopped` in place of `finished`; the bullet is red when it failed and yellow when it was stopped), followed by `↳ 9 agents · 1 failed` (the failed part only when non-zero). A failed workflow's reason joins the count on that line: `↳ 2 agents · 2 failed · <reason>`. Opening a finished row shows the value the script returned.
+- The end shows as `• workflow finished · <description> · 6m 3s` followed by `↳ 9 agents · 1 failed` (see [Transcript](usage.md#transcript)). Opening a finished row shows the value the script returned.
 - `/tasks` lists the workflow next to other tasks as `workflow › <description>`, and stops it with `x` (`stop-agent`). Enter opens its progress dialog; dismissing it returns to the task list.
 - When the workflow completes or fails, the agent is told with the value or the error, and a new turn starts if none runs, as for a subagent. `TaskStop` by the agent gives no notice; a stop from `/tasks` is reported with the next prompt without starting a turn.
 - The agents' cost shows only in the status line's `total`, added as each agent ends.
@@ -89,11 +88,7 @@ The 1000 calls and the memory limit are fixed.
 - A result is not checked beyond its schema.
 - The value a script returns reaches the model as it is, with no length limit.
 - Each agent's transcript is saved under the session's directory and does not appear in `/resume`.
-- The progress dialog's agent list is moved through with Up and Down only; page keys scroll the transcript behind it.
-- An ended agent's view, read from its saved transcript, has no closing turn row.
 - A workflow's task and output live only in memory and do not survive a restart.
-- Every running workflow agent's output is processed for its view while it runs, whether or not it is viewed.
-- Opening an ended agent's view reads its whole saved transcript first.
 - Stopping a workflow waits for its agents' current model requests and tool calls to stop, and counts the agents still queued or running at that moment as failed in its end row.
 
 ## Not implemented

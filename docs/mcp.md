@@ -26,7 +26,7 @@
 
 ## Startup
 
-- Servers start at startup, and each has 30 seconds to connect.
+- Servers start at startup, and each has 30 seconds to connect. A tool call times out after 60 seconds.
 - The fullscreen interface does not wait for them: the session opens at once, with "Connecting to MCP servers…" above the input from 2 seconds in until the last server has connected or failed.
   - A server joins the open session when it connects: its tools can be loaded from the agent's next request on, in a turn that is already running too.
   - The system prompt's list of servers is updated once, when the last server has connected or failed. A resumed session keeps the list it had until then.

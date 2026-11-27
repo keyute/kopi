@@ -42,7 +42,6 @@
 - Sandboxed `Bash` cannot read `$KOPI_HOME/skills`, so scripts bundled with skills there do not run; those in `~/.agents/skills` and in project skills do.
 - A trusted folder's `.agents/skills` is writable by the model, like its instruction files.
 - A top-level `.md` file with a description in a skills directory loads as a skill, and nothing below a directory that has a `SKILL.md` is searched.
-- Loading skills lists PiG's agent directory and `~/.agents/skills` even when they hold nothing Kopi uses.
 
 ## Not implemented
 

@@ -25,18 +25,16 @@
 ## Models
 
 - A model is `provider/id`. The ids a provider offers are built into Kopi, so a model released after your Kopi build is unknown until Kopi is updated or its list is fetched.
-- At every start, in the background, Kopi refreshes the lists of the providers of the models this run uses (the session model, `smallModel`, `workflows.model`, `classifier.model` and the models of subagent definitions) that have a credential. A list checked under four hours ago is not requested. The refresh has 15 seconds, does not delay the start, and quitting stops it.
-- Separately, a configured model that is unknown fetches its provider's list before the session opens, whatever the list's age, once per provider per process and for at most 5 seconds per provider, so unknown ids under several providers add up.
-- The list comes from `pi-in-go.dev`. That request carries the provider id, `types=chat,image,classifier`, `If-None-Match` with the ETag when a list is saved (not for `openrouter`), and a user agent with PiG's name and version, the OS, its release and the architecture; it carries no credential.
-- A provider that serves its own list is also asked for it, with its own credential:
-  - `openrouter`: `/models/user`. The result replaces openrouter's whole built-in list, narrowed to the models its key may use, and does so on later starts too. It has no four-hour window, so it is asked on every start that uses it.
-  - `radius`: its own catalog, in place of `pi-in-go.dev`. It has no four-hour window, so it is asked on every start that uses it.
-- The request to `pi-in-go.dev` does not renew an expired sign-in. A provider asked for its own list (`openrouter`, `radius`) has its credential resolved first, which renews an expired `radius` sign-in.
+- A provider's list is refreshed when a model of it is first used in a run: at start for the session model, `smallModel`, `workflows.model`, `classifier.model` and the models of subagent definitions that have a credential, and later after `/model`, a first login or a subagent. The refresh runs in the background, does not delay the start, has 15 seconds, and is skipped for a list checked under four hours ago.
+- A configured model that is unknown fetches its provider's list before the session opens instead, whatever the list's age, for at most 5 seconds per provider, once per provider per process.
+- The list comes from `pi-in-go.dev`. That request carries the provider id, `types=chat,image,classifier`, `If-None-Match` with the ETag when a list is saved, and a user agent with PiG's name and version, the OS, its release and the architecture; it carries no credential and does not renew an expired sign-in.
+- Two providers serve their own list, asked for with their own credential on every start that uses them, with no four-hour window:
+  - `openrouter`: `/models/user`. The result replaces its whole built-in list, narrowed to the models its key may use.
+  - `radius`: its own catalog, in place of `pi-in-go.dev`.
 - The list is saved in `agent/models-store.json`. Every start reads the saved list first, and its entries replace the built-in ones of that provider, base URL included, while it is newer than the list built into Kopi. `PIG_OFFLINE` set to `1`, `true` or `yes`, or `PI_OFFLINE` set to any value, stops both the background refresh and the fetch; the saved list is still read.
-- A refreshed list applies to the running session (context window, prices, base URL); the status line shows a new context window after the next tool call or turn.
+- A refreshed list applies to the running session (context window, prices, base URL).
 - A model known only from a saved list, and any `openrouter` model, is unknown once a refreshed list leaves it out: at the next start, or in the fullscreen interface when the session opens after the refresh.
-- A provider first used later in a run (after `/model`, a first login or a subagent) has its list refreshed then, under the same rules as at start.
-- A model still unknown after the fetch stops the start, naming `agent/models.json`; if the fetch failed, the message says the list could not be refreshed. The outcome of a fetch is kept for the process, so a later check in the same process does not repeat it; a fetch cut short by cancelling the start is not kept.
+- A model still unknown after the fetch stops the start, naming `agent/models.json`; if the fetch failed, the message says the list could not be refreshed.
 - Declare a model yourself in `agent/models.json`. Under a built-in provider whose models carry an API and base URL, the entry takes both from them and uses the provider's credential:
 
 ```json
@@ -53,14 +51,12 @@
 
 - The context window is where Kopi compacts: the conversation is summarised once it passes `contextWindow` less 16384 tokens, and a reply whose input exceeded `contextWindow` is compacted too. The value is not checked against what the provider accepts.
 - A compaction changes only what the model reads: a summary written by the session model, then the most recent messages. The transcript shows it as two notices and keeps the earlier conversation, also in a resumed session. The summary is not shown.
-- After a compaction the main session's model is [told the mode again](tools.md#modes).
 - With no `model` set, the default model for a provider still follows the Kopi build.
 
 ## Identity
 
 - After an `anthropic` account sign-in Kopi notes that Anthropic bills third-party tools per token as extra usage, not from Claude plan limits.
 - Sign-in introduces the app as `Kopi` to OpenAI's Sign in with ChatGPT (`openai`), which also receives `installation_id`, and as `kopi` to other sign-ins that take a name.
-- Requests carry no PiG attribution headers.
 - Still PiG's:
   - The page a browser sign-in returns to shows pi's logo.
   - The `radius` sign-in URL names `pi-gateway` on `radius.pi.dev`.
@@ -84,14 +80,14 @@
 - A read follows activity, such as a turn starting or ending, at most once a minute, and never while idle, so a reset time that has passed stays until the next activity.
 - Opening [`/usage`](usage.md#usage-1) also makes Kopi call the provider, and shows the windows it reads. While it is open, activity reads again at most once a minute, and never while idle. From then on a model or sign-in change reads again, as with a `limit_` or `reset_` segment.
 - A failed read keeps the last values.
-- Requests carry only the credential and an `Accept` header, with Go's default user agent.
+- Requests carry only the credential and an `Accept` header, with Go's default user agent; Codex's also carry `ChatGPT-Account-Id`.
 
 ## Limitations
 
 - PiG's built-in providers still use ambient credentials: API keys in the environment, Google application-default credentials and the AWS profile and credential chain.
 - Importing PiG changes the TLS settings of Go's process-wide default HTTP transport.
 - `agent/models.json` is trusted configuration: PiG reads it, and its `apiKey` can run a shell command.
-- Provider requests identify as PiG, not Kopi.
+- Requests carry no PiG attribution headers. They still identify as PiG, not Kopi: Codex requests send `originator: pig` and the user agent is `pig/…`.
 - Codex and xAI name a window by its length, so one that is not five hours, a week or a month has no segment and is not shown.
 - Naming a window the model's provider does not have still makes Kopi call that provider.
 
@@ -101,7 +97,6 @@
 - Plan limits for `anthropic`: its third-party usage is billed as extra usage, not from the plan's windows, so read `cost` and `total`; there is no extra-usage figure either.
 - Plan limits for `openai` and `meta`, and for a subagent's or workflow agent's provider.
 - Kimi's `limits[]` and `usage` counts: only the `usages` ratios are read, so on a plan whose ratios read 0 its `limit_` segments show 0%.
-- A Kopi provider identity.
 - A command to refresh the model lists on demand.
 - A key for the four-hour window.
 - A setting for where compaction starts apart from the context window.

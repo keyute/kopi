@@ -21,6 +21,7 @@ Basics:
 - [ ] Try `/execute`, `/plan`, Ctrl+C and `--continue`
 - [ ] `kopi -p` with an argument
 - [ ] `kopi -p` with piped input
+- [ ] `/copy` on a reply with two code blocks, then `2`, pastes the first block without its fence; on a reply without code it pastes the whole reply
 
 Sign-in, with a scratch `KOPI_HOME`:
 
@@ -34,9 +35,8 @@ Background tasks:
 - [ ] Ask for `sleep 30; echo done` with Bash
 - [ ] Press Ctrl+B while it runs
 - [ ] The status line shows `1 shell`
-- [ ] When it ends, the `• task t1 finished` row appears and the model replies without a prompt
+- [ ] When it ends, the `• shell finished` row appears and the model replies without a prompt
 - [ ] `/tasks` lists and stops a task
-- [ ] `/copy` on a reply with two code blocks, then `2`, pastes the first block without its fence; on a reply without code it pastes the whole reply
 - [ ] After quitting, `pgrep sleep` finds nothing
 
 ## Releasing

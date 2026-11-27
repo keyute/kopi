@@ -4,7 +4,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 - Precedence is default < config file < flags.
 - `kopi config` shows each value and its origin; unknown keys are rejected.
-- The fullscreen interface logs to `kopi.log` in the home; print mode logs to stderr.
+- Print mode logs to stderr; the fullscreen interface logs to `kopi.log` in the home.
 
 ## Home
 
@@ -19,6 +19,8 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `outputs/` | One folder per session of [saved tool output](tools.md#saved-output) too long to return whole; Kopi removes files older than a week at startup |
 | `agents/` | Your [subagents](subagents.md), one Markdown file each |
 | `sandbox/` | The lock and the record of placeholders that Kopi processes sharing the home use to remove them safely (Linux), see [sandbox](sandbox.md#linux-placeholders) |
+| `themes/` | Your [themes](#theme), `<name>.json` |
+| `kopi.log` | The fullscreen interface's log |
 | `images/` | Pasted clipboard images, removed after a day |
 | `installation_id` | The installation's UUID, created the first time a sign-in asks for it |
 | `agent/` | PiG's agent directory, created on first run: its credential file (`auth.json`), session logs (`sessions/`), other PiG state, the saved model lists (`models-store.json`, see [models](providers.md#models)) and an optional `models.json` |
@@ -34,7 +36,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `smallModel` | Model that answers `WebFetch` and `WebSearch` and writes session titles, see [`smallModel`](#smallmodel) |
 | `instructionFallbacks` | Fallback names for project instruction files, see [`instructionFallbacks`](#instructionfallbacks) |
 | `skills` | `skills.prefix`, see [`skills.prefix`](#skillsprefix) |
-| `workflows` | `workflows.model`, `workflows.maxWorkflows` and `workflows.maxAgents`, see [`workflows`](#workflows) |
+| `workflows` | `workflows.model`, `workflows.maxWorkflows` and `workflows.maxAgents`, see [workflows](workflows.md#configuration) |
 | `keys` | Key bindings for fullscreen actions, see [Keys](#keys) |
 | `statusline` | Status line entries, see [Status line](#status-line) |
 | `subagentline` | Subagent row entries, see [Subagent rows](#subagent-rows) |
@@ -50,7 +52,9 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 - `provider/id` of the session model; `--model` overrides it, and [`/model`](usage.md#commands) switches it until Kopi exits. An id Kopi does not know is fetched or declared as described in [models](providers.md#models).
 - Unset, each start uses the default model of a provider with a credential, environment credentials included. Nothing is saved, and a notice names the model and the config file to set it in.
 - With credentials for several providers, the default depends on the order the runtime prefers; set `model` to pin it.
-- With no credential at all, the fullscreen interface asks which provider to log in to, then opens the session; print mode fails with a hint to run `kopi login`. Start fails first, naming the provider, when `smallModel`, an enabled `classifier.model`, `workflows.model` (checked only in the fullscreen interface and when no rule denies `Workflow`) or a [subagent](subagents.md) definition's `model` (checked only where something can use it: when no rule denies `Agent`, or in the fullscreen interface when no rule denies `Workflow`) names a provider with no credential.
+- With no credential at all, the fullscreen interface asks which provider to log in to, then opens the session; print mode fails with a hint to run `kopi login`.
+- Every model key (`smallModel`, `classifier.model`, `workflows.model`, a [subagent](subagents.md) definition's `model`) is checked at start. A value that is not `provider/id` always fails. An unknown model, or one whose provider has no credential, fails naming the provider, but only where the key's feature can run: `smallModel` always; `classifier.model` when `classifier.enabled`; `workflows.model` in the fullscreen interface with no rule denying `Workflow`; a definition's `model` with no rule denying `Agent`, or in the fullscreen interface with no rule denying `Workflow`.
+- In the fullscreen interface, a model key that shares the provider of a configured `model` without a credential gets the first-run login instead, when that provider offers a sign-in or an API key and the id is one Kopi knows; an unknown id fails at start with the login hint.
 
 ## `mode`
 
@@ -66,14 +70,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 
 - `provider/id` of the model that answers `WebFetch` and `WebSearch` calls and writes the session title shown in the terminal tab, see [terminal](usage.md#terminal).
 - Unset, `WebFetch`, `WebSearch` and session titles all use the session model and follow [`/model`](usage.md#commands), so set it to a cheaper model. `WebSearch` is offered while that model has hosted search, decided when a session opens and on `/model`; a running subagent or workflow agent keeps what it opened with.
-- A wrong value, an unknown model or one whose provider has no credential fails at start.
-- In the fullscreen interface, a `smallModel` that shares the provider of a configured `model` without a credential gets the first-run login instead when that provider offers a sign-in or an API key and the id is one Kopi knows; an unknown id fails at start with the login hint.
-
-## `workflows`
-
-- `workflows.model` is the `provider/id` of the model workflow agents use when their definition sets none; unset, it is the session model. A wrong value, an unknown model or one whose provider has no credential fails at start, checked only where workflows can run: in the fullscreen interface, with no rule denying `Workflow`.
-- `workflows.maxWorkflows` (default 4, at least 1) is how many [workflows](workflows.md) run at once, and `workflows.maxAgents` (default 16, at least 1) how many agents of one workflow run at once.
-- In the fullscreen interface, a `workflows.model` that shares the provider of a configured `model` without a credential gets the first-run login instead when that provider offers a sign-in or an API key and the id is one Kopi knows; an unknown id fails at start with the login hint.
+- Checked at start as every [model key](#model) is.
 
 ## `instructionFallbacks`
 
@@ -172,8 +169,8 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 | `tokens` | The session's context size (`22.1k tokens`); absent until known |
 | `cost` | The session's cost (`$0.42`); absent while zero |
 | `total` | The whole session's estimated cost (`$1.87`): the main session, its subagents, workflow agents that have ended, and the classifier, `WebFetch`, `WebSearch` and session-title requests; absent while zero |
-| `limit_<window>` | The share used of one usage window of the provider's subscription plan (`12%`); absent when the provider has no such window, with an API key, until read and in a subagent's or workflow agent's view on another provider |
-| `reset_<window>` | When that window resets (`14:30`, `Wed 09:00`, `Dec 1`); absent in the same cases and when the window has no reset |
+| `limit_<window>` | The share used of one usage window of the provider's subscription plan (`12%`), see [Plan limits](providers.md#plan-limits) |
+| `reset_<window>` | When that window resets (`14:30`, `Wed 09:00`, `Dec 1`), see [Plan limits](providers.md#plan-limits) |
 | `cwd` | The workspace, with your home directory as `~` |
 | `notice` | Transient hints such as `Copied` |
 | `sandbox` | `sandboxed` or `unsandboxed` when `Bash` is available; shows the default, not a call that sets `unsandboxed` |
@@ -187,24 +184,20 @@ Built-in segments: `model`, `context`, `branch`, `mode`, and:
 - `cost` is an estimate computed from the model's listed price; on a subscription sign-in it is not what you are billed. `total` is the same kind of estimate.
 - `total` always shows the whole session, whichever view is open. It leaves out a workflow agent that is still running. After a resume (`-c`, `-r` or `/resume`) it holds the main session's cost from before the resume, but not what subagents, workflow agents and those requests cost then.
 - `<window>` is `5h`, `wk`, `mo`, `mo_code`, `premium` or `chat`; [Plan limits](providers.md#plan-limits) lists which providers have which.
-- `limit_<window>` and `reset_<window>` draw no label and no separator; write them in the entry. None is in the default layout, and naming any makes Kopi call the provider's usage endpoint; opening [`/usage`](usage.md#usage-1) does too. See [Plan limits](providers.md#plan-limits) for what is sent and when.
-- `limit_<window>` shows in the warning colour from 90%; `reset_<window>` does not.
+- `limit_<window>` and `reset_<window>` draw no label and no separator; write them in the entry. None is in the default layout, and naming any makes Kopi call the provider's usage endpoint; see [Plan limits](providers.md#plan-limits) for what is sent and when.
 - `changes`:
   - Untracked files are not counted.
-  - Kopi runs `git diff` in the workspace for it, unsandboxed, in any folder whether trusted or not, and only when an entry names `changes` and the workspace is in a repository when Kopi starts.
-  - External diff drivers, textconv and fsmonitor hooks are turned off.
-  - Git does not refresh or write the index.
+  - Kopi runs a hardened `git diff` in the workspace for it, unsandboxed, in any folder whether trusted or not, and only when an entry names `changes` and the workspace is in a repository when Kopi starts. External diff drivers, textconv and fsmonitor hooks are off, and git does not write the index.
+  - A clean or process filter defined in the repository's or your own git config still runs on files that `.gitattributes` assigns to it.
   - A bare repository found without a `.git` is not used (git 2.38 or later).
   - A missing object in a partial clone is not fetched (git 2.45 or later).
-  - A clean or process filter defined in the repository's or your own git config still runs on files that `.gitattributes` assigns to it.
-  - It refreshes when Kopi starts, when a turn starts and on every status refresh, so a change made outside Kopi shows at the next of those. A refresh that arrives during a run reruns it once when it finishes.
+  - It refreshes when Kopi starts, when a turn starts and on every status refresh.
 
 A segment in `segments`:
 
 - Is named with letters, digits and `_`, and has either `text` or `command`, and an optional `color`: a theme colour role such as `accent`, `#rgb`, `#rrggbb` or a number from 0 to 255.
 - A `command` runs with `sh -c` in the workspace, unsandboxed, with a 5 second timeout.
   - It runs at start, when a turn starts, on every status refresh and, with an `interval` such as `"30s"` (at least 1s), on that schedule.
-  - A refresh that arrives while it is still running is skipped.
   - The segment shows the first line of its stdout, keeping ANSI colours, and is hidden while the command fails or prints nothing.
 
 ```json
@@ -275,7 +268,7 @@ Segments:
 
 ## Terminal
 
-- `terminal.title` (default `true`): sets the terminal's title to `κ`, or a state glyph where the terminal does not read OSC 7501, then the session's name and the workspace folder, see [usage](usage.md#terminal). It is the only switch for the generated title, which comes from `smallModel`, else the session model. With `false`, Kopi leaves the title alone, does not ask the terminal whether it reads OSC 7501, and asks no model for a session name.
+- `terminal.title` (default `true`): sets the terminal's title, see [usage](usage.md#terminal). With `false`, Kopi leaves the title alone, does not ask the terminal whether it reads OSC 7501, and asks no model for a session name.
 - `terminal.progress` (default `false`): shows the terminal's indeterminate progress bar while the session works.
 - `terminal.notifications` (default `auto`): how Kopi notifies you while the terminal is not focused.
   - `osc9`: a desktop notification (OSC 9).
@@ -290,4 +283,4 @@ Segments:
 
 ## Not implemented
 
-- Project-level config.
+- A project `config.json`.

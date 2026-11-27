@@ -51,7 +51,7 @@ A folder added with [`/add-dir` or `--add-dir`](usage.md#commands) is trusted or
 - For your home directory or the root the dialog does not say the answer is saved, and it holds for this run only.
 - Print mode never asks: it adds a folder no decision covers with file access only and saves nothing.
 - The instruction files are found as for the start directory, one per directory from the one holding `.git` down to the folder. They reach the model in a message, not the system prompt, and only when the folder is trusted. A file that a directory already added holds is not sent again in the same session; a session started or resumed is told again.
-- [`/remove-dir`](usage.md#commands) keeps the saved decision, so adding the folder again asks nothing, unless it is your home directory or the root; change the decision in `trust.json`. It does not take back instruction files a session has already been sent; a session started afterwards is not sent them. A file only the removed directory held is sent again with the next directory added that holds it, the same one included. The dialog lists the instruction files that no directory already added holds when it opens, so after a `/remove-dir` before you answer, a file it did not list can be sent with the folder.
+- [`/remove-dir`](usage.md#commands) keeps the saved decision, so adding the folder again asks nothing, unless it is your home directory or the root; change the decision in `trust.json`. It does not take back instruction files a session has already been sent. The dialog lists the instruction files no directory already added holds, so after a `/remove-dir` before you answer, a file it did not list can be sent with the folder.
 
 ## Limitations
 
