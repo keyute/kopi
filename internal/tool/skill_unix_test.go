@@ -41,7 +41,7 @@ func TestSkillRefusesFilesAfterDirectoryBecomesSymlink(t *testing.T) {
 func TestSkillRefusesSymlinkedDirectoryIntoHome(t *testing.T) {
 	home := skillHome(t)
 	dir := filepath.Join(t.TempDir(), "link")
-	require.NoError(t, os.Symlink(filepath.Join(home, "agent"), dir))
+	require.NoError(t, os.Symlink(filepath.Join(home, "runtime"), dir))
 
 	out, err := runSkillAt(t, home, dir, "auth.json")
 
@@ -67,7 +67,7 @@ func TestSkillRefusesWhenHomeIsUnreadable(t *testing.T) {
 func TestSkillSymlinkToHomeFileIsRefused(t *testing.T) {
 	home := skillHome(t)
 	dir := t.TempDir()
-	require.NoError(t, os.Symlink(filepath.Join(home, "agent", "auth.json"), filepath.Join(dir, "link")))
+	require.NoError(t, os.Symlink(filepath.Join(home, "runtime", "auth.json"), filepath.Join(dir, "link")))
 
 	out, err := runSkillAt(t, home, dir, "link")
 
@@ -88,8 +88,8 @@ func TestSkillExemptsTheSkillsEntryNotWhatItPointsTo(t *testing.T) {
 	assert.Contains(t, out, "ref")
 
 	require.NoError(t, os.RemoveAll(outside))
-	require.NoError(t, os.Symlink(filepath.Join(home, "agent"), outside))
-	for _, file := range []string{"agent/auth.json", "skills/auth.json"} {
+	require.NoError(t, os.Symlink(filepath.Join(home, "runtime"), outside))
+	for _, file := range []string{"runtime/auth.json", "skills/auth.json"} {
 		out, err := runSkillAt(t, home, home, file)
 
 		assert.ErrorIs(t, err, ErrProtected, file)

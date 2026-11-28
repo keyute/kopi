@@ -34,7 +34,7 @@ func ResolvePaths() (Paths, error) {
 		InstructionFile: filepath.Join(home, "AGENTS.md"),
 		SkillsDir:       filepath.Join(home, "skills"),
 		AgentsDir:       filepath.Join(home, "agents"),
-		AgentDir:        filepath.Join(home, "agent"),
+		AgentDir:        filepath.Join(home, "runtime"),
 		LogFile:         filepath.Join(home, "kopi.log"),
 		HistoryFile:     filepath.Join(home, "history.jsonl"),
 		ImageDir:        filepath.Join(home, "images"),

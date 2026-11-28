@@ -23,7 +23,7 @@ Kopi keeps all its state in its home: `$KOPI_HOME`, default `~/.kopi`.
 | `kopi.log` | Fullscreen log |
 | `images/` | Pasted images, removed after a day |
 | `installation_id` | Installation UUID, created when a sign-in first asks |
-| `agent/` | PiG's agent directory: `auth.json`, `sessions/`, `models-store.json` (see [models](providers.md#models)), an optional `models.json` and other PiG state |
+| `runtime/` | PiG's agent directory: `auth.json`, `sessions/`, `models-store.json` (see [models](providers.md#models)), an optional `models.json` and other PiG state |
 
 ## Top-level keys
 

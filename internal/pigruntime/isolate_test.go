@@ -13,7 +13,7 @@ func TestNewPinsIsolationEnv(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	kopiHome := filepath.Join(root, "kopi")
-	agentDir := filepath.Join(kopiHome, "agent")
+	agentDir := filepath.Join(kopiHome, "runtime")
 	ws := filepath.Join(root, "ws")
 	for _, dir := range []string{home, ws} {
 		require.NoError(t, os.MkdirAll(dir, 0o755))

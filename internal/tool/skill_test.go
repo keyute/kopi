@@ -357,7 +357,7 @@ func skillHome(t *testing.T) string {
 	t.Helper()
 	home := filepath.Join(t.TempDir(), "kopi")
 	for file, content := range map[string]string{
-		"agent/auth.json":   "secret-auth",
+		"runtime/auth.json": "secret-auth",
 		"config.json":       "secret-config",
 		"skills/s/SKILL.md": "---\nname: s\n---\n",
 		"skills/s/ref.md":   "ref",
@@ -388,10 +388,10 @@ func TestSkillReadsFileOfSkillInsideHome(t *testing.T) {
 func TestSkillRefusesHomeOutsideSkills(t *testing.T) {
 	home := skillHome(t)
 	for name, tc := range map[string]struct{ dir, file string }{
-		"agent":    {filepath.Join(home, "agent"), "auth.json"},
+		"runtime":  {filepath.Join(home, "runtime"), "auth.json"},
 		"home":     {home, "config.json"},
-		"homeDeep": {home, "agent/auth.json"},
-		"ancestor": {filepath.Dir(home), "kopi/agent/auth.json"},
+		"homeDeep": {home, "runtime/auth.json"},
+		"ancestor": {filepath.Dir(home), "kopi/runtime/auth.json"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out, err := runSkillAt(t, home, tc.dir, tc.file)
@@ -451,7 +451,7 @@ func TestSkillMissingFileInOrdinaryDirectoryIsNotFound(t *testing.T) {
 func TestSkillRefusesMissingAndExistingHomeFilesAlike(t *testing.T) {
 	home := skillHome(t)
 	tl := NewSkill([]skill.Skill{{Name: "s", Dir: home}}, home)
-	for _, file := range []string{"agent/nope.json", "agent/auth.json", "agent/auth.json/x", "agent/nope/x", "agent/", "agent/nope/"} {
+	for _, file := range []string{"runtime/nope.json", "runtime/auth.json", "runtime/auth.json/x", "runtime/nope/x", "runtime/", "runtime/nope/"} {
 		raw, err := json.Marshal(map[string]string{"name": "s", "file": file})
 		require.NoError(t, err)
 
