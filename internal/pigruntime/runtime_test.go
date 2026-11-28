@@ -54,7 +54,7 @@ func newSandbox(t *testing.T) sandbox {
 		kopiHome: filepath.Join(root, "kopi"),
 		ws:       filepath.Join(root, "ws"),
 	}
-	sb.agentDir = filepath.Join(sb.kopiHome, "agent")
+	sb.agentDir = filepath.Join(sb.kopiHome, "runtime")
 	for _, dir := range []string{sb.home, sb.kopiHome, sb.ws} {
 		require.NoError(t, os.MkdirAll(dir, 0o755))
 	}

@@ -55,7 +55,7 @@ func newTestEnv(t *testing.T) testEnv {
 		kopiHome:  filepath.Join(root, "kopi"),
 		workspace: filepath.Join(root, "ws"),
 	}
-	e.agentDir = filepath.Join(e.kopiHome, "agent")
+	e.agentDir = filepath.Join(e.kopiHome, "runtime")
 	for _, dir := range []string{e.home, e.kopiHome, e.workspace} {
 		require.NoError(t, os.Mkdir(dir, 0o755))
 	}
@@ -845,24 +845,24 @@ func unknownModelText(e testEnv, where string) string {
 }
 
 func TestDiagnoseUnknownModel(t *testing.T) {
-	paths := config.Paths{AgentDir: "/kopi/agent", ConfigFile: "/kopi/config.json"}
+	paths := config.Paths{AgentDir: "/kopi/runtime", ConfigFile: "/kopi/config.json"}
 
 	err := diagnose(pigruntime.ErrUnknownModel, "a/m1", "flags", paths, app.OpenRequest{}, nil)
-	assert.EqualError(t, err, `unknown model "a/m1": check --model, or declare the model in /kopi/agent/models.json`)
+	assert.EqualError(t, err, `unknown model "a/m1": check --model, or declare the model in /kopi/runtime/models.json`)
 
 	err = diagnose(fmt.Errorf("%w: %w", pigruntime.ErrUnknownModel, &pigruntime.ModelListError{Provider: "a", Err: errors.New("boom")}), "a/m1", "config", paths, app.OpenRequest{}, nil)
-	assert.EqualError(t, err, `unknown model "a/m1": the model list could not be refreshed (boom); check "model" in /kopi/config.json, or declare the model in /kopi/agent/models.json`)
+	assert.EqualError(t, err, `unknown model "a/m1": the model list could not be refreshed (boom); check "model" in /kopi/config.json, or declare the model in /kopi/runtime/models.json`)
 }
 
 func TestUnknownModelErrorForSubModel(t *testing.T) {
-	paths := config.Paths{AgentDir: "/kopi/agent"}
+	paths := config.Paths{AgentDir: "/kopi/runtime"}
 
 	err := unknownModelError(pigruntime.ErrUnknownModel, "a/m1", "", paths)
-	assert.EqualError(t, err, `unknown model "a/m1": declare the model in /kopi/agent/models.json`)
+	assert.EqualError(t, err, `unknown model "a/m1": declare the model in /kopi/runtime/models.json`)
 
 	unavailable := fmt.Errorf("%w: %w", pigruntime.ErrUnknownModel, &pigruntime.ModelListError{Provider: "a", Err: errors.New("GET https://catalog.example/x: boom")})
 	err = unknownModelError(unavailable, "a/m1", "", paths)
-	assert.EqualError(t, err, `unknown model "a/m1": the model list could not be refreshed (GET https://catalog.example/x: boom); declare the model in /kopi/agent/models.json`)
+	assert.EqualError(t, err, `unknown model "a/m1": the model list could not be refreshed (GET https://catalog.example/x: boom); declare the model in /kopi/runtime/models.json`)
 }
 
 func TestRootUnknownModelNamesWhereItIsSet(t *testing.T) {

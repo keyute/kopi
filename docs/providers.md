@@ -4,7 +4,7 @@
 
 - `kopi login` lists providers that offer a login, their methods and stored credentials; `kopi login <provider>` runs one.
 - A provider offers an account sign-in, an API key or both (Kopi asks which). A key is read hidden on a terminal or as a line from piped stdin; a sign-in prints its URL and opens the browser.
-- `kopi logout <provider>` removes the credential from `agent/auth.json`. An environment credential works without a login; `kopi login` marks only stored ones.
+- `kopi logout <provider>` removes the credential from `runtime/auth.json`. An environment credential works without a login; `kopi login` marks only stored ones.
 
 ## In the fullscreen interface
 
@@ -17,12 +17,12 @@
 
 - A model is `provider/id`. Ids are built in, so a newer model is unknown until Kopi updates or its list is fetched.
 - A provider's list refreshes in the background when a model of it is first used in a run: at start for the session model and other model keys with a credential, later after `/model`, a first login or a subagent. It has 15 seconds, never delays the start, and is skipped for a list under four hours old.
-- An unknown configured model instead fetches its provider's list before the session opens, whatever its age, for at most 5 seconds, once per provider per process. If it is still unknown, the start stops, pointing to `agent/models.json`.
+- An unknown configured model instead fetches its provider's list before the session opens, whatever its age, for at most 5 seconds, once per provider per process. If it is still unknown, the start stops, pointing to `runtime/models.json`.
 - The list comes from `pi-in-go.dev`. The request carries the provider id, `types=chat,image,classifier`, the saved ETag, and a user agent with PiG's version, the OS, its release and the architecture; no credential.
 - `openrouter` (`/models/user`, narrowed to its key's models, replacing its built-in list) and `radius` (its own catalog) serve their own lists, fetched with their credential at every start that uses them, outside the four-hour window.
-- The list is saved in `agent/models-store.json`, read first at every start; its entries replace that provider's built-in ones, base URL included, while newer than Kopi's built-in list. `PIG_OFFLINE` set to `1`, `true` or `yes`, or `PI_OFFLINE` set to any value, stops the refresh and the fetch, not the read.
+- The list is saved in `runtime/models-store.json`, read first at every start; its entries replace that provider's built-in ones, base URL included, while newer than Kopi's built-in list. `PIG_OFFLINE` set to `1`, `true` or `yes`, or `PI_OFFLINE` set to any value, stops the refresh and the fetch, not the read.
 - A refreshed list applies to the running session. A model known only from a saved list, or any `openrouter` model, becomes unknown once a refreshed list drops it, at the next start or fullscreen session open.
-- Declare a model in `agent/models.json`. It takes the API, base URL and credential of its built-in provider; a provider with no built-in base URL, such as `azure`, also needs `baseUrl`.
+- Declare a model in `runtime/models.json`. It takes the API, base URL and credential of its built-in provider; a provider with no built-in base URL, such as `azure`, also needs `baseUrl`.
 
 ```json
 {"providers": {"mistral": {"models": [{"id": "brand-new"}]}}}
@@ -67,7 +67,7 @@
 
 - PiG's built-in providers use ambient credentials: environment API keys, Google application-default credentials, and the AWS profile and credential chain.
 - Importing PiG changes the TLS settings of Go's default HTTP transport, process-wide.
-- `agent/models.json` is trusted configuration: its `apiKey` can run a shell command.
+- `runtime/models.json` is trusted configuration: its `apiKey` can run a shell command.
 - Requests carry no PiG attribution headers but still identify as PiG: Codex requests send `originator: pig` and the user agent is `pig/…`.
 - Codex and xAI name windows by length; one that is not five hours, a week or a month has no segment. Naming a window the provider lacks still makes Kopi call it.
 

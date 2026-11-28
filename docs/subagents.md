@@ -5,7 +5,6 @@ A subagent is another agent the main agent starts for one task. It has its own c
 ## Format
 
 - A definition is a Markdown file with YAML frontmatter, one subagent per `*.md` file directly in `$KOPI_HOME/agents/` (default `~/.kopi/agents/`). Symlinks are followed. The body is the subagent's system prompt.
-- `~/.kopi/agent/` (singular) is unrelated: the runtime keeps sessions and sign-ins there.
 
 ```markdown
 ---

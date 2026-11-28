@@ -31,7 +31,7 @@ type Sandbox struct {
 	Home, KopiHome, AgentDir, Workspace string
 }
 
-// NewSandbox creates temp home/, kopi/ (with agent/) and ws/ directories and
+// NewSandbox creates temp home/, kopi/ (with runtime/) and ws/ directories and
 // points HOME at home/, with an empty PATH and PiG's variables cleared.
 func NewSandbox(t testing.TB) Sandbox {
 	t.Helper()
@@ -41,7 +41,7 @@ func NewSandbox(t testing.TB) Sandbox {
 		KopiHome:  filepath.Join(root, "kopi"),
 		Workspace: filepath.Join(root, "ws"),
 	}
-	sb.AgentDir = filepath.Join(sb.KopiHome, "agent")
+	sb.AgentDir = filepath.Join(sb.KopiHome, "runtime")
 	for _, dir := range []string{sb.Home, sb.AgentDir, sb.Workspace} {
 		require.NoError(t, os.MkdirAll(dir, 0o755))
 	}
